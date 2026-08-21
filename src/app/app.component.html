@@ -1,0 +1,10 @@
+<!-- Reemplazar el contenido de: src/app/app.component.html -->
+@if (auth.ready()) {
+  @if (auth.session()) {
+    <app-raid-night />
+  } @else {
+    <app-sign-in />
+  }
+} @else {
+  <p style="text-align:center; margin-top: 20vh; font-family: system-ui;">Cargando…</p>
+}

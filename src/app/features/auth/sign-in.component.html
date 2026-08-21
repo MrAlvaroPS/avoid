@@ -1,0 +1,26 @@
+<!-- Colocar en: src/app/features/auth/sign-in.component.html -->
+<div class="sign-in-wrap">
+  <h1>Dashboard RL — Ula'tek</h1>
+  <form (submit)="$event.preventDefault(); onSubmit()">
+    <input
+      type="email"
+      placeholder="Email"
+      [value]="email()"
+      (input)="email.set($any($event.target).value)"
+      autocomplete="username"
+    />
+    <input
+      type="password"
+      placeholder="Contraseña"
+      [value]="password()"
+      (input)="password.set($any($event.target).value)"
+      autocomplete="current-password"
+    />
+    <button type="submit" [disabled]="loading()">
+      {{ loading() ? 'Entrando…' : 'Entrar' }}
+    </button>
+  </form>
+  @if (error()) {
+    <p class="error">{{ error() }}</p>
+  }
+</div>

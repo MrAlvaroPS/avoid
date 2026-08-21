@@ -1,0 +1,33 @@
+/* Colocar en: src/app/features/auth/sign-in.component.css */
+.sign-in-wrap {
+  max-width: 320px;
+  margin: 15vh auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: system-ui, sans-serif;
+}
+
+.sign-in-wrap form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sign-in-wrap input,
+.sign-in-wrap button {
+  padding: 10px 12px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid #444;
+}
+
+.sign-in-wrap button {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.error {
+  color: #e5484d;
+  font-size: 13px;
+}
