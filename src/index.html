@@ -6,6 +6,17 @@
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Solo JetBrains Mono (cifras tabulares) — el resto de la tipografía (Georgia/Arial) es de sistema, sin webfont, para no cargar Inter cuando la identidad real de la guild usa Arial. -->
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- Tooltips oficiales de Wowhead (embed público, pensado para sitios de terceros):
+       cualquier <a> con data-wowhead="spell=ID" o "item=ID" recibe automáticamente
+       el tooltip enriquecido (icono + descripción) al pasar el ratón por encima. -->
+  <script>
+    var whTooltips = { colorLinks: true, iconizeLinks: false, renameLinks: false };
+  </script>
+  <script src="https://wow.zamimg.com/js/tooltips.js"></script>
 </head>
 <body>
   <app-root></app-root>

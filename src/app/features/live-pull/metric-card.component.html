@@ -1,0 +1,39 @@
+<button type="button" class="metric-card" (click)="activated.emit()">
+  <div class="card-top">
+    <span class="icon-badge" [class]="'tone-' + iconTone()" aria-hidden="true">{{ icon() }}</span>
+    <span class="label">{{ label() }}</span>
+  </div>
+
+  @if (loading()) {
+    <span class="value skeleton tabular" aria-hidden="true">&nbsp;</span>
+    <span class="sr-only">Calculando…</span>
+  } @else {
+    <div class="card-body">
+      <div class="value-block">
+        <span class="value tabular">{{ value() }}</span>
+        @if (delta(); as d) {
+          <span
+            class="delta"
+            [class.tone-success]="d.tone === 'success'"
+            [class.tone-warning]="d.tone === 'warning'"
+            [class.tone-danger]="d.tone === 'danger'"
+            [class.tone-neutral]="d.tone === 'neutral'"
+          >
+            @if (d.direction) {
+              <span aria-hidden="true">{{ d.direction === 'up' ? '↑' : '↓' }}</span>
+            }
+            {{ d.label }}
+          </span>
+        }
+      </div>
+      @if (gaugeValue(); as gv) {
+        <!-- Sin centerValue: la tarjeta ya enseña el número real (0% de HP
+             restante) a la izquierda — el gauge representa PROGRESO
+             (invertido respecto al HP), poner el mismo "0%" dentro del arco
+             lleno habría leído como contradictorio. El arco es el apoyo
+             visual, el número grande de la izquierda sigue siendo la fuente. -->
+        <app-gauge class="card-gauge" [value]="gv" [tone]="gaugeTone()" />
+      }
+    </div>
+  }
+</button>

@@ -95,6 +95,25 @@ create table if not exists pulls (
 );
 create index if not exists pulls_report_code_idx on pulls (report_code, pull_number desc);
 
+-- Añadida 2026-08-22: línea temporal raid-wide de instancias de mecánica
+-- (§12 de la hoja de ruta) — una fila por CADA cast de una mecánica del
+-- manifiesto durante un pull, no por jugador golpeado. Es lo que alimenta
+-- MechanicTimelineComponent (el "elemento de firma" de la vista, §15.1) y la
+-- tarjeta "Mecánicas falladas". Sin esto solo había agregados por jugador en
+-- player_pull_records, insuficiente para una timeline cronológica real.
+create table if not exists pull_mechanic_events (
+  id uuid primary key default gen_random_uuid(),
+  pull_id uuid not null references pulls (id) on delete cascade,
+  ability_id bigint not null,
+  mechanic_name text not null,
+  trigger_time_ms integer not null,
+  outcome text not null check (outcome in ('clean', 'partial_fail', 'fail')),
+  players_hit integer not null default 0,
+  avoidable boolean,
+  created_at timestamptz not null default now()
+);
+create index if not exists pull_mechanic_events_pull_idx on pull_mechanic_events (pull_id, trigger_time_ms);
+
 -- Generada por analyze-report (Fase 1): un row por jugador que participó en
 -- el pull (fight.friendlyPlayers de WCL), cruzando Deaths/DamageTaken contra
 -- boss_mechanics_candidates de ese boss+dificultad.
@@ -114,6 +133,12 @@ create table if not exists player_pull_records (
   -- daño de verdad?", solo un totalón sin decir de qué viene. Es lo que alimenta
   -- el "marcador" de la sección de mecánicas (ver boss-mechanics.service.ts).
   mechanic_damage jsonb not null default '[]'::jsonb,
+  -- Añadido 2026-08-22 (§3/§7 de la hoja de ruta, que schema.sql se había dejado fuera):
+  dps numeric, -- DamageDone del jugador / duración del pull en segundos (simplificación: no descuenta "active time")
+  hps numeric, -- Healing (con overheal) del jugador / duración del pull en segundos, mismo matiz
+  absorbed_damage_taken bigint not null default 0, -- suma de `absorbed` en DamageTaken: daño que un escudo evitó
+  talent_build jsonb, -- campo `talentTree` de events(dataType: CombatantInfo) — [{id,rank,nodeID}], IDs crudos, no nombres (verificado en real 2026-08-22: `talents` es un campo legado que siempre viene vacío)
+  equipped_items jsonb, -- gear + trinkets, tal cual sale de CombatantInfo
   created_at timestamptz not null default now()
 );
 create index if not exists player_pull_records_pull_idx on player_pull_records (pull_id);
@@ -160,6 +185,7 @@ alter table boss_mechanics_candidates enable row level security;
 alter table report_encounters enable row level security;
 alter table reports enable row level security;
 alter table pulls enable row level security;
+alter table pull_mechanic_events enable row level security;
 alter table player_pull_records enable row level security;
 alter table pull_briefs enable row level security;
 alter table llm_calls enable row level security;
@@ -170,6 +196,7 @@ create policy "read all - boss_mechanics_candidates" on boss_mechanics_candidate
 create policy "read all - report_encounters" on report_encounters for select using (true);
 create policy "read all - reports" on reports for select using (true);
 create policy "read all - pulls" on pulls for select using (true);
+create policy "read all - pull_mechanic_events" on pull_mechanic_events for select using (true);
 create policy "read all - player_pull_records" on player_pull_records for select using (true);
 create policy "read all - pull_briefs" on pull_briefs for select using (true);
 create policy "read all - llm_calls" on llm_calls for select using (true);
@@ -178,6 +205,7 @@ create policy "read all - session_state" on session_state for select using (true
 -- Imprescindible para que la suscripción Realtime del front reciba los INSERT.
 -- Sin esto, RaidSessionService.subscribeRealtime() se queda callado.
 alter publication supabase_realtime add table pulls;
+alter publication supabase_realtime add table pull_mechanic_events;
 alter publication supabase_realtime add table pull_briefs;
 alter publication supabase_realtime add table llm_calls;
 alter publication supabase_realtime add table reports;

@@ -1,0 +1,57 @@
+<section class="callouts" aria-labelledby="callouts-heading">
+  <h2 id="callouts-heading" class="heading">A quién dirigir</h2>
+
+  @if (loading()) {
+    <div class="skeleton-line" aria-hidden="true"></div>
+    <div class="skeleton-line" aria-hidden="true"></div>
+  } @else if (callouts().length === 0) {
+    <p class="empty">Sin nada urgente que señalar en este pull.</p>
+  } @else {
+    <ul class="callout-list">
+      @for (callout of callouts(); track callout.raiderName + callout.parts.length) {
+        <li>
+          <!-- role="button" en un <div>, NO un <button>: el tooltip de Wowhead
+               solo engancha su listener a elementos <a> reales (verificado en
+               real — un <span data-wowhead> se resalta con nuestro :hover
+               pero el popup nunca aparece), y <a> no puede anidarse dentro de
+               <button>. Con un div+role=button de fuera, cada habilidad de
+               dentro puede ser un <a> normal (abre Wowhead en pestaña nueva
+               al clicar, tooltip real al pasar el ratón). -->
+          <div
+            class="callout-row"
+            role="button"
+            tabindex="0"
+            [class.severity-critical]="callout.severity === 'critical'"
+            [class.severity-warning]="callout.severity === 'warning'"
+            [class.severity-positive]="callout.severity === 'positive'"
+            (click)="calloutSelected.emit(callout)"
+            (keydown.enter)="calloutSelected.emit(callout)"
+            (keydown.space)="$event.preventDefault(); calloutSelected.emit(callout)"
+          >
+            <span class="icon" aria-hidden="true">{{ iconFor(callout.severity) }}</span>
+            <span class="message">
+              <span class="sr-only">{{ severityLabel(callout.severity) }}:</span>
+              @for (part of callout.parts; track $index) {
+                @if (part.kind === 'text') {
+                  {{ part.text }}
+                } @else if (part.wowheadSpellId) {
+                  <a
+                    class="ability-ref"
+                    [href]="'https://www.wowhead.com/spell=' + part.wowheadSpellId"
+                    target="_blank"
+                    rel="noopener"
+                    [attr.data-wowhead]="'spell=' + part.wowheadSpellId"
+                    (click)="$event.stopPropagation()"
+                    >{{ part.label }}</a
+                  >
+                } @else {
+                  {{ part.label }}
+                }
+              }
+            </span>
+          </div>
+        </li>
+      }
+    </ul>
+  }
+</section>

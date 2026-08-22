@@ -1,0 +1,42 @@
+<div class="history">
+  <h1>Histórico de reports</h1>
+  <p class="intro">
+    Los reports que ya se han importado (pegando el código en Raid) aparecen aquí solos. El botón de abajo trae
+    además el resto del histórico de la guild directamente desde WCL, sin tener que pegar cada código a mano.
+  </p>
+
+  <form class="sync-bar" (submit)="$event.preventDefault(); onSync()">
+    <input type="text" [value]="guildName()" (input)="guildName.set($any($event.target).value)" placeholder="Guild" />
+    <input type="text" [value]="serverSlug()" (input)="serverSlug.set($any($event.target).value)" placeholder="Servidor" />
+    <input type="text" [value]="serverRegion()" (input)="serverRegion.set($any($event.target).value)" placeholder="Región" />
+    <button type="submit" [disabled]="syncing()">{{ syncing() ? 'Sincronizando…' : 'Sincronizar histórico de la guild' }}</button>
+  </form>
+  @if (syncSummary(); as s) {
+    <p class="sync-summary">{{ s }}</p>
+  }
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  @if (loading()) {
+    <p class="muted">Cargando…</p>
+  } @else if (reports().length === 0) {
+    <p class="muted">Sin reports todavía — importa uno en Raid o sincroniza el histórico de arriba.</p>
+  } @else {
+    <ul class="report-list">
+      @for (item of reports(); track item.report.code) {
+        <li>
+          <button type="button" class="report-row" (click)="open(item.report.code)">
+            <div class="main">
+              <span class="title">{{ item.report.title }}</span>
+              <span class="date tabular">{{ formatDate(item.report.start_time) }}</span>
+            </div>
+            <div class="bosses">
+              {{ item.bossesAttempted.length ? item.bossesAttempted.join(' · ') : 'sin bosses de raid detectados' }}
+            </div>
+          </button>
+        </li>
+      }
+    </ul>
+  }
+</div>

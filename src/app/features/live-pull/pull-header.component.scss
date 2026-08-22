@@ -1,0 +1,139 @@
+.pull-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 20px;
+  // Tratamiento algo más rico que el resto de tarjetas — es la cabecera
+  // "hero" del centro de mando, la primera cosa que se lee (§1: vistazo).
+  background: linear-gradient(135deg, var(--accent-deep) -60%, var(--surface-2) 35%, var(--surface) 100%);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+}
+
+.identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.boss-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.boss-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.difficulty-badge {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.attempt,
+.duration {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.attempt-label,
+.duration-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.attempt-number,
+.duration-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.progress-score {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+
+  &.tone-success {
+    color: var(--success);
+  }
+  &.tone-danger {
+    color: var(--danger);
+  }
+}
+
+.pacing {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+  cursor: help;
+
+  &.tone-success {
+    color: var(--success);
+  }
+  &.tone-warning {
+    color: var(--warning);
+  }
+}
+
+.pacing-median {
+  font-size: 10px;
+  opacity: 0.85;
+}
+
+.result {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 13px;
+
+  &.is-kill {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  &.is-wipe {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+}
+
+.result-hp {
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

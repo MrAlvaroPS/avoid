@@ -1,0 +1,106 @@
+// Centro de mando: cabecera + métricas + progreso ocupan la franja de "un
+// vistazo" de arriba (§15.1), timeline a todo el ancho como elemento de
+// firma, y a partir de ahí una columna de acción ancha ("a quién dirigir",
+// que puede tener muchas filas) junto a una columna de síntesis visual
+// (roscos + análisis IA) — no una columna única de paneles apilados.
+.live-pull {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    'header'
+    'metrics'
+    'trend'
+    'timeline'
+    'callouts'
+    'catdonut'
+    'defdonut'
+    'brief'
+    'players';
+
+  @media (min-width: 1080px) {
+    grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+    grid-template-areas:
+      'header   header'
+      'metrics  trend'
+      'timeline timeline'
+      'callouts catdonut'
+      'callouts defdonut'
+      'callouts brief'
+      'players  players';
+    align-items: start;
+  }
+}
+
+// Bug real de CSS Grid (capturado en real: un screenshot a 900px de ancho
+// salió de 94.583px): el mínimo automático de un hijo de grid es el
+// min-content de su contenido, no el ancho de su columna — el chip-list de
+// mechanic-timeline (min-width: max-content, pensado para su PROPIO
+// overflow-x interno) reventaba entonces la pista del grid entero en vez de
+// quedarse contenido. min-width: 0 en cada área hace que el grid respete su
+// 1fr/1.7fr real y deje el scroll horizontal donde debe estar: dentro de
+// .timeline, no en la página.
+.live-pull > * {
+  min-width: 0;
+}
+
+.area-header {
+  grid-area: header;
+}
+.area-metrics {
+  grid-area: metrics;
+}
+.area-trend {
+  grid-area: trend;
+}
+.area-timeline {
+  grid-area: timeline;
+}
+.area-callouts {
+  grid-area: callouts;
+  height: 100%;
+}
+.area-catdonut {
+  grid-area: catdonut;
+}
+.area-defdonut {
+  grid-area: defdonut;
+}
+.area-brief {
+  grid-area: brief;
+  height: 100%;
+}
+.area-players {
+  grid-area: players;
+}
+
+// Tarjeta genérica para los widgets nuevos (donuts, tendencia) — mismo
+// tratamiento visual que .callouts/.timeline (§ superficie/radio ya
+// establecidos), no un estilo nuevo suelto.
+.widget {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 16px;
+}
+
+.widget-heading {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.loading,
+.load-error {
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.load-error {
+  color: var(--danger);
+}

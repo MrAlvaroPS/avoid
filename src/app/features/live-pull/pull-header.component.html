@@ -1,0 +1,53 @@
+<header class="pull-header">
+  <div class="identity">
+    <span class="boss-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+        <path
+          d="M12 2c1.2 2 .6 3.4-.4 4.6C10.6 7.8 10 9 10 10.4c0 .9.4 1.7 1 2.2-.6-1.6.2-2.6 1-3.4.3 1 .9 1.6 1.6 2.2.9.8 1.4 1.9 1.4 3.2A5 5 0 0 1 9 19.9 5.6 5.6 0 0 1 7 15.6c0-2 1-3.4 2-4.6-1.3.5-2.6 1.8-3.2 3.4A7.4 7.4 0 0 1 5 11.2C5 6.8 8 3.4 12 2Z"
+          fill="currentColor"
+        />
+      </svg>
+    </span>
+    <div class="titles">
+      <span class="boss-name">{{ encounterName() }}</span>
+      <span class="difficulty-badge">{{ difficultyLabel() }}</span>
+    </div>
+  </div>
+
+  <div class="attempt">
+    <span class="attempt-label">Intento</span>
+    <span class="attempt-number tabular">#{{ attemptNumber() }}</span>
+    @if (progressDeltaPct(); as delta) {
+      <span
+        class="progress-score tabular"
+        [class.tone-success]="delta > 0"
+        [class.tone-danger]="delta < 0"
+        title="Score compuesto (§13): HP del boss, duración vs. mejor kill, muertes y mecánicas falladas — comparado contra el intento anterior de este boss."
+      >
+        {{ delta > 0 ? '↑' : delta < 0 ? '↓' : '·' }} {{ delta > 0 ? '+' : '' }}{{ delta }} vs anterior
+      </span>
+    }
+  </div>
+
+  <div class="result" [class.is-kill]="result() === 'kill'" [class.is-wipe]="result() === 'wipe'">
+    {{ resultLabel() }}
+    @if (result() === 'wipe') {
+      <span class="result-hp tabular">· {{ bossHpRemainingPct() }}% HP</span>
+    }
+    <span class="sr-only">{{ result() === 'kill' ? '— boss derrotado' : '— el raid murió antes de matar al boss' }}</span>
+  </div>
+
+  <div class="duration">
+    <span class="duration-label">Duración</span>
+    <span class="duration-value tabular">{{ durationLabel() }}</span>
+    @if (referencePacing(); as pacing) {
+      <span
+        class="pacing tabular"
+        [class.tone-success]="pacing.tone === 'success'"
+        [class.tone-warning]="pacing.tone === 'warning'"
+        [title]="pacing.zeroDeathContext ?? ''"
+        >{{ pacing.label }}</span
+      >
+    }
+  </div>
+</header>

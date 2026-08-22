@@ -1,0 +1,140 @@
+.metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 16px;
+  // .card-surface (styles.scss) inline aquí (un <button> no puede llevar la
+  // clase global fácilmente desde el template sin acoplar el componente a
+  // esa convención) — mismo look real: gradiente sutil + borde + sombra,
+  // ya no solo background plano.
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-card-hover), var(--shadow-inset-top);
+    border-color: var(--border-bright);
+  }
+}
+
+.card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  font-size: 13px;
+  flex-shrink: 0;
+
+  &.tone-accent {
+    background: var(--accent-soft);
+  }
+  &.tone-danger {
+    background: var(--danger-soft);
+  }
+  &.tone-warning {
+    background: var(--warning-soft);
+  }
+  &.tone-gold {
+    background: var(--gold-soft);
+  }
+}
+
+.label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.card-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.value-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--text);
+}
+
+.card-gauge {
+  flex-shrink: 0;
+  width: 84px;
+}
+
+.skeleton {
+  display: inline-block;
+  width: 64px;
+  height: 30px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-hover) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+.delta {
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+
+  &.tone-success {
+    color: var(--success);
+  }
+  &.tone-warning {
+    color: var(--warning);
+  }
+  &.tone-danger {
+    color: var(--danger);
+  }
+  &.tone-neutral {
+    color: var(--text-muted);
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

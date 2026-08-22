@@ -1,0 +1,14 @@
+<div class="metrics-row">
+  @for (metric of metrics(); track metric.label) {
+    <app-metric-card
+      [label]="metric.label"
+      [value]="metric.value"
+      [delta]="metric.delta"
+      [loading]="loading()"
+      [icon]="metric.icon"
+      [iconTone]="metric.iconTone"
+      [gaugeValue]="metric.gaugeValue"
+      (activated)="provenanceRequested.emit(metric.provenance)"
+    />
+  }
+</div>

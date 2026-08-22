@@ -1,0 +1,70 @@
+<div class="raid-session">
+  <form class="import-bar" (submit)="$event.preventDefault(); onImport()">
+    <input
+      class="code-input tabular"
+      type="text"
+      placeholder="Código o URL del report de WCL (ej. qtK3xYXRFkfdan6M)"
+      [value]="reportCodeInput()"
+      (input)="reportCodeInput.set($any($event.target).value)"
+      [disabled]="importing()"
+    />
+    <button type="submit" class="import-btn" [disabled]="importing() || !reportCodeInput().trim()">
+      {{ importing() ? 'Importando…' : hasReportLoaded() ? 'Actualizar' : 'Importar' }}
+    </button>
+    @if (importProgress(); as p) {
+      <span class="progress">{{ p }}</span>
+    } @else if (lastCheckedAt(); as t) {
+      <span class="progress">Última comprobación: {{ t }}</span>
+    }
+
+    @if (hasReportLoaded()) {
+      <label class="auto-refresh">
+        <input type="checkbox" [checked]="autoRefresh()" (change)="toggleAutoRefresh()" />
+        En vivo (auto cada 25s)
+      </label>
+    }
+  </form>
+
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  @if (hasPulls()) {
+    <nav class="pull-picker" aria-label="Pulls de este report, agrupados por boss">
+      @for (group of pullGroups(); track group.key) {
+        <div class="pull-group" [class.collapsed]="!isGroupExpanded(group)">
+          <button type="button" class="pull-group-header" (click)="toggleGroup(group)" [attr.aria-expanded]="isGroupExpanded(group)">
+            <span class="chevron" aria-hidden="true">{{ isGroupExpanded(group) ? '▾' : '▸' }}</span>
+            <span class="pull-group-boss">{{ group.bossName }}</span>
+            <span class="pull-group-difficulty">{{ group.difficulty }}</span>
+            <span class="pull-group-summary tabular">{{ groupSummary(group) }}</span>
+          </button>
+          @if (isGroupExpanded(group)) {
+            <ol>
+              @for (pull of group.pulls; track pull.id) {
+                <li>
+                  <button
+                    type="button"
+                    class="pull-chip"
+                    [class.selected]="pull.id === selectedPullId()"
+                    [class.is-kill]="pull.kill"
+                    (click)="selectPull(pull)"
+                  >
+                    <span class="pull-name">{{ pullLabel(pull) }}</span>
+                    <span class="pull-sub tabular">{{ pullSubLabel(pull) }}</span>
+                  </button>
+                </li>
+              }
+            </ol>
+          }
+        </div>
+      }
+    </nav>
+
+    @if (selectedPullId(); as id) {
+      <app-live-pull [pullId]="id" />
+    }
+  } @else if (!importing()) {
+    <p class="empty-state">Pega el código de un report de WCL para empezar.</p>
+  }
+</div>

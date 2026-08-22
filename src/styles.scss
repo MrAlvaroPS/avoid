@@ -1,1 +1,110 @@
-/* You can add global styles to this file, and also import other style files */
+// Sistema visual "de un vistazo" — §15 de la hoja de ruta + identidad real
+// de la guild (avoid-guild-web.vercel.app), no una paleta genérica inventada.
+// Semántica de estado (verde/ámbar/carmesí) se mantiene separada de la marca
+// a propósito — sigue siendo la única forma de leer clean/partial/fail de un
+// vistazo sin que compita visualmente con el morado de identidad.
+
+:root {
+  --bg: #080810; // "void"
+  --surface: #12101c;
+  --surface-2: #191424;
+  --surface-hover: #221c30;
+
+  --text: #f4f0f7;
+  --text-muted: #aaa1b4;
+  --text-faint: #746c7d;
+
+  --border: #ba91ce29; // "line"
+  --border-bright: #ba91ce52; // "line-bright"
+
+  --accent: #ba91ce; // "violet-bright" — texto/bordes/highlights sobre fondo oscuro
+  --accent-solid: #8c63ab; // "violet" — fondo sólido de botones (con --accent-bright el texto blanco pierde contraste)
+  --accent-deep: #4c2f6b; // "violet-deep"
+  --accent-soft: rgba(186, 145, 206, 0.16);
+
+  --gold: #c9a96b; // acento secundario de la marca — reservado para hitos (mejor pull, récord)
+  --gold-soft: rgba(201, 169, 107, 0.16);
+
+  --success: #5fbf82;
+  --success-soft: rgba(95, 191, 130, 0.14);
+  // --success (arriba) es para texto/fondos suaves — como relleno de barra de
+  // gráfica falla el check de luminosidad (dataviz: validate_palette.js "#5fbf82"
+  // --mode dark --surface "#12101c" -> FAIL banda de luminosidad). Esta versión
+  // más oscura sí pasa; solo para marcas de gráfica (barras, líneas), no para texto.
+  --chart-positive: #3f9e63;
+  --warning: #e3ad4f;
+  --warning-soft: rgba(227, 173, 79, 0.14);
+  --danger: #e2596f;
+  --danger-soft: rgba(226, 89, 111, 0.14);
+  --neutral: #aaa1b4;
+  --neutral-soft: rgba(170, 161, 180, 0.12);
+
+  --focus-ring: #ba91ce;
+
+  --font-display: Georgia, 'Times New Roman', serif; // títulos — el mismo registro que "Las personas detrás del progreso" en la web de AVOID
+  --font-sans: Arial, Helvetica, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-sm: 8px;
+
+  // Profundidad real — antes las tarjetas eran solo background+radius (plano
+  // del todo). Sombra sutil + borde de 1px es lo que separa un "dashboard de
+  // verdad" de cajas apiladas: casi todos los paneles de referencia que
+  // pasó el usuario usan esta combinación (Geckoboard, Plecto, Bsinx...).
+  --card-border: rgba(186, 145, 206, 0.1);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.55);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.45), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  --shadow-inset-top: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+// Clase base de tarjeta — un único sitio para el "look" de superficie
+// elevada, que todos los widgets del dashboard comparten en vez de cada
+// componente reinventando background+radius+padding por su cuenta.
+.card-surface {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button {
+  font-family: inherit;
+  color: inherit;
+}

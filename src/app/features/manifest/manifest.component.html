@@ -1,0 +1,168 @@
+<div class="manifest">
+  <h1>Manifiesto de mecánicas</h1>
+  <p class="intro">
+    Tarea manual #1 (§5): el candidato sale solo de Blizzard Journal + Wago DB2 — lo único que
+    decides tú es si es evitable, la categoría y el umbral. Se hace una vez por boss+dificultad,
+    no una vez por pull.
+  </p>
+
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  <div class="layout">
+    <nav class="boss-list" aria-label="Bosses vistos en vuestros reports">
+      @if (loadingBosses()) {
+        <p class="muted">Cargando bosses…</p>
+      } @else if (bosses().length === 0) {
+        <p class="muted">Todavía no hay ningún boss — importa un report primero.</p>
+      } @else {
+        <ul>
+          @for (boss of bosses(); track boss.encounterId) {
+            <li>
+              <button type="button" class="boss-btn" [class.selected]="boss.encounterId === selectedEncounterId()" (click)="selectBoss(boss.encounterId)">
+                {{ boss.bossName }}
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    </nav>
+
+    <section class="detail">
+      @if (selectedBoss(); as boss) {
+        <div class="detail-header">
+          <h2>{{ boss.bossName }}</h2>
+          <div class="difficulty-tabs">
+            @for (diffId of boss.difficulties; track diffId) {
+              <button type="button" [class.selected]="diffId === selectedDifficultyId()" (click)="selectDifficulty(diffId)">
+                {{ difficultyLabel(diffId) }}
+              </button>
+            }
+          </div>
+          <div class="sync-actions">
+            <button type="button" class="sync-btn" [disabled]="syncing() || deepSyncing()" (click)="onSync(false)">
+              {{ syncing() ? 'Sincronizando…' : 'Sincronizar desde Blizzard' }}
+            </button>
+            <button
+              type="button"
+              class="sync-btn deep"
+              [disabled]="syncing() || deepSyncing()"
+              (click)="onSync(true)"
+              title="Trae hasta 20 kills públicas de referencia (en vez de 3) para clasificar mecánicas con mucha más muestra — tarda ~30-40s."
+            >
+              {{ deepSyncing() ? 'Sync profundo… (~30-40s)' : 'Sync profundo (+logs públicos)' }}
+            </button>
+          </div>
+        </div>
+
+        @if (lastSyncSummary(); as s) {
+          <p class="sync-summary">{{ s }}</p>
+        }
+
+        @if (loadingCandidates()) {
+          <p class="muted">Cargando candidatas…</p>
+        } @else if (candidates().length === 0) {
+          <p class="muted">Sin candidatas todavía — pulsa "Sincronizar desde Blizzard".</p>
+        } @else {
+          <table class="candidates">
+            <thead>
+              <tr>
+                <th>Habilidad</th>
+                <th>Origen</th>
+                <th>Visto en logs</th>
+                <th>Categoría</th>
+                <th>Evitable</th>
+                <th>Umbral</th>
+                <th>Revisada</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of candidates(); track c.ability_id) {
+                <tr [class.saving]="savingAbilityId() === c.ability_id" [class.reviewed]="c.reviewed">
+                  <td>
+                    <app-wowhead-link type="spell" [id]="c.ability_id" class="name"
+                      ><span class="name">{{ c.name }}</span></app-wowhead-link
+                    >
+                    @if (c.description) {
+                      <span class="desc">{{ c.description }}</span>
+                    }
+                    <span class="meta">#{{ c.ability_id }} · {{ c.observed_in_logs ? 'visto en vuestros logs' : 'no visto todavía' }}</span>
+                  </td>
+                  <td class="meta">{{ c.difficulty_mapping_status }}</td>
+                  <td>
+                    @if (hitStatFor(c.ability_id); as stat) {
+                      <span class="hit-stat"
+                        >{{ stat.avgPlayersHit.toFixed(1) }} jugadores de media ({{ stat.instances }} instancia{{ stat.instances === 1 ? '' : 's' }})</span
+                      >
+                      @if (c.avoidable === null && suggestedAvoidable(c.ability_id) !== null) {
+                        <button type="button" class="suggestion-btn" (click)="applySuggestion(c)">
+                          💡 Sugerido: {{ suggestedAvoidable(c.ability_id) ? 'evitable' : 'raid-wide' }} — aplicar
+                        </button>
+                      }
+                    } @else {
+                      <span class="meta">sin datos todavía</span>
+                    }
+                  </td>
+                  <td>
+                    <select
+                      [value]="c.category ?? c.inferred_category ?? ''"
+                      (change)="onEdit(c, { category: $any($event.target).value || null })"
+                    >
+                      <option value="">Sin categoría</option>
+                      @for (cat of categories; track cat) {
+                        <option [value]="cat">{{ cat }}</option>
+                      }
+                    </select>
+                    @if (c.category) {
+                      <span class="confirmed-note">✓ confirmada</span>
+                    } @else if (c.inferred_category) {
+                      <button type="button" class="suggestion-btn" [title]="c.inferred_category_reasons.join(' · ')" (click)="confirmInferredCategory(c)">
+                        💡 Sugerida: {{ c.inferred_category }} — confirmar
+                      </button>
+                      <p class="reasons">{{ c.inferred_category_reasons.join(' · ') }}</p>
+                    } @else {
+                      <span class="meta">sin evidencia suficiente para sugerir todavía</span>
+                    }
+                    @if (c.reference_occurrences) {
+                      <p class="reasons">
+                        Benchmark (log de referencia): {{ c.reference_avg_players_hit }} jugadores de media golpeados en
+                        {{ c.reference_occurrences }} ocurrencia{{ c.reference_occurrences === 1 ? '' : 's' }}.
+                      </p>
+                    }
+                  </td>
+                  <td>
+                    <select
+                      [value]="c.avoidable === null ? '' : c.avoidable ? 'yes' : 'no'"
+                      (change)="onEdit(c, { avoidable: $any($event.target).value === '' ? null : $any($event.target).value === 'yes' })"
+                    >
+                      <option value="">Sin decidir</option>
+                      <option value="yes">Sí</option>
+                      <option value="no">No</option>
+                    </select>
+                  </td>
+                  <td>
+                    <input
+                      type="number"
+                      class="threshold tabular"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      [value]="c.severity_threshold ?? 0.35"
+                      (change)="onEdit(c, { severity_threshold: toNumber($any($event.target).value) })"
+                    />
+                  </td>
+                  <td>
+                    <input type="checkbox" [checked]="c.reviewed" (change)="onEdit(c, { reviewed: $any($event.target).checked })" />
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      } @else {
+        <p class="muted">Elige un boss de la lista.</p>
+      }
+    </section>
+  </div>
+</div>

@@ -1,0 +1,245 @@
+.manifest {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1 {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.intro {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 20px;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.boss-list {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 8px;
+}
+
+.boss-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.boss-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+  &.selected {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+}
+
+.detail {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 16px;
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+
+  h2 {
+    margin: 0;
+    font-size: 15px;
+  }
+}
+
+.difficulty-tabs {
+  display: flex;
+  gap: 4px;
+
+  button {
+    padding: 4px 10px;
+    background: var(--surface-2);
+    border: none;
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+
+    &.selected {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+  }
+}
+
+.sync-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.sync-btn {
+  padding: 8px 14px;
+  background: var(--accent-solid);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:disabled {
+    opacity: 0.6;
+  }
+
+  &.deep {
+    background: var(--surface-2);
+    color: var(--accent);
+    border: 1px solid var(--border-bright);
+  }
+}
+
+.sync-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 12px;
+}
+
+.candidates {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+
+  th {
+    text-align: left;
+    padding: 6px 8px;
+    color: var(--text-faint);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--surface-2);
+  }
+
+  td {
+    padding: 8px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--surface-2);
+  }
+
+  tr.reviewed td:first-child {
+    box-shadow: inset 3px 0 0 var(--success);
+  }
+  tr.saving {
+    opacity: 0.5;
+  }
+}
+
+.name {
+  display: block;
+  font-weight: 500;
+}
+
+.desc {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  max-width: 320px;
+}
+
+.meta {
+  display: block;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+select,
+.threshold {
+  background: var(--surface-2);
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.threshold {
+  width: 64px;
+}
+
+.hit-stat {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.suggestion-btn {
+  margin-top: 4px;
+  padding: 3px 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    filter: brightness(1.15);
+  }
+}
+
+.confirmed-note {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--success);
+}
+
+.reasons {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  max-width: 280px;
+}

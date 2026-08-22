@@ -1,0 +1,56 @@
+<section class="llm-card" aria-labelledby="llm-heading">
+  <div class="row">
+    <span class="icon" aria-hidden="true">💬</span>
+    <h2 id="llm-heading" class="heading">Análisis IA</h2>
+
+    @if (analysis(); as a) {
+      <span class="model tabular">{{ a.model }}</span>
+    }
+  </div>
+
+  @if (analysis(); as a) {
+    <p class="headline">{{ a.headline }}</p>
+    <div class="columns">
+      @if (a.improved.length) {
+        <div class="col">
+          <span class="col-title tone-success">Bien</span>
+          <ul>
+            @for (item of a.improved; track item) {
+              <li>{{ item }}</li>
+            }
+          </ul>
+        </div>
+      }
+      @if (a.regressed.length) {
+        <div class="col">
+          <span class="col-title tone-danger">Mal</span>
+          <ul>
+            @for (item of a.regressed; track item) {
+              <li>{{ item }}</li>
+            }
+          </ul>
+        </div>
+      }
+      @if (a.nextPullActions.length) {
+        <div class="col">
+          <span class="col-title tone-accent">Próximo intento</span>
+          <ul>
+            @for (item of a.nextPullActions; track item) {
+              <li>{{ item }}</li>
+            }
+          </ul>
+        </div>
+      }
+    </div>
+  } @else {
+    <div class="empty">
+      <p>Sin analizar todavía — guardado y no se relanza salvo que lo pidas de nuevo.</p>
+      <button type="button" class="analyze-btn" [disabled]="generating()" (click)="generateRequested.emit()">
+        {{ generating() ? 'Analizando…' : 'Analizar' }}
+      </button>
+    </div>
+    @if (error(); as e) {
+      <p class="brief-error" role="alert">{{ e }}</p>
+    }
+  }
+</section>

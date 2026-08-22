@@ -1,0 +1,64 @@
+@if (error(); as e) {
+  <p class="load-error" role="alert">{{ e }}</p>
+} @else if (loading() && !detail()) {
+  <p class="loading">Cargando pull…</p>
+} @else if (detail(); as d) {
+  <div class="live-pull">
+    <app-pull-header
+      class="area-header"
+      [encounterName]="d.header.encounterName"
+      [difficulty]="d.header.difficulty"
+      [attemptNumber]="d.header.attemptNumber"
+      [durationLabel]="d.header.durationLabel"
+      [bossHpRemainingPct]="d.header.bossHpRemainingPct"
+      [result]="d.header.result"
+      [progressDeltaPct]="d.progressDeltaPct"
+      [referencePacing]="d.header.referencePacing"
+    />
+
+    <app-metrics-row class="area-metrics" [metrics]="d.metrics" [loading]="loading()" (provenanceRequested)="activeProvenance.set($event)" />
+
+    <!-- Widget nuevo: progreso entre intentos — mismos datos que ya se
+         traían (priorPulls), solo que ahora también en forma de gráfica, no
+         solo texto en una tarjeta de delta. -->
+    <section class="widget area-trend" aria-labelledby="trend-heading">
+      <h2 id="trend-heading" class="widget-heading">Progreso entre intentos</h2>
+      <app-trend-bars [bars]="d.progressTrend" />
+    </section>
+
+    <section class="widget area-timeline" aria-labelledby="timeline-heading">
+      <h2 id="timeline-heading" class="widget-heading">Daño recibido y mecánicas</h2>
+      <app-raid-damage-chart
+        [chips]="d.timeline"
+        [background]="d.backgroundMechanics"
+        [series]="d.raidDamageSeries"
+        [durationMs]="d.header.durationMs"
+        [loading]="loading()"
+        (chipSelected)="onTimelineChipSelected($event)"
+      />
+    </section>
+
+    <!-- Orden visual y de teclado: cabecera → métricas → timeline → callouts → análisis IA (§15.1). -->
+    <app-coaching-callout-list class="area-callouts" [callouts]="d.callouts" (calloutSelected)="onCalloutSelected($event)" />
+
+    <!-- Dos roscos nuevos: de qué está hecho el pull (categoría de
+         mecánica) y cuánta defensa se desperdició en las muertes, en
+         conjunto — mismos datos ya calculados (pull_mechanic_events,
+         defensiveOptions), solo agregados en vez de solo por fila. -->
+    <section class="widget area-catdonut" aria-labelledby="catdonut-heading">
+      <h2 id="catdonut-heading" class="widget-heading">Mecánicas por categoría</h2>
+      <app-donut-chart [segments]="d.mechanicCategoryBreakdown" centerLabel="casts" (segmentSelected)="onDonutSegmentSelected($event, 'pull_mechanic_events agrupado por categoría')" />
+    </section>
+
+    <section class="widget area-defdonut" aria-labelledby="defdonut-heading">
+      <h2 id="defdonut-heading" class="widget-heading">Defensivos en las muertes</h2>
+      <app-donut-chart [segments]="d.defensiveStatusBreakdown" centerLabel="evaluados" (segmentSelected)="onDonutSegmentSelected($event, 'defensiveOptions de cada muerte agrupado por estado')" />
+    </section>
+
+    <app-llm-analysis-card class="area-brief" [analysis]="d.brief" [generating]="generatingBrief()" [error]="briefError()" (generateRequested)="onGenerateBrief()" />
+
+    <app-player-stats-table class="area-players" [players]="d.playerStats" />
+  </div>
+
+  <app-provenance-drawer [entry]="activeProvenance()" (closeRequested)="activeProvenance.set(null)" />
+}

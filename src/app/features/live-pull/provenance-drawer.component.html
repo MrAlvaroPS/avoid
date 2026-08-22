@@ -1,0 +1,29 @@
+@if (entry(); as e) {
+  <!-- El resto de la pantalla se atenúa (no se oculta) — nunca tapa la timeline, spec §15.1 -->
+  <div class="scrim" (click)="closeRequested.emit()"></div>
+  <aside class="drawer" role="dialog" aria-labelledby="provenance-heading">
+    <div class="drawer-header">
+      <h2 id="provenance-heading">De dónde sale este dato</h2>
+      <button type="button" class="close-btn" (click)="closeRequested.emit()" aria-label="Cerrar">✕</button>
+    </div>
+
+    <dl>
+      <dt>Fuente</dt>
+      <dd class="tabular">{{ e.source }}</dd>
+
+      <dt>Cómo se calculó</dt>
+      <dd>{{ e.method }}</dd>
+
+      @if (e.detail) {
+        <dt>Detalle</dt>
+        <dd>{{ e.detail }}</dd>
+      }
+    </dl>
+
+    @if (wclUrl(e); as url) {
+      <a [href]="url" target="_blank" rel="noopener" class="wcl-link">
+        Ver en warcraftlogs.com ↗
+      </a>
+    }
+  </aside>
+}

@@ -1,0 +1,118 @@
+<section class="player-stats">
+  <button type="button" class="toggle" [attr.aria-expanded]="open()" (click)="toggle()">
+    <span>Detalle de jugadores (DPS/HPS/absorciones/talentos/consumibles)</span>
+    <span aria-hidden="true">{{ open() ? '▲' : '▼' }}</span>
+  </button>
+
+  @if (open()) {
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Jugador</th>
+            <th>Clase / spec</th>
+            <th class="chart-col">DPS</th>
+            <th class="chart-col">HPS</th>
+            <th>Absorbido</th>
+            <th>Talentos</th>
+            <th>Trinkets</th>
+            <th>Defensivos usados</th>
+            <th>Consumibles</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (p of players(); track p.playerName) {
+            <tr [class.died]="p.died">
+              <td>{{ p.playerName }}{{ p.died ? ' 💀' : '' }}</td>
+              <td>{{ p.spec ? p.spec + ' ' : '' }}{{ p.class ?? '—' }}</td>
+              <td class="chart-col">
+                <div class="bar-row" [title]="(p.dps | number: '1.0-0') + ' DPS'">
+                  <div class="bar-track"><div class="bar-fill dps" [style.width.%]="(p.dps / maxDps()) * 100"></div></div>
+                  <span class="bar-value tabular">{{ p.dps | number: '1.0-0' }}</span>
+                </div>
+              </td>
+              <td class="chart-col">
+                <div class="bar-row" [title]="(p.hps | number: '1.0-0') + ' HPS'">
+                  <div class="bar-track"><div class="bar-fill hps" [style.width.%]="(p.hps / maxHps()) * 100"></div></div>
+                  <span class="bar-value tabular">{{ p.hps | number: '1.0-0' }}</span>
+                </div>
+              </td>
+              <td class="tabular">{{ p.absorbedDamageTaken | number: '1.0-0' }}</td>
+              <td class="talents-cell">
+                <button type="button" class="mini-toggle" (click)="toggleTalents(p.playerName)">
+                  {{ p.talents.length }} talento{{ p.talents.length === 1 ? '' : 's' }}
+                  @if (p.talentUnresolvedCount) {
+                    <span class="unresolved-note">(+{{ p.talentUnresolvedCount }} sin resolver)</span>
+                  }
+                  <span aria-hidden="true">{{ expandedTalents().has(p.playerName) ? '▲' : '▼' }}</span>
+                </button>
+                @if (expandedTalents().has(p.playerName)) {
+                  <div class="talent-chips">
+                    @for (t of p.talents; track t.spellId) {
+                      <app-wowhead-link type="spell" [id]="t.spellId">#{{ t.spellId }}</app-wowhead-link>
+                    }
+                  </div>
+                }
+              </td>
+              <td class="tabular trinkets">
+                <!-- Bug real encontrado en real (filas de la tabla con
+                     muchísimo alto de más): el <app-wowhead-link> y el texto
+                     "(ilvl N)" eran DOS hijos sueltos dentro de un
+                     contenedor flex-column — cada uno se convertía en su
+                     propio flex item y se apilaban en dos líneas por
+                     trinket en vez de leerse "Nombre (ilvl N)" en una. Un
+                     único <span> por trinket = un único flex item. -->
+                @if (p.trinkets.length) {
+                  @for (t of p.trinkets; track t.itemId) {
+                    <span class="trinket-row">
+                      @if (t.name) {
+                        <app-wowhead-link type="item" [id]="t.itemId">{{ t.name }}</app-wowhead-link>
+                      } @else {
+                        <span>Ítem #{{ t.itemId }}</span>
+                      }
+                      (ilvl {{ t.itemLevel }})
+                    </span>
+                  }
+                } @else {
+                  —
+                }
+              </td>
+              <td class="defensives-cell">
+                @if (p.defensivesUsed.length) {
+                  @for (d of p.defensivesUsed; track d.spellId) {
+                    <span class="defensive-use" [title]="d.name + ' — usado en: ' + timeList(d.timestampsMs)">
+                      <app-wowhead-link type="spell" [id]="d.spellId">{{ d.name }}</app-wowhead-link>
+                      <span class="count-badge tabular">×{{ d.count }}</span>
+                    </span>
+                  }
+                } @else {
+                  <span class="none-used">ninguno</span>
+                }
+              </td>
+              <td class="consumables-cell">
+                @if (p.consumables.healthstone; as stone) {
+                  <span class="consumable-status" [class.status-used]="stone.used" [class.status-missed]="!stone.used && stone.available">
+                    🪨 Piedra: {{ stone.used ? 'usada ×' + stone.count : stone.available ? 'disponible, sin usar' : 'sin brujo en raid' }}
+                  </span>
+                } @else {
+                  <span class="consumable-status">🪨 Piedra: pull sin reprocesar</span>
+                }
+                @if (p.consumables.healthPotion; as potion) {
+                  <span class="consumable-status" [class.status-used]="potion.used">🧪 Poción: {{ potion.used ? 'usada ×' + potion.count : 'sin usar' }}</span>
+                } @else {
+                  <span class="consumable-status">🧪 Poción: pull sin reprocesar</span>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+      <p class="note">
+        DPS/HPS: daño o curación total del jugador dividido entre la duración del pull (no descuenta huecos sin
+        objetivo, puede ir algo por debajo del DPS que enseña WCL) — barras a escala del máximo de este pull.
+        Defensivos: TODOS los casts durante el pull completo, no solo el instante de morir — pasa el ratón sobre
+        cada uno para ver a qué segundos exactos se usó.
+      </p>
+    </div>
+  }
+</section>
