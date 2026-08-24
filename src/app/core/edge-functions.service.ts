@@ -10,19 +10,44 @@ export interface AnalyzeReportResult {
   processed: number;
   remaining: number;
   newestPullId: string | null;
+  /** §"la noche duplicada... dos personas subieron el mismo log" (bug real, arreglado a mano): report_code de otro report ya importado que parece la misma sesión (inicio a ±6h, ≥2 bosses en común) — null = sin sospecha. Solo se calcula al crear el report, se repite igual en cada respuesta mientras exista. */
+  possibleDuplicateOf: string | null;
+}
+
+export interface PullBriefRow {
+  pull_id: string;
+  headline: string;
+  improved: string[];
+  regressed: string[];
+  next_pull_actions: string[];
+  model: string;
 }
 
 export interface GeneratePullBriefResult {
   ok: true;
   cached: boolean;
-  brief: {
-    pull_id: string;
-    headline: string;
-    improved: string[];
-    regressed: string[];
-    next_pull_actions: string[];
-    model: string;
-  };
+  brief: PullBriefRow;
+}
+
+// §"meter en el dosier de un jugador y en el resumen de toda la noche
+// completa también la consulta de IA" (feedback real): mismos campos que
+// PullBriefRow, dos ámbitos nuevos — jugador×noche y raid×noche.
+export interface NightPlayerBriefRow {
+  report_code: string;
+  player_name: string;
+  headline: string;
+  improved: string[];
+  regressed: string[];
+  next_pull_actions: string[];
+  model: string;
+}
+export interface NightBriefRow {
+  report_code: string;
+  headline: string;
+  improved: string[];
+  regressed: string[];
+  next_pull_actions: string[];
+  model: string;
 }
 
 export interface SyncBossMechanicsResult {
@@ -69,6 +94,62 @@ export class EdgeFunctionsService {
     return this.invoke<GeneratePullBriefResult>('generate-pull-brief', { pullId, force });
   }
 
+  /** §"copiar el prompt completo": el MISMO contexto que generatePullBrief construiría, listo para copiar y pegar en cualquier chat de LLM — no gasta presupuesto ni llama a Anthropic. */
+  async getManualPullBriefPrompt(pullId: string): Promise<{ ok: true; systemPrompt: string; userMessage: string }> {
+    return this.invoke('manual-pull-brief', { pullId, action: 'prompt' });
+  }
+
+  /** §"pegar el resultado... procesarlo como si fuese a través de la API": parsea el texto pegado con el MISMO parseo que la respuesta real, y lo guarda igual (pull_briefs, model:'manual'). */
+  async submitManualPullBrief(pullId: string, rawResponseText: string): Promise<{ ok: true; brief: PullBriefRow }> {
+    return this.invoke('manual-pull-brief', { pullId, action: 'submit', rawResponseText });
+  }
+
+  /** Genera (o devuelve cacheado) el brief LLM de un jugador para UNA noche concreta. Idempotente por report_code+player_name salvo force:true. */
+  async generateNightPlayerBrief(reportCode: string, playerName: string, force = false): Promise<{ ok: true; cached: boolean; brief: NightPlayerBriefRow }> {
+    return this.invoke('generate-night-player-brief', { reportCode, playerName, force });
+  }
+  async getManualNightPlayerBriefPrompt(reportCode: string, playerName: string): Promise<{ ok: true; systemPrompt: string; userMessage: string }> {
+    return this.invoke('manual-night-player-brief', { reportCode, playerName, action: 'prompt' });
+  }
+  async submitManualNightPlayerBrief(reportCode: string, playerName: string, rawResponseText: string): Promise<{ ok: true; brief: NightPlayerBriefRow }> {
+    return this.invoke('manual-night-player-brief', { reportCode, playerName, action: 'submit', rawResponseText });
+  }
+
+  /** Genera (o devuelve cacheado) el brief LLM de TODA una noche de raid. Idempotente por report_code salvo force:true. */
+  async generateNightBrief(reportCode: string, force = false): Promise<{ ok: true; cached: boolean; brief: NightBriefRow }> {
+    return this.invoke('generate-night-brief', { reportCode, force });
+  }
+  async getManualNightBriefPrompt(reportCode: string): Promise<{ ok: true; systemPrompt: string; userMessage: string }> {
+    return this.invoke('manual-night-brief', { reportCode, action: 'prompt' });
+  }
+  async submitManualNightBrief(reportCode: string, rawResponseText: string): Promise<{ ok: true; brief: NightBriefRow }> {
+    return this.invoke('manual-night-brief', { reportCode, action: 'submit', rawResponseText });
+  }
+
+  /** §"que autoexcluya pero que permita también editarlo... para restaurar" — confirma o revierte la exclusión de un wipe call detectado. */
+  async setWipeCallStatus(pullId: string, excluded: boolean): Promise<{ ok: true; pullId: string; excluded: boolean }> {
+    return this.invoke('set-wipe-call-status', { pullId, excluded });
+  }
+
+  /** §"un prompt para pasar a la IA y que investigue... clasificar todas las mecánicas" — mismo patrón que manual-pull-brief, sin gastar la API propia. */
+  async getMechanicClassificationPrompt(bossId: string, difficulty: string): Promise<{ ok: true; systemPrompt: string; userMessage: string; mechanicCount: number }> {
+    return this.invoke('classify-mechanics', { bossId, difficulty, action: 'prompt' });
+  }
+
+  async submitMechanicClassification(
+    bossId: string,
+    difficulty: string,
+    rawResponseText: string,
+  ): Promise<{
+    ok: true;
+    applied: { abilityId: number; name: string; category: string }[];
+    skippedLowConfidence: { abilityId: number; name: string; category: string | null; notes: string }[];
+    skippedUndetermined: { abilityId: number; name: string }[];
+    invalid: { abilityId: unknown; reason: string }[];
+  }> {
+    return this.invoke('classify-mechanics', { bossId, difficulty, action: 'submit', rawResponseText });
+  }
+
   /**
    * Auto-descubre mecánicas de un boss (Blizzard Journal + Wago DB2) sin
    * pisar ediciones humanas previas. `deepSync` cambia de 3 a 20 los logs
@@ -97,6 +178,19 @@ export class EdgeFunctionsService {
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */
   async syncReports(params: { guildName: string; serverSlug: string; serverRegion: string; sinceMs?: number }): Promise<SyncReportsResult> {
     return this.invoke<SyncReportsResult>('sync-reports', params);
+  }
+
+  /** §9.1: siembra known_raid_bosses (+ boss_reference_stats) para TODA la instancia de una vez, aunque la guild no haya pulleado la mitad de los bosses todavía. Sin zoneId usa el del report más reciente. */
+  async syncSeasonBosses(zoneId?: number): Promise<{
+    ok: true;
+    zoneId: number;
+    zoneName: string;
+    wclEncountersSeen: number;
+    journalEncountersMatched: number;
+    bossesSeeded: number;
+    referenceStatsUpserts: number;
+  }> {
+    return this.invoke('sync-season-bosses', zoneId ? { zoneId } : {});
   }
 
   private async invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> {

@@ -8,6 +8,12 @@
   max-width: 1600px;
   margin: 0 auto;
   padding: 20px;
+  overflow-y: auto;
+}
+
+.area-season {
+  align-self: flex-start;
+  min-width: 220px;
 }
 
 .import-bar {
@@ -72,10 +78,218 @@
   cursor: pointer;
 }
 
+// §"cargar un log desde un historial (con fecha)... con acordarme del día
+// es suficiente" (feedback real): botón discreto junto al resto de la
+// barra + panel desplegable de reports recientes, sin salir de esta pantalla.
+.recent-toggle {
+  flex-shrink: 0;
+  padding: 9px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+}
+
+.recent-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden; // §bug real (feedback: "aparece un scroll horizontal en toda la pantalla") — contención de respaldo, ver min-width:0 de abajo para la causa real
+  padding: 6px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+}
+
+.recent-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  min-width: 0; // ítem flex de .recent-picker — sin esto, su ancho de contenido puede desbordar la columna y filtrarse hasta la página
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+}
+.recent-date {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  min-width: 80px;
+}
+.recent-title {
+  // §bug real (feedback: "scroll horizontal en toda la pantalla" al abrir
+  // este picker): flex-shrink:0 SIN min-width:0 hacía que un título largo
+  // (report de WCL con nombre extenso) forzara el ancho de la fila más allá
+  // de su contenedor — flex-shrink:1 + min-width:0 + elipsis, igual que
+  // .recent-bosses, en vez de asumir que el título siempre es corto.
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.recent-bosses {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .error {
   color: var(--danger);
   font-size: 13px;
   margin: 0;
+}
+
+.duplicate-warning {
+  padding: 10px 14px;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  font-size: 12.5px;
+  margin: 0;
+
+  strong {
+    font-weight: 700;
+  }
+}
+
+.night-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+}
+.night-summary-stats {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.night-summary-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.night-stat {
+  font-size: 12.5px;
+  color: var(--text-muted);
+
+  strong {
+    color: var(--text);
+    font-weight: 700;
+  }
+}
+.night-hardest {
+  color: var(--warning);
+}
+.night-players {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+}
+.night-players-label {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.night-players-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.player-chip {
+  padding: 3px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: 20px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-decoration: none;
+
+  &:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+.night-summary-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-link-btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+
+  &:hover {
+    color: var(--accent);
+  }
+}
+
+.copy-night-btn {
+  flex-shrink: 0;
+  padding: 6px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
 }
 
 .empty-state {
@@ -84,91 +298,111 @@
   padding: 40px 0;
 }
 
+// Card ÚNICA para todo el picker (antes: una card entera por boss, apiladas
+// — el coste de gradiente/borde/sombra/padding se pagaba N veces). La altura
+// ahora depende de cuántas FILAS de pills hacen falta al envolver (wrap),
+// no de cuántos bosses tiene el report.
 .pull-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.pull-group {
   background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
   border: 1px solid var(--card-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card), var(--shadow-inset-top);
-  padding: 10px 12px 12px;
-  min-width: 0;
-
-  // Colapsado: mismo look, mucha menos altura — la cabecera es lo único
-  // que queda, sin el padding inferior pensado para la tira de chips.
-  &.collapsed {
-    padding-bottom: 10px;
-  }
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.pull-group-header {
+.boss-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.boss-pill {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  width: 100%;
-  padding: 0 2px 8px;
-  border-bottom: 1px solid var(--surface-2);
-  margin-bottom: 8px;
-  background: none;
-  border-left: none;
-  border-right: none;
-  border-top: none;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--surface-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
   color: inherit;
   font: inherit;
-  text-align: left;
   cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 
-  .collapsed & {
-    padding-bottom: 0;
-    margin-bottom: 0;
-    border-bottom: none;
+  &:hover {
+    background: var(--surface-hover);
   }
-
-  &:hover .pull-group-boss {
-    color: var(--accent);
+  &.active {
+    background: var(--accent-soft);
+    border-color: var(--border-bright);
   }
 }
 
-.chevron {
-  color: var(--text-faint);
-  font-size: 11px;
-  width: 10px;
-  flex-shrink: 0;
-}
-
-.pull-group-boss {
-  font-size: 13px;
+.boss-pill-name {
+  font-size: 12px;
   font-weight: 700;
   color: var(--text);
+  white-space: nowrap;
 }
 
-.pull-group-difficulty {
-  font-size: 10.5px;
+.boss-pill-diff {
+  font-size: 9.5px;
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 4px;
-  padding: 1px 6px;
+  padding: 1px 5px;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  white-space: nowrap;
+
+  .boss-pill.active & {
+    background: var(--surface);
+  }
 }
 
-.pull-group-summary {
-  margin-left: auto;
-  font-size: 11.5px;
+.boss-pill-summary {
+  font-size: 10.5px;
   color: var(--text-faint);
+  white-space: nowrap;
 }
 
-.pull-group ol {
+.pull-chip-row {
   display: flex;
   gap: 8px;
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 4px 0 0;
+  // §mismo bug de CSS que las tablas del resto de la app: overflow-x:auto
+  // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
   overflow-x: auto;
+  overflow-y: visible;
+  border-top: 1px solid var(--surface-2);
+}
+
+// §"un 'todos los pulls' que reúna datos": mismo tamaño/sitio que un chip de
+// pull normal, pero SIN el borde rojo/verde de kill/wipe (no es un intento,
+// es una vía de navegación) — texto de acento en vez de estado.
+.history-link {
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px dashed var(--border-bright);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--surface-2);
+  }
 }
 
 .pull-chip {

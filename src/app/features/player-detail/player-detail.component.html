@@ -1,0 +1,83 @@
+@if (error(); as e) {
+  <p class="load-error" role="alert">{{ e }}</p>
+} @else if (loading()) {
+  <p class="loading">Cargando jugador…</p>
+} @else if (data(); as d) {
+  <div class="player-detail">
+    <a routerLink="/roster" class="back-link">← Volver al roster</a>
+
+    <header class="page-header">
+      <app-role-icon [role]="d.role" />
+      <h1>{{ d.playerName }}</h1>
+      @if (d.rank === 'Trial') {
+        <span class="trial-badge" title="Trial en wowaudit">Trial</span>
+      }
+    </header>
+
+    <section class="widget">
+      <h2 class="widget-heading">Fiabilidad — últimas {{ d.weeklyScores.length }} semanas</h2>
+      <app-trend-bars [bars]="weeklyBars()" />
+    </section>
+
+    @if (d.recentNights.length) {
+      <!-- §"un dosier de personaje de una noche concreta" (feedback real):
+           entrada al dosier por noche, no solo al agregado de 60 días. -->
+      <section class="widget">
+        <h2 class="widget-heading">Noches recientes</h2>
+        <div class="night-chips">
+          @for (night of d.recentNights; track night.reportCode) {
+            <a class="night-chip" [routerLink]="['/report', night.reportCode, 'player', d.playerName]">{{ night.date | date: 'd MMM' }}</a>
+          }
+        </div>
+      </section>
+    }
+
+    <section class="widget">
+      <h2 class="widget-heading">Muertes recientes</h2>
+      @if (!d.recentDeaths.length) {
+        <app-empty-panel icon="✓" message="Sin muertes registradas todavía." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Boss</th>
+                <th>Fecha</th>
+                <th>Mecánica</th>
+                <th>Causa</th>
+                <th>¿Defensivo disponible?</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (death of d.recentDeaths; track death.pullId) {
+                <tr [class.row-wipecall]="death.isWipeCall">
+                  <td class="cell-boss">
+                    <a [routerLink]="['/boss', death.bossId, death.difficulty]">{{ death.bossName }}</a>
+                    <span class="difficulty-tag">{{ death.difficulty }}</span>
+                  </td>
+                  <td class="tabular meta">{{ death.closedAt | date: 'd MMM, HH:mm' }}</td>
+                  <td class="cell-mechanic">
+                    @if (death.mechanicId) {
+                      <app-wowhead-link type="spell" [id]="death.mechanicId">{{ death.mechanicName ?? 'Sin identificar' }}</app-wowhead-link>
+                    } @else {
+                      {{ death.mechanicName ?? 'Sin identificar' }}
+                    }
+                    <app-mechanic-info-icon [note]="death.aiNote" />
+                    @if (categoryMeta(death.category); as meta) {
+                      <span class="cat-tag">{{ meta.short }}</span>
+                    }
+                    @if (death.isWipeCall) {
+                      <span class="cat-tag cat-tag-wipecall" title="Excluida de fiabilidad — cluster de wipe call confirmado">WIPE CALL</span>
+                    }
+                  </td>
+                  <td>{{ rootCauseLabel(death.rootCause, death.category) }}</td>
+                  <td [class.tone-danger]="death.preventableWithDefensive === true">{{ defensiveLabel(death.preventableWithDefensive) }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+  </div>
+}

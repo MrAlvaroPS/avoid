@@ -10,18 +10,28 @@
     <p class="error" role="alert">{{ e }}</p>
   }
 
+  <div class="season-sync-bar">
+    <button type="button" class="sync-btn" [disabled]="syncingSeason()" (click)="onSyncSeason()">
+      {{ syncingSeason() ? 'Sincronizando bosses de la season…' : 'Sincronizar bosses de la season' }}
+    </button>
+    <span class="hint">Trae la lista completa de bosses de la instancia actual (Blizzard + WCL), aunque no los hayáis pulleado todavía.</span>
+  </div>
+
   <div class="layout">
-    <nav class="boss-list" aria-label="Bosses vistos en vuestros reports">
+    <nav class="boss-list" aria-label="Bosses de la season">
       @if (loadingBosses()) {
         <p class="muted">Cargando bosses…</p>
       } @else if (bosses().length === 0) {
-        <p class="muted">Todavía no hay ningún boss — importa un report primero.</p>
+        <p class="muted">Todavía no hay ningún boss — importa un report o sincroniza la season arriba.</p>
       } @else {
         <ul>
           @for (boss of bosses(); track boss.encounterId) {
             <li>
               <button type="button" class="boss-btn" [class.selected]="boss.encounterId === selectedEncounterId()" (click)="selectBoss(boss.encounterId)">
                 {{ boss.bossName }}
+                @if (!boss.hasRealPulls) {
+                  <span class="no-pulls-badge" title="Conocido por el catálogo de la season — todavía sin pulls propios">sin pulls</span>
+                }
               </button>
             </li>
           }
@@ -33,10 +43,25 @@
       @if (selectedBoss(); as boss) {
         <div class="detail-header">
           <h2>{{ boss.bossName }}</h2>
+          <p class="no-pulls-note">
+            @if (!boss.hasRealPulls) {
+              Todavía no tenéis ningún pull de este boss — elige la dificultad a mano para poder sincronizar igual desde Blizzard + logs públicos.
+            } @else if (boss.difficulties.length < standardDifficultyIds.length) {
+              Solo tenéis pulls propios en {{ boss.difficulties.length }} de las 4 dificultades — puedes elegir cualquiera de las otras para sincronizarla igual desde Blizzard + logs públicos.
+            }
+          </p>
+          <!-- §"faltan las dificultades en los bosses que ya tienen pulls": antes
+               solo se ofrecían boss.difficulties (las vistas de verdad), así que
+               un boss con pulls SOLO en Normal no dejaba elegir Heroic/Mythic ni
+               para consultar ni para sincronizar — las 4 siempre están aquí, con
+               las vistas de verdad marcadas aparte. -->
           <div class="difficulty-tabs">
-            @for (diffId of boss.difficulties; track diffId) {
+            @for (diffId of standardDifficultyIds; track diffId) {
               <button type="button" [class.selected]="diffId === selectedDifficultyId()" (click)="selectDifficulty(diffId)">
                 {{ difficultyLabel(diffId) }}
+                @if (boss.difficulties.includes(diffId)) {
+                  <span class="has-pulls-dot" title="Tenéis pulls propios en esta dificultad">●</span>
+                }
               </button>
             }
           </div>
@@ -60,6 +85,73 @@
           <p class="sync-summary">{{ s }}</p>
         }
 
+        @if (candidates().length > 0) {
+          <!-- §"un prompt para pasar a la IA y que investigue... clasificar
+               todas las mecánicas de forma semi automática, con ayuda
+               manual" (feedback real): mismo patrón de dos pasos que el
+               análisis IA de un pull — copiar prompt / pegar respuesta —
+               acotado a este boss+dificultad exacto. -->
+          <div class="classify-bar">
+            @if (!classifyPanelOpen()) {
+              <button type="button" class="classify-toggle" (click)="openClassifyPanel()">🔎 Clasificar mecánicas con ayuda de una IA →</button>
+            }
+          </div>
+
+          @if (classifyPanelOpen()) {
+            <div class="classify-panel">
+              @if (loadingClassifyPrompt()) {
+                <p class="muted">Preparando el prompt…</p>
+              } @else if (classifyPromptError(); as pe) {
+                <p class="error" role="alert">{{ pe }}</p>
+              } @else {
+                <div class="classify-step">
+                  <span class="step-label">1. Copia el prompt y pégalo en un chat de IA con acceso a internet ({{ classifyMechanicCount() }} mecánicas)</span>
+                  <pre class="prompt-box">{{ classifyFullPrompt }}</pre>
+                  <button type="button" class="copy-btn" (click)="copyClassifyPrompt()">{{ classifyCopied() ? '✓ Copiado' : 'Copiar prompt' }}</button>
+                </div>
+                <div class="classify-step">
+                  <span class="step-label">2. Pega aquí el JSON que responda la IA</span>
+                  <textarea
+                    class="paste-box"
+                    rows="6"
+                    placeholder="Pega aquí el array JSON de clasificaciones…"
+                    [value]="classifyPasteText()"
+                    (input)="classifyPasteText.set($any($event.target).value)"
+                  ></textarea>
+                  @if (classifySubmitError(); as se) {
+                    <p class="error" role="alert">{{ se }}</p>
+                  }
+                  <div class="classify-actions">
+                    <button type="button" class="sync-btn" [disabled]="classifySubmitting() || !classifyPasteText().trim()" (click)="submitClassification()">
+                      {{ classifySubmitting() ? 'Aplicando…' : 'Aplicar clasificación' }}
+                    </button>
+                    <button type="button" class="classify-toggle" (click)="closeClassifyPanel()">Cancelar</button>
+                  </div>
+                </div>
+                @if (classifyResult(); as r) {
+                  <div class="classify-result">
+                    @if (r.applied.length) {
+                      <p class="result-line result-ok">✓ {{ r.applied.length }} mecánica{{ r.applied.length === 1 ? '' : 's' }} clasificada{{ r.applied.length === 1 ? '' : 's' }}: {{ r.applied.map((a) => a.name + ' → ' + a.category).join(', ') }}</p>
+                    }
+                    @if (r.skippedLowConfidence.length) {
+                      <p class="result-line result-warn">
+                        ⚠ {{ r.skippedLowConfidence.length }} con poca confianza, sin aplicar (revisa a mano):
+                        {{ r.skippedLowConfidence.map((s) => s.name + ' (sugerido ' + (s.category ?? 'ninguna') + ': ' + s.notes + ')').join(' · ') }}
+                      </p>
+                    }
+                    @if (r.skippedUndetermined.length) {
+                      <p class="result-line meta">— {{ r.skippedUndetermined.length }} sin determinar: {{ r.skippedUndetermined.map((s) => s.name).join(', ') }}</p>
+                    }
+                    @if (r.invalid.length) {
+                      <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada.</p>
+                    }
+                  </div>
+                }
+              }
+            </div>
+          }
+        }
+
         @if (loadingCandidates()) {
           <p class="muted">Cargando candidatas…</p>
         } @else if (candidates().length === 0) {
@@ -69,7 +161,7 @@
             <thead>
               <tr>
                 <th>Habilidad</th>
-                <th>Origen</th>
+                <th title="Razonamiento de la IA al clasificarla, si vino de ese flujo">IA</th>
                 <th>Visto en logs</th>
                 <th>Categoría</th>
                 <th>Evitable</th>
@@ -84,12 +176,28 @@
                     <app-wowhead-link type="spell" [id]="c.ability_id" class="name"
                       ><span class="name">{{ c.name }}</span></app-wowhead-link
                     >
-                    @if (c.description) {
-                      <span class="desc">{{ c.description }}</span>
+                    @if (c.name_es && c.name_es.toLowerCase() !== c.name.toLowerCase()) {
+                      <span class="desc">{{ c.name_es }}</span>
                     }
-                    <span class="meta">#{{ c.ability_id }} · {{ c.observed_in_logs ? 'visto en vuestros logs' : 'no visto todavía' }}</span>
+                    <span class="meta">#{{ c.ability_id }} · {{ c.observed_in_logs ? 'visto en vuestros logs' : 'no visto todavía' }} · {{ c.difficulty_mapping_status }}</span>
+                    @if (crossDifficultyNote(c); as note) {
+                      <p class="cross-difficulty-note">⚠ {{ note }}</p>
+                    }
                   </td>
-                  <td class="meta">{{ c.difficulty_mapping_status }}</td>
+                  <td>
+                    <!-- §"ponlo en el lugar de la columna 'origen'... así
+                         tenemos las notas junto al nombre de la habilidad"
+                         (feedback real): antes vivía dentro de la celda de
+                         Categoría — el origen (difficulty_mapping_status)
+                         ya no necesita columna propia (se fue arriba, junto
+                         al nombre), así que este hueco pasa a ser el sitio
+                         del razonamiento de la IA, pegado a la habilidad. -->
+                    @if (c.ai_classification; as ai) {
+                      <app-mechanic-info-icon [note]="ai.notes" [label]="'IA (' + (ai.confidence === 'high' ? 'alta' : 'media') + ' confianza)'" />
+                    } @else {
+                      <span class="meta">—</span>
+                    }
+                  </td>
                   <td>
                     @if (hitStatFor(c.ability_id); as stat) {
                       <span class="hit-stat"
@@ -105,13 +213,19 @@
                     }
                   </td>
                   <td>
-                    <select
-                      [value]="c.category ?? c.inferred_category ?? ''"
-                      (change)="onEdit(c, { category: $any($event.target).value || null })"
-                    >
-                      <option value="">Sin categoría</option>
+                    <!-- §bug real encontrado (2026-08-23, feedback real: "aunque marca
+                         confirmado, en el desplegable no cambia nada y sigue 'sin
+                         categoría'"): [value] en el <select> compite con las <option>
+                         generadas por @for — el navegador puede intentar aplicar el
+                         value ANTES de que esas opciones existan en el DOM y se queda
+                         pegado en la primera, aunque el dato (c.category) sea correcto
+                         (por eso "✓ confirmada" sí acertaba y el desplegable no). Se
+                         marca [selected] en cada <option> individualmente en vez de
+                         fiarlo todo a un solo [value] en el padre — inmune al orden. -->
+                    <select (change)="onEdit(c, { category: $any($event.target).value || null })">
+                      <option value="" [selected]="!c.category && !c.inferred_category">Sin categoría</option>
                       @for (cat of categories; track cat) {
-                        <option [value]="cat">{{ cat }}</option>
+                        <option [value]="cat" [selected]="cat === (c.category ?? c.inferred_category)">{{ cat }}</option>
                       }
                     </select>
                     @if (c.category) {
@@ -132,13 +246,11 @@
                     }
                   </td>
                   <td>
-                    <select
-                      [value]="c.avoidable === null ? '' : c.avoidable ? 'yes' : 'no'"
-                      (change)="onEdit(c, { avoidable: $any($event.target).value === '' ? null : $any($event.target).value === 'yes' })"
-                    >
-                      <option value="">Sin decidir</option>
-                      <option value="yes">Sí</option>
-                      <option value="no">No</option>
+                    <!-- Mismo arreglo que la categoría de arriba, por consistencia — aquí las opciones son estáticas (no @for) así que era menos probable que fallara, pero el patrón [selected] por option es el robusto de verdad. -->
+                    <select (change)="onEdit(c, { avoidable: $any($event.target).value === '' ? null : $any($event.target).value === 'yes' })">
+                      <option value="" [selected]="c.avoidable === null">Sin decidir</option>
+                      <option value="yes" [selected]="c.avoidable === true">Sí</option>
+                      <option value="no" [selected]="c.avoidable === false">No</option>
                     </select>
                   </td>
                   <td>

@@ -9,22 +9,38 @@
       <table>
         <thead>
           <tr>
+            <th></th>
+            <th></th>
             <th>Jugador</th>
             <th>Clase / spec</th>
+            <th title="Percentil real de WCL contra el mundo, misma clase/spec, este boss+dificultad">Percentil</th>
             <th class="chart-col">DPS</th>
             <th class="chart-col">HPS</th>
             <th>Absorbido</th>
-            <th>Talentos</th>
-            <th>Trinkets</th>
-            <th>Defensivos usados</th>
             <th>Consumibles</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           @for (p of players(); track p.playerName) {
-            <tr [class.died]="p.died">
-              <td>{{ p.playerName }}{{ p.died ? ' 💀' : '' }}</td>
-              <td>{{ p.spec ? p.spec + ' ' : '' }}{{ p.class ?? '—' }}</td>
+            <!-- Fila compacta, SIEMPRE la misma altura — el detalle pesado
+                 (talentos/trinkets/defensivos, longitud muy variable de
+                 jugador a jugador) vive aparte, en la fila de abajo, para no
+                 forzar la altura de ESTA fila a la de la celda más larga. -->
+            <tr class="summary-row" [class.died]="p.died" (click)="toggleDetail(p.playerName)">
+              <td class="death-col">{{ p.died ? '💀' : '' }}</td>
+              <td class="role-col"><app-role-icon [role]="p.role" /></td>
+              <td class="player-col">{{ p.playerName }}</td>
+              <td class="class-col">{{ p.spec ? p.spec + ' ' : '' }}{{ p.class ?? '—' }}</td>
+              <td>
+                @if (p.worldRankPercent != null) {
+                  <span class="percentile-badge" [class]="'tone-' + percentileTone(p.worldRankPercent)" [title]="'Sobre ' + (p.worldTotalParses | number: '1.0-0') + ' parses reales de esta clase/spec en este boss+dificultad'">
+                    {{ p.worldRankPercent | number: '1.0-0' }}
+                  </span>
+                } @else {
+                  <span class="meta">—</span>
+                }
+              </td>
               <td class="chart-col">
                 <div class="bar-row" [title]="(p.dps | number: '1.0-0') + ' DPS'">
                   <div class="bar-track"><div class="bar-fill dps" [style.width.%]="(p.dps / maxDps()) * 100"></div></div>
@@ -38,80 +54,125 @@
                 </div>
               </td>
               <td class="tabular">{{ p.absorbedDamageTaken | number: '1.0-0' }}</td>
-              <td class="talents-cell">
-                <button type="button" class="mini-toggle" (click)="toggleTalents(p.playerName)">
-                  {{ p.talents.length }} talento{{ p.talents.length === 1 ? '' : 's' }}
-                  @if (p.talentUnresolvedCount) {
-                    <span class="unresolved-note">(+{{ p.talentUnresolvedCount }} sin resolver)</span>
-                  }
-                  <span aria-hidden="true">{{ expandedTalents().has(p.playerName) ? '▲' : '▼' }}</span>
-                </button>
-                @if (expandedTalents().has(p.playerName)) {
-                  <div class="talent-chips">
-                    @for (t of p.talents; track t.spellId) {
-                      <app-wowhead-link type="spell" [id]="t.spellId">#{{ t.spellId }}</app-wowhead-link>
-                    }
-                  </div>
+              <td class="consumables-summary-col">
+                @for (c of consumableSummary(p); track c.icon) {
+                  <span class="consumable-dot" [class.ok]="c.ok" [class.missing]="!c.ok" [title]="c.title">{{ c.icon }}</span>
                 }
               </td>
-              <td class="tabular trinkets">
-                <!-- Bug real encontrado en real (filas de la tabla con
-                     muchísimo alto de más): el <app-wowhead-link> y el texto
-                     "(ilvl N)" eran DOS hijos sueltos dentro de un
-                     contenedor flex-column — cada uno se convertía en su
-                     propio flex item y se apilaban en dos líneas por
-                     trinket en vez de leerse "Nombre (ilvl N)" en una. Un
-                     único <span> por trinket = un único flex item. -->
-                @if (p.trinkets.length) {
-                  @for (t of p.trinkets; track t.itemId) {
-                    <span class="trinket-row">
-                      @if (t.name) {
-                        <app-wowhead-link type="item" [id]="t.itemId">{{ t.name }}</app-wowhead-link>
-                      } @else {
-                        <span>Ítem #{{ t.itemId }}</span>
-                      }
-                      (ilvl {{ t.itemLevel }})
-                    </span>
-                  }
-                } @else {
-                  —
-                }
-              </td>
-              <td class="defensives-cell">
-                @if (p.defensivesUsed.length) {
-                  @for (d of p.defensivesUsed; track d.spellId) {
-                    <span class="defensive-use" [title]="d.name + ' — usado en: ' + timeList(d.timestampsMs)">
-                      <app-wowhead-link type="spell" [id]="d.spellId">{{ d.name }}</app-wowhead-link>
-                      <span class="count-badge tabular">×{{ d.count }}</span>
-                    </span>
-                  }
-                } @else {
-                  <span class="none-used">ninguno</span>
-                }
-              </td>
-              <td class="consumables-cell">
-                @if (p.consumables.healthstone; as stone) {
-                  <span class="consumable-status" [class.status-used]="stone.used" [class.status-missed]="!stone.used && stone.available">
-                    🪨 Piedra: {{ stone.used ? 'usada ×' + stone.count : stone.available ? 'disponible, sin usar' : 'sin brujo en raid' }}
-                  </span>
-                } @else {
-                  <span class="consumable-status">🪨 Piedra: pull sin reprocesar</span>
-                }
-                @if (p.consumables.healthPotion; as potion) {
-                  <span class="consumable-status" [class.status-used]="potion.used">🧪 Poción: {{ potion.used ? 'usada ×' + potion.count : 'sin usar' }}</span>
-                } @else {
-                  <span class="consumable-status">🧪 Poción: pull sin reprocesar</span>
-                }
+              <td class="expand-col">
+                <span aria-hidden="true">{{ expandedPlayers().has(p.playerName) ? '▲' : '▼' }}</span>
               </td>
             </tr>
+
+            @if (expandedPlayers().has(p.playerName)) {
+              <tr class="detail-row">
+                <td colspan="10">
+                  <div class="detail-grid">
+                    <div class="detail-block">
+                      <h4>Talentos</h4>
+                      @if (p.talents.length) {
+                        <!-- Icono + tooltip de Wowhead, sin texto — el ID en
+                             pantalla ("#414659") no le dice nada a nadie. -->
+                        <div class="icon-chips">
+                          @for (t of p.talents; track t.spellId) {
+                            <app-wowhead-link type="spell" [id]="t.spellId" class="icon-only" />
+                          }
+                        </div>
+                      } @else {
+                        <span class="meta">—</span>
+                      }
+                      @if (p.talentUnresolvedCount) {
+                        <p class="unresolved-note">+{{ p.talentUnresolvedCount }} nodos sin resolver a spellId</p>
+                      }
+                    </div>
+
+                    <div class="detail-block">
+                      <h4>Equipo</h4>
+                      @if (p.gear.length) {
+                        <div class="icon-chips">
+                          @for (g of p.gear; track g.slot) {
+                            <app-wowhead-link type="item" [id]="g.itemId" class="icon-only" [attr.title]="'ilvl ' + g.itemLevel" />
+                          }
+                        </div>
+                      } @else {
+                        <span class="meta">—</span>
+                      }
+                    </div>
+
+                    <div class="detail-block">
+                      <h4>Defensivos usados</h4>
+                      @if (p.defensivesUsed.length) {
+                        @for (d of p.defensivesUsed; track d.spellId) {
+                          <div class="defensive-use">
+                            <app-wowhead-link type="spell" [id]="d.spellId">{{ d.name }}</app-wowhead-link>
+                            <span class="cast-times">
+                              @for (c of d.casts; track c.timeMs; let last = $last) {
+                                <span class="cast-time tabular" [class.close-to-death]="c.closeToDeath" [title]="c.closeToDeath ? 'A menos de 10s de morir' : ''"
+                                  >{{ formatTime(c.timeMs) }}</span
+                                >{{ last ? '' : ', ' }}
+                              }
+                            </span>
+                          </div>
+                        }
+                      } @else {
+                        <span class="meta">ninguno</span>
+                      }
+                    </div>
+
+                    <div class="detail-block">
+                      <h4>Defensivos al morir</h4>
+                      @if (p.defensiveStatusAtDeath === null) {
+                        <span class="meta">no murió</span>
+                      } @else if (!p.defensiveStatusAtDeath.length) {
+                        <span class="meta">sin catálogo para su clase/spec</span>
+                      } @else {
+                        @for (opt of p.defensiveStatusAtDeath; track opt.spellId) {
+                          @if (opt.status === 'on_cooldown') {
+                            <div class="defensive-cd-row">
+                              <app-wowhead-link type="spell" [id]="opt.spellId">{{ opt.name }}</app-wowhead-link>
+                              <!-- §"Feint (dura 6s) y al lado -8, ¿incongruencia?" (feedback
+                                   real): el tooltip de Wowhead da la DURACIÓN del efecto —
+                                   esto es un dato totalmente distinto, cuánto le FALTABA de
+                                   COOLDOWN para poder volver a lanzarlo. Un "−8s" pelado
+                                   al lado de un tooltip de duración se lee como si fuera
+                                   la misma magnitud — la etiqueta ahora lo deja explícito. -->
+                              <span class="cd-remaining tabular">{{ opt.cooldownRemainingMs != null ? 'en cooldown, quedaban ' + (opt.cooldownRemainingMs / 1000 | number: '1.0-0') + 's' : 'en cooldown (sin dato de cuánto quedaba)' }}</span>
+                            </div>
+                          }
+                        }
+                        @if (!hasAnyOnCooldown(p)) {
+                          <span class="meta">ninguno en cooldown</span>
+                        }
+                      }
+                    </div>
+
+                    <div class="detail-block">
+                      <h4>Consumibles</h4>
+                      @if (p.consumables.healthstone; as stone) {
+                        <span class="consumable-status" [class.status-used]="stone.used" [class.status-missed]="!stone.used && stone.available">
+                          🪨 {{ stone.used ? 'Piedra usada ×' + stone.count : stone.available ? 'Piedra disponible, sin usar' : 'Sin Warlock en la raid' }}
+                        </span>
+                      } @else {
+                        <span class="consumable-status">🪨 pull sin reprocesar</span>
+                      }
+                      @if (p.consumables.healthPotion; as potion) {
+                        <span class="consumable-status" [class.status-used]="potion.used">🧪 {{ potion.used ? 'Poción usada ×' + potion.count : 'Poción sin usar' }}</span>
+                      } @else {
+                        <span class="consumable-status">🧪 pull sin reprocesar</span>
+                      }
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            }
           }
         </tbody>
       </table>
       <p class="note">
         DPS/HPS: daño o curación total del jugador dividido entre la duración del pull (no descuenta huecos sin
         objetivo, puede ir algo por debajo del DPS que enseña WCL) — barras a escala del máximo de este pull.
-        Defensivos: TODOS los casts durante el pull completo, no solo el instante de morir — pasa el ratón sobre
-        cada uno para ver a qué segundos exactos se usó.
+        Defensivos: TODOS los casts durante el pull completo, no solo el instante de morir. Clic en una fila para
+        ver talentos/trinkets/defensivos completos.
       </p>
     </div>
   }

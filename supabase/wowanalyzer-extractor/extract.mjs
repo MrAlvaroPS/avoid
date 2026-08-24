@@ -146,6 +146,42 @@ function buildConstantIndex(root) {
   return index;
 }
 
+// Bug real reportado en real (2026-08-22, ver cooldown_catalog en Supabase):
+// un Mistweaver veía "Touch of Karma" (defensivo exclusivo de Windwalker) en
+// su rosco de defensivos. La causa raíz eran DOS bugs apilados: (a) el
+// consumidor (_shared/defensive-cooldowns.ts) nunca filtraba por `spec`
+// aunque la columna existe — ya arreglado ahí — y (b) ESTA función fijaba
+// `spec: null` para TODO lo extraído, sin condición. La fila viva de
+// cooldown_catalog demuestra que (b) es una REGRESIÓN, no el diseño
+// original: ya había specs reales guardadas ("Havoc", "Blood", "Protection",
+// "Feral/Guardian"...) que solo pudieron salir de leer el propio path del
+// fichero — src/analysis/retail/{clase}/{spec}/.../Abilities.tsx, spec justo
+// un nivel por debajo de la clase, salvo que el fichero viva directamente en
+// la carpeta de la clase o en una carpeta "shared" (esos dos casos sí son
+// compartidos de verdad entre specs). Reconstruido aquí a partir del propio
+// path en vez de una tabla de traducción a mano — sin poder verificarlo
+// contra un checkout real del repo en este momento, así que la primera
+// ejecución real tras este cambio hay que revisarla a mano contra el
+// spellbook real de cada spec antes de confiar del todo en las specs nuevas
+// que aparezcan (el resto del pipeline ya verifica spellId 1:1 contra
+// Blizzard, pero eso no confirma la SPEC, solo que el hechizo existe).
+function extractSpecFromPath(file, classSegment) {
+  const normalized = file.replace(/\\/g, '/');
+  const marker = `analysis/retail/${classSegment}/`;
+  const idx = normalized.indexOf(marker);
+  if (idx === -1) return null;
+  const rest = normalized.slice(idx + marker.length);
+  const nextSegment = rest.split('/')[0];
+  if (!nextSegment || /^Abilities\.tsx?$/.test(nextSegment) || /^shared$/i.test(nextSegment)) return null;
+  return nextSegment
+    .replace(/[-_]/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
 function extractCatalog(repoRoot) {
   const retailDir = join(repoRoot, 'src/analysis/retail');
   const files = walk(retailDir, (name) => name === 'Abilities.tsx' || name === 'Abilities.ts');
@@ -159,6 +195,7 @@ function extractCatalog(repoRoot) {
     if (!m) continue;
     const wclClass = CLASS_MAP[m[1]];
     if (!wclClass) continue;
+    const spec = extractSpecFromPath(file, m[1]);
 
     const text = readFileSync(file, 'utf8');
     for (const { block, subCategory } of extractDefensiveBlocks(text)) {
@@ -166,16 +203,25 @@ function extractCatalog(repoRoot) {
       if (!ref) continue;
       const resolved = constantIndex.get(`${ref.source}.${ref.key}`);
       if (!resolved) continue;
+      // La clave YA NO es solo clase+id: la misma spell puede vivir en dos
+      // Abilities.tsx de specs distintas de la misma clase (ej. una defensiva
+      // compartida re-declarada en cada carpeta de spec en vez de en
+      // "shared") — si eso pasa, gana la primera con spec no-null encontrada
+      // en vez de la primera a secas, para no perder la información de spec
+      // por el orden en que walk() recorra el filesystem.
       const key = `${wclClass}|${resolved.id}`;
-      if (!byClassAndId.has(key)) {
+      const existing = byClassAndId.get(key);
+      if (!existing) {
         byClassAndId.set(key, {
           class: wclClass,
-          spec: null,
+          spec,
           spell_id: resolved.id,
           name: resolved.name,
           category: subCategory === 'DEFENSIVE' ? 'personal_defensive' : 'semi_defensive',
           base_cooldown_ms: extractBaseCooldownMs(block),
         });
+      } else if (existing.spec == null && spec != null) {
+        existing.spec = spec;
       }
     }
   }

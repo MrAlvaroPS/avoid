@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { resyncMechanicCategory } from '../_shared/resync-mechanic-category.ts';
 
 interface EditRequest {
   bossId: string;
@@ -12,6 +13,11 @@ interface EditRequest {
   reviewed?: boolean;
 }
 
+// §bug real encontrado (2026-08-23): faltaban 'healing-absorb' y
+// 'personal-target' — ambas categorías válidas desde hace tiempo (ver el
+// enum de boss_mechanics_candidates y CATEGORIES en manifest.component.ts),
+// pero guardar cualquiera de las dos a mano desde Ajustes fallaba en
+// silencio contra esta lista desactualizada.
 const VALID_CATEGORIES = new Set([
   'tankbuster',
   'raid-damage',
@@ -20,6 +26,9 @@ const VALID_CATEGORIES = new Set([
   'interrupt',
   'soak',
   'spread',
+  'healing-absorb',
+  'personal-target',
+  'enrage',
 ]);
 
 Deno.serve(async (req: Request) => {
@@ -44,7 +53,7 @@ Deno.serve(async (req: Request) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from('boss_mechanics_candidates')
     .update({
       category: body.category ?? null,
@@ -56,10 +65,24 @@ Deno.serve(async (req: Request) => {
     })
     .eq('boss_id', body.bossId)
     .eq('difficulty', body.difficulty)
-    .eq('ability_id', body.abilityId);
+    .eq('ability_id', body.abilityId)
+    .select('name')
+    .maybeSingle();
 
   if (error) {
     return jsonResponse({ ok: false, error: error.message }, 500);
   }
+
+  // §"Uncoiling sale sin clasificar... confirmada en Ajustes — falta ahí
+  // cruce de datos" (feedback real): sin esto, confirmar una categoría
+  // aquí no llegaba nunca a los pulls YA analizados (pull_mechanic_events/
+  // death_cause quedan congelados desde analyze-report) — ver
+  // resync-mechanic-category.ts. Se re-marca por NOMBRE, no por
+  // ability_id — el ability_id del manifiesto (Journal) casi nunca
+  // coincide con el que WCL guardó de verdad en los eventos.
+  if (body.category && updated?.name) {
+    await resyncMechanicCategory(supabase, body.bossId, body.difficulty, updated.name, body.category);
+  }
+
   return jsonResponse({ ok: true });
 });

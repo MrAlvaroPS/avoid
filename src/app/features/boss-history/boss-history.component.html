@@ -1,0 +1,157 @@
+@if (error(); as e) {
+  <p class="load-error" role="alert">{{ e }}</p>
+} @else if (loading()) {
+  <p class="loading">Cargando histórico…</p>
+} @else if (data(); as d) {
+  <div class="boss-history">
+    <a routerLink="/" class="back-link">← Volver a la raid</a>
+
+    <header class="page-header">
+      <h1>{{ d.bossName }}</h1>
+      <span class="difficulty-badge">{{ d.difficulty }}</span>
+    </header>
+
+    <div class="stat-row">
+      <div class="stat">
+        <span class="stat-value tabular">{{ d.totalPulls }}</span>
+        <span class="stat-label">intentos totales</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value tabular">{{ d.totalKills }}</span>
+        <span class="stat-label">kills</span>
+      </div>
+      @if (d.firstKillAt) {
+        <div class="stat">
+          <span class="stat-value tabular">{{ d.firstKillAt | date: 'd MMM y' }}</span>
+          <span class="stat-label">primera kill</span>
+        </div>
+      }
+      @if (d.bestKillDurationMs != null) {
+        <div class="stat">
+          <span class="stat-value tabular">{{ formatDuration(d.bestKillDurationMs) }}</span>
+          <span class="stat-label">mejor tiempo</span>
+        </div>
+      }
+    </div>
+
+    @if (d.referencePacing) {
+      <app-compare-bar-row [pacing]="d.referencePacing" />
+    }
+
+    <section class="widget">
+      <h2 class="widget-heading">Progresión — {{ d.totalPulls }} intentos</h2>
+      <app-trend-bars [bars]="progressionBars()" />
+    </section>
+
+    <section class="widget">
+      <h2 class="widget-heading">Mecánicas: tendencia</h2>
+      @if (!d.mechanicTrends.length) {
+        <app-empty-panel icon="✓" message="Ninguna mecánica ha fallado todavía en este boss+dificultad." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mecánica</th>
+                <th class="align-right">1ª mitad</th>
+                <th class="align-right">2ª mitad</th>
+                <th>Tendencia</th>
+                <th class="align-right">Fallos / instancias</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (m of d.mechanicTrends; track m.abilityId) {
+                <tr>
+                  <td class="cell-mechanic">
+                    <app-wowhead-link type="spell" [id]="m.abilityId" class="icon-only" />
+                    <span>{{ m.name }}</span>
+                    <app-mechanic-info-icon [note]="m.aiNote" />
+                    @if (categoryMeta(m.category); as meta) {
+                      <span class="cat-tag">{{ meta.short }}</span>
+                    }
+                  </td>
+                  <td class="tabular align-right">{{ m.firstHalfFailRate != null ? formatPct(m.firstHalfFailRate * 100) : '—' }}</td>
+                  <td class="tabular align-right">{{ m.secondHalfFailRate != null ? formatPct(m.secondHalfFailRate * 100) : '—' }}</td>
+                  <td>
+                    <span
+                      class="trend-tag"
+                      [class.tone-improving]="m.trend === 'improving'"
+                      [class.tone-worsening]="m.trend === 'worsening'"
+                      [class.tone-flat]="m.trend === 'flat'"
+                      >{{ trendLabel(m.trend) }}</span
+                    >
+                  </td>
+                  <td class="tabular align-right meta">{{ m.totalFails }} / {{ m.totalInstances }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+
+    <section class="widget">
+      <h2 class="widget-heading">Causas de muerte más repetidas</h2>
+      @if (!d.topDeathCauses.length) {
+        <app-empty-panel icon="✓" message="Sin muertes registradas todavía en este boss+dificultad." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mecánica</th>
+                <th class="align-right">Muertes</th>
+                <th class="align-right">Jugadores distintos</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of d.topDeathCauses; track c.mechanicName) {
+                <tr>
+                  <td class="cell-mechanic">
+                    @if (c.wowheadSpellId) {
+                      <app-wowhead-link type="spell" [id]="c.wowheadSpellId" class="icon-only" />
+                    }
+                    <span>{{ c.mechanicName }}</span>
+                    <app-mechanic-info-icon [note]="c.aiNote" />
+                  </td>
+                  <td class="tabular align-right">{{ c.deathCount }}</td>
+                  <td class="tabular align-right">{{ c.distinctPlayers }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+
+    <section class="widget">
+      <h2 class="widget-heading">Fiabilidad en este boss</h2>
+      @if (!d.roster.length) {
+        <app-empty-panel icon="🛡️" message="Sin datos evaluables todavía." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th></th>
+                <th>Jugador</th>
+                <th>Fiabilidad</th>
+                <th class="align-right">Muestra</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (p of d.roster; track p.playerName) {
+                <tr>
+                  <td class="role-col"><app-role-icon [role]="p.role" /></td>
+                  <td class="cell-player">{{ p.playerName }}</td>
+                  <td><span class="reliability-badge" [class]="'tone-' + reliabilityTone(p.overall)">{{ p.overall }}</span></td>
+                  <td class="tabular align-right meta">{{ p.sampleSize }} pull{{ p.sampleSize === 1 ? '' : 's' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+  </div>
+}

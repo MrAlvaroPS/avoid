@@ -134,6 +134,65 @@ export async function getJournalEncounterWithNamespace(
   return { encounter: payload, namespace };
 }
 
+/**
+ * Mismo endpoint que getJournalEncounter pero forzando un locale concreto
+ * (ignora BLIZZARD_LOCALE) — §"las habilidades deberían estar en inglés y de
+ * subtítulo en castellano para poder localizarlas bien" (feedback real): el
+ * resto del cliente pide en en_US a propósito (para que searchJournalEncounter
+ * case con los nombres de boss de WCL, siempre en inglés), así que el nombre
+ * en castellano de cada habilidad hace falta como una llamada aparte.
+ */
+export async function getJournalEncounterLocalized(journalEncounterId: number, locale: string): Promise<JournalEncounter> {
+  const token = await getAccessToken();
+  const url = new URL(`https://${region()}.api.blizzard.com/data/wow/journal-encounter/${journalEncounterId}`);
+  url.searchParams.set('namespace', `static-${region()}`);
+  url.searchParams.set('locale', locale);
+  const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Blizzard Game Data journal-encounter (${locale}) -> HTTP ${res.status}`);
+  return res.json();
+}
+
+// --- journal-instance: catálogo de raids/mazmorras (§9.1) ------------------
+// No existe /data/wow/search/journal-instance (verificado en real: HTTP
+// 404) — a diferencia de journal-encounter, la única vía real es el índice
+// completo (/data/wow/journal-instance/index, ~213 entradas) y filtrar en
+// memoria. Cacheado en memoria: la lista de instancias no cambia dentro de
+// la vida de una misma invocación de función, y varias no van a repetir la
+// misma llamada de 213 filas para lo mismo.
+interface JournalInstanceIndexEntry {
+  id: number;
+  name: string;
+}
+let cachedInstanceIndex: JournalInstanceIndexEntry[] | null = null;
+
+export interface JournalInstanceEncounter {
+  id: number;
+  name: string;
+}
+export interface JournalInstanceDetail {
+  id: number;
+  name: string;
+  encounters?: JournalInstanceEncounter[];
+  order_index?: number;
+}
+
+async function getJournalInstanceIndex(): Promise<JournalInstanceIndexEntry[]> {
+  if (cachedInstanceIndex) return cachedInstanceIndex;
+  const data = await gameDataGet<{ instances?: JournalInstanceIndexEntry[] }>('/data/wow/journal-instance/index');
+  cachedInstanceIndex = data.instances ?? [];
+  return cachedInstanceIndex;
+}
+
+/** Busca una instancia (raid/mazmorra) por nombre exacto (case-insensitive) — no hay endpoint de búsqueda real para journal-instance, así que se filtra el índice completo. */
+export async function findJournalInstanceByName(name: string): Promise<JournalInstanceIndexEntry | null> {
+  const index = await getJournalInstanceIndex();
+  return index.find((i) => i.name.toLowerCase() === name.toLowerCase()) ?? null;
+}
+
+export async function getJournalInstance(journalInstanceId: number): Promise<JournalInstanceDetail> {
+  return gameDataGet<JournalInstanceDetail>(`/data/wow/journal-instance/${journalInstanceId}`);
+}
+
 let cachedNamespace: string | null | undefined;
 
 /**
@@ -187,6 +246,53 @@ export async function getSpecName(specId: number): Promise<string | null> {
     return data.name;
   } catch {
     specNameCache.set(specId, null);
+    return null;
+  }
+}
+
+// tildes fuera tras NFKD (wowaudit da nombres de reino con acentos, la API
+// los quiere sin) — rango Unicode de marcas diacríticas combinantes (U+0300
+// a U+036F) construido con String.fromCharCode a partir de puntos de código
+// en vez de caracteres literales en el fuente, para no arriesgarse a que la
+// codificación del archivo los corrompa.
+const COMBINING_MARKS = new RegExp(`[${String.fromCharCode(0x0300)}-${String.fromCharCode(0x036f)}]`, 'g');
+
+function slugify(value: string): string {
+  return value
+    .normalize('NFKD')
+    .replace(COMBINING_MARKS, '')
+    .toLowerCase()
+    // §bug real encontrado (2026-08-23, verificado contra la API real: solo
+    // 18/30 avatares se resolvieron): el slug oficial de Blizzard ELIMINA
+    // el apóstrofe ("C'Thun" -> "cthun", "Zul'jin" -> "zuljin"), no lo
+    // convierte en guión — antes de colapsar el resto de símbolos (que sí
+    // se convierten en guión, ej. espacios: "Bleeding Hollow" -> "bleeding-hollow").
+    .replace(/'/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * §"un poco como un dosier de personaje... una foto suya de perfil si
+ * podemos tenerla (de su personaje)": Character Media API — un namespace
+ * DISTINTO al resto de este cliente (profile-{region}, no static-{region}),
+ * pero mismo token de app (client_credentials) — no hace falta OAuth de
+ * usuario para leer datos públicos de personaje. Best-effort: null si el
+ * personaje no existe con ese nombre+reino, tiene el perfil oculto, o
+ * cualquier otro fallo — nunca debe tumbar el sync del roster por esto.
+ */
+export async function getCharacterAvatarUrl(realmName: string, characterName: string): Promise<string | null> {
+  try {
+    const token = await getAccessToken();
+    const url = new URL(`https://${region()}.api.blizzard.com/profile/wow/character/${slugify(realmName)}/${characterName.toLowerCase()}/character-media`);
+    url.searchParams.set('namespace', `profile-${region()}`);
+    url.searchParams.set('locale', locale());
+    const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const assets = (data.assets ?? []) as { key: string; value: string }[];
+    return assets.find((a) => a.key === 'avatar')?.value ?? null;
+  } catch {
     return null;
   }
 }

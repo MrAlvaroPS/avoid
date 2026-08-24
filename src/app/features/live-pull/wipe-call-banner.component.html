@@ -1,0 +1,26 @@
+<section class="wipe-banner" [class.is-restored]="!excluded()" aria-live="polite">
+  <div class="row">
+    <span class="icon" aria-hidden="true">🏳️</span>
+    <span class="headline">
+      @if (excluded()) {
+        Posible wipe call detectado ({{ confidence() }}% de confianza) — excluido de fiabilidad, métricas y racha.
+      } @else {
+        Wipe call detectado pero restaurado a mano — vuelve a contar en todas las estadísticas.
+      }
+    </span>
+    <button type="button" class="link-btn" (click)="detailsOpen.set(!detailsOpen())">{{ detailsOpen() ? 'ocultar evidencia' : 'ver evidencia' }}</button>
+    <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="toggle()">
+      {{ toggling() ? 'Guardando…' : excluded() ? 'No fue un wipe call →' : 'Marcar como wipe call →' }}
+    </button>
+  </div>
+  @if (detailsOpen()) {
+    <ul class="signal-list">
+      @for (line of signalLines(); track line) {
+        <li>{{ line }}</li>
+      }
+    </ul>
+  }
+  @if (error(); as e) {
+    <p class="banner-error" role="alert">{{ e }}</p>
+  }
+</section>

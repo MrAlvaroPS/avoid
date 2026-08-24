@@ -16,6 +16,17 @@
       [referencePacing]="d.header.referencePacing"
     />
 
+    @if (d.wipeCall; as wc) {
+      <app-wipe-call-banner
+        class="area-wipecall"
+        [pullId]="d.pullId"
+        [confidence]="wc.confidence"
+        [excluded]="wc.excluded"
+        [signals]="wc.signals"
+        (statusChanged)="onWipeCallStatusChanged()"
+      />
+    }
+
     <app-metrics-row class="area-metrics" [metrics]="d.metrics" [loading]="loading()" (provenanceRequested)="activeProvenance.set($event)" />
 
     <!-- Widget nuevo: progreso entre intentos — mismos datos que ya se
@@ -26,20 +37,19 @@
       <app-trend-bars [bars]="d.progressTrend" />
     </section>
 
-    <section class="widget area-timeline" aria-labelledby="timeline-heading">
-      <h2 id="timeline-heading" class="widget-heading">Daño recibido y mecánicas</h2>
-      <app-raid-damage-chart
-        [chips]="d.timeline"
-        [background]="d.backgroundMechanics"
-        [series]="d.raidDamageSeries"
-        [durationMs]="d.header.durationMs"
-        [loading]="loading()"
-        (chipSelected)="onTimelineChipSelected($event)"
-      />
-    </section>
+    <!-- §7.2 .compare-bar-row: antes una línea de texto en la cabecera, ahora
+         componente propio con más peso visual — mismo dato de siempre
+         (boss_reference_stats), solo aparece en un kill con referencia. -->
+    <app-compare-bar-row class="area-compare" [pacing]="d.header.referencePacing" />
 
-    <!-- Orden visual y de teclado: cabecera → métricas → timeline → callouts → análisis IA (§15.1). -->
-    <app-coaching-callout-list class="area-callouts" [callouts]="d.callouts" (calloutSelected)="onCalloutSelected($event)" />
+    <!-- Orden visual y de teclado: cabecera → métricas → callouts → análisis IA (§15.1). -->
+    <app-coaching-callout-list
+      class="area-callouts"
+      [callouts]="d.callouts"
+      [mechanicFails]="d.mechanicFails"
+      [groupMechanicFailCount]="d.groupMechanicFailCount"
+      (provenanceRequested)="activeProvenance.set($event)"
+    />
 
     <!-- Dos roscos nuevos: de qué está hecho el pull (categoría de
          mecánica) y cuánta defensa se desperdició en las muertes, en
@@ -55,9 +65,35 @@
       <app-donut-chart [segments]="d.defensiveStatusBreakdown" centerLabel="evaluados" (segmentSelected)="onDonutSegmentSelected($event, 'defensiveOptions de cada muerte agrupado por estado')" />
     </section>
 
-    <app-llm-analysis-card class="area-brief" [analysis]="d.brief" [generating]="generatingBrief()" [error]="briefError()" (generateRequested)="onGenerateBrief()" />
+    <app-llm-analysis-card
+      class="area-brief"
+      scope="pull"
+      [pullId]="d.pullId"
+      [entities]="briefEntities()"
+      [analysis]="d.brief"
+      [generating]="generatingBrief()"
+      [error]="briefError()"
+      (generateRequested)="onGenerateBrief()"
+      (manualBriefSaved)="onManualBriefSaved($event)"
+    />
 
     <app-player-stats-table class="area-players" [players]="d.playerStats" />
+
+    <!-- §"si la gráfica vas a mantenerla bájala abajo del todo... un
+         timeline como el de lorrgs tendría más sentido": línea temporal
+         al fondo, una fila fija por mecánica en vez de una curva de daño
+         agregada — mismo dato de siempre (d.timeline), solo cambia el orden
+         en la página y la forma de leerlo. -->
+    <section class="widget area-timeline" aria-labelledby="timeline-heading">
+      <h2 id="timeline-heading" class="widget-heading">Línea temporal de mecánicas</h2>
+      <app-mechanic-swimlane
+        [chips]="d.timeline"
+        [background]="d.backgroundMechanics"
+        [durationMs]="d.header.durationMs"
+        [loading]="loading()"
+        (chipSelected)="onTimelineChipSelected($event)"
+      />
+    </section>
   </div>
 
   <app-provenance-drawer [entry]="activeProvenance()" (closeRequested)="activeProvenance.set(null)" />

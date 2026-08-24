@@ -40,14 +40,8 @@
   <div class="duration">
     <span class="duration-label">Duración</span>
     <span class="duration-value tabular">{{ durationLabel() }}</span>
-    @if (referencePacing(); as pacing) {
-      <span
-        class="pacing tabular"
-        [class.tone-success]="pacing.tone === 'success'"
-        [class.tone-warning]="pacing.tone === 'warning'"
-        [title]="pacing.zeroDeathContext ?? ''"
-        >{{ pacing.label }}</span
-      >
-    }
+    <!-- §7.2: el detalle de ritmo vs. referencia pública ahora vive en su
+         propio panel (.compare-bar-row, más abajo) — repetirlo aquí como
+         texto sería la misma información dos veces. -->
   </div>
 </header>

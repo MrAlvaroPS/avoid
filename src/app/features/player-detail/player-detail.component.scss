@@ -1,0 +1,175 @@
+// Mismo vocabulario visual que boss-history.component.scss (widget/table
+// genéricos) — son la misma familia de "página de detalle agregado".
+.player-detail {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.loading,
+.load-error {
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.load-error {
+  color: var(--danger);
+}
+
+.back-link {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-decoration: none;
+  align-self: flex-start;
+
+  &:hover {
+    color: var(--accent);
+  }
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.page-header h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text);
+}
+.trial-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.widget {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 16px;
+}
+.widget-heading {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.table-wrap {
+  // §mismo bug de CSS que night-player-dossier/night-report: overflow-x:auto
+  // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
+  overflow-x: auto;
+  overflow-y: visible;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--surface-2);
+  white-space: nowrap;
+}
+td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--surface-2);
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+tr:last-child td {
+  border-bottom: none;
+}
+.meta {
+  color: var(--text-faint);
+}
+
+.cell-boss {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+
+  a {
+    color: inherit;
+    text-decoration: none;
+    &:hover {
+      color: var(--accent);
+    }
+  }
+}
+.difficulty-tag {
+  margin-left: 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-faint);
+}
+
+.cell-mechanic {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cat-tag {
+  margin-left: 5px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.cat-tag-wipecall {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.row-wipecall {
+  opacity: 0.65;
+}
+
+// §"activo/disponible/cooldown" ya establece que "tenía un defensivo
+// disponible y no lo usó" es la señal que de verdad importa señalar — mismo
+// tono danger que el resto de la app usa para esa idea.
+.tone-danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.night-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.night-chip {
+  padding: 3px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: 20px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-decoration: none;
+
+  &:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+}

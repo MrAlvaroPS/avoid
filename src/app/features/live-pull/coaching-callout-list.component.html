@@ -1,57 +1,173 @@
 <section class="callouts" aria-labelledby="callouts-heading">
-  <h2 id="callouts-heading" class="heading">A quién dirigir</h2>
+  <div class="panel-head">
+    <h2 id="callouts-heading" class="heading">A quién dirigir</h2>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'mechanics'" [class.active]="activeTab() === 'mechanics'" (click)="activeTab.set('mechanics')">
+        Mecánicas <span class="tab-count">{{ mechanicFails().length }}</span>
+      </button>
+      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'deaths'" [class.active]="activeTab() === 'deaths'" (click)="activeTab.set('deaths')">
+        Muertes <span class="tab-count">{{ deathCount() }}</span>
+      </button>
+    </div>
+  </div>
 
-  @if (loading()) {
-    <div class="skeleton-line" aria-hidden="true"></div>
-    <div class="skeleton-line" aria-hidden="true"></div>
-  } @else if (callouts().length === 0) {
-    <p class="empty">Sin nada urgente que señalar en este pull.</p>
-  } @else {
-    <ul class="callout-list">
-      @for (callout of callouts(); track callout.raiderName + callout.parts.length) {
-        <li>
-          <!-- role="button" en un <div>, NO un <button>: el tooltip de Wowhead
-               solo engancha su listener a elementos <a> reales (verificado en
-               real — un <span data-wowhead> se resalta con nuestro :hover
-               pero el popup nunca aparece), y <a> no puede anidarse dentro de
-               <button>. Con un div+role=button de fuera, cada habilidad de
-               dentro puede ser un <a> normal (abre Wowhead en pestaña nueva
-               al clicar, tooltip real al pasar el ratón). -->
-          <div
-            class="callout-row"
-            role="button"
-            tabindex="0"
-            [class.severity-critical]="callout.severity === 'critical'"
-            [class.severity-warning]="callout.severity === 'warning'"
-            [class.severity-positive]="callout.severity === 'positive'"
-            (click)="calloutSelected.emit(callout)"
-            (keydown.enter)="calloutSelected.emit(callout)"
-            (keydown.space)="$event.preventDefault(); calloutSelected.emit(callout)"
+  @if (activeTab() === 'mechanics') {
+    @if (!mechanicFails().length) {
+      <!-- §"pone mecánicas fallidas y luego 'a quién dirigir' no tiene
+           nada" (feedback real, verificado contra datos reales): la
+           tarjeta "Mecánicas falladas" también cuenta fallos de categorías
+           de GRUPO (raid-damage/tankbuster/interrupt/debuff-stack/
+           healing-absorb) — no son culpa de una persona, así que nunca
+           aparecen aquí. Sin esta nota, un número >0 arriba y "0" aquí
+           se leía como una contradicción; ahora se explica por qué. -->
+      <p class="empty">
+        Sin mecánicas de responsabilidad individual falladas en este pull.
+        @if (groupMechanicFailCount() > 0) {
+          <span class="empty-note"
+            >(La tarjeta "Mecánicas falladas" de arriba sí cuenta {{ groupMechanicFailCount() }} fallo{{ groupMechanicFailCount() === 1 ? '' : 's' }} de categorías de grupo —
+            daño de raid, tankbuster, interrupción... — que no son responsabilidad de una persona y por eso no salen en esta pestaña.)</span
           >
-            <span class="icon" aria-hidden="true">{{ iconFor(callout.severity) }}</span>
-            <span class="message">
-              <span class="sr-only">{{ severityLabel(callout.severity) }}:</span>
-              @for (part of callout.parts; track $index) {
-                @if (part.kind === 'text') {
-                  {{ part.text }}
-                } @else if (part.wowheadSpellId) {
-                  <a
-                    class="ability-ref"
-                    [href]="'https://www.wowhead.com/spell=' + part.wowheadSpellId"
-                    target="_blank"
-                    rel="noopener"
-                    [attr.data-wowhead]="'spell=' + part.wowheadSpellId"
-                    (click)="$event.stopPropagation()"
-                    >{{ part.label }}</a
-                  >
-                } @else {
-                  {{ part.label }}
-                }
+        }
+      </p>
+    } @else {
+      <div class="row-list mechanics-grid">
+        <div class="row-head">
+          <span>Jugador</span>
+          <span>Mecánica</span>
+          <span class="align-right">Minuto</span>
+          <span>Resultado</span>
+          <span class="align-right" title="Daño de esta instancia de la mecánica sobre este jugador">Daño</span>
+          <span class="align-right" title="Sanación recibida mientras duraba">Sanación</span>
+          <span title="¿Usó algún cast propio en los ±10s alrededor?">Defensivo</span>
+        </div>
+        @for (m of mechanicFails(); track m.raiderName + m.mechanic.label + m.timeLabel) {
+          <button type="button" class="row" [class.row-fail]="m.outcome === 'fail'" (click)="provenanceRequested.emit(m.provenance)">
+            <span class="cell-player"><app-class-icon [wclClass]="m.raiderClass" />{{ m.raiderName }}</span>
+            <span class="cell-mechanic">
+              @if (m.mechanic.wowheadSpellId) {
+                <app-wowhead-link type="spell" [id]="m.mechanic.wowheadSpellId" class="icon-only" />
+              }
+              <span class="mechanic-label">{{ m.mechanic.label }}</span>
+              <app-mechanic-info-icon [note]="m.notes" />
+              @if (categoryMeta(m.category); as meta) {
+                <span class="cat-tag">{{ meta.short }}</span>
+              } @else {
+                <span class="cat-tag cat-tag-unknown" title="Sin categoría confirmada en el manifiesto todavía — clasifícala en Ajustes.">
+                  SIN CLASIFICAR · {{ m.totalPlayersHit }} golpeados
+                </span>
               }
             </span>
-          </div>
-        </li>
-      }
-    </ul>
+            <span class="cell-time tabular align-right">{{ m.timeLabel }}</span>
+            <span class="outcome-pill" [class.pill-fail]="m.outcome === 'fail'" [class.pill-warning]="m.outcome === 'partial_fail'">{{ outcomeLabel(m.outcome) }}</span>
+            <span class="tabular align-right">{{ m.damageTaken | number: '1.0-0' }}</span>
+            <span class="tabular align-right" [class.heal-zero]="m.healingReceived === 0">{{ m.healingReceived | number: '1.0-0' }}</span>
+            <span class="cell-defensive">
+              @if (m.usedDefensiveSpellId) {
+                <app-wowhead-link type="spell" [id]="m.usedDefensiveSpellId" class="icon-only" />
+                <span class="def-yes">Sí</span>
+              } @else {
+                <span class="meta">No</span>
+              }
+            </span>
+          </button>
+        }
+      </div>
+    }
+  } @else {
+    @if (!callouts().length) {
+      <p class="empty">Sin muertes en este pull.</p>
+    } @else {
+      <div class="row-list deaths-grid">
+        <div class="row-head">
+          <span></span>
+          <span>Jugador</span>
+          <span>Mecánica</span>
+          <span class="align-right">Minuto</span>
+          <span class="align-center" title="¿Fue un golpe único (o pocos golpes casi simultáneos) el que le mató?">Oneshot</span>
+          <span class="align-right" title="Daño recibido en los últimos 5s antes de morir">Daño (5s)</span>
+          <span class="align-right" title="Sanación real recibida en los últimos 6s antes de morir">Sanación</span>
+          <span title="Defensivos que YA tenía activos en el momento de morir — sí reaccionó, y aun así no bastó">Activo</span>
+          <span title="Defensivos disponibles y sin usar en el momento de morir">Disponibles</span>
+          <span title="Defensivos en cooldown en el momento de morir, con cuánto faltaba">En cooldown</span>
+        </div>
+        @for (c of callouts(); track c.raiderName + c.mechanic.label + c.timeLabel) {
+          <button
+            type="button"
+            class="row"
+            [class.row-fail]="c.severity === 'critical' && !c.isWipeCall"
+            [class.row-positive]="c.severity === 'positive'"
+            [class.row-wipecall]="c.isWipeCall"
+            (click)="provenanceRequested.emit(c.provenance)"
+          >
+            <span class="cell-icon" aria-hidden="true">{{ c.isWipeCall ? '🏳️' : c.severity === 'critical' ? '💀' : '📈' }}</span>
+            <span class="cell-player"><app-class-icon [wclClass]="c.raiderClass" />{{ c.raiderName }}</span>
+            <span class="cell-mechanic">
+              @if (c.mechanic.wowheadSpellId) {
+                <app-wowhead-link type="spell" [id]="c.mechanic.wowheadSpellId" class="icon-only" />
+              }
+              <span class="mechanic-label">{{ c.mechanic.label }}</span>
+              <app-mechanic-info-icon [note]="c.notes" />
+              @if (c.isWipeCall) {
+                <span class="cat-tag cat-tag-unknown" title="Excluida de fiabilidad/métricas/racha — ver el aviso de wipe call arriba del pull.">WIPE CALL</span>
+              }
+            </span>
+            <span class="cell-time tabular align-right">{{ c.timeLabel || '—' }}</span>
+            <span class="align-center">
+              @if (c.oneshot === true) {
+                <span class="oneshot-yes">⚡ Sí</span>
+              } @else if (c.oneshot === false) {
+                <span class="meta">No</span>
+              } @else {
+                <span class="meta">—</span>
+              }
+            </span>
+            <span class="tabular align-right">{{ c.damageWindowTotal != null ? (c.damageWindowTotal | number: '1.0-0') : '—' }}</span>
+            <span class="tabular align-right">
+              @if (c.healingWindowTotal != null) {
+                <span [class.heal-zero]="c.healingWindowTotal === 0">{{ c.healingWindowTotal | number: '1.0-0' }}</span>
+              } @else {
+                <span class="meta">—</span>
+              }
+            </span>
+            <span class="cell-defensive-list">
+              @if (c.defensivesActive.length) {
+                @for (d of c.defensivesActive; track d.spellId) {
+                  <span class="def-item def-active">
+                    <app-wowhead-link type="spell" [id]="d.spellId" class="icon-only" />
+                    <span>{{ d.name }}</span>
+                  </span>
+                }
+              } @else {
+                <span class="meta">—</span>
+              }
+            </span>
+            <span class="cell-defensive-list">
+              @if (c.defensivesAvailable.length) {
+                @for (d of c.defensivesAvailable; track d.spellId) {
+                  <span class="def-item">
+                    <app-wowhead-link type="spell" [id]="d.spellId" class="icon-only" />
+                    <span>{{ d.name }}</span>
+                  </span>
+                }
+              } @else {
+                <span class="meta">—</span>
+              }
+            </span>
+            <span class="cell-defensive-list">
+              @if (c.defensivesOnCooldown.length) {
+                @for (d of c.defensivesOnCooldown; track d.spellId) {
+                  <span class="def-item" [class.close-to-death]="d.closeToDeath">
+                    <app-wowhead-link type="spell" [id]="d.spellId" class="icon-only" />
+                    <span>{{ d.name }}{{ d.cooldownRemainingMs != null ? ' (−' + (d.cooldownRemainingMs / 1000 | number: '1.0-0') + 's)' : '' }}</span>
+                  </span>
+                }
+              } @else {
+                <span class="meta">—</span>
+              }
+            </span>
+          </button>
+        }
+      </div>
+    }
   }
 </section>

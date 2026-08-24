@@ -40,10 +40,22 @@
   font-weight: 500;
 }
 
+// §bug real (feedback: "esto queda raro... puede ocupar todo el ancho del
+// card si no va a estar a varias columnas") — con CSS Grid + auto-fit, el
+// número de columnas se calcula UNA vez para todo el grid según el ancho
+// disponible, no según cuántos hijos hay realmente: con 3 bloques pero solo
+// sitio para 2 columnas, "Próximo intento" caía huérfano en una fila nueva
+// con el ancho de UNA columna, dejando el resto de esa fila vacío. Flexbox
+// con wrap resuelve esto solo: flex-grow reparte el espacio libre POR LÍNEA,
+// así que un bloque que cae solo en su propia línea crece para llenarla.
 .columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 16px;
+}
+.col {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 
 .col-title {
@@ -113,4 +125,106 @@ li {
     opacity: 0.6;
     cursor: default;
   }
+}
+
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+// §"un botón para copiar el prompt completo... pegar el resultado": ruta
+// SECUNDARIA de verdad — texto de acento discreto, no un botón sólido
+// compitiendo con "Analizar" (esa sigue siendo la vía recomendada/rápida).
+.manual-toggle {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.manual-panel {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.manual-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.step-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.prompt-box {
+  margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.copy-btn {
+  align-self: flex-start;
+  padding: 6px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+}
+
+.paste-box {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  resize: vertical;
+
+  &:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+}
+
+.meta {
+  color: var(--text-faint);
+  font-size: 12px;
+  margin: 0;
 }

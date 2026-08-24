@@ -1,33 +1,38 @@
 // Centro de mando: cabecera + métricas + progreso ocupan la franja de "un
-// vistazo" de arriba (§15.1), timeline a todo el ancho como elemento de
-// firma, y a partir de ahí una columna de acción ancha ("a quién dirigir",
-// que puede tener muchas filas) junto a una columna de síntesis visual
-// (roscos + análisis IA) — no una columna única de paneles apilados.
+// vistazo" de arriba (§15.1), y a partir de ahí una columna de acción ancha
+// ("a quién dirigir", que puede tener muchas filas) junto a una columna de
+// síntesis visual (roscos + análisis IA) — no una columna única de paneles
+// apilados. La línea temporal de mecánicas va al fondo del todo (feedback
+// real: "bájala abajo del todo"), a todo el ancho, después de jugadores.
 .live-pull {
   display: grid;
   gap: 14px;
   grid-template-columns: 1fr;
   grid-template-areas:
     'header'
+    'wipecall'
     'metrics'
     'trend'
-    'timeline'
+    'compare'
     'callouts'
     'catdonut'
     'defdonut'
     'brief'
-    'players';
+    'players'
+    'timeline';
 
   @media (min-width: 1080px) {
     grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
     grid-template-areas:
       'header   header'
+      'wipecall wipecall'
       'metrics  trend'
-      'timeline timeline'
+      'callouts compare'
       'callouts catdonut'
       'callouts defdonut'
       'callouts brief'
-      'players  players';
+      'players  players'
+      'timeline timeline';
     align-items: start;
   }
 }
@@ -47,11 +52,17 @@
 .area-header {
   grid-area: header;
 }
+.area-wipecall {
+  grid-area: wipecall;
+}
 .area-metrics {
   grid-area: metrics;
 }
 .area-trend {
   grid-area: trend;
+}
+.area-compare {
+  grid-area: compare;
 }
 .area-timeline {
   grid-area: timeline;

@@ -1,0 +1,146 @@
+<div class="roster">
+  <h1>Fiabilidad del roster</h1>
+  <p class="intro">
+    §12: un número de 1 a 100 por jugador — ejecución mecánica (40%), disciplina defensiva
+    (30%) y preparación (20%, solo encantamientos por ahora) sobre los últimos 60 días de
+    pulls, ponderados por recencia (un pull de hace 10 días pesa la mitad que uno de hoy);
+    asistencia (10%) — de los reports importados en Avoid desde el inicio de la season actual,
+    no del calendario de wowaudit (que cuenta firmas/eventos programados, no raids reales). Preparación no
+    cuenta gemas todavía — WCL sí las trae, pero sin dato de cuántos huecos tiene cada ítem
+    no hay umbral real que puntuar sin inventarlo; flask/comida siguen sin detectar. Nunca
+    se rellena un eje sin dato con un cero — se excluye y se renormaliza sobre lo que sí hay.
+  </p>
+
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  <!-- §"atascos constantes... a través de todos los bosses" (feedback real):
+       distinto de la tabla de fiabilidad de abajo (un número por jugador,
+       sin desglosar por categoría) y de "todos los pulls" de un boss (por
+       categoría, pero un solo boss) — aquí es "¿este jugador falla SIEMPRE
+       la misma categoría, en varios bosses distintos?". Solo se enseña si
+       hay algo que enseñar: sin patrones repetidos, la sección desaparece
+       en vez de mostrar un "todo limpio" que compite por atención con el
+       resto de la pantalla. -->
+  @if (!offendersLoading() && offenders().length > 0) {
+    <section class="offenders-panel" aria-labelledby="offenders-heading">
+      <h2 id="offenders-heading" class="section-heading">Atascos constantes (últimos 60 días)</h2>
+      <p class="section-intro">Misma categoría de mecánica, fallada en varios bosses distintos — no un mal pull puntual de uno solo.</p>
+      <ul class="offenders-list">
+        @for (o of offenders(); track o.playerName + o.category) {
+          <li class="offender-row">
+            <app-role-icon [role]="o.role" />
+            <a class="offender-player" [routerLink]="['/player', o.playerName]">{{ o.playerName }}</a>
+            @if (categoryMeta(o.category); as meta) {
+              <span class="cat-tag">{{ meta.label }}</span>
+            }
+            <span class="offender-meta tabular">{{ o.instanceCount }} veces · {{ o.distinctBossCount }} bosses distintos</span>
+            <span class="offender-meta meta">última vez {{ o.lastOccurredAt | date: 'd MMM' }}</span>
+          </li>
+        }
+      </ul>
+    </section>
+  }
+
+  @if (loading()) {
+    <p class="muted">Calculando…</p>
+  } @else if (!hasAnyData()) {
+    <app-empty-panel icon="🛡️" message="Sin pulls en los últimos 60 días todavía." hint="En cuanto se importe un report, aquí aparece el roster con su fiabilidad." />
+  } @else {
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th></th>
+          <th>Jugador</th>
+          <th title="Ejecución mecánica (40%) + disciplina defensiva (30%) + asistencia (10%), renormalizado sobre los ejes con datos">Fiabilidad</th>
+          <th title="Primera mitad de los 60 días vs. segunda mitad — ¿va a mejor o a peor?">Tendencia</th>
+          <th>Muestra</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (p of players(); track p.playerName) {
+          <tr class="summary-row" (click)="toggle(p.playerName)">
+            <td class="rank-col tabular">{{ $index + 1 }}</td>
+            <td class="role-col"><app-role-icon [role]="p.role" /></td>
+            <td class="player-col">
+              {{ p.playerName }}
+              @if (p.rank === 'Trial') {
+                <span class="trial-badge" title="Trial en wowaudit">Trial</span>
+              }
+            </td>
+            <td>
+              <span class="reliability-badge" [class]="'tone-' + tone(p.overall)">{{ p.overall }}</span>
+            </td>
+            <td>
+              @if (p.trend === 'up') {
+                <span class="trend-arrow trend-up" title="Mejorando: 2ª mitad de la ventana por encima de la 1ª">↑</span>
+              } @else if (p.trend === 'down') {
+                <span class="trend-arrow trend-down" title="Empeorando: 2ª mitad de la ventana por debajo de la 1ª">↓</span>
+              } @else if (p.trend === 'flat') {
+                <span class="trend-arrow trend-flat" title="Estable: sin cambio significativo entre mitades">→</span>
+              } @else {
+                <span class="meta" title="Hace falta al menos un pull en cada mitad de la ventana para comparar">—</span>
+              }
+            </td>
+            <td class="tabular meta">{{ p.sampleSize }} pull{{ p.sampleSize === 1 ? '' : 's' }}</td>
+          </tr>
+          @if (expandedPlayer() === p.playerName) {
+            <tr class="detail-row">
+              <td colspan="6">
+                <div class="breakdown">
+                  <div class="axis">
+                    <span class="axis-label">Ejecución mecánica <span class="axis-weight">40%</span></span>
+                    @if (p.breakdown.mecanica != null) {
+                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.mecanica"></div></div>
+                      <span class="axis-value tabular">{{ p.breakdown.mecanica | number: '1.0-0' }}</span>
+                    } @else {
+                      <span class="axis-empty">sin datos suficientes todavía</span>
+                    }
+                  </div>
+                  <div class="axis">
+                    <span class="axis-label">Disciplina defensiva <span class="axis-weight">30%</span></span>
+                    @if (p.breakdown.defensiva != null) {
+                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.defensiva"></div></div>
+                      <span class="axis-value tabular">{{ p.breakdown.defensiva | number: '1.0-0' }}</span>
+                    } @else {
+                      <span class="axis-empty">sin muertes evaluables todavía</span>
+                    }
+                  </div>
+                  <div class="axis">
+                    <span class="axis-label">Preparación <span class="axis-weight">20%</span></span>
+                    @if (p.breakdown.preparacion != null) {
+                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.preparacion"></div></div>
+                      <span class="axis-value tabular">{{ p.breakdown.preparacion | number: '1.0-0' }}</span>
+                    } @else {
+                      <span class="axis-empty">sin datos suficientes todavía</span>
+                    }
+                  </div>
+                  @if (p.latestGemCount != null) {
+                    <!-- §"gem_count se calcula pero no se muestra en ningún
+                         sitio" (feedback real): informativo, no puntuado —
+                         sin dato de sockets máximos por ítem no hay umbral
+                         real que puntuar sin inventarlo, mismo criterio que
+                         encantamientos SÍ tienen y esto no. -->
+                    <p class="gem-note">💎 {{ p.latestGemCount }} gema{{ p.latestGemCount === 1 ? '' : 's' }} engarzada{{ p.latestGemCount === 1 ? '' : 's' }} en el último pull — informativo, no puntuado.</p>
+                  }
+                  <div class="axis">
+                    <span class="axis-label">Asistencia <span class="axis-weight">10%</span></span>
+                    @if (p.breakdown.asistencia != null) {
+                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.asistencia"></div></div>
+                      <span class="axis-value tabular">{{ p.breakdown.asistencia | number: '1.0-0' }}</span>
+                    } @else {
+                      <span class="axis-empty">no cruza con el roster de wowaudit todavía</span>
+                    }
+                  </div>
+                </div>
+                <a class="history-link" [routerLink]="['/player', p.playerName]" (click)="$event.stopPropagation()">Ver historial y tendencia →</a>
+              </td>
+            </tr>
+          }
+        }
+      </tbody>
+    </table>
+  }
+</div>

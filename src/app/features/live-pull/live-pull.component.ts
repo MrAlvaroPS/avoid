@@ -1,17 +1,20 @@
 // Colocar en: src/app/features/live-pull/live-pull.component.ts
 // <app-live-pull>: contenedor, resuelve el Pull + diff + callouts (§15.1 árbol de componentes).
-import { Component, effect, inject, input, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal } from '@angular/core';
 import { PullAnalysisService, type PullDetail } from '../../core/pull-analysis.service';
 import { PullHeaderComponent } from './pull-header.component';
 import { MetricsRowComponent } from './metrics-row.component';
-import { RaidDamageChartComponent } from '../../shared/charts/raid-damage-chart.component';
+import { MechanicSwimlaneComponent } from '../../shared/charts/mechanic-swimlane.component';
 import { CoachingCalloutListComponent } from './coaching-callout-list.component';
 import { LlmAnalysisCardComponent } from './llm-analysis-card.component';
+import { WipeCallBannerComponent } from './wipe-call-banner.component';
 import { PlayerStatsTableComponent } from './player-stats-table.component';
 import { ProvenanceDrawerComponent } from './provenance-drawer.component';
 import { DonutChartComponent, type DonutSegment } from '../../shared/charts/donut-chart.component';
 import { TrendBarsComponent } from '../../shared/charts/trend-bars.component';
-import type { CoachingCallout, ProvenanceEntry, TimelineChip } from '../../shared/models/ui';
+import { CompareBarRowComponent } from './compare-bar-row.component';
+import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-text.component';
+import type { LlmPullAnalysis, ProvenanceEntry, TimelineChip } from '../../shared/models/ui';
 
 @Component({
   selector: 'app-live-pull',
@@ -19,13 +22,15 @@ import type { CoachingCallout, ProvenanceEntry, TimelineChip } from '../../share
   imports: [
     PullHeaderComponent,
     MetricsRowComponent,
-    RaidDamageChartComponent,
+    MechanicSwimlaneComponent,
     CoachingCalloutListComponent,
     LlmAnalysisCardComponent,
+    WipeCallBannerComponent,
     PlayerStatsTableComponent,
     ProvenanceDrawerComponent,
     DonutChartComponent,
     TrendBarsComponent,
+    CompareBarRowComponent,
   ],
   templateUrl: './live-pull.component.html',
   styleUrl: './live-pull.component.scss',
@@ -47,6 +52,35 @@ export class LivePullComponent {
   briefError = signal<string | null>(null);
   activeProvenance = signal<ProvenanceEntry | null>(null);
 
+  // §"pintar cada jugador de su clase, mecánicas con tooltip+nota" (feedback
+  // real): entidades de ESTE pull para app-brief-text — sacadas de las
+  // filas que ya se calculan para "a quién dirigir" (callouts +
+  // mechanicFails), nada que pedir aparte.
+  briefEntities = computed<BriefEntities>(() => {
+    const d = this.detail();
+    if (!d) return EMPTY_BRIEF_ENTITIES;
+    const players = new Map<string, string>();
+    const mechanics = new Map<string, { spellId: number | null; note: string | null }>();
+    for (const c of d.callouts) {
+      if (c.raiderClass) players.set(c.raiderName, c.raiderClass);
+      mechanics.set(c.mechanic.label, { spellId: c.mechanic.wowheadSpellId, note: c.notes });
+    }
+    for (const m of d.mechanicFails) {
+      if (m.raiderClass) players.set(m.raiderName, m.raiderClass);
+      mechanics.set(m.mechanic.label, { spellId: m.mechanic.wowheadSpellId, note: m.notes });
+    }
+    return { players, mechanics };
+  });
+
+  // §bug real (2026-08-23): sin esto, cambiar de pull rápido (el
+  // auto-seleccionado al cargar el report + el que elige el usuario a
+  // continuación, o dos clics seguidos entre pulls) podía dejar la pantalla
+  // mostrando datos de OTRO pull — la petición del pull viejo, si tardaba
+  // más en responder, llegaba DESPUÉS y sobrescribía en silencio la del
+  // pull correcto ya mostrado. Se guarda qué pullId es el más reciente
+  // PEDIDO y solo se aplica una respuesta si sigue siendo esa cuando llega.
+  private latestRequestedPullId: string | null = null;
+
   constructor() {
     effect(() => {
       const id = this.pullId();
@@ -55,15 +89,18 @@ export class LivePullComponent {
   }
 
   async load(id: string): Promise<void> {
+    this.latestRequestedPullId = id;
     this.loading.set(true);
     this.error.set(null);
     try {
       const detail = await this.pullAnalysis.loadPullDetail(id);
+      if (this.latestRequestedPullId !== id) return; // llegó tarde, ya no es la selección vigente
       this.detail.set(detail);
     } catch (err) {
+      if (this.latestRequestedPullId !== id) return;
       this.error.set(err instanceof Error ? err.message : String(err));
     } finally {
-      this.loading.set(false);
+      if (this.latestRequestedPullId === id) this.loading.set(false);
     }
   }
 
@@ -86,6 +123,18 @@ export class LivePullComponent {
     if (chip.provenance) this.activeProvenance.set(chip.provenance);
   }
 
+  /** §"pegar el resultado... procesarlo como si fuese a través de la API": manual-pull-brief ya guardó el brief — esto solo refresca la vista con lo guardado, sin recargar todo el pull. */
+  onManualBriefSaved(brief: LlmPullAnalysis): void {
+    const current = this.detail();
+    if (!current) return;
+    this.detail.set({ ...current, brief });
+  }
+
+  /** §"que autoexcluya pero que permita también editarlo... para restaurar": el toggle de wipe call cambia demasiados cálculos derivados (deaths, mechFails, racha, defensivos) como para parchearlos a mano — recarga el pull entero desde la BD, ya recalculado. */
+  onWipeCallStatusChanged(): void {
+    void this.load(this.pullId());
+  }
+
   /** §"los roscos deberían tener alguna opción para ver más detalles" — reusa el mismo drawer de provenance que ya usan métricas/timeline/callouts, no un mecanismo de UI nuevo. */
   onDonutSegmentSelected(segment: DonutSegment, source: string): void {
     this.activeProvenance.set({
@@ -93,9 +142,5 @@ export class LivePullComponent {
       method: `${segment.label}: ${segment.value}.`,
       detail: segment.detailLines?.length ? segment.detailLines.join('\n') : 'Sin desglose adicional para este segmento.',
     });
-  }
-
-  onCalloutSelected(callout: CoachingCallout): void {
-    this.activeProvenance.set(callout.provenance);
   }
 }

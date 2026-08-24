@@ -11,12 +11,15 @@
 // saber qué report vigilar (un poller server-side, Fase D) — esto de aquí es
 // puramente "qué estaba mirando este navegador", un problema distinto.
 import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { ReportsService, type PullListItem } from '../../core/reports.service';
+import type { ReportRow } from '../../shared/models/domain';
 import { extractReportCode } from '../../shared/wcl-code.util';
 import { formatDuration, formatPct } from '../../shared/format.util';
 import { LivePullComponent } from '../live-pull/live-pull.component';
+import { EmptyPanelComponent } from '../../shared/empty-panel.component';
+import { SeasonProgressComponent } from './season-progress.component';
 
 export interface PullGroup {
   key: string;
@@ -28,20 +31,64 @@ export interface PullGroup {
   bestWipePct: number | null;
 }
 
-const STORAGE_KEY = 'avoid.currentReportCode';
-const AUTO_REFRESH_MS = 25_000; // dentro del rango 20-30s que recomienda §11
+// §"un resumen de la noche completa, no boss a boss" (feedback real): agrega
+// TODOS los pulls del report activo — no una llamada nueva, `pulls()` y
+// `pullGroups()` ya están cargados para el picker, esto es agregación pura
+// sobre lo mismo.
+export interface NightSummary {
+  totalPulls: number;
+  totalKills: number;
+  totalWipes: number;
+  totalDurationMs: number;
+  bossesAttempted: number;
+  /** El grupo con más wipes (no el de más intentos a secas — un boss con 5 intentos y 4 kills no es "el que más cuesta") — null solo si no hay grupos, imposible en la práctica si hay pulls. */
+  hardestGroup: PullGroup | null;
+}
 
-function readStoredReportCode(): string | null {
+const STORAGE_KEY = 'avoid.currentReportCode';
+// §"el polling cada 25-30s parece mucho... podríamos reducirlo a 15-20s"
+// (feedback real, 2026-08-24): antes 25s, ahora en el punto medio de lo que pidió.
+const AUTO_REFRESH_MS = 18_000;
+// §"si vuelvo a la pestaña de raid se ha perdido el live pull y tengo que
+// ponerlo de nuevo en marcha, eso debería guardar más consistencia hasta
+// que... no haya cambios en 10 minutos... y ahí ya se pueda dar por cerrado
+// el log" (feedback real): el report_code YA se persistía (comentario de
+// arriba), lo que NO sobrevivía a navegar fuera y volver era el estado del
+// checkbox "En vivo" — `autoRefresh` es un signal en memoria, se resetea a
+// false cada vez que este componente se destruye/recrea (cualquier
+// navegación fuera de "/"). Ahora se persiste junto al código, y se
+// autorreanuda al volver SOLO si hubo actividad real (una nueva pull vista,
+// o una comprobación manual) hace menos de 10 minutos — pasado eso, se
+// considera el log cerrado y no se reanuda solo.
+const LIVE_STALE_MS = 10 * 60 * 1000;
+const RECENT_REPORTS_LIMIT = 10;
+
+interface StoredSession {
+  reportCode: string;
+  autoRefreshOn: boolean;
+  /** epoch ms de la última vez que se vio actividad real (pull nueva, o una comprobación manual) — no cada tick del polling en sí, que no siempre trae nada nuevo. */
+  lastActivityAt: number;
+}
+
+function readStoredSession(): StoredSession | null {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    // Compat con el formato viejo (un string plano con solo el código,
+    // de antes de que existiera autoRefreshOn/lastActivityAt) — se sigue
+    // pudiendo leer, solo que sin estado "en vivo" que reanudar.
+    if (!raw.trim().startsWith('{')) return { reportCode: raw, autoRefreshOn: false, lastActivityAt: 0 };
+    const parsed = JSON.parse(raw);
+    if (!parsed?.reportCode) return null;
+    return { reportCode: String(parsed.reportCode), autoRefreshOn: !!parsed.autoRefreshOn, lastActivityAt: Number(parsed.lastActivityAt) || 0 };
   } catch {
-    return null; // navegación privada / storage bloqueado: se degrada a "sin persistencia", no rompe nada
+    return null; // navegación privada / storage bloqueado / JSON corrupto: se degrada a "sin persistencia", no rompe nada
   }
 }
 
-function writeStoredReportCode(code: string | null): void {
+function writeStoredSession(session: StoredSession | null): void {
   try {
-    if (code) localStorage.setItem(STORAGE_KEY, code);
+    if (session) localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
     else localStorage.removeItem(STORAGE_KEY);
   } catch {
     // idem — si no se puede persistir, la sesión sigue funcionando en memoria
@@ -51,7 +98,7 @@ function writeStoredReportCode(code: string | null): void {
 @Component({
   selector: 'app-raid-session',
   standalone: true,
-  imports: [LivePullComponent],
+  imports: [LivePullComponent, EmptyPanelComponent, SeasonProgressComponent, RouterLink],
   templateUrl: './raid-session.component.html',
   styleUrl: './raid-session.component.scss',
 })
@@ -68,37 +115,60 @@ export class RaidSessionComponent {
   error = signal<string | null>(null);
 
   currentReportCode = signal<string | null>(null);
+  // §"la noche duplicada... dos personas subieron el mismo log" (bug real,
+  // arreglado a mano el 2026-08-23): analyze-report ya avisa si este report
+  // parece la misma sesión que otro ya importado — se enseña como aviso, no
+  // bloquea nada (podría ser una segunda sesión real el mismo día).
+  duplicateWarning = signal<string | null>(null);
   pulls = signal<PullListItem[]>([]);
+  // §"un dosier de personaje de una noche concreta... para dirigir a uno o
+  // varios raiders" (feedback real): entrada al dosier por jugador desde
+  // el resumen de la noche — quién participó en algún pull de este report.
+  nightPlayers = signal<string[]>([]);
   selectedPullId = signal<string | null>(null);
   autoRefresh = signal(false);
   lastCheckedAt = signal<string | null>(null);
+  /** epoch ms de la última actividad real (nueva pull vista o comprobación manual) — base para el auto-cierre a los 10 min. */
+  private lastActivityAt = 0;
+
+  // §"poder cargar un log desde un historial (con fecha) si ya lo he
+  // cargado previamente, así no tengo que buscar logs y con acordarme del
+  // día es suficiente" (feedback real): un picker rápido aquí mismo, sin
+  // salir a Histórico — carga instantánea (loadExisting, sin llamar a WCL,
+  // ya está todo en Supabase de una importación anterior).
+  recentReports = signal<{ report: ReportRow; bossesAttempted: string[] }[]>([]);
+  showRecentPicker = signal(false);
 
   hasPulls = computed(() => this.pulls().length > 0);
   hasReportLoaded = computed(() => this.currentReportCode() !== null);
 
-  // §"lo que ocupan las primeras líneas con los bosses, toda la pantalla —
-  // no es sostenible": con 4+ bosses cada uno con sus intentos, la tira
-  // agrupada por sí sola ya llenaba el viewport. Solo el grupo del boss
-  // seleccionado se enseña expandido por defecto; el resto colapsa a una
-  // fila compacta — un clic la vuelve a abrir (manualExpanded gana sobre el
-  // "expandido por defecto" tanto para abrir como para cerrar a mano).
-  manualExpanded = signal<Set<string>>(new Set());
+  // §"esa Zona de la cabecera donde vienen los bosses y los pulls sigue
+  // ocupando muchísimo espacio" (feedback repetido incluso tras la primera
+  // pasada de compactación, que seguía dibujando una CARD entera por boss
+  // apilada verticalmente — con gradiente/borde/sombra/padding propios cada
+  // una, eso no escala con el número de bosses). Ahora todos los bosses son
+  // una sola fila de pills diminutas que envuelve (wrap) en vez de apilarse,
+  // y solo el boss ACTIVO (como mucho uno) enseña su fila de pulls debajo —
+  // el picker entero pasa a ocupar una altura casi constante sin importar
+  // cuántos bosses tenga el report.
+  //
+  // undefined = "sin tocar todavía" -> sigue el pull seleccionado. Una vez
+  // el usuario clica cualquier pill pasa a ser explícito de verdad (una key
+  // concreta, o null = "ninguno abierto") y ya no vuelve a seguir la
+  // selección automáticamente — un clic manual siempre gana.
+  private manualActiveKey = signal<string | null | undefined>(undefined);
 
-  isGroupExpanded(group: PullGroup): boolean {
-    if (this.manualExpanded().has(group.key)) return true;
-    if (this.manualExpanded().has('!' + group.key)) return false; // cerrado a mano
-    return group.pulls.some((p) => p.id === this.selectedPullId());
-  }
+  activeGroupKey = computed<string | null>(() => {
+    const manual = this.manualActiveKey();
+    if (manual !== undefined) return manual;
+    const selected = this.selectedPullId();
+    return this.pullGroups().find((g) => g.pulls.some((p) => p.id === selected))?.key ?? null;
+  });
+
+  activeGroup = computed<PullGroup | null>(() => this.pullGroups().find((g) => g.key === this.activeGroupKey()) ?? null);
 
   toggleGroup(group: PullGroup): void {
-    const expanded = this.isGroupExpanded(group);
-    this.manualExpanded.update((set) => {
-      const next = new Set(set);
-      next.delete(group.key);
-      next.delete('!' + group.key);
-      next.add(expanded ? '!' + group.key : group.key);
-      return next;
-    });
+    this.manualActiveKey.set(this.activeGroupKey() === group.key ? null : group.key);
   }
 
   // §"agrupar los pulls de un boss": una tira plana con TODOS los pulls de
@@ -125,6 +195,48 @@ export class RaidSessionComponent {
     return [...groups.values()];
   });
 
+  nightSummary = computed<NightSummary | null>(() => {
+    const pulls = this.pulls();
+    if (!pulls.length) return null;
+    const totalKills = pulls.filter((p) => p.kill).length;
+    const totalDurationMs = pulls.reduce((sum, p) => sum + (p.duration_ms ?? 0), 0);
+    const groups = this.pullGroups();
+    const hardestGroup = groups.reduce<PullGroup | null>((worst, g) => {
+      const wipes = g.attemptCount - g.killCount;
+      const worstWipes = worst ? worst.attemptCount - worst.killCount : -1;
+      return wipes > worstWipes ? g : worst;
+    }, null);
+    return { totalPulls: pulls.length, totalKills, totalWipes: pulls.length - totalKills, totalDurationMs, bossesAttempted: groups.length, hardestGroup };
+  });
+
+  // §"recap copiable para Discord": mismo patrón que llm-analysis-card.component.ts (copyPrompt) — navigator.clipboard.writeText + feedback de 2s, no un tercer mecanismo.
+  copyStatus = signal<'idle' | 'copied' | 'error'>('idle');
+
+  async copyNightSummary(): Promise<void> {
+    const s = this.nightSummary();
+    if (!s) return;
+    const today = new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long' });
+    const lines = [
+      `📋 Resumen de la noche — ${today}`,
+      `Bosses intentados: ${s.bossesAttempted} · Kills: ${s.totalKills} · Wipes: ${s.totalWipes} · Tiempo en pulls: ${formatDuration(s.totalDurationMs)}`,
+      '',
+      'Por boss:',
+      ...this.pullGroups().map(
+        (g) =>
+          `- ${g.bossName} (${g.difficulty}): ${g.attemptCount} intento${g.attemptCount === 1 ? '' : 's'}` +
+          (g.killCount > 0 ? `, ${g.killCount} kill${g.killCount === 1 ? '' : 's'}` : `, mejor intento ${formatPct(g.bestWipePct)} HP restante`),
+      ),
+    ];
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      this.copyStatus.set('copied');
+      setTimeout(() => this.copyStatus.set('idle'), 2000);
+    } catch {
+      this.copyStatus.set('error');
+      setTimeout(() => this.copyStatus.set('idle'), 2000);
+    }
+  }
+
   private autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -132,10 +244,23 @@ export class RaidSessionComponent {
     // todavía no tenga pulls clasificados) > localStorage (volver de Ajustes
     // en medio de la misma sesión, ya con pulls seguro).
     const fromQueryParam = this.route.snapshot.queryParamMap.get('report');
-    const code = fromQueryParam ?? readStoredReportCode();
+    const stored = readStoredSession();
+    const code = fromQueryParam ?? stored?.reportCode ?? null;
     if (code) {
       this.reportCodeInput.set(code);
-      void this.loadExisting(code, /* analyzeIfEmpty */ !!fromQueryParam);
+      // §"si vuelvo a la pestaña de raid se ha perdido el live pull... hasta
+      // que no haya cambios en 10 minutos" (feedback real): solo reanuda
+      // "En vivo" solo si viene de localStorage (no de un ?report= nuevo,
+      // que es otra sesión distinta) Y hubo actividad real hace <10min —
+      // pasado eso se considera el log cerrado, no se reanuda solo.
+      const resumeLive = !fromQueryParam && !!stored?.autoRefreshOn && Date.now() - (stored?.lastActivityAt ?? 0) < LIVE_STALE_MS;
+      if (resumeLive) this.lastActivityAt = stored!.lastActivityAt;
+      void this.loadExisting(code, /* analyzeIfEmpty */ !!fromQueryParam).then(() => {
+        if (resumeLive && this.currentReportCode() === code) {
+          this.autoRefresh.set(true);
+          this.startAutoRefresh();
+        }
+      });
     }
     if (fromQueryParam) {
       // Limpia el query param de la URL tras consumirlo — así un refresh no
@@ -143,6 +268,36 @@ export class RaidSessionComponent {
       void this.router.navigate([], { queryParams: {}, replaceUrl: true });
     }
     this.destroyRef.onDestroy(() => this.stopAutoRefresh());
+    this.reportsService
+      .listAllReports()
+      .then((rows) => this.recentReports.set(rows.slice(0, RECENT_REPORTS_LIMIT)))
+      .catch(() => {}); // best-effort, no bloquea el resto de la pantalla
+  }
+
+  toggleRecentPicker(): void {
+    this.showRecentPicker.update((v) => !v);
+  }
+
+  /** Carga un report ya importado antes, elegido por fecha — instantáneo, sin llamar a WCL (loadExisting solo lee lo que ya hay en Supabase). */
+  async loadFromHistory(code: string): Promise<void> {
+    this.showRecentPicker.set(false);
+    this.reportCodeInput.set(code);
+    this.error.set(null);
+    await this.loadExisting(code, /* analyzeIfEmpty */ true); // por si el histórico solo tenía metadata (sync-reports) y nunca se llegó a analizar
+  }
+
+  reportDateLabel(startTime: number): string {
+    return new Date(startTime).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  }
+
+  /** Guarda el código activo + si "En vivo" está encendido + cuándo hubo la última actividad real — todo lo que hace falta para reanudar al volver a esta pestaña. */
+  private persistSession(): void {
+    const code = this.currentReportCode();
+    if (!code) {
+      writeStoredSession(null);
+      return;
+    }
+    writeStoredSession({ reportCode: code, autoRefreshOn: this.autoRefresh(), lastActivityAt: this.lastActivityAt });
   }
 
   /** Recarga desde Supabase lo que ya hay guardado, sin llamar a WCL — instantáneo al volver de otra pantalla. */
@@ -159,6 +314,8 @@ export class RaidSessionComponent {
       this.currentReportCode.set(code);
       this.pulls.set(pulls);
       this.selectedPullId.set(pulls.at(-1)?.id ?? null);
+      this.manualActiveKey.set(undefined); // sigue al pull recién cargado, no a un pin manual de una sesión anterior
+      this.reportsService.listNightPlayers(code).then((p) => this.nightPlayers.set(p)).catch(() => {}); // best-effort, no bloquea la carga principal
     } catch {
       // si falla (ej. Supabase no disponible un instante), no bloquea: el usuario puede pulsar Importar
     }
@@ -185,16 +342,29 @@ export class RaidSessionComponent {
             r.remaining > 0 ? `Procesados ${processedTotal} pulls, quedan ${r.remaining}…` : `Procesados ${processedTotal} pulls.`,
           );
         }
+        this.duplicateWarning.set(r.possibleDuplicateOf);
       });
       this.currentReportCode.set(code);
-      writeStoredReportCode(code);
+      // §"actividad real" = se encontró una pull nueva de verdad, o el
+      // propio RL pulsó "Actualizar" a mano — un tick de auto-refresh vacío
+      // (sin novedades) NO cuenta, o el reloj de los 10 min nunca vencería
+      // mientras la pestaña siga abierta sin que pase nada de verdad.
+      if (newestPullId || isManual) this.lastActivityAt = Date.now();
+      this.persistSession();
       this.lastCheckedAt.set(new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }));
       const pulls = await this.reportsService.listPulls(code);
       this.pulls.set(pulls);
+      this.reportsService.listNightPlayers(code).then((p) => this.nightPlayers.set(p)).catch(() => {}); // best-effort, no bloquea la carga principal
       // Solo saltamos al pull recién procesado si de verdad hay uno nuevo — un
       // ciclo de auto-refresh sin novedades no debe robarte la selección actual.
-      if (newestPullId) this.selectedPullId.set(newestPullId);
-      else if (!this.selectedPullId()) this.selectedPullId.set(pulls.at(-1)?.id ?? null);
+      // Si el nuevo pull es de OTRO boss (la raid avanzó), el picker tiene que
+      // seguirle la pista en vez de dejar el pin manual de un boss ya viejo.
+      if (newestPullId) {
+        this.selectedPullId.set(newestPullId);
+        this.manualActiveKey.set(undefined);
+      } else if (!this.selectedPullId()) {
+        this.selectedPullId.set(pulls.at(-1)?.id ?? null);
+      }
     } catch (err) {
       this.error.set(err instanceof Error ? err.message : String(err));
     } finally {
@@ -207,13 +377,28 @@ export class RaidSessionComponent {
 
   toggleAutoRefresh(): void {
     this.autoRefresh.update((v) => !v);
-    if (this.autoRefresh()) this.startAutoRefresh();
-    else this.stopAutoRefresh();
+    if (this.autoRefresh()) {
+      this.lastActivityAt = Date.now(); // encenderlo a mano también cuenta como actividad — no se autocierra a los 10min de haberlo prendido
+      this.startAutoRefresh();
+    } else {
+      this.stopAutoRefresh();
+    }
+    this.persistSession();
   }
 
   private startAutoRefresh(): void {
     this.stopAutoRefresh();
     this.autoRefreshTimer = setInterval(() => {
+      // §"hasta que no haya cambios en 10 minutos... ahí ya se puede dar por
+      // cerrado el log" (feedback real): el auto-cierre no depende solo de
+      // volver a la pestaña — si se queda abierta sin novedades, también se
+      // apaga sola en vez de seguir sondeando un log que ya terminó.
+      if (Date.now() - this.lastActivityAt >= LIVE_STALE_MS) {
+        this.autoRefresh.set(false);
+        this.stopAutoRefresh();
+        this.persistSession();
+        return;
+      }
       const code = this.currentReportCode();
       if (code && !this.importing()) void this.runAnalyze(code, false);
     }, AUTO_REFRESH_MS);

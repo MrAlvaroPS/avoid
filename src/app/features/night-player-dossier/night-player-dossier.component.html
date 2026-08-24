@@ -1,0 +1,302 @@
+@if (error(); as e) {
+  <p class="load-error" role="alert">{{ e }}</p>
+} @else if (loading()) {
+  <p class="loading">Cargando dosier…</p>
+} @else if (data(); as d) {
+  <div class="dossier">
+    <a [routerLink]="['/']" [queryParams]="{ report: d.reportCode }" class="back-link">← Volver a la raid</a>
+
+    <header class="page-header">
+      @if (d.roster?.avatarUrl) {
+        <img class="avatar" [src]="d.roster!.avatarUrl" [alt]="d.playerName" />
+      } @else {
+        <div class="avatar avatar-placeholder"><app-role-icon [role]="d.roster?.role ?? null" /></div>
+      }
+      <div class="header-text">
+        <h1>
+          {{ d.playerName }}
+          @if (d.roster?.rank === 'Trial') {
+            <span class="trial-badge">Trial</span>
+          }
+        </h1>
+        <p class="header-sub">
+          {{ d.reportDate ? (d.reportDate | date: "d 'de' MMMM, y") : d.reportTitle }}
+          @if (d.roster?.class) {
+            · {{ d.roster!.class }}
+          }
+        </p>
+        <div class="header-links">
+          @if (d.battleNetUrl) {
+            <a [href]="d.battleNetUrl" target="_blank" rel="noopener">Battle.net ↗</a>
+          }
+          @if (d.raiderIoUrl) {
+            <a [href]="d.raiderIoUrl" target="_blank" rel="noopener">Raider.IO ↗</a>
+          }
+        </div>
+      </div>
+      <button type="button" class="copy-btn" (click)="copySummary()">
+        {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord →' }}
+      </button>
+    </header>
+
+    <div class="stat-row">
+      <div class="stat">
+        <span class="stat-value tabular">{{ d.pulls.length }}</span>
+        <span class="stat-label">pulls</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value tabular tone-danger">{{ d.totalDeaths }}</span>
+        <span class="stat-label">muertes</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value tabular tone-warning">{{ d.totalMechanicFails }}</span>
+        <span class="stat-label">mecánicas falladas</span>
+      </div>
+      @if (d.reliability; as rel) {
+        <div class="stat">
+          <span class="reliability-wrap" tabindex="0">
+            <span class="reliability-badge" [class]="'tone-' + reliabilityTone()">{{ rel.overall }}</span>
+            <div class="reliability-tooltip" role="tooltip">
+              <p><strong>Fiabilidad — 60 días</strong></p>
+              <p>Mecánica (40%): {{ rel.breakdown.mecanica != null ? rel.breakdown.mecanica.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p>Defensiva (30%): {{ rel.breakdown.defensiva != null ? rel.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p>Preparación (20%): {{ rel.breakdown.preparacion != null ? rel.breakdown.preparacion.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p>Asistencia (10%): {{ rel.breakdown.asistencia != null ? rel.breakdown.asistencia.toFixed(0) + '%' : 'sin dato' }}</p>
+            </div>
+          </span>
+          <span class="stat-label">fiabilidad — 60 días</span>
+        </div>
+      }
+      @if (d.nightReliability; as nr) {
+        <div class="stat">
+          <span class="reliability-wrap" tabindex="0">
+            <span class="reliability-badge" [class]="'tone-' + nightReliabilityTone()">{{ nr.overall }}</span>
+            <div class="reliability-tooltip" role="tooltip">
+              <p><strong>Fiabilidad — esta noche</strong></p>
+              <p>Mecánica: {{ nr.breakdown.mecanica != null ? nr.breakdown.mecanica.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p>Defensiva: {{ nr.breakdown.defensiva != null ? nr.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p>Preparación: {{ nr.breakdown.preparacion != null ? nr.breakdown.preparacion.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p class="meta">{{ nr.sampleSize }} pull{{ nr.sampleSize === 1 ? '' : 's' }} evaluados. Sin eje de asistencia (no aplica a una sola noche).</p>
+            </div>
+          </span>
+          <span class="stat-label">fiabilidad — esta noche</span>
+        </div>
+      }
+    </div>
+
+    <!-- §"que dentro del dosier pueda hacer consulta IA con informe
+         completo... orientado a mejorar como RL" (feedback real): mismo
+         componente que ya usa el análisis de un pull, en scope
+         'night-player' — tiene en cuenta TODO el dosier de esta noche. -->
+    <app-llm-analysis-card
+      scope="night-player"
+      [reportCode]="d.reportCode"
+      [playerName]="d.playerName"
+      [entities]="briefEntities()"
+      [analysis]="d.brief"
+      [generating]="generatingBrief()"
+      [error]="briefError()"
+      (generateRequested)="onGenerateBrief()"
+      (manualBriefSaved)="onManualBriefSaved($event)"
+    />
+
+    @if (d.repeatedPatterns.length) {
+      <section class="widget widget-alert" aria-labelledby="patterns-heading">
+        <h2 id="patterns-heading" class="widget-heading">⚠️ Patrones repetidos esta noche</h2>
+        <ul class="pattern-list">
+          @for (p of d.repeatedPatterns; track p.mechanicName) {
+            <li>
+              @if (p.mechanicId) {
+                <app-wowhead-link type="spell" [id]="p.mechanicId"><strong>{{ p.mechanicName }}</strong></app-wowhead-link>
+              } @else {
+                <strong>{{ p.mechanicName }}</strong>
+              }
+              <app-mechanic-info-icon [note]="p.aiNote" />
+              @if (categoryMeta(p.category); as meta) {
+                <span class="cat-tag">{{ meta.short }}</span>
+              }
+              — {{ p.instanceCount }} veces en {{ p.distinctBossCount }} boss{{ p.distinctBossCount === 1 ? '' : 'es' }} distinto{{ p.distinctBossCount === 1 ? '' : 's' }}
+              <span class="meta">({{ p.bossNames.join(', ') }})</span>
+            </li>
+          }
+        </ul>
+      </section>
+    }
+
+    <section class="widget" aria-labelledby="bosses-heading">
+      <h2 id="bosses-heading" class="widget-heading">Bosses de la noche</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th></th>
+              <th>Boss</th>
+              <th>Intento</th>
+              <th>Resultado</th>
+              <th class="align-right">Duración</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (p of d.pulls; track p.pullId) {
+              <tr>
+                <td class="death-col">{{ p.died ? '💀' : '' }}</td>
+                <td class="cell-boss">
+                  <a [routerLink]="['/boss', p.bossId, p.difficulty]">{{ p.bossName }}</a>
+                  <span class="difficulty-tag">{{ p.difficulty }}</span>
+                </td>
+                <td class="tabular">#{{ p.pullNumber }}</td>
+                <td>
+                  @if (p.kill) {
+                    <span class="result-pill result-kill">Kill</span>
+                  } @else {
+                    <span class="result-pill result-wipe">Wipe {{ formatPct(p.wipePct) }}</span>
+                  }
+                </td>
+                <td class="tabular align-right">{{ formatDuration(p.durationMs) }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="widget" aria-labelledby="deaths-heading">
+      <h2 id="deaths-heading" class="widget-heading">Muertes</h2>
+      @if (!d.deaths.length) {
+        <app-empty-panel icon="✓" message="Sin muertes esta noche." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Boss</th>
+                <th class="align-right">Minuto</th>
+                <th>Mecánica</th>
+                <th>Causa</th>
+                <th>¿Defensivo disponible?</th>
+                <th title="¿Usó una piedra de brujo o poción de vida en los 15s antes de morir?">¿Poción/piedra?</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (death of d.deaths; track death.pullId) {
+                <tr [class.row-wipecall]="death.isWipeCall">
+                  <td class="cell-boss">{{ death.bossName }} <span class="meta">#{{ death.pullNumber }}</span></td>
+                  <td class="tabular align-right">{{ formatDuration(death.timeMs) }}</td>
+                  <td class="cell-mechanic">
+                    @if (death.mechanicId) {
+                      <app-wowhead-link type="spell" [id]="death.mechanicId">{{ mechanicDisplayName(death.mechanicName) }}</app-wowhead-link>
+                    } @else {
+                      {{ mechanicDisplayName(death.mechanicName) }}
+                    }
+                    <app-mechanic-info-icon [note]="death.aiNote" />
+                    @if (categoryMeta(death.category); as meta) {
+                      <span class="cat-tag">{{ meta.short }}</span>
+                    }
+                    @if (death.isWipeCall) {
+                      <span class="cat-tag cat-tag-wipecall" title="Excluida de fiabilidad — cluster de wipe call confirmado">WIPE CALL</span>
+                    }
+                  </td>
+                  <td>{{ rootCauseLabel(death.rootCause, death.category) }}</td>
+                  <td [class.tone-danger]="death.defensivesAvailable.length > 0">
+                    @if (death.defensivesAvailable.length) {
+                      <div class="defensive-icons">
+                        @for (def of death.defensivesAvailable; track def.spellId) {
+                          <app-wowhead-link type="spell" [id]="def.spellId" class="icon-only" [attr.title]="def.name" />
+                        }
+                      </div>
+                    } @else {
+                      <span class="meta">No</span>
+                    }
+                  </td>
+                  <td>
+                    @if (death.usedHealthstoneBeforeDeath || death.usedHealthPotionBeforeDeath) {
+                      {{ death.usedHealthstoneBeforeDeath && death.usedHealthPotionBeforeDeath ? 'Piedra + poción' : death.usedHealthstoneBeforeDeath ? 'Piedra de brujo' : 'Poción de vida' }}
+                    } @else {
+                      <span class="meta">No</span>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+
+    <section class="widget" aria-labelledby="fails-heading">
+      <h2 id="fails-heading" class="widget-heading">Mecánicas falladas sin morir</h2>
+      @if (!d.mechanicFails.length) {
+        <app-empty-panel icon="✓" message="Sin mecánicas de responsabilidad individual falladas esta noche." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Boss</th>
+                <th>Mecánica</th>
+                <th>Resultado</th>
+                <th class="align-right">Daño</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (fail of d.mechanicFails; track fail.pullId + fail.mechanicName) {
+                <tr>
+                  <td class="cell-boss">{{ fail.bossName }} <span class="meta">#{{ fail.pullNumber }}</span></td>
+                  <td class="cell-mechanic">
+                    <app-wowhead-link type="spell" [id]="fail.mechanicId">{{ fail.mechanicName }}</app-wowhead-link>
+                    <app-mechanic-info-icon [note]="fail.aiNote" />
+                    @if (categoryMeta(fail.category); as meta) {
+                      <span class="cat-tag">{{ meta.short }}</span>
+                    } @else {
+                      <span class="cat-tag cat-tag-unknown">SIN CLASIFICAR</span>
+                    }
+                  </td>
+                  <td>{{ fail.outcome === 'fail' ? 'Fallo' : 'Aviso' }}</td>
+                  <td class="tabular align-right">{{ fail.damageTaken | number: '1.0-0' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+
+    @if (d.gearSnapshot; as g) {
+      <section class="widget" aria-labelledby="gear-heading">
+        <h2 id="gear-heading" class="widget-heading">Equipo — al terminar {{ g.bossName }} (#{{ g.fromPullNumber }})</h2>
+        <p class="gear-sub">
+          {{ g.spec ? g.spec + ' ' : '' }}{{ g.class ?? '—' }} · {{ g.enchantedSlotCount }}/{{ g.enchantableSlotCount }} slots encantables con encantamiento · {{ g.gemCount }} gema{{ g.gemCount === 1 ? '' : 's' }} engarzada{{ g.gemCount === 1 ? '' : 's' }}
+        </p>
+        <div class="gear-columns">
+          <div class="detail-block">
+            <h4>Talentos</h4>
+            @if (g.talents.length) {
+              <div class="icon-chips">
+                @for (t of g.talents; track t.spellId) {
+                  <app-wowhead-link type="spell" [id]="t.spellId" class="icon-only" />
+                }
+              </div>
+              @if (g.talentUnresolvedCount) {
+                <p class="unresolved-note">+{{ g.talentUnresolvedCount }} nodos sin resolver</p>
+              }
+            } @else {
+              <span class="meta">—</span>
+            }
+          </div>
+          <div class="detail-block">
+            <h4>Equipo</h4>
+            @if (g.gear.length) {
+              <div class="icon-chips">
+                @for (item of g.gear; track item.slot) {
+                  <app-wowhead-link type="item" [id]="item.itemId" class="icon-only" [attr.title]="'ilvl ' + item.itemLevel" />
+                }
+              </div>
+            } @else {
+              <span class="meta">—</span>
+            }
+          </div>
+        </div>
+      </section>
+    }
+  </div>
+}

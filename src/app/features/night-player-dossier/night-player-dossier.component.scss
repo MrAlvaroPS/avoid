@@ -1,0 +1,412 @@
+// Mismo vocabulario visual que boss-history/player-detail (widget/table
+// genéricos) — misma familia de "página de detalle agregado".
+.dossier {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.loading,
+.load-error {
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.load-error {
+  color: var(--danger);
+}
+
+.back-link {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-decoration: none;
+  align-self: flex-start;
+
+  &:hover {
+    color: var(--accent);
+  }
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid var(--card-border);
+  box-shadow: var(--shadow-card);
+  flex-shrink: 0;
+}
+.avatar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+}
+.header-text {
+  flex: 1;
+  min-width: 0;
+}
+.page-header h1 {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.header-sub {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.header-links {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+
+  a {
+    font-size: 11.5px;
+    color: var(--accent);
+    text-decoration: none;
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+.trial-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.copy-btn {
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 8px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+}
+
+.stat-row {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stat-label {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.tone-danger {
+  color: var(--danger);
+}
+.tone-warning {
+  color: var(--warning);
+}
+
+.widget {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 16px;
+}
+.widget-alert {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+}
+.widget-heading {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.widget-alert .widget-heading {
+  color: var(--warning);
+}
+
+.pattern-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--surface-2);
+  white-space: nowrap;
+}
+td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--surface-2);
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+tr:last-child td {
+  border-bottom: none;
+}
+.align-right {
+  text-align: right;
+}
+.meta {
+  color: var(--text-faint);
+}
+.death-col {
+  width: 20px;
+}
+
+.cell-boss {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+
+  a {
+    color: inherit;
+    text-decoration: none;
+    &:hover {
+      color: var(--accent);
+    }
+  }
+}
+.difficulty-tag {
+  margin-left: 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-faint);
+}
+
+.cell-mechanic {
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cat-tag {
+  margin-left: 5px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.cat-tag-unknown,
+.cat-tag-wipecall {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.result-pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 20px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.result-kill {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.result-wipe {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.row-wipecall {
+  opacity: 0.65;
+}
+
+// §"pon los iconos de los que SÍ tenía disponible... que lo pueda usar
+// efectiva y realmente" (feedback real): mismo patrón icon-only+tooltip de
+// Wowhead que ya usa "a quién dirigir" en un pull, aquí a nivel de la noche
+// entera — status==='available_unused' ya viene filtrado desde el
+// servicio (catálogo real de su clase/spec/talentos, sin cooldown, sin
+// estar ya activo).
+.defensive-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+::ng-deep .defensive-icons .icon-only {
+  display: inline-block;
+
+  .wowhead-link {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    overflow: hidden;
+    border-bottom: none !important;
+    background-size: cover;
+  }
+}
+
+.reliability-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+
+  &.tone-danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  &.tone-warning {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  &.tone-success {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+}
+
+// §"al pasar el ratón por encima deberían salir los valores con los que lo
+// calcula" (feedback real): mismo patrón de hover que app-mechanic-info-icon
+// (shared/mechanic-info-icon.component.ts) — CSS puro, sin estado ni click.
+.reliability-wrap {
+  position: relative;
+  display: inline-flex;
+  outline: none;
+}
+.reliability-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: max-content;
+  min-width: 190px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-card);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+
+  p {
+    margin: 0;
+  }
+  strong {
+    color: var(--text);
+  }
+  .meta {
+    margin-top: 4px;
+    color: var(--text-faint);
+  }
+}
+.reliability-wrap:hover .reliability-tooltip,
+.reliability-wrap:focus-within .reliability-tooltip {
+  opacity: 1;
+  visibility: visible;
+}
+
+.gear-sub {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.gear-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.detail-block h4 {
+  margin: 0 0 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+}
+.icon-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+::ng-deep .icon-chips .icon-only {
+  display: inline-block;
+
+  .wowhead-link {
+    display: block;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    overflow: hidden;
+    border-bottom: none !important;
+    background-size: cover;
+  }
+}
+.unresolved-note {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}

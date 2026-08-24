@@ -20,6 +20,26 @@
       }
     </dl>
 
+    @if (e.damageTimeline; as timeline) {
+      <!-- §13.4: secuencia real de golpes, no solo el agregado de "Detalle" de arriba. -->
+      <h3 class="timeline-heading">Golpes en los últimos segundos</h3>
+      <ol class="hit-timeline">
+        @for (hit of timeline; track $index) {
+          <li class="hit-row">
+            <span class="hit-time tabular">{{ hit.timeLabel }}</span>
+            <span class="hit-label">
+              @if (hit.wowheadSpellId) {
+                <app-wowhead-link type="spell" [id]="hit.wowheadSpellId" class="icon-only" />
+              }
+              <span>{{ hit.abilityLabel }}</span>
+            </span>
+            <span class="hit-bar-track"><span class="hit-bar-fill" [style.width.%]="(hit.amount / maxHit()) * 100"></span></span>
+            <span class="hit-amount tabular">{{ hit.amount | number: '1.0-0' }}</span>
+          </li>
+        }
+      </ol>
+    }
+
     @if (wclUrl(e); as url) {
       <a [href]="url" target="_blank" rel="noopener" class="wcl-link">
         Ver en warcraftlogs.com ↗

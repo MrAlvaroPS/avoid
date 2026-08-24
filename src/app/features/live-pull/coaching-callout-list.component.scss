@@ -7,8 +7,16 @@
   height: 100%;
 }
 
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
 .heading {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
@@ -16,94 +24,318 @@
   letter-spacing: 0.04em;
 }
 
+// §"la primera pestaña Mecánicas, la segunda Muertes" — misma superficie
+// recesiva que el resto de toggles de la app, sin inventar un componente de
+// tabs nuevo.
+.tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+
+  button {
+    border: none;
+    background: transparent;
+    color: var(--text-faint);
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: calc(var(--radius-sm) - 2px);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+
+    &.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow-card);
+    }
+    &:hover:not(.active) {
+      color: var(--text-muted);
+    }
+  }
+}
+
+.tab-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 0 5px;
+  min-width: 15px;
+  text-align: center;
+}
+.active .tab-count {
+  color: var(--text-muted);
+}
+
 .empty {
   margin: 0;
   color: var(--text-muted);
   font-size: 13px;
 }
-
-.callout-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.empty-note {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: 11.5px;
 }
 
-.callout-row {
+// Lista de filas en grid — mismas columnas fijas siempre (§"fijando las
+// cosas siempre en las mismas posiciones"), pero SIN ser un <table>: cada
+// fila es un <button> (accesible por teclado gratis), no una <tr>. Overflow
+// horizontal contenido en el propio panel, nunca en la página (dataviz).
+.row-list {
+  // §mismo bug de CSS que las tablas del resto de la app: overflow-x:auto
+  // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.row-head,
+.row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 6px;
+}
+
+// §"scroll horizontal rarete" (bug real): cada fila es su propio grid
+// independiente (a propósito, ver nota más abajo sobre min-width:max-content)
+// y por defecto una pista de grid no se encoge por debajo del min-content de
+// SU contenido — una fila con una lista de defensivos más larga que otra
+// fuerza SU PROPIA pista más ancha que las demás, aunque todas compartan el
+// mismo grid-template-columns. El contenedor .row-list ajusta el scroll a
+// la fila más ancha, así que el resto de filas terminan con hueco vacío al
+// llegar al final del scroll — de ahí lo "raro". min-width:0 en cada celda
+// hace que las pistas respeten el minmax() declarado de verdad, y el
+// contenido que no cabe se envuelve (ya hay flex-wrap en las celdas que lo
+// necesitan) en vez de forzar la pista.
+.row-head > *,
+.row > * {
+  min-width: 0;
+}
+
+.mechanics-grid .row-head,
+.mechanics-grid .row {
+  grid-template-columns: minmax(84px, 1fr) minmax(150px, 1.7fr) 46px 74px 64px 64px 76px;
+}
+.deaths-grid .row-head,
+.deaths-grid .row {
+  grid-template-columns: 16px minmax(84px, 1fr) minmax(150px, 1.7fr) 46px 60px 64px 64px minmax(130px, 1.2fr) minmax(130px, 1.2fr) minmax(130px, 1.2fr);
+}
+
+.row-head {
+  color: var(--text-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--surface-2);
+}
+
+.row {
   width: 100%;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 8px 10px;
-  background: transparent;
   border: none;
-  border-radius: 8px;
+  border-bottom: 1px solid var(--surface-2);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.12s ease;
 
-  &:hover {
+  &:hover,
+  &:focus-visible {
     background: var(--surface-2);
   }
-}
-
-.icon {
-  flex-shrink: 0;
-  line-height: 1.4;
-}
-
-.message {
-  font-size: 13px;
-  color: var(--text);
-}
-
-.ability-ref {
-  border-bottom: 1px dotted var(--text-faint);
-  cursor: help;
-  &:hover {
-    border-bottom-color: var(--accent);
-    color: var(--accent);
+  &:last-child {
+    border-bottom: none;
   }
 }
 
-.severity-critical .icon {
-  filter: saturate(1.2);
+.row-fail .cell-player {
+  color: var(--danger);
+  font-weight: 600;
 }
-.severity-critical .message {
-  color: var(--text);
+.row-wipecall {
+  opacity: 0.65;
 }
-.severity-warning .message {
-  color: var(--text);
+.row-wipecall .cell-player {
+  color: var(--text-muted);
+  font-weight: 600;
 }
-.severity-positive .message {
+.row-positive .cell-player {
   color: var(--success);
+  font-weight: 600;
 }
 
-.skeleton-line {
-  height: 16px;
-  border-radius: 4px;
-  margin-bottom: 8px;
-  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-hover) 37%, var(--surface-2) 63%);
-  background-size: 400% 100%;
-  animation: shimmer 1.4s ease infinite;
-}
-
-@keyframes shimmer {
-  0% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0 50%;
-  }
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
+.cell-player {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+  font-weight: 600;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// El icono/tooltip de la nota IA vive ahora en app-mechanic-info-icon
+// (shared/mechanic-info-icon.component.ts) — hover, no click, reutilizado
+// en todos los sitios que enseñan mecánicas.
+
+.cell-icon {
+  text-align: center;
+}
+
+// Único icono por fila (el de la mecánica) — el resto de nombres son texto
+// plano, a propósito, para no repetir el bug/ruido de "un icono por chip".
+.cell-mechanic {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+.mechanic-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+// El icono real es el <a class="wowhead-link"> DENTRO de <app-wowhead-link
+// class="icon-only">, no el mismo elemento — class="icon-only" en el uso del
+// componente cae en su host (<app-wowhead-link>), nunca en el <a> que
+// pinta su plantilla. ".icon-only.wowhead-link" (compuesto, mismo
+// elemento) por eso NUNCA coincidía con nada, y el <a> se quedaba sin ancho/
+// alto propios — un <a> vacío (sin texto) con solo background-image no
+// tiene tamaño intrínseco, así que el icono desaparecía (0×0) aunque el
+// background-image sí estuviera puesto. Selector de DESCENDIENTE, no compuesto.
+::ng-deep .icon-only {
+  display: inline-block;
+  flex-shrink: 0;
+
+  .wowhead-link {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    overflow: hidden;
+    border-bottom: none !important;
+    background-size: cover;
+  }
+}
+.cat-tag {
+  flex-shrink: 0;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+// §"no estamos evaluando bien las mecánicas... no aparecen en dirección de
+// personajes": tono warning, no accent — a diferencia de una categoría
+// confirmada, esta fila es una señal de que el manifiesto necesita revisión,
+// no un dato ya cerrado.
+.cat-tag-unknown {
+  white-space: nowrap;
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.align-right {
+  text-align: right;
+}
+.align-center {
+  text-align: center;
+}
+
+.outcome-pill {
+  justify-self: start;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 20px;
+
+  &.pill-fail {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  &.pill-warning {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+}
+
+.oneshot-yes {
+  color: var(--warning);
+  font-weight: 600;
+}
+.heal-zero {
+  color: var(--danger);
+}
+
+.cell-defensive {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.def-yes {
+  color: var(--success);
+  font-size: 11.5px;
+}
+
+// Listas de disponibles/en cooldown: texto plano separado por comas, SIN
+// icono por nombre — feedback real: "no llenar todo de iconos". El icono
+// queda reservado para la mecánica, que es lo que de verdad ayuda a
+// reconocer de un vistazo.
+.cell-defensive-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  white-space: normal;
+  font-size: 11.5px;
+  line-height: 1.4;
+  // §"scroll horizontal rarete": un nombre de defensivo largo (ej. "Greater
+  // Invisibility") no cabe en una sola línea aunque el resto SÍ envuelva —
+  // ese único elemento sin envolver seguía "sangrando" fuera de la celda
+  // visualmente (el layout de la pista ya estaba bien, era solo pintado),
+  // lo que inflaba el scrollWidth de esa fila por encima de las demás y
+  // descuadraba el scroll del contenedor entero. Recortar aquí, no dejar
+  // que se salga.
+  overflow-x: hidden;
+}
+
+// Icono + texto SEPARADOS (dos elementos, no un solo <a> con texto e icono
+// mezclados) — es lo que evita el bug real de antes: el icono de Wowhead se
+// inyecta como background-image sobre el propio <a>, y si ese <a> también
+// lleva el nombre como texto, icono y letras se dibujan uno encima del otro.
+.def-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+
+  &.close-to-death {
+    color: var(--danger);
+    font-weight: 600;
+  }
+  // §"si tenía o no defensivo activo... eso es relevante para saber si usó
+  // algo": tono success — sí reaccionó, distinto del ámbar de "disponible
+  // sin usar" (podía haberlo hecho, no lo hizo) y del tenue de "en cooldown".
+  &.def-active {
+    color: var(--success);
+    font-weight: 600;
+  }
+}
+
+.meta {
+  color: var(--text-faint);
+  font-size: 11.5px;
 }

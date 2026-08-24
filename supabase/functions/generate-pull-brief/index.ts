@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { generatePullBrief } from '../_shared/llm-brief.ts';
+import { buildPullBriefContext } from '../_shared/pull-brief-context.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 
 // Genera (o devuelve de caché) el brief de UN pull concreto. Separado de
@@ -40,11 +41,6 @@ Deno.serve(async (req: Request) => {
   );
 
   try {
-    const { data: pull } = await supabase.from('pulls').select('*').eq('id', body.pullId).maybeSingle();
-    if (!pull) {
-      return jsonResponse({ ok: false, error: `Pull ${body.pullId} no encontrado` });
-    }
-
     if (!body.force) {
       const { data: existing } = await supabase.from('pull_briefs').select('*').eq('pull_id', body.pullId).maybeSingle();
       if (existing) {
@@ -52,34 +48,12 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const { data: records } = await supabase
-      .from('player_pull_records')
-      .select('died,avoidable_damage_taken')
-      .eq('pull_id', body.pullId);
-    const deaths = (records ?? []).filter((r) => r.died).length;
-    const avoidableDamageTotal = (records ?? []).reduce((sum, r) => sum + Number(r.avoidable_damage_taken ?? 0), 0);
+    const context = await buildPullBriefContext(supabase, body.pullId);
+    if (!context) {
+      return jsonResponse({ ok: false, error: `Pull ${body.pullId} no encontrado` });
+    }
 
-    // Delta contra los pulls anteriores de ESTE boss+dificultad — el "mejoró/empeoró" del brief.
-    const { data: priorPulls } = await supabase
-      .from('pulls')
-      .select('pull_number,wipe_pct,duration_ms')
-      .eq('boss_id', pull.boss_id)
-      .eq('difficulty', pull.difficulty)
-      .lt('pull_number', pull.pull_number)
-      .order('pull_number', { ascending: false })
-      .limit(3);
-
-    const pullContext = {
-      pullNumber: pull.pull_number,
-      wipePct: pull.wipe_pct,
-      durationMs: pull.duration_ms,
-      deaths,
-      avoidableDamageTotal,
-      previousPulls: (priorPulls ?? []).map((p) => ({ pullNumber: p.pull_number, wipePct: p.wipe_pct, durationMs: p.duration_ms })),
-      // TODO Fase 2: perfil de referencia de WCL Rankings como tercer eje.
-    };
-
-    const brief = await generatePullBrief(supabase, pullContext, body.force ? 'pull-brief-regenerated' : 'pull-brief');
+    const brief = await generatePullBrief(supabase, context.pullContext, body.force ? 'pull-brief-regenerated' : 'pull-brief');
 
     const { data: saved, error: upsertError } = await supabase
       .from('pull_briefs')

@@ -26,7 +26,10 @@
 
 .table-wrap {
   padding: 0 16px 16px;
+  // §mismo bug de CSS que night-player-dossier/night-report: overflow-x:auto
+  // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
   overflow-x: auto;
+  overflow-y: visible;
 }
 
 table {
@@ -45,14 +48,53 @@ th {
   border-bottom: 1px solid var(--surface-2);
 }
 
-td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--surface-2);
-  white-space: nowrap;
+// §"la tabla del roster está descuadrada": antes cada <td> podía traer 3-5
+// líneas de texto propio (trinkets/defensivos/consumibles siempre
+// desplegados), así que la altura de la fila la marcaba la celda más larga
+// y dps/hps/percentil quedaban flotando arriba de un hueco enorme. Ahora la
+// fila resumen tiene una altura FIJA de verdad (line-height+padding, nunca
+// contenido de varias líneas) y el contenido largo vive aparte, en
+// .detail-row, que solo aparece si se pide.
+.summary-row {
+  cursor: pointer;
+  transition: background 0.12s ease;
+
+  td {
+    height: 34px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--surface-2);
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+
+  &:hover {
+    background: var(--surface-2);
+  }
+  &.died .player-col {
+    color: var(--danger);
+  }
 }
 
-tr.died td:first-child {
-  color: var(--danger);
+.death-col {
+  width: 20px;
+  text-align: center;
+  padding-right: 0 !important;
+}
+.role-col {
+  width: 22px;
+  text-align: center;
+}
+.player-col {
+  font-weight: 600;
+  color: var(--text);
+}
+.class-col {
+  color: var(--text-muted);
+}
+.expand-col {
+  width: 20px;
+  text-align: center;
+  color: var(--text-faint);
 }
 
 td.tabular {
@@ -103,76 +145,122 @@ th.chart-col {
   font-size: 12px;
 }
 
-td.trinkets {
+.consumables-summary-col {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  white-space: normal;
-}
-
-.talents-cell {
-  white-space: normal;
-  max-width: 220px;
-}
-
-.mini-toggle {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  cursor: pointer;
-  padding: 0;
+}
+.consumable-dot {
+  font-size: 12px;
+  opacity: 0.55;
+  &.ok {
+    opacity: 1;
+  }
+  &.missing {
+    opacity: 1;
+    filter: saturate(1.4);
+  }
+}
 
-  &:hover {
-    color: var(--text);
+// --- Fila de detalle: se abre bajo la fila resumen, no compite con su altura ---
+
+.detail-row td {
+  padding: 12px 10px 16px;
+  border-bottom: 1px solid var(--surface-2);
+  background: var(--surface);
+  white-space: normal;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.detail-block {
+  min-width: 0;
+
+  h4 {
+    margin: 0 0 6px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-faint);
+    font-weight: 600;
+  }
+}
+
+// Talentos/equipo: solo icono, sin texto (un ID en pantalla no dice nada) —
+// se anula el guion punteado que trae WowheadLinkComponent por defecto (está
+// pensado para texto subrayado, no para un icono suelto) y se le da tamaño
+// de icono real.
+.icon-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+// El <a> real vive DENTRO de <app-wowhead-link class="icon-only">, no en el
+// mismo elemento — "icon-only.wowhead-link" (compuesto) nunca coincidía con
+// nada, dejando el <a> (sin texto, solo background-image) sin tamaño
+// intrínseco → icono invisible aunque el background-image sí estuviera puesto.
+::ng-deep .icon-only {
+  display: inline-block;
+  flex-shrink: 0;
+
+  .wowhead-link {
+    display: block;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    overflow: hidden;
+    border-bottom: none !important;
+    background-size: cover;
   }
 }
 
 .unresolved-note {
+  margin: 4px 0 0;
   color: var(--text-faint);
   font-size: 10.5px;
 }
 
-.talent-chips {
-  margin-top: 4px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px 6px;
-  max-width: 260px;
-}
-
-.defensives-cell,
-.consumables-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  white-space: normal;
-}
-
 .defensive-use {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   font-size: 12px;
+  margin-bottom: 3px;
+  flex-wrap: wrap;
 }
 
-.count-badge {
-  color: var(--text-muted);
+.cast-times {
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+// §"los defensivos ganan peso si están pegados a la muerte": el momento
+// concreto se resalta en vez de quedar igual de apagado que el resto.
+.cast-time.close-to-death {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.defensive-cd-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 3px;
+}
+.cd-remaining {
+  color: var(--warning);
   font-size: 11px;
 }
 
-.none-used {
-  color: var(--text-faint);
-  font-size: 12px;
-}
-
 .consumable-status {
+  display: block;
   font-size: 11.5px;
   color: var(--text-faint);
+  margin-bottom: 2px;
 
   &.status-used {
     color: var(--success);
@@ -186,4 +274,41 @@ td.trinkets {
   margin: 10px 0 0;
   font-size: 11px;
   color: var(--text-faint);
+}
+
+.meta {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+// §3.1/§7.1: percentil real de WCL — color de ESTADO (qué tal va, no qué
+// es), mismos tokens ya reservados en toda la app.
+.percentile-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  cursor: help;
+
+  &.tone-danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  &.tone-warning {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  &.tone-success {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  &.tone-neutral {
+    background: var(--surface-2);
+    color: var(--text-faint);
+  }
 }

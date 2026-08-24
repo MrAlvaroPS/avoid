@@ -35,19 +35,33 @@ export interface TrendBar {
   `,
   styles: [
     `
+      // §bug real (reutilizado en boss-history con TODOS los pulls de una
+      // season, no solo "los últimos intentos"): flex:1 sin overflow
+      // reparte el ancho disponible entre TODAS las barras a partes
+      // iguales, así que con 30-40 pulls cada una se queda en una
+      // rendija ilegible en vez de mantener un tamaño mínimo — dataviz
+      // §"wide content scrolls inside its own container". min-width fijo
+      // por columna + overflow-x:auto: con pocas barras se ve exactamente
+      // igual que antes (no llenan el ancho, no hay scroll), con muchas
+      // hace scroll en vez de aplastarse.
       .trend {
         display: flex;
         align-items: flex-end;
         gap: 10px;
         height: 96px;
         padding-top: 4px;
+        // §mismo bug de CSS que las tablas del resto de la app: overflow-x:auto
+        // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
+        overflow-x: auto;
+        overflow-y: visible;
       }
       .bar-col {
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 5px;
-        flex: 1;
+        flex: 1 0 auto;
+        min-width: 22px;
         height: 100%;
       }
       .track {

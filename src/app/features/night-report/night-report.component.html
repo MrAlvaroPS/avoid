@@ -1,0 +1,201 @@
+@if (error(); as e) {
+  <p class="load-error" role="alert">{{ e }}</p>
+} @else if (loading()) {
+  <p class="loading">Cargando informe…</p>
+} @else if (data(); as d) {
+  <div class="night-report">
+    <a [routerLink]="['/']" [queryParams]="{ report: d.reportCode }" class="back-link">← Volver a la raid</a>
+
+    <header class="page-header">
+      <div>
+        <h1>Informe de la noche</h1>
+        <p class="header-sub">{{ d.reportDate ? (d.reportDate | date: "d 'de' MMMM, y") : d.reportTitle }}</p>
+      </div>
+      <button type="button" class="copy-btn" (click)="copyReport()">
+        {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar informe →' }}
+      </button>
+    </header>
+
+    <div class="stat-row">
+      <div class="stat">
+        <span class="stat-value tabular">{{ d.bosses.length }}</span>
+        <span class="stat-label">bosses</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value tabular tone-success">{{ d.totalKills }}</span>
+        <span class="stat-label">kills</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value tabular tone-danger">{{ d.totalWipes }}</span>
+        <span class="stat-label">wipes</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value tabular">{{ formatDuration(d.totalDurationMs) }}</span>
+        <span class="stat-label">tiempo en pulls</span>
+      </div>
+      <div class="stat">
+        <span class="stat-value tabular tone-danger">{{ d.totalDeaths }}</span>
+        <span class="stat-label">muertes reales</span>
+        @if (d.totalWipeCallDeathsExcluded > 0) {
+          <span class="stat-note">+{{ d.totalWipeCallDeathsExcluded }} de wipe call, excluidas</span>
+        }
+      </div>
+    </div>
+
+    <!-- §"en el resumen de noche otra consulta IA con informe completo... a
+         nivel de raid con algo menos de detalle particular de jugadores"
+         (feedback real): mismo componente que el dosier individual, en
+         scope 'night'. -->
+    <app-llm-analysis-card
+      scope="night"
+      [reportCode]="d.reportCode"
+      [entities]="briefEntities()"
+      [analysis]="d.brief"
+      [generating]="generatingBrief()"
+      [error]="briefError()"
+      (generateRequested)="onGenerateBrief()"
+      (manualBriefSaved)="onManualBriefSaved($event)"
+    />
+
+    <section class="widget" aria-labelledby="attendance-heading">
+      <h2 id="attendance-heading" class="widget-heading">Asistencia</h2>
+      <div class="attendance-row">
+        <div class="attendance-col">
+          <span class="attendance-label tone-success">Presentes — Main ({{ d.attendingMain.length }})</span>
+          <div class="chip-row">
+            @for (name of d.attendingMain; track name) {
+              <a class="player-chip" [routerLink]="['/report', d.reportCode, 'player', name]">{{ name }}</a>
+            }
+          </div>
+        </div>
+        @if (d.attendingTrial.length) {
+          <div class="attendance-col">
+            <span class="attendance-label">Presentes — Trial ({{ d.attendingTrial.length }})</span>
+            <div class="chip-row">
+              @for (name of d.attendingTrial; track name) {
+                <a class="player-chip" [routerLink]="['/report', d.reportCode, 'player', name]">{{ name }}</a>
+              }
+            </div>
+          </div>
+        }
+        @if (d.absentMain.length) {
+          <div class="attendance-col">
+            <span class="attendance-label tone-danger">Ausentes — Main ({{ d.absentMain.length }})</span>
+            <div class="chip-row">
+              @for (name of d.absentMain; track name) {
+                <span class="player-chip chip-absent">{{ name }}</span>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    </section>
+
+    @if (d.wipeCallPulls.length) {
+      <section class="widget widget-alert" aria-labelledby="wipecalls-heading">
+        <h2 id="wipecalls-heading" class="widget-heading">🏳️ Wipe calls detectados esta noche</h2>
+        <ul class="plain-list">
+          @for (w of d.wipeCallPulls; track w.bossName + w.pullNumber) {
+            <li>{{ w.bossName }} ({{ w.difficulty }}) #{{ w.pullNumber }} — {{ w.confidence }}% de confianza</li>
+          }
+        </ul>
+      </section>
+    }
+
+    <section class="widget" aria-labelledby="bosses-heading">
+      <h2 id="bosses-heading" class="widget-heading">Bosses de la noche</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Boss</th>
+              <th class="align-right">Intentos</th>
+              <th class="align-right">Kills</th>
+              <th>Mejor</th>
+              <th>Progreso</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (b of d.bosses; track b.bossId + b.difficulty) {
+              <tr>
+                <td class="cell-boss">
+                  <a [routerLink]="['/boss', b.bossId, b.difficulty]">{{ b.bossName }}</a>
+                  <span class="difficulty-tag">{{ b.difficulty }}</span>
+                </td>
+                <td class="tabular align-right">{{ b.attempts }}</td>
+                <td class="tabular align-right">{{ b.kills }}</td>
+                <td>
+                  @if (b.kills > 0) {
+                    <span class="result-pill result-kill">Kill · {{ formatDuration(b.bestKillDurationMs) }}</span>
+                  } @else {
+                    <span class="result-pill result-wipe">{{ formatPct(100 - (b.bestWipePct ?? 100)) }} progreso</span>
+                  }
+                </td>
+                <td class="progress-cell"><app-trend-bars [bars]="b.progressBars" /></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    @if (d.topOffenders.length) {
+      <section class="widget widget-alert" aria-labelledby="offenders-heading">
+        <h2 id="offenders-heading" class="widget-heading">⚠️ Muertes repetidas esta noche</h2>
+        <ul class="plain-list">
+          @for (o of d.topOffenders; track o.playerName) {
+            <li>
+              <a [routerLink]="['/report', d.reportCode, 'player', o.playerName]">{{ o.playerName }}</a>
+              — {{ o.deathCount }} muertes
+            </li>
+          }
+        </ul>
+      </section>
+    }
+
+    <section class="widget" aria-labelledby="deathcauses-heading">
+      <h2 id="deathcauses-heading" class="widget-heading">Causas de muerte más repetidas</h2>
+      @if (!d.topDeathCauses.length) {
+        <app-empty-panel icon="✓" message="Sin muertes reales esta noche." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mecánica</th>
+                <th class="align-right">Muertes</th>
+                <th class="align-right">Jugadores distintos</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of d.topDeathCauses; track c.mechanicName) {
+                <tr>
+                  <td class="cell-mechanic">
+                    @if (c.wowheadSpellId) {
+                      <app-wowhead-link type="spell" [id]="c.wowheadSpellId" class="icon-only" />
+                    }
+                    <span>{{ c.mechanicName }}</span>
+                    <app-mechanic-info-icon [note]="c.aiNote" />
+                  </td>
+                  <td class="tabular align-right">{{ c.deathCount }}</td>
+                  <td class="tabular align-right">{{ c.distinctPlayers }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+
+    <div class="donut-row">
+      <section class="widget" aria-labelledby="catdonut-heading">
+        <h2 id="catdonut-heading" class="widget-heading">Mecánicas por categoría</h2>
+        <app-donut-chart [segments]="d.mechanicCategoryBreakdown" centerLabel="casts" />
+      </section>
+      <section class="widget" aria-labelledby="defdonut-heading">
+        <h2 id="defdonut-heading" class="widget-heading">Defensivos en las muertes reales</h2>
+        <app-donut-chart [segments]="d.defensiveStatusBreakdown" centerLabel="evaluados" />
+      </section>
+    </div>
+  </div>
+}

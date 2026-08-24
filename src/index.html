@@ -12,9 +12,19 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <!-- Tooltips oficiales de Wowhead (embed público, pensado para sitios de terceros):
        cualquier <a> con data-wowhead="spell=ID" o "item=ID" recibe automáticamente
-       el tooltip enriquecido (icono + descripción) al pasar el ratón por encima. -->
+       el tooltip enriquecido (icono + descripción) al pasar el ratón por encima.
+       iconizeLinks:true (§"iconos junto a cada habilidad, para saber qué es sin
+       leer"): Blizzard Game Data NO tiene icono para casi ninguna habilidad de
+       boss de esta season todavía (verificado en real: 404 en /data/wow/media/spell/{id}
+       para varios IDs reales de WCL de esta raid — dato ausente en origen, no
+       un fallo de nuestra query) — Wowhead sí lo tiene (datamina PTR/beta),
+       así que en vez de montar un pipeline de resolución propio que fallaría
+       igual por falta de dato en Blizzard, se usa el propio embed de Wowhead
+       (ya cargado) para que CUALQUIER <a data-wowhead> de toda la app —
+       manifiesto, callouts, timeline, tabla de jugadores — enseñe su icono
+       inline automáticamente, sin tocar el resto del código. -->
   <script>
-    var whTooltips = { colorLinks: true, iconizeLinks: false, renameLinks: false };
+    var whTooltips = { colorLinks: true, iconizeLinks: true, renameLinks: false };
   </script>
   <script src="https://wow.zamimg.com/js/tooltips.js"></script>
 </head>

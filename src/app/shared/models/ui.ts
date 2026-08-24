@@ -47,10 +47,77 @@ export interface TimelineChip {
  */
 export type CoachingCalloutPart = { kind: 'text'; text: string } | { kind: 'ability'; label: string; wowheadSpellId: number | null };
 
+export interface DefensiveRef {
+  spellId: number;
+  name: string;
+  /** Solo relevante en defensivesOnCooldown — cuánto le faltaba en el instante exacto que representa esta fila. null = sin dato de cooldown base (extractor no lo resolvió). */
+  cooldownRemainingMs: number | null;
+  /** true = se lanzó dentro de los últimos ~10s antes de morir — el defensivo "gana peso" cuando está pegado a la muerte (lo usó y aun así no bastó, o lo tenía casi listo). */
+  closeToDeath?: boolean;
+}
+
+/**
+ * §"A QUIÉN DIRIGIR": pestaña Muertes. Columnas fijas — quién, qué mecánica,
+ * minuto, oneshot sí/no, daño 5s, sanación 5-10s, defensivos disponibles,
+ * defensivos en cooldown. Las mecánicas falladas SIN morir viven aparte en
+ * MechanicFailRow (pestaña Mecánicas) — los datos disponibles no son los
+ * mismos (aquí sí hay snapshot de defensivos activos en el momento exacto de
+ * morir; en un fallo sin muerte no existe ese snapshot).
+ */
 export interface CoachingCallout {
   raiderName: string;
-  severity: 'critical' | 'warning' | 'positive';
-  parts: CoachingCalloutPart[];
+  /** §"pon icono de clase junto al nombre en 'a quién dirigir'" (feedback real): actor.subType de WCL tal cual ("DeathKnight"...) — null en la fila de racha rota, donde no se trae el registro completo del jugador. */
+  raiderClass: string | null;
+  /** 'critical' = murió. 'positive' = rompió una racha de muertes a la misma mecánica. */
+  severity: 'critical' | 'positive';
+  mechanic: { label: string; wowheadSpellId: number | null };
+  /** §"poner una 'I' de información junto a la mecánica con la nota descriptiva que haya traído la IA" (feedback real): mismo texto que boss_mechanics_candidates.ai_classification.notes — null si esta mecánica no vino del flujo de clasificación por IA. */
+  notes: string | null;
+  /** Minuto de combate ("2:14") — vacío solo en la fila de racha rota, que no representa un instante concreto de ESTE pull. */
+  timeLabel: string;
+  /** §"la tabla de muertes debería estar ordenada por tiempo de muerte" (feedback real): ms crudos para poder ordenar cronológicamente — timeLabel es solo el texto ya formateado. null en la fila de racha rota (no es un instante de este pull). */
+  timeMs: number | null;
+  /** Solo tiene sentido si murió — null en la fila de racha rota. */
+  oneshot: boolean | null;
+  /** §"esa gente no debería... contar como muerte, marcado como wipe call" (feedback real): true = esta fila NO cuenta en el recuento de "Muertes" ni en fiabilidad/racha — se sigue mostrando (el RL quiere verla) pero marcada aparte en vez de mezclada con fallos reales. */
+  isWipeCall: boolean;
+  damageWindowTotal: number | null;
+  /** 0 real = de verdad nadie le curó nada; no confundir con null (no evaluable). */
+  healingWindowTotal: number | null;
+  /** §"si tenía o no defensivo activo... eso es relevante para saber si usó algo o no": defensivos que YA tenía puestos (cast + duración real vs. momento de morir, o snapshot de buffs de WCL si la duración no se conoce todavía) en el instante exacto de morir — sí reaccionó, y aun así no bastó. Distinto de "disponible sin usar" (podía haberlo usado, no lo hizo). */
+  defensivesActive: DefensiveRef[];
+  defensivesAvailable: DefensiveRef[];
+  defensivesOnCooldown: DefensiveRef[];
+  provenance: ProvenanceEntry;
+}
+
+/**
+ * §"A QUIÉN DIRIGIR": pestaña Mecánicas — quién se comió una mecánica de
+ * responsabilidad individual sin llegar a morir por ella. Mismo espíritu que
+ * CoachingCallout pero con los datos que SÍ existen para un instante que no
+ * es una muerte: daño de esa instancia concreta (no una ventana genérica),
+ * sanación recibida mientras duraba, y si hubo algún cast propio pegado a
+ * ella (sin desglose disponible/en cooldown — eso exige el snapshot de
+ * buffs que analyze-report solo toma al morir).
+ */
+export interface MechanicFailRow {
+  raiderName: string;
+  /** §"pon icono de clase junto al nombre" (feedback real): actor.subType de WCL tal cual ("DeathKnight"...). */
+  raiderClass: string | null;
+  mechanic: { label: string; wowheadSpellId: number | null };
+  /** §"añade... una 'i' de información que abra... 'notas' de la mecánica que trajimos con el prompt en Ajustes" (feedback real): mismo texto que boss_mechanics_candidates.ai_classification.notes — null si esta mecánica no vino del flujo de clasificación por IA (clasificada a mano, o sin clasificar todavía). */
+  notes: string | null;
+  timeLabel: string;
+  /** 'fail' = mató a la raid de otra mecánica cerca (raro verlo aquí, ya cubierto por CoachingCallout si murió). 'partial_fail' = demasiada gente golpeada para ser normal. */
+  outcome: 'partial_fail' | 'fail';
+  /** §"no estamos evaluando bien las mecánicas que se fallan" (feedback real): null = todavía sin categoría confirmada NI sugerida en el manifiesto — antes eso hacía que la fila desapareciera de esta pestaña por completo aunque SÍ contara en la tarjeta "Mecánicas falladas", la incoherencia señalada. Ahora se enseña igual, marcada "sin clasificar". */
+  category: MechanicCategory | null;
+  /** Cuánta gente golpeó esta instancia en total (no solo este jugador) — la señal que le hace falta al RL para juzgar a ojo una mecánica `category: null`: pocos golpeados = probablemente individual, casi toda la raid = probablemente raid-wide. */
+  totalPlayersHit: number;
+  damageTaken: number;
+  healingReceived: number;
+  /** spellId del cast propio más cercano (±10s) — null = no se le vio usar nada. */
+  usedDefensiveSpellId: number | null;
   provenance: ProvenanceEntry;
 }
 
@@ -74,6 +141,8 @@ export interface ProvenanceEntry {
   detail?: string; // contexto adicional (ej. lista de nombres, ids)
   wclReportCode?: string;
   wclFightId?: number;
+  /** §13.4: secuencia real de golpes en los últimos segundos antes de morir — solo presente en el drawer de una muerte, no en el resto de provenance. */
+  damageTimeline?: { timeLabel: string; amount: number; abilityLabel: string; wowheadSpellId: number | null }[];
 }
 
 export type PullResult = 'wipe' | 'kill';
@@ -85,4 +154,7 @@ export interface ReferencePacing {
   tone: 'success' | 'warning' | 'neutral';
   /** "84% de esas 50 kills públicas se hicieron sin ninguna muerte" — contexto de cuán normal es un kill perfecto incluso arriba. */
   zeroDeathContext: string | null;
+  /** §7.2 .compare-bar-row: los dos números crudos detrás de `label`, para dibujar la barra real en vez de repetir el cálculo. */
+  yourDurationMs: number;
+  medianDurationMs: number;
 }

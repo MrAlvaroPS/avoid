@@ -9,9 +9,10 @@
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { EdgeFunctionsService } from './edge-functions.service';
-import { formatDuration, formatPct, formatTimeLabel, mechanicCategoryMeta, normalizeDifficulty } from '../shared/format.util';
-import type { BossReferenceStatsRow, PlayerPullRecordRow, PullBriefRow, PullMechanicEventRow, PullRow, ReportEncounterRow } from '../shared/models/domain';
-import type { CoachingCallout, LlmPullAnalysis, MetricCardData, PullDifficulty, PullResult, ReferencePacing, TimelineChip } from '../shared/models/ui';
+import { WowauditRosterService } from './wowaudit-roster.service';
+import { formatDuration, formatPct, formatTimeLabel, mechanicCategoryMeta, mechanicDisplayName, normalizeDifficulty } from '../shared/format.util';
+import type { BossReferenceStatsRow, DefensiveOption, PlayerPullRecordRow, PullBriefRow, PullMechanicEventRow, PullRow, ReportEncounterRow } from '../shared/models/domain';
+import type { CoachingCallout, LlmPullAnalysis, MechanicFailRow, MetricCardData, PullDifficulty, PullResult, ReferencePacing, TimelineChip } from '../shared/models/ui';
 import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { TrendBar } from '../shared/charts/trend-bars.component';
 
@@ -33,16 +34,24 @@ export interface PlayerStatRow {
   died: boolean;
   class: string | null;
   spec: string | null;
+  /** §"todo el roster de todas las pantallas... tiene que ser el oficial de wowaudit": null = no cruza con el roster de wowaudit (nombre distinto, o sin sincronizar todavía). */
+  role: 'Tank' | 'Heal' | 'Melee' | 'Ranged' | null;
   dps: number;
   hps: number;
   absorbedDamageTaken: number;
-  /** Solo los talentos con spellId resuelto (cruce TraitNodeEntry/TraitDefinition en analyze-report) — se pintan como chips con tooltip de Wowhead. */
+  /** §3.1/§7.1: percentil real de WCL contra el mundo, misma clase/spec, este boss+dificultad. Null si WCL no pudo rankear este pull (log privado, boss no rankeable todavía...). */
+  worldRankPercent: number | null;
+  worldTotalParses: number | null;
+  /** Solo los talentos con spellId resuelto (cruce TraitNodeEntry/TraitDefinition en analyze-report) — se pintan como iconos con tooltip de Wowhead, sin texto (el ID en pantalla no dice nada a nadie). */
   talents: { spellId: number; rank: number }[];
   /** Nodos elegidos que NO se pudieron resolver a un spellId (p.ej. algunos nodos de elección sin definición directa) — se cuentan en vez de ocultarse sin más, para no dar la sensación de un build incompleto. */
   talentUnresolvedCount: number;
-  trinkets: { itemId: number; itemLevel: number; name: string | null }[];
-  /** Compendio de uso de defensivos durante TODO el pull — no solo el instante de morir. Solo se incluyen los que se usaron al menos una vez (los 0 usos no aportan nada a este resumen; si murió, el desglose completo de disponibilidad ya vive en death_cause.defensiveOptions). */
-  defensivesUsed: { spellId: number; name: string; count: number; timestampsMs: number[] }[];
+  /** TODO el equipo, no solo los trinkets — icono + tooltip de Wowhead basta, no hace falta resolver el nombre en analyze-report. */
+  gear: { slot: number; itemId: number; itemLevel: number }[];
+  /** Compendio de uso de defensivos durante TODO el pull — no solo el instante de morir. Cada cast lleva su minuto y si cayó pegado a una muerte (más peso: lo usó y aun así no bastó, o llegó a tiempo). Solo se incluyen los que se usaron al menos una vez. */
+  defensivesUsed: { spellId: number; name: string; casts: { timeMs: number; closeToDeath: boolean }[] }[];
+  /** Estado de cooldown de CADA defensivo de su catálogo en el momento exacto de morir — null si no murió (no aplica). Mismo dato que ya vive en death_cause.defensiveOptions, expuesto aquí para el desplegable del roster. */
+  defensiveStatusAtDeath: import('../shared/models/domain').DefensiveOption[] | null;
   consumables: PlayerPullRecordRow['consumables'];
 }
 
@@ -58,6 +67,10 @@ export interface PullDetail {
   /** Daño recibido por la raid en el tiempo — la gráfica real que sustituye al timeline de solo-chips. Null si WCL no respondió al analizar este pull. */
   raidDamageSeries: { pointIntervalMs: number; points: number[] } | null;
   callouts: CoachingCallout[];
+  /** Mecánicas de responsabilidad individual falladas SIN morir — pestaña "Mecánicas" de A quién dirigir, separada de "Muertes" (callouts). */
+  mechanicFails: MechanicFailRow[];
+  /** §"pone mecánicas fallidas y luego 'a quién dirigir' no tiene nada" (feedback real, verificado): fallos reales de categorías de GRUPO (raid-damage/tankbuster/interrupt/debuff-stack/healing-absorb) — cuentan en la tarjeta "Mecánicas falladas" pero nunca en esta pestaña (no son culpa de una persona). Se expone para poder explicar la diferencia en vez de dejarla como una contradicción muda. */
+  groupMechanicFailCount: number;
   playerStats: PlayerStatRow[];
   brief: LlmPullAnalysis | null;
   isFirstPullOfNight: boolean; // sin comparación posible — las 4 tarjetas van sin delta
@@ -69,12 +82,13 @@ export interface PullDetail {
   defensiveStatusBreakdown: DonutSegment[];
   /** Progreso (100 - wipe_pct) de los últimos intentos + este, más reciente a la derecha. */
   progressTrend: TrendBar[];
+  /** §"cuándo se determina un wipe global... vamos a wipear": null = sin cluster detectado en este pull (o fue kill). */
+  wipeCall: { confidence: number; excluded: boolean; signals: Record<string, number | boolean | null> } | null;
 }
 
-// Orden de inventario estándar de WoW: los slots de trinket son los índices
-// 12 y 13 del array `gear` de combatantInfo (verificado en real el
-// 2026-08-22 contra un pull real: índice 12 traía icono "raidtrinkets").
-const TRINKET_SLOT_INDICES = [12, 13];
+// §"los defensivos ganan peso si están pegados a la muerte": un cast dentro
+// de estos ms antes de morir se marca closeToDeath en el roster.
+const CLOSE_TO_DEATH_MS = 10_000;
 
 // Misma ventana que usa analyze-report para atribuir daño/muerte a un cast
 // concreto — se repite aquí (no se comparte módulo con Deno) para poder
@@ -82,10 +96,16 @@ const TRINKET_SLOT_INDICES = [12, 13];
 // duplicarla como chip suelto.
 const MECHANIC_ATTRIBUTION_WINDOW_MS = 4000;
 
+/** §"esa gente no debería... contar como muerte, marcado como wipe call": true solo cuando la muerte formó parte del cluster detectado EN ESE PULL y el RL no la ha restaurado (pull.wipe_call_excluded). La fila se sigue mostrando en "a quién dirigir" — esto solo decide si cuenta en métricas/fiabilidad/racha. */
+function isExcludedWipeCallDeath(pull: PullRow, record: PlayerPullRecordRow): boolean {
+  return record.wipe_call_cluster && pull.wipe_call_excluded;
+}
+
 @Injectable({ providedIn: 'root' })
 export class PullAnalysisService {
   private supabase = inject(SupabaseService);
   private edgeFunctions = inject(EdgeFunctionsService);
+  private wowauditRoster = inject(WowauditRosterService);
 
   async loadPullDetail(pullId: string): Promise<PullDetail> {
     const client = this.supabase.client;
@@ -94,12 +114,26 @@ export class PullAnalysisService {
     if (pullErr) throw pullErr;
     const pull = pullData as PullRow;
 
-    const [encounterRes, recordsRes, mechEventsRes, briefRes, candidateCountRes, priorPullsRes, referenceStatsRes] = await Promise.all([
+    // §"todo el roster de todas las pantallas... tiene que ser el oficial de
+    // wowaudit": el icono de rol de la tabla de jugadores de ESTE pull sale
+    // de aquí también, no de una deducción propia — best-effort (sin sync
+    // todavía, la tabla sigue funcionando sin icono de rol).
+    const rosterByNamePromise = this.wowauditRoster
+      .listRoster()
+      .then((roster) => new Map(roster.map((r) => [r.name, r.role])))
+      .catch(() => new Map<string, string>());
+
+    const [encounterRes, recordsRes, mechEventsRes, briefRes, candidatesRes, priorPullsRes, referenceStatsRes] = await Promise.all([
       client.from('report_encounters').select('*').eq('report_code', pull.report_code).eq('fight_id', pull.fight_id).maybeSingle(),
       client.from('player_pull_records').select('*').eq('pull_id', pullId),
       client.from('pull_mechanic_events').select('*').eq('pull_id', pullId).order('trigger_time_ms', { ascending: true }),
       client.from('pull_briefs').select('*').eq('pull_id', pullId).maybeSingle(),
-      client.from('boss_mechanics_candidates').select('id', { count: 'exact', head: true }).eq('boss_id', pull.boss_id).eq('difficulty', pull.difficulty),
+      // §"la 'i' que abra... las notas que trajimos con el prompt en
+      // Ajustes" (feedback real): se trae name+ai_classification en la
+      // misma consulta que ya existía solo para saber si había manifiesto
+      // (antes head:true/count, sin filas) — mismo viaje de red, ahora con
+      // lo necesario para cruzar por nombre en buildMechanicFails.
+      client.from('boss_mechanics_candidates').select('name, ai_classification').eq('boss_id', pull.boss_id).eq('difficulty', pull.difficulty),
       client
         .from('pulls')
         .select('*')
@@ -120,7 +154,9 @@ export class PullAnalysisService {
     const records = (recordsRes.data ?? []) as PlayerPullRecordRow[];
     const mechEvents = (mechEventsRes.data ?? []) as PullMechanicEventRow[];
     const briefRow = briefRes.data as PullBriefRow | null;
-    const hasManifest = (candidateCountRes.count ?? 0) > 0;
+    const candidateRows = (candidatesRes.data ?? []) as { name: string; ai_classification: { notes: string } | null }[];
+    const hasManifest = candidateRows.length > 0;
+    const notesByMechanicName = new Map(candidateRows.filter((c) => c.ai_classification?.notes).map((c) => [c.name, c.ai_classification!.notes]));
     const priorPulls = (priorPullsRes.data ?? []) as PullRow[];
     const previousPull = priorPulls[0] ?? null;
     const referenceStats = referenceStatsRes.data as BossReferenceStatsRow | null;
@@ -178,7 +214,15 @@ export class PullAnalysisService {
     // calcula UNA vez y se reparte a metrics (el número) y timeline (los
     // chips), para no calcular la misma atribución dos veces con posible
     // resultado distinto.
-    const deathAttribution = attributeDeaths(records, mechEvents);
+    // §"no debería... contar como muerte": las del cluster de wipe call
+    // excluido no entran como candidatas de "mecánica fallada sin cast
+    // correlado" — no infla mechCard, aunque siguen pudiendo aparecer con
+    // su propio chip descriptivo en la timeline (buildTimeline usa
+    // `records` sin filtrar para eso, ver más abajo).
+    const deathAttribution = attributeDeaths(
+      records.filter((r) => !isExcludedWipeCallDeath(pull, r)),
+      mechEvents,
+    );
     const metrics = buildMetrics(
       pull,
       records,
@@ -192,8 +236,16 @@ export class PullAnalysisService {
       deathAttribution.uncoveredFailedMechanicCount,
     );
     const { chips: timeline, background: backgroundMechanics } = buildTimeline(pull, records, mechEvents, hasManifest, deathAttribution.coveredRecordIds);
-    const callouts = buildCallouts(pull, records, previousPull, previousRecords, priorPulls, priorRecordsByPullId);
-    const playerStats = buildPlayerStats(records);
+    const callouts = buildCallouts(pull, records, previousPull, previousRecords, priorPulls, priorRecordsByPullId, notesByMechanicName);
+    const mechanicFails = buildMechanicFails(pull, records, mechEvents, notesByMechanicName);
+    // §"pone mecánicas fallidas y luego 'a quién dirigir' no tiene nada"
+    // (feedback real): mismo criterio de exclusión que buildMechanicFails,
+    // pero contando lo EXCLUIDO en vez de lo incluido — para poder decir
+    // "hubo N fallos, pero son de grupo/tank/interrupción" en vez de dejar
+    // la pestaña vacía sin explicación cuando la tarjeta de arriba no es 0.
+    const groupMechanicFailCount = mechEvents.filter((m) => m.outcome !== 'clean' && m.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(m.category)).length;
+    const roleByName = await rosterByNamePromise;
+    const playerStats = buildPlayerStats(records, roleByName);
 
     // §13: score compuesto, no solo la comparación campo a campo de las 4
     // tarjetas — "¿este intento fue mejor que el anterior en conjunto?" en un
@@ -204,9 +256,9 @@ export class PullAnalysisService {
     if (previousPull) {
       const killDurations = [pull, ...priorPulls].filter((p) => p.wipe_pct === 0 && p.duration_ms != null).map((p) => p.duration_ms!);
       const bestKillDurationMs = killDurations.length ? Math.min(...killDurations) : null;
-      const currentDeaths = records.filter((r) => r.died).length;
+      const currentDeaths = records.filter((r) => r.died && !isExcludedWipeCallDeath(pull, r)).length;
       const currentMechFails = mechEvents.filter((m) => m.outcome !== 'clean').length;
-      const previousDeaths = previousRecords.filter((r) => r.died).length;
+      const previousDeaths = previousRecords.filter((r) => r.died && !isExcludedWipeCallDeath(previousPull, r)).length;
       const currentScore = progressScore(pull, currentDeaths, currentMechFails, bestKillDurationMs);
       const previousScore = progressScore(previousPull, previousDeaths, previousMechFailCount, bestKillDurationMs);
       progressDeltaPct = Math.round((currentScore - previousScore) * 10) / 10;
@@ -222,14 +274,22 @@ export class PullAnalysisService {
       backgroundMechanics,
       raidDamageSeries: pull.raid_damage_taken_series,
       callouts,
+      mechanicFails,
+      groupMechanicFailCount,
       playerStats,
       brief: briefRow ? mapBrief(briefRow) : null,
       isFirstPullOfNight: !previousPull,
       progressDeltaPct,
       mechanicCategoryBreakdown: buildMechanicCategoryBreakdown(mechEvents),
-      defensiveStatusBreakdown: buildDefensiveStatusBreakdown(records),
+      defensiveStatusBreakdown: buildDefensiveStatusBreakdown(records.filter((r) => !isExcludedWipeCallDeath(pull, r))),
       progressTrend: buildProgressTrend(pull, priorPulls),
+      wipeCall: pull.wipe_call_signals ? { confidence: pull.wipe_call_confidence ?? 0, excluded: pull.wipe_call_excluded, signals: pull.wipe_call_signals } : null,
     };
+  }
+
+  /** §"que autoexcluya pero que permita también editarlo... para restaurar": el toggle de wipe call — recarga el pull entero porque el cambio afecta a demasiados cálculos derivados (deaths, mechFails, racha, defensivos) como para recomputarlos todos a mano en el cliente. */
+  async setWipeCallStatus(pullId: string, excluded: boolean): Promise<void> {
+    await this.edgeFunctions.setWipeCallStatus(pullId, excluded);
   }
 
   async generateBrief(pullId: string, force = false): Promise<LlmPullAnalysis> {
@@ -250,32 +310,50 @@ function progressScore(pull: PullRow, deaths: number, mechFails: number, bestKil
   return hpTerm + durationTerm - deaths * 5 - mechFails * 3;
 }
 
-function buildPlayerStats(records: PlayerPullRecordRow[]): PlayerStatRow[] {
+function buildPlayerStats(records: PlayerPullRecordRow[], roleByName: Map<string, string>): PlayerStatRow[] {
   return records
     .map((r) => ({
       playerName: r.player_name,
       died: r.died,
       class: r.class,
       spec: r.spec,
+      role: (roleByName.get(r.player_name) as PlayerStatRow['role']) ?? null,
       dps: r.dps ?? 0,
       hps: r.hps ?? 0,
       absorbedDamageTaken: r.absorbed_damage_taken ?? 0,
+      worldRankPercent: r.world_rank_percent,
+      worldTotalParses: r.world_total_parses,
       talents: (r.talent_build ?? [])
         .filter((t): t is { id: number; rank: number; nodeID: number; spellId: number } => typeof t.spellId === 'number')
         .map((t) => ({ spellId: t.spellId, rank: t.rank })),
       talentUnresolvedCount: (r.talent_build ?? []).filter((t) => typeof t.spellId !== 'number').length,
-      trinkets: TRINKET_SLOT_INDICES.map((i) => r.equipped_items?.[i])
-        .filter((item): item is NonNullable<typeof item> => !!item && item.id > 0)
-        .map((item) => ({ itemId: item.id, itemLevel: item.itemLevel ?? 0, name: item.name ?? null })),
+      // §"todo el gear, no solo los trinkets": icono + tooltip de Wowhead ya
+      // basta (no hace falta el nombre resuelto en analyze-report) — se
+      // enseñan todos los slots con item real, en el orden que ya trae WCL.
+      gear: (r.equipped_items ?? [])
+        .map((item, slot) => ({ slot, itemId: item?.id ?? 0, itemLevel: item?.itemLevel ?? 0 }))
+        .filter((g) => g.itemId > 0),
+      // §"los defensivos ganan peso si están pegados a la muerte": cada cast
+      // lleva su propio minuto y si cayó en los CLOSE_TO_DEATH_MS previos a
+      // morir — si no murió, closeToDeath siempre es false (no hay muerte
+      // con la que compararlo).
       defensivesUsed: (r.defensive_casts ?? [])
         .filter((d) => d.timestampsMs.length > 0)
-        .map((d) => ({ spellId: d.spellId, name: d.name, count: d.timestampsMs.length, timestampsMs: d.timestampsMs })),
+        .map((d) => ({
+          spellId: d.spellId,
+          name: d.name,
+          casts: d.timestampsMs.map((timeMs) => ({
+            timeMs,
+            closeToDeath: r.died && r.death_cause != null && timeMs <= r.death_cause.timeMs && r.death_cause.timeMs - timeMs <= CLOSE_TO_DEATH_MS,
+          })),
+        })),
+      defensiveStatusAtDeath: r.died ? (r.death_cause?.defensiveOptions ?? []) : null,
       consumables: r.consumables,
     }))
     .sort((a, b) => b.dps - a.dps);
 }
 
-function mapBrief(row: PullBriefRow | { headline: string; improved: string[]; regressed: string[]; next_pull_actions: string[]; model: string }): LlmPullAnalysis {
+export function mapBrief(row: PullBriefRow | { headline: string; improved: string[]; regressed: string[]; next_pull_actions: string[]; model: string }): LlmPullAnalysis {
   return {
     headline: row.headline,
     improved: row.improved,
@@ -293,12 +371,26 @@ function mapBrief(row: PullBriefRow | { headline: string; improved: string[]; re
 // honesto: da algo buscable a mano y a lo que aspirar cuando Blizzard/el
 // manifiesto se pongan al día.
 function mechanicLabel(deathCause: { mechanicId: number; mechanicName: string | null }): string {
-  if (deathCause.mechanicName) return deathCause.mechanicName;
+  if (deathCause.mechanicName) return mechanicDisplayName(deathCause.mechanicName);
   if (deathCause.mechanicId) return `Hechizo #${deathCause.mechanicId} (sin clasificar)`;
   return 'Causa no registrada por WCL';
 }
 
 /** Desglose completo para el drawer de procedencia — aquí sí cabe todo lo que la línea corta del callout no puede. */
+// §13.4 "la secuencia real de golpes antes de morir, no solo una frase":
+// death_cause.damageWindowEvents ya trae cada golpe individual (analyze-report,
+// §2026-08-23) — aquí solo se da formato de presentación (tiempo legible,
+// nombre resuelto o "Golpe #N" si WCL no tenía nombre para esa ability).
+function buildDamageTimeline(deathCause: PlayerPullRecordRow['death_cause']): CoachingCallout['provenance']['damageTimeline'] {
+  if (!deathCause?.damageWindowEvents?.length) return undefined;
+  return deathCause.damageWindowEvents.map((hit, i) => ({
+    timeLabel: formatTimeLabel(hit.time_ms),
+    amount: hit.amount,
+    abilityLabel: hit.ability_name ?? `Golpe #${i + 1}`,
+    wowheadSpellId: hit.ability_id,
+  }));
+}
+
 function buildDeathDetail(deathCause: PlayerPullRecordRow['death_cause'], consumables: PlayerPullRecordRow['consumables'] | null): string {
   if (!deathCause) return '';
   const lines: string[] = [`Mecánica: ${mechanicLabel(deathCause)} (spell #${deathCause.mechanicId || '—'})`];
@@ -306,6 +398,17 @@ function buildDeathDetail(deathCause: PlayerPullRecordRow['death_cause'], consum
   if (deathCause.category) {
     lines.push(`Categoría: ${deathCause.category}${deathCause.categoryIsInferred ? ' (sugerida automáticamente, sin confirmar en el manifiesto)' : ' (confirmada en el manifiesto)'}.`);
   }
+  // §10: por qué murió, no solo qué le mató — ver rootCause en analyze-report.
+  // 'unclassified' se explica en vez de callarse aquí (a diferencia de la
+  // frase corta del callout): en el drawer sí hay sitio para decir POR QUÉ
+  // no se pudo determinar, en vez de dejar un hueco mudo.
+  const rootCauseLabel: Record<NonNullable<typeof deathCause.rootCause>, string> = {
+    self_positioning: 'Se posicionó mal — la mecánica exigía evitar una zona o separarse, y no lo hizo.',
+    unsoaked_mechanic: 'Falta de coordinación de grupo — mecánica de soak sin suficiente gente agrupada.',
+    no_healing_received: 'Sin sanación real dirigida a este jugador en los 6s previos a morir, con daño sostenido (no un golpe único).',
+    unclassified: 'Causa raíz no determinada — la mecánica no está en una categoría con causa conocida, o haría falta rastrear dispels/amenaza (no disponible todavía) para saberlo con certeza.',
+  };
+  if (deathCause.rootCause) lines.push(`Causa raíz: ${rootCauseLabel[deathCause.rootCause]}`);
 
   if (deathCause.damageProfile === 'burst') {
     lines.push(`Daño: golpe único — ${(deathCause.killingBlowAmount ?? 0).toLocaleString('es-ES')} de ${deathCause.damageWindowHits} golpe(s) en los últimos 5s (${deathCause.damageWindowTotal.toLocaleString('es-ES')} en total esa ventana). No fue un desgaste, fue un golpe que se comió de una vez.`);
@@ -368,7 +471,7 @@ function computeDeathStreak(
   let streak = 0;
   for (const p of pullsDesc) {
     const rec = (recordsByPullId.get(p.id) ?? []).find((r) => r.player_name === playerName);
-    if (rec?.died && rec.death_cause?.mechanicId === mechanicId) {
+    if (rec?.died && rec.death_cause?.mechanicId === mechanicId && !isExcludedWipeCallDeath(p, rec)) {
       streak++;
     } else {
       break;
@@ -398,8 +501,19 @@ function paceDiffLabel(actualMs: number, referenceMs: number): { label: string; 
  * está haciendo Avoid" sin el listón imposible de la excepción absoluta.
  */
 function buildReferencePacing(pull: PullRow, referenceStats: BossReferenceStatsRow | null): ReferencePacing | null {
-  if (!referenceStats || pull.wipe_pct !== 0 || pull.duration_ms == null || referenceStats.reference_median_duration_ms == null) return null;
-  const vsMedian = paceDiffLabel(pull.duration_ms, referenceStats.reference_median_duration_ms);
+  if (pull.wipe_pct !== 0) return null; // solo tiene sentido comparar el ritmo de un KILL — ver buildReferencePacingFromDuration
+  return buildReferencePacingFromDuration(pull.duration_ms, referenceStats);
+}
+
+/**
+ * Misma comparación que buildReferencePacing pero sin exigir un PullRow
+ * completo — §"todos los pulls de un boss": la pantalla de histórico quiere
+ * comparar el MEJOR kill de toda la historia del boss, no el de un pull
+ * concreto, así que solo hace falta la duración.
+ */
+export function buildReferencePacingFromDuration(durationMs: number | null, referenceStats: BossReferenceStatsRow | null): ReferencePacing | null {
+  if (!referenceStats || durationMs == null || referenceStats.reference_median_duration_ms == null) return null;
+  const vsMedian = paceDiffLabel(durationMs, referenceStats.reference_median_duration_ms);
   return {
     label: `${vsMedian.label} vs. la mediana de ${referenceStats.reference_sample_size} kills públicas (${formatDuration(referenceStats.reference_median_duration_ms)})`,
     tone: vsMedian.tone,
@@ -407,6 +521,8 @@ function buildReferencePacing(pull: PullRow, referenceStats: BossReferenceStatsR
       referenceStats.reference_zero_death_rate != null && referenceStats.reference_sample_size
         ? `${Math.round(referenceStats.reference_zero_death_rate * 100)}% de esas ${referenceStats.reference_sample_size} kills públicas se hicieron sin ninguna muerte.`
         : null,
+    yourDurationMs: durationMs,
+    medianDurationMs: referenceStats.reference_median_duration_ms,
   };
 }
 
@@ -502,12 +618,18 @@ function buildMetrics(
   mechanicFailurePatterns: MechanicFailurePattern[],
   uncoveredFailedMechanicCount: number,
 ): MetricCardData[] {
-  const deaths = records.filter((r) => r.died).length;
+  const deaths = records.filter((r) => r.died && !isExcludedWipeCallDeath(pull, r)).length;
   // + uncoveredFailedMechanicCount: muertes reales cuya habilidad no generó
   // un cast de boss reconocible — sin esto el número podía leer "0
   // mecánicas falladas" con 7 muertes reales en el mismo pull (ver
   // attributeDeaths).
   const mechFails = mechEvents.filter((m) => m.outcome !== 'clean').length + uncoveredFailedMechanicCount;
+  // §"no estamos evaluando bien las mecánicas... no aparecen en dirección de
+  // personajes" (feedback real): cuántos de esos fallos SÍ cuentan aquí pero
+  // no tienen categoría — antes esto era invisible, ahora se explica en el
+  // propio detalle de la tarjeta en vez de dejar que el número no cuadre
+  // con "a quién dirigir" sin decir por qué.
+  const unclassifiedFailCount = mechEvents.filter((m) => m.outcome !== 'clean' && m.category == null).length;
 
   const hpCard: MetricCardData = {
     label: 'HP del boss restante',
@@ -547,6 +669,9 @@ function buildMetrics(
           uncoveredFailedMechanicCount
             ? `${uncoveredFailedMechanicCount} de esos fallos son muertes sin un cast de boss correlado (ver "a quién dirigir" para el detalle de cada una).`
             : null,
+          unclassifiedFailCount
+            ? `${unclassifiedFailCount} de esos fallos no tienen categoría confirmada en el manifiesto todavía — aparecen en "a quién dirigir" marcados "sin clasificar" (Ajustes para curarlos).`
+            : null,
           mechanicFailurePatterns.length
             ? `Patrones repetidos (últimos ${Math.max(...mechanicFailurePatterns.map((p) => p.totalPulls))} intentos):\n${mechanicFailurePatterns
                 .map((p) => `${p.name}: falló en ${p.failedPulls} de ${p.totalPulls} intentos`)
@@ -564,7 +689,7 @@ function buildMetrics(
   let streakPlayer: string | null = null;
   let streakMechanic: string | null = null;
   for (const r of records) {
-    if (!r.died || !r.death_cause) continue;
+    if (!r.died || !r.death_cause || isExcludedWipeCallDeath(pull, r)) continue;
     const priorStreak = computeDeathStreak(r.player_name, r.death_cause.mechanicId, priorPulls, priorRecordsByPullId);
     const total = priorStreak + 1;
     if (total > maxStreak) {
@@ -779,20 +904,29 @@ function buildTimeline(
   return { chips: chips.map(({ ms, ...chip }) => ({ ...chip, timeMs: ms === Number.MAX_SAFE_INTEGER ? null : ms })), background };
 }
 
-function textPart(text: string): import('../shared/models/ui').CoachingCalloutPart {
-  return { kind: 'text', text };
-}
-function abilityPart(label: string, wowheadSpellId: number | null): import('../shared/models/ui').CoachingCalloutPart {
-  return { kind: 'ability', label, wowheadSpellId };
-}
-/** Une varias habilidades con "/" pero como fragmentos independientes — cada una con su propio tooltip de Wowhead, no un string plano. */
-function abilityListParts(items: { name: string; spellId: number }[]): import('../shared/models/ui').CoachingCalloutPart[] {
-  const parts: import('../shared/models/ui').CoachingCalloutPart[] = [];
-  items.forEach((item, i) => {
-    if (i > 0) parts.push(textPart('/'));
-    parts.push(abilityPart(item.name, item.spellId));
-  });
-  return parts;
+
+// Categorías donde "estar en players_hit_names" es responsabilidad
+// individual del jugador (se posicionó mal / no se agrupó / no se separó /
+// le tocaba a él y no reaccionó) — NO incluye raid-damage/tankbuster/
+// debuff-stack/interrupt/healing-absorb, donde que te golpee es esperado o
+// no depende de tu posición. Sin esta lista, cualquier mecánica raid-wide
+// llenaría "a quién dirigir" de gente que hizo exactamente lo que tenía que hacer.
+// Exportado: night-player-summary.service.ts reutiliza EXACTAMENTE el mismo
+// criterio para la misma pregunta ("¿esta mecánica es responsabilidad
+// individual?") a nivel de una noche entera, no solo de un pull.
+export const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set(['avoidable-ground', 'spread', 'soak', 'personal-target']);
+
+function toDefensiveRefs(options: DefensiveOption[], status: DefensiveOption['status'], deathTimeMs?: number, castTimestamps?: Map<number, number[]>): import('../shared/models/ui').DefensiveRef[] {
+  return options
+    .filter((o) => o.status === status)
+    .map((o) => {
+      let closeToDeath: boolean | undefined;
+      if (status === 'active' && deathTimeMs != null && castTimestamps) {
+        const casts = castTimestamps.get(o.spellId) ?? [];
+        closeToDeath = casts.some((t) => t <= deathTimeMs && deathTimeMs - t <= CLOSE_TO_DEATH_MS);
+      }
+      return { spellId: o.spellId, name: o.name, cooldownRemainingMs: o.cooldownRemainingMs ?? null, closeToDeath };
+    });
 }
 
 function buildCallouts(
@@ -802,104 +936,45 @@ function buildCallouts(
   previousRecords: PlayerPullRecordRow[],
   priorPulls: PullRow[],
   priorRecordsByPullId: Map<string, PlayerPullRecordRow[]>,
+  notesByMechanicName: Map<string, string>,
 ): CoachingCallout[] {
   const callouts: CoachingCallout[] = [];
 
   for (const r of records) {
     if (!r.died || !r.death_cause) continue;
-    // Línea corta a propósito (§15.1: "a quién dirigir" se lee bajo presión,
-    // no es donde cabe el desglose completo) — el detalle completo (estado de
-    // cada defensivo, con cooldown restante cuando se sabe) va al drawer de
-    // procedencia, un clic más allá, siguiendo el mismo patrón "vistazo vs.
-    // verificación" del resto de la pantalla (§1/§8). Prioridad de qué mostrar
-    // en la línea corta: lo más accionable primero — "podía haber usado X" es
-    // más útil que un simple "sin nada activo".
+
     const options = r.death_cause.defensiveOptions ?? [];
-    const availableUnused = options.filter((o) => o.status === 'available_unused');
-    const active = options.filter((o) => o.status === 'active');
-    const shortNoteParts: import('../shared/models/ui').CoachingCalloutPart[] = availableUnused.length
-      ? [textPart(' · podía usar '), ...abilityListParts(availableUnused)]
-      : active.length
-        ? [textPart(' · con '), ...abilityListParts(active), textPart(' activo')]
-        : r.death_cause.preventableWithDefensive === true
-          ? [textPart(' · sin defensivo activo')]
-          : []; // desconocido: no inventamos una afirmación corta
-
-    // §"golpe único vs. daño sostenido, información útil": distingue "no
-    // había nada que hacer, fue un golpe brutal" de "se le fue acumulando el
-    // daño y nadie lo curó/no reaccionó" — son dos historias de coaching
-    // completamente distintas con el mismo resultado (muerte).
-    const profileNote =
-      r.death_cause.damageProfile === 'burst'
-        ? ` · golpe único de ${(r.death_cause.killingBlowAmount ?? 0).toLocaleString('es-ES')}`
-        : r.death_cause.damageProfile === 'sustained'
-          ? ' · daño sostenido'
-          : '';
-
-    // Piedra/poción: solo en el caso más accionable (golpe único — es
-    // justo cuando una piedra/poción de emergencia habría importado de
-    // verdad) y solo lo que se puede afirmar con certeza: piedra
-    // disponible+sin usar es un hecho verificado (warlock en la raid); la
-    // poción solo se afirma como "sin usar", nunca "disponible" (no hay
-    // forma honesta de saber si la llevaba encima).
-    // Optional chaining hasta en las propiedades anidadas: bug real
-    // encontrado en real (pulls procesados con una versión de analyze-report
-    // anterior a que existiera esta columna traen consumables:{} tal cual —
-    // "Cannot read properties of undefined" al leer .healthstone.used).
-    const consumableNotes: string[] = [];
-    if (r.death_cause.damageProfile === 'burst') {
-      if (r.consumables?.healthstone?.available && !r.consumables.healthstone.used) consumableNotes.push('piedra disponible sin usar');
-      if (r.consumables?.healthPotion && !r.consumables.healthPotion.used) consumableNotes.push('sin poción usada');
-    }
-    const consumableNote = consumableNotes.length ? ` · ${consumableNotes.join(', ')}` : '';
+    const castTimestamps = new Map((r.defensive_casts ?? []).map((d) => [d.spellId, d.timestampsMs]));
 
     callouts.push({
       raiderName: r.player_name,
+      raiderClass: r.class,
       severity: 'critical',
-      parts: [
-        textPart(`${r.player_name} murió a `),
-        abilityPart(mechanicLabel(r.death_cause), r.death_cause.mechanicId || null),
-        ...shortNoteParts,
-        textPart(profileNote + consumableNote),
-      ],
+      mechanic: { label: mechanicLabel(r.death_cause), wowheadSpellId: r.death_cause.mechanicId || null },
+      notes: (r.death_cause.mechanicName && notesByMechanicName.get(r.death_cause.mechanicName)) || null,
+      timeLabel: formatTimeLabel(r.death_cause.timeMs),
+      timeMs: r.death_cause.timeMs,
+      isWipeCall: isExcludedWipeCallDeath(pull, r),
+      // 'unknown' (sin eventos de daño en la ventana) se queda en null —
+      // honesto: no es lo mismo "sabemos que no fue un golpe único" que "no lo sabemos".
+      oneshot: r.death_cause.damageProfile === 'unknown' ? null : r.death_cause.damageProfile === 'burst',
+      damageWindowTotal: r.death_cause.damageWindowTotal,
+      healingWindowTotal: r.death_cause.healingWindowTotal,
+      // §"si tenía o no defensivo activo en el momento de la muerte, eso es
+      // relevante para saber si usó algo o no": columna propia, separada de
+      // "disponible sin usar" — aquí SÍ reaccionó (cast + duración real vs.
+      // morir, o snapshot de buffs si la duración no se conoce todavía) y
+      // aun así no bastó, historia de coaching bien distinta.
+      defensivesActive: toDefensiveRefs(options, 'active', r.death_cause.timeMs, castTimestamps),
+      defensivesAvailable: toDefensiveRefs(options, 'available_unused'),
+      defensivesOnCooldown: toDefensiveRefs(options, 'on_cooldown', r.death_cause.timeMs, castTimestamps),
       provenance: {
         source: 'player_pull_records.death_cause',
         method: 'died=true + killingAbilityGameID, cruzado con el último snapshot de buffs a ≤2s de la muerte y con los Casts del jugador en todo el pull.',
         detail: buildDeathDetail(r.death_cause, r.consumables),
         wclReportCode: pull.report_code,
         wclFightId: pull.fight_id,
-      },
-    });
-  }
-
-  const nonDeadWithDamage = records
-    .filter((r) => !r.died && r.avoidable_damage_taken > 0)
-    .sort((a, b) => b.avoidable_damage_taken - a.avoidable_damage_taken)
-    .slice(0, 2);
-  for (const r of nonDeadWithDamage) {
-    // Nombra la mecánica que más aportó, no solo un totalón sin decir de qué
-    // viene — mechanic_damage ya trae el desglose, solo hacía falta ordenarlo.
-    const topMechanic = [...r.mechanic_damage].sort((a, b) => b.amount - a.amount)[0];
-    const mechanicNoteParts: import('../shared/models/ui').CoachingCalloutPart[] = topMechanic
-      ? [textPart(' (sobre todo '), abilityPart(topMechanic.mechanicName ?? `hechizo #${topMechanic.mechanicId}`, topMechanic.mechanicId || null), textPart(')')]
-      : [];
-    callouts.push({
-      raiderName: r.player_name,
-      severity: 'warning',
-      parts: [
-        textPart(`${r.player_name} recibió ${r.avoidable_damage_taken.toLocaleString('es-ES')} de daño evitable sin llegar a morir`),
-        ...mechanicNoteParts,
-      ],
-      provenance: {
-        source: 'player_pull_records.avoidable_damage_taken',
-        method: 'Suma de daño de mecánicas marcadas avoidable=true en el manifiesto (desglose en mechanic_damage).',
-        detail: r.mechanic_damage
-          .slice()
-          .sort((a, b) => b.amount - a.amount)
-          .map((m) => `${m.mechanicName ?? `hechizo #${m.mechanicId}`}: ${m.amount.toLocaleString('es-ES')}`)
-          .join('\n'),
-        wclReportCode: pull.report_code,
-        wclFightId: pull.fight_id,
+        damageTimeline: buildDamageTimeline(r.death_cause),
       },
     });
   }
@@ -907,7 +982,7 @@ function buildCallouts(
   if (previousPull) {
     const olderPulls = priorPulls.slice(1); // pulls anteriores a previousPull, para medir la racha que se rompió
     for (const prev of previousRecords) {
-      if (!prev.died || !prev.death_cause) continue;
+      if (!prev.died || !prev.death_cause || isExcludedWipeCallDeath(previousPull, prev)) continue;
       const current = records.find((r) => r.player_name === prev.player_name);
       const stillFailing = current?.died && current.death_cause?.mechanicId === prev.death_cause.mechanicId;
       if (stillFailing) continue;
@@ -916,14 +991,23 @@ function buildCallouts(
       if (totalStreak >= 2) {
         callouts.push({
           raiderName: prev.player_name,
+          raiderClass: prev.class,
           severity: 'positive',
-          parts: [
-            textPart(`${prev.player_name} rompió la racha de ${totalStreak} muertes seguidas a `),
-            abilityPart(prev.death_cause.mechanicName ?? 'esa mecánica', prev.death_cause.mechanicId || null),
-          ],
+          mechanic: { label: prev.death_cause.mechanicName ?? 'esa mecánica', wowheadSpellId: prev.death_cause.mechanicId || null },
+          notes: (prev.death_cause.mechanicName && notesByMechanicName.get(prev.death_cause.mechanicName)) || null,
+          // Racha ROTA, no un instante de ESTE pull — sin minuto real que enseñar.
+          timeLabel: '',
+          timeMs: null,
+          isWipeCall: false,
+          oneshot: null,
+          damageWindowTotal: null,
+          healingWindowTotal: null,
+          defensivesActive: [],
+          defensivesAvailable: [],
+          defensivesOnCooldown: [],
           provenance: {
             source: 'player_pull_records (pulls anteriores)',
-            method: 'Racha de muertes consecutivas a la misma mecánica que no se repitió en este pull.',
+            method: `Racha de ${totalStreak} muertes consecutivas a la misma mecánica que no se repitió en este pull.`,
             detail: prev.player_name,
           },
         });
@@ -931,6 +1015,94 @@ function buildCallouts(
     }
   }
 
-  const severityOrder: Record<CoachingCallout['severity'], number> = { critical: 0, warning: 1, positive: 2 };
-  return callouts.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  // §"la tabla de muertes debería estar ordenada por tiempo de muerte...
+  // ahora mismo está caótico" (feedback real): antes solo se ordenaba por
+  // severity (todas las muertes de este pull mezcladas entre sí en el orden
+  // en que player_pull_records las devolvía la consulta, no el orden en que
+  // ocurrieron). Cronológico dentro de cada grupo de severidad — las de
+  // racha rota (timeMs null, no son un instante de este pull) se quedan al
+  // final de su grupo, después de las que sí tienen un momento real.
+  const severityOrder: Record<CoachingCallout['severity'], number> = { critical: 0, positive: 1 };
+  return callouts.sort((a, b) => {
+    const severityDelta = severityOrder[a.severity] - severityOrder[b.severity];
+    if (severityDelta !== 0) return severityDelta;
+    if (a.timeMs == null && b.timeMs == null) return 0;
+    if (a.timeMs == null) return 1;
+    if (b.timeMs == null) return -1;
+    return a.timeMs - b.timeMs;
+  });
+}
+
+/**
+ * §"A QUIÉN DIRIGIR" pestaña Mecánicas: quién se comió una mecánica de
+ * responsabilidad individual sin morir por ella — daño de esa instancia,
+ * sanación recibida mientras duraba, y si hubo un cast propio pegado a ella
+ * (player_hit_details, calculado en analyze-report). Un jugador que YA tiene
+ * fila de muerte por esta misma mecánica no aparece aquí también — la
+ * muerte ya lo cubre, con más detalle (pestaña Muertes).
+ */
+function buildMechanicFails(
+  pull: PullRow,
+  records: PlayerPullRecordRow[],
+  mechEvents: PullMechanicEventRow[],
+  notesByMechanicName: Map<string, string>,
+): MechanicFailRow[] {
+  const deathCoverage = new Set<string>(); // "player|abilityId"
+  for (const r of records) {
+    if (r.died && r.death_cause) deathCoverage.add(`${r.player_name}|${r.death_cause.mechanicId}`);
+  }
+  const classByName = new Map(records.map((r) => [r.player_name, r.class]));
+
+  const rows: MechanicFailRow[] = [];
+  for (const ev of mechEvents) {
+    if (ev.outcome === 'clean') continue;
+    // §"no estamos evaluando bien las mecánicas que se fallan... y no
+    // aparecen en dirección de personajes, en TODOS los bosses" (feedback
+    // real, verificado en real: candidatas del manifiesto con category=null
+    // E inferred_category=null — sync-boss-mechanics todavía no tuvo
+    // evidencia real con la que sugerir nada). Antes `!ev.category` cortaba
+    // aquí sin más, así que un fallo real (contado en la tarjeta "Mecánicas
+    // falladas") desaparecía sin dejar rastro en "a quién dirigir". Ahora
+    // solo se excluyen las categorías donde SÍ sabemos que no es
+    // responsabilidad individual (confirmadas o inferidas) — null pasa, se
+    // enseña marcado "sin clasificar" y el RL decide con el dato crudo
+    // (cuánta gente golpeó) en vez de que se lo ocultemos.
+    if (ev.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category)) continue;
+    for (const detail of ev.player_hit_details) {
+      if (deathCoverage.has(`${detail.name}|${ev.ability_id}`)) continue;
+      rows.push({
+        raiderName: detail.name,
+        raiderClass: classByName.get(detail.name) ?? null,
+        mechanic: { label: ev.mechanic_name, wowheadSpellId: ev.ability_id || null },
+        // §"la 'i' que abra... 'notas'... la misma nota que se pone ahí"
+        // (feedback real): se cruza por NOMBRE, no por ability_id — mismo
+        // motivo que resync-mechanic-category.ts (el ability_id del
+        // manifiesto casi nunca coincide con el real que guardó WCL aquí).
+        notes: notesByMechanicName.get(ev.mechanic_name) ?? null,
+        timeLabel: formatTimeLabel(ev.trigger_time_ms),
+        outcome: ev.outcome as 'partial_fail' | 'fail',
+        category: ev.category,
+        totalPlayersHit: ev.players_hit,
+        damageTaken: detail.damage_taken,
+        healingReceived: detail.healing_received,
+        usedDefensiveSpellId: detail.used_defensive_spell_id,
+        provenance: {
+          source: 'pull_mechanic_events.player_hit_details',
+          method: `Instancia con outcome='${ev.outcome}' (categoría ${ev.category ?? 'sin clasificar todavía'}); daño = solo el de esta ability sobre este jugador en su ventana de reacción, sanación = recibida durante esa misma ventana, defensivo = cast propio en los ±10s alrededor.`,
+          detail: [
+            ev.category == null ? 'Sin categoría confirmada NI sugerida en el manifiesto todavía — clasifícala en Ajustes.' : null,
+            ev.description ?? '(sin descripción en el manifiesto)',
+            `${ev.players_hit} jugador(es) golpeados en esta instancia.`,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          wclReportCode: pull.report_code,
+          wclFightId: pull.fight_id,
+        },
+      });
+    }
+  }
+
+  const outcomeOrder: Record<MechanicFailRow['outcome'], number> = { fail: 0, partial_fail: 1 };
+  return rows.sort((a, b) => outcomeOrder[a.outcome] - outcomeOrder[b.outcome]);
 }

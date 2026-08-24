@@ -9,14 +9,14 @@
   </div>
 
   @if (analysis(); as a) {
-    <p class="headline">{{ a.headline }}</p>
+    <p class="headline"><app-brief-text [text]="a.headline" [entities]="entities()" /></p>
     <div class="columns">
       @if (a.improved.length) {
         <div class="col">
           <span class="col-title tone-success">Bien</span>
           <ul>
             @for (item of a.improved; track item) {
-              <li>{{ item }}</li>
+              <li><app-brief-text [text]="item" [entities]="entities()" /></li>
             }
           </ul>
         </div>
@@ -26,31 +26,77 @@
           <span class="col-title tone-danger">Mal</span>
           <ul>
             @for (item of a.regressed; track item) {
-              <li>{{ item }}</li>
+              <li><app-brief-text [text]="item" [entities]="entities()" /></li>
             }
           </ul>
         </div>
       }
       @if (a.nextPullActions.length) {
         <div class="col">
-          <span class="col-title tone-accent">Próximo intento</span>
+          <span class="col-title tone-accent">{{ nextActionsLabel() }}</span>
           <ul>
             @for (item of a.nextPullActions; track item) {
-              <li>{{ item }}</li>
+              <li><app-brief-text [text]="item" [entities]="entities()" /></li>
             }
           </ul>
         </div>
       }
     </div>
+    <div class="action-row">
+      <button type="button" class="copy-btn" (click)="copyBriefForDiscord()">
+        {{ copyBriefStatus() === 'copied' ? '✓ Copiado' : copyBriefStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord' }}
+      </button>
+      @if (!manualPanelOpen()) {
+        <button type="button" class="manual-toggle" (click)="openManualPanel()">Rehacer a mano con otro LLM →</button>
+      }
+    </div>
   } @else {
     <div class="empty">
       <p>Sin analizar todavía — guardado y no se relanza salvo que lo pidas de nuevo.</p>
-      <button type="button" class="analyze-btn" [disabled]="generating()" (click)="generateRequested.emit()">
-        {{ generating() ? 'Analizando…' : 'Analizar' }}
-      </button>
+      <div class="action-row">
+        <button type="button" class="analyze-btn" [disabled]="generating()" (click)="generateRequested.emit()">
+          {{ generating() ? 'Analizando…' : 'Analizar' }}
+        </button>
+        @if (!manualPanelOpen()) {
+          <button type="button" class="manual-toggle" (click)="openManualPanel()">o hazlo a mano, sin gastar la API →</button>
+        }
+      </div>
     </div>
     @if (error(); as e) {
       <p class="brief-error" role="alert">{{ e }}</p>
     }
+  }
+
+  @if (manualPanelOpen()) {
+    <!-- §"un botón para copiar el prompt completo... pegar el resultado...
+         procesarlo como si fuese a través de la API": el prompt exacto que
+         se le pasaría al LLM, listo para copiar y pegar en otro chat — y un
+         hueco para traer la respuesta de vuelta sin gastar la key propia. -->
+    <div class="manual-panel">
+      @if (loadingPrompt()) {
+        <p class="meta">Preparando el prompt…</p>
+      } @else if (promptError(); as pe) {
+        <p class="brief-error" role="alert">{{ pe }}</p>
+      } @else {
+        <div class="manual-step">
+          <span class="step-label">1. Copia el prompt y pégalo en tu chat de LLM</span>
+          <pre class="prompt-box">{{ fullPromptText }}</pre>
+          <button type="button" class="copy-btn" (click)="copyPrompt()">{{ copied() ? '✓ Copiado' : 'Copiar prompt' }}</button>
+        </div>
+        <div class="manual-step">
+          <span class="step-label">2. Pega aquí la respuesta que te dé la IA</span>
+          <textarea class="paste-box" rows="6" placeholder="Pega aquí el JSON que respondió el LLM…" [value]="pasteText()" (input)="pasteText.set($any($event.target).value)"></textarea>
+          @if (submitError(); as se) {
+            <p class="brief-error" role="alert">{{ se }}</p>
+          }
+          <div class="action-row">
+            <button type="button" class="analyze-btn" [disabled]="submitting() || !pasteText().trim()" (click)="submitPastedResult()">
+              {{ submitting() ? 'Procesando…' : 'Procesar respuesta' }}
+            </button>
+            <button type="button" class="manual-toggle" (click)="closeManualPanel()">Cancelar</button>
+          </div>
+        </div>
+      }
+    </div>
   }
 </section>

@@ -1,6 +1,16 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { getFightEvents, getFightGraph, sumGraphSeries, getReportAbilities, getReportActors, getReportFights, isEncounterFight, type WclActor } from '../_shared/wcl-client.ts';
-import { activeDefensives, defensivesForClass, type CooldownCatalog } from '../_shared/defensive-cooldowns.ts';
+import {
+  getFightEvents,
+  getFightGraph,
+  sumGraphSeries,
+  getFightPlayerRankings,
+  getReportAbilities,
+  getReportActors,
+  getReportFights,
+  isEncounterFight,
+  type WclActor,
+} from '../_shared/wcl-client.ts';
+import { activeDefensives, defensivesForClass, type CooldownCatalog, type TalentGate } from '../_shared/defensive-cooldowns.ts';
 import { getItemName, getSpecName, getCurrentBuildNamespace } from '../_shared/blizzard-client.ts';
 import { buildFromBlizzardNamespace, fetchTalentSpellLookup } from '../_shared/wago-db2-client.ts';
 import { resolveConsumableAbilityIds, buildConsumableUsage } from '../_shared/consumables.ts';
@@ -52,6 +62,12 @@ interface CastEvent {
 interface ThroughputEvent {
   sourceID?: number;
   amount?: number;
+  // targetID/timestamp no se usaban antes (solo hacía falta sourceID+amount
+  // para el agregado de dps/hps) — WCL ya los trae en el JSON crudo, se
+  // exponen aquí para §10 (rootCause 'no_healing_received': hace falta saber
+  // A QUIÉN curó cada tick, no solo cuánto curó cada sanador en total).
+  targetID?: number;
+  timestamp?: number;
 }
 interface CombatantInfoEvent {
   sourceID?: number;
@@ -131,10 +147,11 @@ Deno.serve(async (req: Request) => {
   try {
     const { data: reportRow } = await supabase
       .from('reports')
-      .select('last_processed_fight_id')
+      .select('last_processed_fight_id, possible_duplicate_of')
       .eq('code', reportCode)
       .maybeSingle();
     const lastProcessedFightId = reportRow?.last_processed_fight_id ?? 0;
+    let possibleDuplicateOf: string | null = reportRow?.possible_duplicate_of ?? null;
 
     const reportDetail = await getReportFights(reportCode);
 
@@ -143,6 +160,32 @@ Deno.serve(async (req: Request) => {
     // ejecutarse DESPUÉS de que exista la fila en `reports`, o el insert falla en silencio
     // (el helper traga el error y devuelve 0 sin avisar) y report_encounters se queda vacía.
     if (!reportRow) {
+      // §"la noche duplicada... dos personas subieron el mismo log" (bug
+      // real encontrado y arreglado a mano el 2026-08-23): sin esto, dos
+      // reports de la MISMA sesión (dos addons subiendo el mismo log)
+      // duplican cada pull/muerte/mecánica en todo el pipeline. Antes de
+      // crear la fila, se busca otro report YA importado con inicio a ±6h
+      // y ≥2 bosses en común — evidencia fuerte de que es la misma noche.
+      // NUNCA bloquea el import (podría ser una segunda sesión real el
+      // mismo día) — solo deja un aviso visible para que el RL decida.
+      const encounterIdsHere = new Set(reportDetail.fights.filter(isEncounterFight).map((f) => f.encounterID));
+      if (encounterIdsHere.size) {
+        const DUPLICATE_WINDOW_MS = 6 * 60 * 60 * 1000;
+        const { data: nearbyReports } = await supabase
+          .from('reports')
+          .select('code')
+          .gte('start_time', reportDetail.startTime - DUPLICATE_WINDOW_MS)
+          .lte('start_time', reportDetail.startTime + DUPLICATE_WINDOW_MS);
+        for (const nearby of nearbyReports ?? []) {
+          const { data: nearbyEncounters } = await supabase.from('report_encounters').select('encounter_id').eq('report_code', nearby.code);
+          const sharedCount = new Set((nearbyEncounters ?? []).map((e) => e.encounter_id).filter((id) => encounterIdsHere.has(id))).size;
+          if (sharedCount >= 2) {
+            possibleDuplicateOf = nearby.code;
+            break;
+          }
+        }
+      }
+
       await supabase.from('reports').upsert(
         {
           code: reportCode,
@@ -152,6 +195,7 @@ Deno.serve(async (req: Request) => {
           is_raid: reportDetail.fights.some(isEncounterFight),
           start_time: reportDetail.startTime,
           end_time: null,
+          possible_duplicate_of: possibleDuplicateOf,
         },
         { onConflict: 'code', ignoreDuplicates: true },
       );
@@ -193,7 +237,7 @@ Deno.serve(async (req: Request) => {
       // §12.1: catálogo real de defensivos, sincronizado desde WoWAnalyzer
       // (o la semilla manual mientras no se haya sincronizado nada aún).
       // Se carga UNA VEZ por report, no por fight ni por evento.
-      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spell_id,name,category,base_cooldown_ms');
+      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spell_id,name,category,base_cooldown_ms,base_duration_ms');
       const cooldownCatalog: CooldownCatalog = (catalogRows ?? []).map((r) => ({
         spellId: r.spell_id,
         name: r.name,
@@ -201,19 +245,41 @@ Deno.serve(async (req: Request) => {
         spec: r.spec,
         category: r.category,
         baseCooldownMs: r.base_cooldown_ms,
+        durationMs: r.base_duration_ms,
       }));
 
       // Talentos → spell ID real, para tooltips de Wowhead (ver
       // wago-db2-client.ts para la cadena TraitNodeEntry->TraitDefinition
-      // verificada con datos reales). Best-effort y cacheado UNA VEZ por
-      // report: si Blizzard o Wago no responden, el talentTree se guarda tal
-      // cual venía de WCL (sin `spellId`) — no bloquea el análisis del report.
+      // verificada con datos reales). §"han desaparecido todos los
+      // talentos": esto ANTES pedía dos tablas DB2 completas a wago.tools en
+      // CADA reprocesado (miles de filas de todas las clases) — lento y
+      // ocasionalmente fallaba/tardaba de más, degradando en silencio a
+      // "sin resolver" (a propósito, para no bloquear el análisis). Ahora se
+      // cachea en talent_spell_lookup por build de juego: solo cambia cuando
+      // Blizzard saca un parche, así que una vez resuelto no hace falta
+      // volver a pedirlo — la caché quita la parte flaky del camino
+      // caliente sin quitar el fallback (si build o caché fallan, sigue sin
+      // bloquear el análisis).
       let talentSpellLookup: Map<number, number> | null = null;
       try {
         const namespace = await getCurrentBuildNamespace();
         if (namespace) {
           const build = buildFromBlizzardNamespace(namespace);
-          talentSpellLookup = (await fetchTalentSpellLookup(build)).entryIdToSpellId;
+          const { data: cached } = await supabase.from('talent_spell_lookup').select('entry_to_spell').eq('build', build).maybeSingle();
+          if (cached) {
+            talentSpellLookup = new Map(Object.entries(cached.entry_to_spell as Record<string, number>).map(([id, spellId]) => [Number(id), spellId]));
+          } else {
+            const fresh = (await fetchTalentSpellLookup(build)).entryIdToSpellId;
+            talentSpellLookup = fresh;
+            const entry_to_spell = Object.fromEntries([...fresh.entries()].map(([id, spellId]) => [String(id), spellId]));
+            // Best-effort: si el insert falla (ej. carrera con otra invocación
+            // guardando el mismo build a la vez), no bloquea — se recalculará
+            // en la siguiente invocación sin caché, sin más coste que hoy.
+            await supabase.from('talent_spell_lookup').upsert({ build, entry_to_spell }).then(
+              () => {},
+              (err) => console.error('No se pudo cachear talent_spell_lookup (no bloqueante):', err),
+            );
+          }
         }
       } catch (err) {
         console.error('No se pudieron resolver talentos a spell ID (se guardan sin resolver):', err);
@@ -239,6 +305,17 @@ Deno.serve(async (req: Request) => {
           if (graph) raidDamageTakenSeries = sumGraphSeries(graph.series);
         } catch (err) {
           console.error('analyze-report: no se pudo traer graph(DamageTaken) para el pull', fight.id, err);
+        }
+
+        // §3.1/§7.1: percentil real de WCL por jugador — best-effort igual
+        // que la gráfica de arriba (un log privado sin permiso de ranking,
+        // o un boss recién publicado sin rankear todavía, no debe tumbar el
+        // resto del análisis del pull).
+        let playerRankings: Map<string, { rankPercent: number; totalParses: number }> | null = null;
+        try {
+          playerRankings = await getFightPlayerRankings(reportCode, fight.id);
+        } catch (err) {
+          console.error('analyze-report: no se pudo traer rankings() para el pull', fight.id, err);
         }
 
         const { data: insertedPull, error: pullError } = await supabase
@@ -312,9 +389,19 @@ Deno.serve(async (req: Request) => {
           if (typeof e.sourceID === 'number') damageDoneByActor.set(e.sourceID, (damageDoneByActor.get(e.sourceID) ?? 0) + (e.amount ?? 0));
         }
         const healingByActor = new Map<number, number>();
+        // §10 rootCause 'no_healing_received' + §"cuánto recibió en los
+        // últimos segundos": no solo CUÁNDO le curaron (para el sí/no de
+        // rootCause) sino CUÁNTO (para el número real que pide la tabla de
+        // "a quién dirigir") — misma tanda de eventos que ya se traía para
+        // hps, ningún fetch nuevo.
+        const healingEventsByTarget = new Map<number, { timestamp: number; amount: number }[]>();
         for (const raw of healingEvents) {
           const e = raw as ThroughputEvent;
           if (typeof e.sourceID === 'number') healingByActor.set(e.sourceID, (healingByActor.get(e.sourceID) ?? 0) + (e.amount ?? 0));
+          if (typeof e.targetID === 'number' && typeof e.timestamp === 'number') {
+            if (!healingEventsByTarget.has(e.targetID)) healingEventsByTarget.set(e.targetID, []);
+            healingEventsByTarget.get(e.targetID)!.push({ timestamp: e.timestamp, amount: e.amount ?? 0 });
+          }
         }
         const combatantInfoByActor = new Map<number, CombatantInfoEvent>();
         for (const raw of combatantInfoEvents) {
@@ -341,6 +428,35 @@ Deno.serve(async (req: Request) => {
         ]);
         const trinketNameById = new Map(trinketNameEntries);
         const specNameById = new Map(specNameEntries);
+        // Centralizado — se necesita en varios sitios de este bloque
+        // (defensivos activos por evento, defensivos del catálogo al morir,
+        // el campo `spec` final del registro) y antes solo se resolvía en el
+        // último de ellos, así que los anteriores no podían filtrar por spec.
+        function resolveSpec(actorId: number): string | null {
+          const specId = combatantInfoByActor.get(actorId)?.specID;
+          return typeof specId === 'number' ? (specNameById.get(specId) ?? null) : null;
+        }
+
+        // §"que los defensivos disponibles sean propios de la clase o de los
+        // talentos... hay cosas que no están por talentos o son pasivas":
+        // allTalentSpellIds sale del MISMO talentSpellLookup ya resuelto
+        // arriba (todos los spellId que existen como nodo de talento, de
+        // cualquier clase) — no es una llamada nueva. playerTalentSpellIds
+        // es el árbol REAL de este jugador en este pull. Sin talentSpellLookup
+        // (falló la resolución ese report) se devuelve null: activeDefensives/
+        // defensivesForClass no filtran de más por falta de dato.
+        const allTalentSpellIds = talentSpellLookup ? new Set(talentSpellLookup.values()) : null;
+        function talentGateForActor(actorId: number): TalentGate | null {
+          if (!allTalentSpellIds || !talentSpellLookup) return null;
+          const tree = combatantInfoByActor.get(actorId)?.talentTree;
+          if (!tree) return null;
+          const playerTalentSpellIds = new Set(
+            (tree as { id?: number }[])
+              .map((node) => (typeof node.id === 'number' ? talentSpellLookup!.get(node.id) : undefined))
+              .filter((id): id is number => typeof id === 'number'),
+          );
+          return { allTalentSpellIds, playerTalentSpellIds };
+        }
 
         // §3/§12: "qué defensivos tenía disponibles" de verdad — no solo "lo
         // lanzó alguna vez", sino próximo_disponible(t) = último_cast_antes_de(t)
@@ -411,7 +527,7 @@ Deno.serve(async (req: Request) => {
           }
 
           if (actor) {
-            for (const cd of activeDefensives(e.buffs, actor.subType, cooldownCatalog)) {
+            for (const cd of activeDefensives(e.buffs, actor.subType, resolveSpec(e.targetID), cooldownCatalog, talentGateForActor(e.targetID))) {
               if (!defensivesSeenByTarget.has(e.targetID)) defensivesSeenByTarget.set(e.targetID, new Map());
               defensivesSeenByTarget.get(e.targetID)!.set(cd.spellId, cd.name);
             }
@@ -434,11 +550,20 @@ Deno.serve(async (req: Request) => {
         // golpe único de daño sostenido. 5s cubre con margen un burst típico
         // (2-3 golpes casi simultáneos) sin colar toda una fase de daño lento.
         const DEATH_BURST_WINDOW_MS = 5000;
-        function computeDeathDamageProfile(targetId: number, deathTimestamp: number): { damageProfile: 'burst' | 'sustained' | 'unknown'; killingBlowAmount: number | null; damageWindowTotal: number; damageWindowHits: number } {
+        interface DamageWindowHit {
+          time_ms: number; // relativo al inicio del pull, como el resto de timestamps que se guardan
+          amount: number;
+          ability_id: number | null;
+          ability_name: string | null;
+        }
+        function computeDeathDamageProfile(
+          targetId: number,
+          deathTimestamp: number,
+        ): { damageProfile: 'burst' | 'sustained' | 'unknown'; killingBlowAmount: number | null; damageWindowTotal: number; damageWindowHits: number; damageWindowEvents: DamageWindowHit[] } {
           const events = (damageEventsByTarget.get(targetId) ?? []).filter(
             (e) => (e.timestamp ?? 0) <= deathTimestamp && (e.timestamp ?? 0) >= deathTimestamp - DEATH_BURST_WINDOW_MS,
           );
-          if (!events.length) return { damageProfile: 'unknown', killingBlowAmount: null, damageWindowTotal: 0, damageWindowHits: 0 };
+          if (!events.length) return { damageProfile: 'unknown', killingBlowAmount: null, damageWindowTotal: 0, damageWindowHits: 0, damageWindowEvents: [] };
           const windowTotal = events.reduce((sum, e) => sum + (e.amount ?? 0), 0);
           const maxHit = events.reduce((max, e) => ((e.amount ?? 0) > (max.amount ?? 0) ? e : max), events[0]);
           const killingBlowAmount = maxHit.amount ?? null;
@@ -447,16 +572,233 @@ Deno.serve(async (req: Request) => {
           // trata igual que un solo golpe (es lo que un jugador percibe como
           // "me ha explotado"), no exige un ÚNICO evento literal.
           const damageProfile: 'burst' | 'sustained' = events.length <= 3 && windowTotal > 0 && (killingBlowAmount ?? 0) / windowTotal >= 0.6 ? 'burst' : 'sustained';
-          return { damageProfile, killingBlowAmount, damageWindowTotal: windowTotal, damageWindowHits: events.length };
+          // §13.4 "la secuencia real de golpes antes de morir, no solo una
+          // frase": hasta ahora solo se guardaba el agregado — el mini-timeline
+          // del drawer de procedencia necesita cada golpe individual.
+          const damageWindowEvents: DamageWindowHit[] = events
+            .map((e) => ({
+              time_ms: (e.timestamp ?? 0) - fight.startTime,
+              amount: e.amount ?? 0,
+              ability_id: e.abilityGameID ?? null,
+              ability_name: typeof e.abilityGameID === 'number' ? (abilityNameById.get(e.abilityGameID) ?? null) : null,
+            }))
+            .sort((a, b) => a.time_ms - b.time_ms);
+          return { damageProfile, killingBlowAmount, damageWindowTotal: windowTotal, damageWindowHits: events.length, damageWindowEvents };
+        }
+
+        // §10 (hoja de ruta / auditoría v2): "no es lo mismo un oneshot que
+        // una muerte por daño sostenido sin sanar, y dentro de cada una la
+        // causa real puede ser muy distinta". Deliberadamente MÁS ACOTADO que
+        // las 6 causas del documento original: undispelled_debuff y
+        // tank_swap_missed harían falta events(dataType: Debuffs) y una
+        // señal de stacks de amenaza que hoy no se traen — mejor devolver
+        // 'unclassified' que inventar una causa sin evidencia real detrás
+        // (mismo principio que ya rige todo lo demás de este pipeline). Las
+        // que SÍ se pueden defender con los datos que ya se traen:
+        //  - self_positioning / unsoaked_mechanic: la CATEGORÍA de la
+        //    mecánica ya dice el tipo de respuesta esperada (evitar el
+        //    suelo/separarse = responsabilidad individual; soak = falta de
+        //    coordinación del grupo) — no hace falta reconstruir a cuánta
+        //    gente golpeó ESTA instancia en concreto para eso.
+        //  - no_healing_received: perfil de daño sostenido (no un burst) +
+        //    ningún tick de sanación real dirigido a este jugador en los
+        //    segundos previos — ahora que healingEventsByTarget existe,
+        //    sin necesitar ninguna llamada nueva a WCL.
+        const NO_HEAL_LOOKBACK_MS = 6000;
+        function computeRootCause(
+          actorId: number,
+          deathTimestamp: number,
+          category: string | null,
+          damageProfile: 'burst' | 'sustained' | 'unknown',
+        ): 'self_positioning' | 'unsoaked_mechanic' | 'no_healing_received' | 'unclassified' {
+          if (category === 'avoidable-ground' || category === 'spread') return 'self_positioning';
+          if (category === 'soak') return 'unsoaked_mechanic';
+          if (damageProfile === 'sustained') {
+            const heals = healingEventsByTarget.get(actorId) ?? [];
+            const hadRecentHeal = heals.some((h) => h.timestamp <= deathTimestamp && h.timestamp >= deathTimestamp - NO_HEAL_LOOKBACK_MS);
+            if (!hadRecentHeal) return 'no_healing_received';
+          }
+          return 'unclassified';
+        }
+
+        // §"a quién dirigir: healing sí/no y cuánto recibió en los últimos
+        // 5-10s": misma ventana que se usa para juzgar rootCause
+        // (NO_HEAL_LOOKBACK_MS), pero aquí se quiere el NÚMERO real, no solo
+        // el sí/no — un jugador puede haber recibido sanación real y aun así
+        // haber muerto (la sanación no fue suficiente), que es una historia
+        // de coaching distinta a "nadie le curó".
+        function computeHealingReceived(actorId: number, deathTimestamp: number): { healingWindowTotal: number; healingWindowHits: number } {
+          const heals = (healingEventsByTarget.get(actorId) ?? []).filter(
+            (h) => h.timestamp <= deathTimestamp && h.timestamp >= deathTimestamp - NO_HEAL_LOOKBACK_MS,
+          );
+          return { healingWindowTotal: heals.reduce((sum, h) => sum + h.amount, 0), healingWindowHits: heals.length };
+        }
+
+        // §"cuándo se determina un wipe global... yo como RL digo 'vamos a
+        // wipear'" (feedback real, investigado contra un caso real de esta
+        // guild): la señal más engañosa es "cuánta gente muere a la vez" —
+        // en un pull real, 18/22 murieron en el mismo segundo a la MISMA
+        // ability (Elemental Explosion): eso es una mecánica real que
+        // revienta a la raid entera de golpe, NO un wipe call. Un wipe call
+        // de verdad se distingue por CÓMO mueren, no solo cuántos a la vez:
+        // causas de muerte HETEROGÉNEAS (cada uno muere a lo que tuviera
+        // encima) y la sanación/el daño de la raid se desploman justo antes
+        // (nadie sigue intentando). Solo se evalúa en wipes — un kill nunca
+        // es un wipe call por definición.
+        const WIPE_CALL_CLUSTER_WINDOW_MS = 8000;
+        const WIPE_CALL_MIN_FRACTION = 0.6; // §"si somos 20 y mueren 16 en 6s" ≈ 0.8 de ejemplo — 0.6 de margen para no dejar escapar el caso real
+        const WIPE_CALL_NEAR_END_MS = 15_000; // el cluster tiene que estar pegado al final del pull — un pico de muertes a mitad de pull que luego se recuperó no cuenta
+        const WIPE_CALL_CONFIDENCE_THRESHOLD = 55; // 0-100 — por debajo se guarda como "posible" visible en la UI, pero NO se auto-excluye
+        // §"aunque sea un wipe call los primeros 2-3-4 que mueren no suelen
+        // ser parte de ese wipe call... es mecánica fallida seguramente, lo
+        // que deriva en el wipe call" (feedback real): el cluster detecta
+        // BIEN el momento en que "la raid da la pelea por perdida", pero las
+        // primeras muertes DENTRO de esa ventana suelen ser la CAUSA (un
+        // fallo real que hace evidente que se ha perdido), no la
+        // consecuencia — esas SÍ deben seguir contando. Se excluyen del
+        // cluster solo las muertes a partir de la Nª (el "pile-on" real),
+        // nunca las primeras — como mucho 3, y nunca más de la mitad del
+        // cluster si es pequeño (un cluster de 4 no puede tener "las 3
+        // primeras" como causa y solo 1 de pile-on real).
+        const WIPE_CALL_TRIGGER_DEATHS = 3;
+
+        interface WipeCallDetection {
+          clusterActorIds: Set<number>;
+          confidence: number;
+          signals: {
+            simultaneityFraction: number;
+            abilityDiversity: number;
+            nearEndMs: number;
+            healingCollapseRatio: number | null;
+            damageCollapseRatio: number | null;
+            sustainedDeathFraction: number;
+            triggerDeathsKept: number;
+          };
+        }
+
+        function detectWipeCall(): WipeCallDetection | null {
+          if (fight.kill) return null;
+
+          const deaths = [...deathByTarget.entries()]
+            .map(([actorId, d]) => ({ actorId, ...d }))
+            .sort((a, b) => a.timestamp - b.timestamp);
+          if (deaths.length < 2) return null;
+
+          // Mayor cluster por ventana deslizante — mismo espíritu que
+          // attributeDeaths()/UNCOVERED_DEATH_GROUP_WINDOW_MS en
+          // pull-analysis.service.ts, ventana más ancha aquí porque un wipe
+          // call se desangra durante varios segundos, no es un solo cast que
+          // golpea a todos a la vez.
+          let bestCluster: typeof deaths = [];
+          for (const start of deaths) {
+            const cluster = deaths.filter((d) => d.timestamp >= start.timestamp && d.timestamp <= start.timestamp + WIPE_CALL_CLUSTER_WINDOW_MS);
+            if (cluster.length > bestCluster.length) bestCluster = cluster;
+          }
+          if (bestCluster.length < 2) return null;
+
+          const localRaidSize = fight.friendlyPlayers.length || 1;
+          const aliveAtClusterStart = localRaidSize - deaths.filter((d) => d.timestamp < bestCluster[0].timestamp).length;
+          const simultaneityFraction = aliveAtClusterStart > 0 ? bestCluster.length / aliveAtClusterStart : 0;
+          const clusterStart = bestCluster[0].timestamp;
+          const clusterEnd = bestCluster.at(-1)!.timestamp;
+          const nearEndMs = fight.endTime - clusterEnd;
+          if (simultaneityFraction < WIPE_CALL_MIN_FRACTION || nearEndMs > WIPE_CALL_NEAR_END_MS) return null; // gates duros — por debajo, ni se guarda como "posible"
+
+          // Señal 1: diversidad de killing ability — 0 = todos murieron a la
+          // MISMA habilidad (mecánica real), 1 = todos a algo distinto (cada
+          // uno se murió a lo que tenía encima, típico de "ya nadie reacciona").
+          const distinctAbilities = new Set(bestCluster.map((d) => d.killingAbilityGameID)).size;
+          const abilityDiversity = Math.min(1, (distinctAbilities - 1) / Math.max(1, bestCluster.length - 1));
+
+          // Señal 2/3: sanación y daño de la RAID (no de un jugador) en los
+          // 10s justo antes del cluster, comparado contra la media de la
+          // propia pelea hasta ese instante — un colapso fuerte (nadie
+          // curando/pegando ya) apoya "wipe call"; actividad normal hasta el
+          // final apoya "mecánica real que remató a todos de golpe".
+          const preClusterStart = clusterStart - 10_000;
+          const fightSoFarMs = Math.max(1, clusterStart - fight.startTime);
+          const allHealing = [...healingEventsByTarget.values()].flat();
+          const priorHealing = allHealing.filter((h) => h.timestamp < clusterStart);
+          const preClusterHealing = priorHealing.filter((h) => h.timestamp >= preClusterStart).reduce((s, h) => s + h.amount, 0);
+          const avgHealingPer10s = (priorHealing.reduce((s, h) => s + h.amount, 0) / fightSoFarMs) * 10_000;
+          const healingCollapseRatio = avgHealingPer10s > 0 ? Math.min(1, preClusterHealing / avgHealingPer10s) : null;
+
+          const friendlyIds = new Set(fight.friendlyPlayers);
+          const priorFriendlyDamage = (damageDoneEvents as ThroughputEvent[]).filter((e) => typeof e.sourceID === 'number' && friendlyIds.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp < clusterStart);
+          const totalPriorDamage = priorFriendlyDamage.reduce((s, e) => s + (e.amount ?? 0), 0);
+          const avgDamagePer10s = (totalPriorDamage / fightSoFarMs) * 10_000;
+          const preClusterDamage = priorFriendlyDamage.filter((e) => (e.timestamp ?? 0) >= preClusterStart).reduce((s, e) => s + (e.amount ?? 0), 0);
+          const damageCollapseRatio = avgDamagePer10s > 0 ? Math.min(1, preClusterDamage / avgDamagePer10s) : null;
+
+          // Señal 4: perfil de daño de cada muerte del cluster — reutiliza
+          // computeDeathDamageProfile tal cual (mismo dato que ya se calcula
+          // para cada death_cause individual). 'burst' (un golpe dominante)
+          // apoya mecánica real; 'sustained'/'unknown' (nada nuevo la mató,
+          // se fue apagando) apoya wipe call.
+          const nonBurstCount = bestCluster.filter((d) => computeDeathDamageProfile(d.actorId, d.timestamp).damageProfile !== 'burst').length;
+          const sustainedDeathFraction = nonBurstCount / bestCluster.length;
+
+          const healingSignal = healingCollapseRatio != null ? 1 - healingCollapseRatio : 0.5; // sin dato = neutral, no penaliza ni favorece
+          const damageSignal = damageCollapseRatio != null ? 1 - damageCollapseRatio : 0.5;
+          const confidence = Math.round(
+            (simultaneityFraction * 0.25 + abilityDiversity * 0.25 + healingSignal * 0.25 + damageSignal * 0.1 + sustainedDeathFraction * 0.15) * 100,
+          );
+
+          // Las señales de arriba (confianza) se calculan sobre el cluster
+          // COMPLETO — esa es la pregunta "¿esto parece un wipe call?".
+          // La EXCLUSIÓN real solo cae sobre el pile-on: bestCluster ya
+          // viene ordenado cronológicamente, así que las primeras
+          // WIPE_CALL_TRIGGER_DEATHS muertes se quitan del set que se
+          // excluye — siguen contando como fallo real en todo lo demás.
+          const triggerDeathCount = Math.min(WIPE_CALL_TRIGGER_DEATHS, Math.floor(bestCluster.length / 2));
+          const pileOnDeaths = bestCluster.slice(triggerDeathCount);
+
+          return {
+            clusterActorIds: new Set(pileOnDeaths.map((d) => d.actorId)),
+            confidence,
+            signals: {
+              simultaneityFraction: Math.round(simultaneityFraction * 100) / 100,
+              abilityDiversity: Math.round(abilityDiversity * 100) / 100,
+              nearEndMs,
+              healingCollapseRatio: healingCollapseRatio != null ? Math.round(healingCollapseRatio * 100) / 100 : null,
+              damageCollapseRatio: damageCollapseRatio != null ? Math.round(damageCollapseRatio * 100) / 100 : null,
+              sustainedDeathFraction: Math.round(sustainedDeathFraction * 100) / 100,
+              // §"los primeros 2-3-4 que mueren no suelen ser parte de ese
+              // wipe call" (feedback real): cuántas de las bestCluster.length
+              // muertes del cluster se dejaron FUERA de la exclusión por ser
+              // las primeras (probable causa, no consecuencia) — visible en
+              // "ver evidencia" del banner para que quede claro que no TODO
+              // el cluster se excluyó.
+              triggerDeathsKept: triggerDeathCount,
+            },
+          };
+        }
+
+        const wipeCallDetection = detectWipeCall();
+        if (wipeCallDetection) {
+          await supabase
+            .from('pulls')
+            .update({
+              wipe_call_confidence: wipeCallDetection.confidence,
+              wipe_call_signals: wipeCallDetection.signals,
+              wipe_call_excluded: wipeCallDetection.confidence >= WIPE_CALL_CONFIDENCE_THRESHOLD,
+            })
+            .eq('id', insertedPull.id);
         }
 
         const playerRecords = fight.friendlyPlayers.map((actorId) => {
           const actor = actorById.get(actorId);
           const death = deathByTarget.get(actorId);
           const mechanic = death ? mechanicById.get(death.killingAbilityGameID) : undefined;
+          // Se calculan una vez aquí (antes solo vivían inline dentro del
+          // spread de death_cause) porque §10/rootCause también los necesita
+          // — mismo dato, dos consumidores, sin recalcular category dos veces.
+          const deathEffectiveCategory = mechanic ? (mechanic.category ?? mechanic.inferred_category ?? null) : null;
+          const deathDamageProfile = death ? computeDeathDamageProfile(actorId, death.timestamp) : null;
+          const deathHealingReceived = death ? computeHealingReceived(actorId, death.timestamp) : null;
           const buffsSnapshot = death ? lastBuffsSnapshotByTarget.get(actorId) : undefined;
           const buffsSnapshotIsFresh = death != null && buffsSnapshot != null && Math.abs(death.timestamp - buffsSnapshot.timestamp) <= DEATH_BUFF_STALENESS_MS;
-          const defensivesAtDeath = buffsSnapshotIsFresh && actor ? activeDefensives(buffsSnapshot.buffs, actor.subType, cooldownCatalog) : [];
+          const defensivesAtDeath = buffsSnapshotIsFresh && actor ? activeDefensives(buffsSnapshot.buffs, actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)) : [];
           const defensivesSeen = [...(defensivesSeenByTarget.get(actorId)?.entries() ?? [])].map(([spellId, name]) => ({ spellId, name }));
 
           // §12: próximo_disponible(t) = último_cast_antes_de(t) + base_cooldown_ms.
@@ -471,16 +813,35 @@ Deno.serve(async (req: Request) => {
           const activeSpellIds = new Set(defensivesAtDeath.map((d) => d.spellId));
           const defensiveOptions: DefensiveOption[] =
             death && actor
-              ? defensivesForClass(actor.subType, cooldownCatalog).map((cd) => {
-                  if (buffsSnapshotIsFresh && activeSpellIds.has(cd.spellId)) {
-                    return { spellId: cd.spellId, name: cd.name, status: 'active' as const };
-                  }
+              ? defensivesForClass(actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)).map((cd) => {
                   const casts = defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? [];
                   let lastCastBefore: number | undefined;
                   for (const t of casts) {
                     if (t <= death.timestamp) lastCastBefore = t;
                     else break; // casts está ordenado cronológicamente, no hace falta seguir mirando
                   }
+
+                  // §"para calcular bien si había defensivo activo tienes
+                  // que revisar lo que dura el defensivo con el momento de
+                  // uso y el momento de su muerte, no solo el CD": con
+                  // duración real conocida, esto se calcula SIEMPRE (cast +
+                  // duración vs. muerte), sin depender de que WCL trajera un
+                  // snapshot de buffs reciente — más fiable que el snapshot
+                  // cuando lo sabemos, así que gana sobre él.
+                  if (lastCastBefore !== undefined && cd.durationMs != null) {
+                    const elapsedSinceCast = death.timestamp - lastCastBefore;
+                    if (elapsedSinceCast <= cd.durationMs) {
+                      return { spellId: cd.spellId, name: cd.name, status: 'active' as const };
+                    }
+                    // Duración conocida y ya expiró: NO caer al snapshot de
+                    // buffs para este spell — sabemos que no está activo,
+                    // sería contradecir un dato más fiable con uno peor.
+                  } else if (buffsSnapshotIsFresh && activeSpellIds.has(cd.spellId)) {
+                    // Duración sin verificar todavía: mismo fallback de
+                    // siempre (snapshot de buffs de WCL a ≤2s de morir).
+                    return { spellId: cd.spellId, name: cd.name, status: 'active' as const };
+                  }
+
                   if (lastCastBefore === undefined) {
                     return { spellId: cd.spellId, name: cd.name, status: 'available_unused' as const };
                   }
@@ -498,6 +859,12 @@ Deno.serve(async (req: Request) => {
             pull_id: insertedPull.id,
             player_name: actor?.name ?? `#${actorId}`,
             died: Boolean(death),
+            // §"esa gente no debería contar como muerte ni afectar su
+            // fiabilidad/defensivos... márcalo como wipe call": true SOLO
+            // para quienes cayeron dentro del cluster detectado (no todo el
+            // pull) — el resto de muertes del mismo pull, si las hay fuera
+            // del cluster, siguen contando normal.
+            wipe_call_cluster: wipeCallDetection?.clusterActorIds.has(actorId) ?? false,
             death_cause: death
               ? {
                   mechanicId: death.killingAbilityGameID,
@@ -515,10 +882,20 @@ Deno.serve(async (req: Request) => {
                   // sync-boss-mechanics, ver _shared/mechanic-category-inference.ts)
                   // — categoryIsInferred dice cuál de las dos es, para que el
                   // front pueda pintarla distinto (confirmada vs. sugerida).
-                  category: mechanic?.category ?? mechanic?.inferred_category ?? null,
+                  category: deathEffectiveCategory,
                   categoryIsInferred: mechanic ? mechanic.category == null && mechanic.inferred_category != null : false,
                   avoidable: mechanic?.avoidable ?? null,
                   preventableWithDefensive: buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
+                  // §10: "no es lo mismo un oneshot que una muerte por daño
+                  // sostenido sin sanar, y la causa real puede ser muy
+                  // distinta" — ver computeRootCause para el alcance real
+                  // (deliberadamente sin undispelled_debuff/tank_swap_missed
+                  // todavía, sin datos reales para defenderlas).
+                  rootCause: computeRootCause(actorId, death.timestamp, deathEffectiveCategory, deathDamageProfile?.damageProfile ?? 'unknown'),
+                  // §"a quién dirigir: healing sí/no y cuánto en los últimos
+                  // segundos" — misma ventana de 6s que ya usa rootCause,
+                  // pero con el número real en vez de solo sí/no.
+                  ...(deathHealingReceived as NonNullable<typeof deathHealingReceived>),
                   // Estado de CADA defensivo de su catálogo en el momento exacto
                   // de morir — activo, en cooldown (y cuánto le faltaba),
                   // disponible y sin usar, o sin dato de cooldown. Sustituye a
@@ -533,7 +910,7 @@ Deno.serve(async (req: Request) => {
                   // única timeline sin dos unidades de tiempo distintas.
                   timeMs: death.timestamp - fight.startTime,
                   // §"golpe único vs. daño sostenido" — ver computeDeathDamageProfile.
-                  ...computeDeathDamageProfile(actorId, death.timestamp),
+                  ...(deathDamageProfile as NonNullable<typeof deathDamageProfile>),
                 }
               : null,
             defensive_events: defensivesSeen,
@@ -550,7 +927,7 @@ Deno.serve(async (req: Request) => {
             // su clase durante el pull completo (no solo el estado en el
             // instante de morir, que vive aparte en death_cause.defensiveOptions).
             defensive_casts: actor
-              ? defensivesForClass(actor.subType, cooldownCatalog).map((cd) => ({
+              ? defensivesForClass(actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)).map((cd) => ({
                   spellId: cd.spellId,
                   name: cd.name,
                   timestampsMs: (defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []).map((t) => t - fight.startTime),
@@ -573,10 +950,9 @@ Deno.serve(async (req: Request) => {
                 return TRINKET_SLOT_INDICES.includes(i) && g.id ? { ...g, name: trinketNameById.get(g.id) ?? null } : item;
               }) ?? null,
             class: actor?.subType ?? null,
-            spec: (() => {
-              const specId = combatantInfoByActor.get(actorId)?.specID;
-              return typeof specId === 'number' ? (specNameById.get(specId) ?? null) : null;
-            })(),
+            spec: resolveSpec(actorId),
+            world_rank_percent: actor ? (playerRankings?.get(actor.name)?.rankPercent ?? null) : null,
+            world_total_parses: actor ? (playerRankings?.get(actor.name)?.totalParses ?? null) : null,
           };
         });
 
@@ -592,6 +968,57 @@ Deno.serve(async (req: Request) => {
         // golpeada contra severity_threshold (0.35 por defecto) para separar
         // "raid-wide esperado" (clean) de "demasiada gente golpeada" (partial_fail).
         const raidSize = fight.friendlyPlayers.length || 1;
+
+        // §"la mecánica, cuánto daño ha sufrido, si ha gastado o no
+        // defensivo": lo mismo que ya se calcula para una muerte
+        // (damageWindowTotal/healingWindowTotal), pero SIN muerte de por
+        // medio — daño real de ESTA instancia (no una ventana genérica hacia
+        // atrás, aquí sí sabemos qué ability fue) + sanación recibida
+        // mientras duraba + si hubo algún cast propio (cualquiera del
+        // catálogo o no — defensiveCastTimestampsByActor no filtra por
+        // catálogo) en la ventana [t0 − RESPONSE_WINDOW_MS, windowEnd].
+        const RESPONSE_WINDOW_MS = 10_000; // mismo criterio que CLOSE_TO_DEATH_MS en el resto de la app
+        interface PlayerHitDetail {
+          name: string;
+          damage_taken: number;
+          damage_hits: number;
+          healing_received: number;
+          used_defensive_spell_id: number | null;
+        }
+        function buildPlayerHitDetails(hitTargets: Map<number, { total: number; hits: number }>, t0: number, windowEnd: number): PlayerHitDetail[] {
+          const out: PlayerHitDetail[] = [];
+          for (const [targetId, dmg] of hitTargets) {
+            const actor = actorById.get(targetId);
+            const name = actor?.name;
+            if (!name) continue;
+            const healingReceived = (healingEventsByTarget.get(targetId) ?? [])
+              .filter((h) => h.timestamp >= t0 && h.timestamp <= windowEnd)
+              .reduce((sum, h) => sum + h.amount, 0);
+            // §bug real encontrado (2026-08-23, feedback real: "a Gusmï le
+            // sale Wrath, que es una habilidad básica, como defensivo"):
+            // defensiveCastTimestampsByActor indexa TODOS los casts del
+            // jugador (rotación normal incluida), no solo su catálogo de
+            // defensivos — el bucle de abajo iteraba TODAS las spells
+            // castadas por el jugador y se quedaba con la primera que
+            // cayera en la ventana, defensiva o no. Se acota al catálogo
+            // real de su clase/spec/talentos antes de mirar timestamps.
+            let usedDefensiveSpellId: number | null = null;
+            const castMap = defensiveCastTimestampsByActor.get(targetId);
+            const catalogSpellIds = new Set(defensivesForClass(actor.subType, resolveSpec(targetId), cooldownCatalog, talentGateForActor(targetId)).map((cd) => cd.spellId));
+            if (castMap) {
+              for (const [spellId, timestamps] of castMap) {
+                if (!catalogSpellIds.has(spellId)) continue;
+                if (timestamps.some((t) => t >= t0 - RESPONSE_WINDOW_MS && t <= windowEnd)) {
+                  usedDefensiveSpellId = spellId;
+                  break;
+                }
+              }
+            }
+            out.push({ name, damage_taken: dmg.total, damage_hits: dmg.hits, healing_received: healingReceived, used_defensive_spell_id: usedDefensiveSpellId });
+          }
+          return out;
+        }
+
         const mechanicEventRows: {
           pull_id: string;
           ability_id: number;
@@ -601,7 +1028,9 @@ Deno.serve(async (req: Request) => {
           trigger_time_ms: number;
           outcome: 'clean' | 'partial_fail' | 'fail';
           players_hit: number;
+          players_hit_names: string[];
           avoidable: boolean | null;
+          player_hit_details: PlayerHitDetail[];
         }[] = [];
 
         for (const raw of enemyCastEvents) {
@@ -641,18 +1070,24 @@ Deno.serve(async (req: Request) => {
               trigger_time_ms: t0 - fight.startTime,
               outcome: wasInterrupted ? 'clean' : 'fail',
               players_hit: wasInterrupted ? 1 : 0, // reutilizado como "¿se resolvió?" para esta categoría, no cuenta jugadores golpeados
+              players_hit_names: [], // players_hit no cuenta golpes aquí, así que tampoco hay nombres que dar
               avoidable: mech.avoidable,
+              player_hit_details: [],
             });
             continue;
           }
 
-          const hitTargets = new Set<number>();
+          const hitTargets = new Map<number, { total: number; hits: number }>();
           for (const rawDamage of damageEvents) {
             const e = rawDamage as DamageEvent;
             if (e.abilityGameID !== abilityId) continue;
             const t = e.timestamp ?? 0;
             if (t < t0 || t > windowEnd) continue;
-            if (typeof e.targetID === 'number') hitTargets.add(e.targetID);
+            if (typeof e.targetID !== 'number') continue;
+            const cur = hitTargets.get(e.targetID) ?? { total: 0, hits: 0 };
+            cur.total += e.amount ?? 0;
+            cur.hits += 1;
+            hitTargets.set(e.targetID, cur);
           }
 
           let causedDeath = false;
@@ -671,6 +1106,10 @@ Deno.serve(async (req: Request) => {
               ? 'partial_fail'
               : 'clean';
 
+          const hitNames = [...hitTargets.keys()]
+            .map((id) => actorById.get(id)?.name)
+            .filter((n): n is string => typeof n === 'string');
+
           mechanicEventRows.push({
             pull_id: insertedPull.id,
             ability_id: abilityId,
@@ -680,8 +1119,86 @@ Deno.serve(async (req: Request) => {
             trigger_time_ms: t0 - fight.startTime,
             outcome,
             players_hit: hitTargets.size,
+            players_hit_names: hitNames,
             avoidable: mech.avoidable,
+            player_hit_details: buildPlayerHitDetails(hitTargets, t0, windowEnd),
           });
+        }
+
+        // §"en un wipe es raro que hayan salido todas las mecánicas bien"
+        // (feedback real, confirmado investigando): mecánicas letales tipo
+        // debuff/DoT (ej. "Elemental Explosion") pueden no generar NINGÚN
+        // evento Cast en WCL — solo tics de daño — así que el bucle de
+        // arriba (basado en enemyCastEvents) nunca las ve, ni para bien ni
+        // para mal: quedan totalmente ausentes de pull_mechanic_events, no
+        // solo "clean". Para las abilities del manifiesto que NO consiguieron
+        // ni una fila arriba, se reconstruyen "instancias" agrupando sus
+        // eventos de daño por proximidad temporal (un hueco > INSTANCE_GAP_MS
+        // sin ningún tic = empieza una instancia nueva) — mismo criterio de
+        // outcome que las basadas en cast (¿mató a alguien dentro de la
+        // instancia? ¿a cuántos golpeó?), solo cambia de dónde sale t0/tEnd.
+        const abilityIdsWithCastRow = new Set(mechanicEventRows.map((r) => r.ability_id));
+        const INSTANCE_GAP_MS = 3000;
+        for (const [abilityId, mech] of mechanicById) {
+          if (abilityIdsWithCastRow.has(abilityId)) continue;
+          const effectiveCategory = mech.category ?? mech.inferred_category;
+          if (effectiveCategory === 'interrupt') continue; // sin daño que agrupar, no aplica este mecanismo
+
+          const events = (damageEvents as DamageEvent[])
+            .filter((e) => e.abilityGameID === abilityId && typeof e.targetID === 'number')
+            .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+          if (!events.length) continue; // ni cast ni daño — de verdad no ocurrió en este pull
+
+          // Tope de duración además del hueco: un aura ambiente que tiquea
+          // sin pausas de más de INSTANCE_GAP_MS durante TODO el pull (ej.
+          // "Malevolent Presence", raid-wide constante) si no, se agrupa en
+          // UNA sola instancia que abarca el pull entero — y si alguien
+          // muere 5 minutos después, el trigger_time_ms sale del primer tic
+          // (segundo 2), no del momento real. Con tope, un aura así se trocea
+          // en instancias de como mucho MAX_INSTANCE_MS, cada una con su
+          // propio trigger_time_ms razonable.
+          const MAX_INSTANCE_MS = 20_000;
+          const instances: DamageEvent[][] = [];
+          for (const e of events) {
+            const last = instances.at(-1);
+            const withinGap = last && (e.timestamp ?? 0) - (last.at(-1)!.timestamp ?? 0) <= INSTANCE_GAP_MS;
+            const withinMaxSpan = last && (e.timestamp ?? 0) - (last[0].timestamp ?? 0) <= MAX_INSTANCE_MS;
+            if (last && withinGap && withinMaxSpan) last.push(e);
+            else instances.push([e]);
+          }
+
+          for (const instance of instances) {
+            const t0 = instance[0].timestamp ?? 0;
+            const windowEnd = instance.at(-1)!.timestamp ?? 0;
+
+            const hitTargets = new Map<number, { total: number; hits: number }>();
+            for (const e of instance) {
+              const cur = hitTargets.get(e.targetID!) ?? { total: 0, hits: 0 };
+              cur.total += e.amount ?? 0;
+              cur.hits += 1;
+              hitTargets.set(e.targetID!, cur);
+            }
+
+            const causedDeath = (deathEvents as DeathEvent[]).some((e) => e.killingAbilityGameID === abilityId && (e.timestamp ?? 0) >= t0 && (e.timestamp ?? 0) <= windowEnd);
+            const ratio = hitTargets.size / raidSize;
+            const threshold = mech.severity_threshold ?? 0.35;
+            const outcome: 'clean' | 'partial_fail' | 'fail' = causedDeath ? 'fail' : mech.avoidable && ratio >= threshold ? 'partial_fail' : 'clean';
+            const hitNames = [...hitTargets.keys()].map((id) => actorById.get(id)?.name).filter((n): n is string => typeof n === 'string');
+
+            mechanicEventRows.push({
+              pull_id: insertedPull.id,
+              ability_id: abilityId,
+              mechanic_name: mech.name,
+              description: mech.description,
+              category: effectiveCategory,
+              trigger_time_ms: t0 - fight.startTime,
+              outcome,
+              players_hit: hitTargets.size,
+              players_hit_names: hitNames,
+              avoidable: mech.avoidable,
+              player_hit_details: buildPlayerHitDetails(hitTargets, t0, windowEnd),
+            });
+          }
         }
 
         if (mechanicEventRows.length) {
@@ -696,7 +1213,7 @@ Deno.serve(async (req: Request) => {
         .eq('code', reportCode);
     }
 
-    return jsonResponse({ ok: true, processed: batch.length, remaining, newestPullId });
+    return jsonResponse({ ok: true, processed: batch.length, remaining, newestPullId, possibleDuplicateOf });
   } catch (err) {
     return jsonResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
   }

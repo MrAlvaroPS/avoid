@@ -1,9 +1,24 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import { searchJournalEncounter, getJournalEncounterWithNamespace, flattenJournalSections } from '../_shared/blizzard-client.ts';
+import { searchJournalEncounter, getJournalEncounterWithNamespace, getJournalEncounterLocalized, flattenJournalSections } from '../_shared/blizzard-client.ts';
 import { fetchJournalDifficultySnapshot, buildFromBlizzardNamespace, type JournalDifficultySnapshot } from '../_shared/wago-db2-client.ts';
 import { resolveDb2Difficulty, filterAbilitiesForDifficulty } from '../_shared/difficulty-mapping.ts';
-import { getFightEvents, fetchPublicRankings, summarizePublicRankings, resolveTopReportRefs, getReportAbilities } from '../_shared/wcl-client.ts';
-import { inferMechanicCategory, type AbilityBehaviorSample } from '../_shared/mechanic-category-inference.ts';
+import {
+  getFightEvents,
+  fetchPublicRankings,
+  summarizePublicRankings,
+  resolveTopReportRefs,
+  getReportAbilities,
+  getDamageTakenByPlayerTable,
+  tallyPlayersHitPerAbility,
+  getFightPlayerRoles,
+  type AbilityPlayerTally,
+} from '../_shared/wcl-client.ts';
+import {
+  inferMechanicCategory,
+  inferCategoryFromBehavior,
+  type AbilityBehaviorSample,
+  type AggregateBehaviorSample,
+} from '../_shared/mechanic-category-inference.ts';
 import { normalizeAbilityName, buildAbilityIdsByName } from '../_shared/ability-name-match.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 
@@ -73,13 +88,31 @@ Deno.serve(async (req: Request) => {
       .order('start_time', { ascending: false })
       .returns<SeenFight[]>();
 
-    if (!seenFights?.length) {
-      return jsonResponse({ ok: false, error: 'Boss desconocido: sincroniza reports primero (sección 01) para que aparezca en la lista.' });
+    // §9.1: un boss sembrado por sync-season-bosses pero nunca pulleado por
+    // la guild no tiene ninguna fila en report_encounters — antes eso
+    // bloqueaba el sync entero ("Boss desconocido"), aunque el boss SÍ
+    // pueda clasificarse igual desde Journal+DB2+logs públicos (solo
+    // observed_in_logs/el cruce con vuestro log más reciente se quedan sin
+    // dato, honestamente). Sin report_encounters no hay forma de INFERIR
+    // qué dificultades sincronizar, así que ahí sí hace falta pedirlas.
+    let bossName: string;
+    if (seenFights?.length) {
+      bossName = seenFights[0].boss_name as string;
+    } else {
+      const { data: known } = await supabase.from('known_raid_bosses').select('boss_name').eq('encounter_id', encounterId).maybeSingle();
+      if (!known) {
+        return jsonResponse({ ok: false, error: 'Boss desconocido: ni tenéis un pull suyo ni está en el catálogo de la season (Ajustes → Sincronizar bosses de la season).' });
+      }
+      bossName = known.boss_name as string;
     }
-    const bossName = seenFights[0].boss_name as string;
     const difficultyIds = body.difficulties?.length
       ? body.difficulties
-      : [...new Set(seenFights.map((f) => f.wcl_difficulty_id as number).filter((d) => d != null))];
+      : seenFights?.length
+        ? [...new Set(seenFights.map((f) => f.wcl_difficulty_id as number).filter((d) => d != null))]
+        : null;
+    if (!difficultyIds?.length) {
+      return jsonResponse({ ok: false, error: `"${bossName}" no tiene pulls propios todavía — indica a mano qué dificultad(es) sincronizar (difficulties: [1|3|4|5]).` });
+    }
 
     // --- 1. Blizzard Journal: fuente oficial de nombres/descripciones ---
     const matches = await searchJournalEncounter(bossName);
@@ -90,6 +123,18 @@ Deno.serve(async (req: Request) => {
     }
     const { encounter, namespace } = await getJournalEncounterWithNamespace(journalEncounterId);
     const abilities = flattenJournalSections(encounter.sections);
+
+    // §"las habilidades deberían estar en inglés y de subtítulo en
+    // castellano para poder localizarlas bien" (feedback real): segunda
+    // llamada al mismo Journal, solo para el nombre — best-effort, nunca
+    // bloquea el sync si Blizzard no tiene traducción o la llamada falla.
+    let abilityNamesEs = new Map<number, string>();
+    try {
+      const encounterEs = await getJournalEncounterLocalized(journalEncounterId, 'es_ES');
+      abilityNamesEs = new Map(flattenJournalSections(encounterEs.sections).map((a) => [a.abilityId, a.name]));
+    } catch {
+      // sin nombre en castellano esta vez — la columna queda null, no bloquea el resto
+    }
 
     // --- 2. Wago DB2: qué mecánicas son de una dificultad concreta (best-effort, nunca bloquea el sync) ---
     let snapshot: JournalDifficultySnapshot | null = null;
@@ -123,7 +168,7 @@ Deno.serve(async (req: Request) => {
       // real de WCL (verificado en real: 0/54 candidatas de un boss casaban
       // por ID) — así que se resuelve el nombre real de cada cast observado y
       // se compara contra el nombre de la candidata, no contra su ID.
-      const sampleFight = seenFights.find((f) => f.wcl_difficulty_id === wclDifficultyId);
+      const sampleFight = (seenFights ?? []).find((f) => f.wcl_difficulty_id === wclDifficultyId);
       const observedNames = new Set<string>();
       if (sampleFight) {
         try {
@@ -175,6 +220,13 @@ Deno.serve(async (req: Request) => {
         damageTaken: { abilityGameID?: number; timestamp?: number; targetID?: number }[];
         deaths: { killingAbilityGameID?: number }[];
         idsByName: Map<string, number[]>;
+        // §"sync profundo no rellenó nada": segunda fuente de comportamiento,
+        // agregada por-fight (table de WCL, una sola llamada) en vez de
+        // por-cast — cobertura mucho más alta cuando el boss tiene pocos
+        // casts reales por log. null si WCL no respondió (best-effort, no
+        // debe tumbar el resto del cruce por-cast que ya funcionaba).
+        damageTally: Map<number, AbilityPlayerTally> | null;
+        tankNames: Set<string> | null;
       }
       const interruptedNames = new Set<string>();
       const referenceBundles: ReferenceBundle[] = [];
@@ -218,12 +270,14 @@ Deno.serve(async (req: Request) => {
         }
 
         async function processReferenceFight(ref: { code: string; fightId: number; startTime: number; endTime: number; raidSize: number }) {
-          const [interrupts, casts, damageTaken, deaths, referenceAbilities] = await Promise.all([
+          const [interrupts, casts, damageTaken, deaths, referenceAbilities, damageTakenTable, roles] = await Promise.all([
             getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'Interrupts', startTime: ref.startTime, endTime: ref.endTime, maxPages: 3 }),
             getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'Casts', startTime: ref.startTime, endTime: ref.endTime, maxPages: 5, hostilityType: 'Enemies' }),
             getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'DamageTaken', startTime: ref.startTime, endTime: ref.endTime, maxPages: 10 }),
             getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'Deaths', startTime: ref.startTime, endTime: ref.endTime, maxPages: 3 }),
             getReportAbilities(ref.code),
+            getDamageTakenByPlayerTable({ code: ref.code, fightId: ref.fightId, startTime: ref.startTime, endTime: ref.endTime }).catch(() => null),
+            getFightPlayerRoles({ code: ref.code, fightId: ref.fightId, startTime: ref.startTime, endTime: ref.endTime }).catch(() => null),
           ]);
           const nameById = new Map(referenceAbilities.map((a) => [a.gameID, a.name]));
           for (const event of interrupts) {
@@ -237,6 +291,8 @@ Deno.serve(async (req: Request) => {
             damageTaken: damageTaken as ReferenceBundle['damageTaken'],
             deaths: deaths as ReferenceBundle['deaths'],
             idsByName: buildAbilityIdsByName(referenceAbilities),
+            damageTally: damageTakenTable ? tallyPlayersHitPerAbility(damageTakenTable) : null,
+            tankNames: roles ? new Set([...roles.entries()].filter(([, role]) => role === 'tank').map(([name]) => name)) : null,
           });
           if (!referenceReportCode) referenceReportCode = ref.code;
         }
@@ -305,6 +361,40 @@ Deno.serve(async (req: Request) => {
         if (!anyBundleQualified) return null;
         return { abilityId: 0, occurrences: totalOccurrences, targetRatiosPerCast: allRatios, sameTargetEveryTime: anyBundleTestedSameTarget && allSameTarget, causedDeath };
       }
+
+      // Segunda fuente de comportamiento, agregada por-fight (ver
+      // AggregateBehaviorSample) — solo hace falta que la ability haya hecho
+      // daño a ALGUIEN en algún momento del fight, no emparejar un cast
+      // concreto. Se calcula para TODAS las candidatas (es barato: ya está
+      // todo pre-agregado en bundle.damageTally), aunque solo se usa de
+      // verdad cuando buildBehaviorSample no dio nada (ver inferMechanicCategory).
+      function buildAggregateBehaviorSample(candidateName: string): AggregateBehaviorSample | null {
+        const ratios: number[] = [];
+        const tankRatios: number[] = [];
+        for (const bundle of referenceBundles) {
+          if (!bundle.raidSize || !bundle.damageTally) continue;
+          const realIds = bundle.idsByName.get(normalizeAbilityName(candidateName)) ?? [];
+          if (!realIds.length) continue;
+          let playersHit: Set<string> | null = null;
+          for (const id of realIds) {
+            const tally = bundle.damageTally.get(id);
+            if (!tally) continue;
+            playersHit = playersHit ? new Set([...playersHit, ...tally.playersHit]) : new Set(tally.playersHit);
+          }
+          if (!playersHit || !playersHit.size) continue;
+          ratios.push(playersHit.size / bundle.raidSize);
+          if (bundle.tankNames) {
+            const tankHits = [...playersHit].filter((p) => bundle.tankNames!.has(p)).length;
+            tankRatios.push(tankHits / playersHit.size);
+          }
+        }
+        if (!ratios.length) return null;
+        return {
+          playersHitRatio: ratios.reduce((a, b) => a + b, 0) / ratios.length,
+          tankHitRatio: tankRatios.length ? tankRatios.reduce((a, b) => a + b, 0) / tankRatios.length : null,
+          referenceFightCount: ratios.length,
+        };
+      }
       // Tamaño de raid representativo para convertir un ratio (0-1, ya
       // normalizado por-bundle dentro de buildBehaviorSample) en un número
       // absoluto de jugadores golpeados que se pueda enseñar — con varias
@@ -315,8 +405,20 @@ Deno.serve(async (req: Request) => {
 
       for (const candidate of abilitiesForDifficulty) {
         const behavior = buildBehaviorSample(candidate.name);
+        // OJO: se calcula SIEMPRE, no solo cuando `behavior` es null — el
+        // cruce por-cast puede existir pero caer en la banda ambigua de
+        // inferCategoryFromBehavior (ratio 0.35-0.6, ni raid-damage ni
+        // avoidable-ground) y aun así no decir nada. inferMechanicCategory
+        // ya sabe usar el agregado solo cuando la INFERENCIA por-cast no
+        // decidió nada (no solo cuando la muestra no existía) — gatear aquí
+        // por `behavior` en vez de por su resultado desaprovechaba esos
+        // casos. Verificado en real: "Possession Barrage" tenía 83
+        // occurrences por-cast con ratio ~58% (banda ambigua, sin
+        // categoría) mientras el agregado por-fight decía 100% de la raid
+        // golpeada — señal mucho más nítida que se estaba descartando sin usar.
+        const aggregateBehavior = buildAggregateBehaviorSample(candidate.name);
         const wasInterruptedInReference = interruptedNames.has(normalizeAbilityName(candidate.name));
-        let inference = inferMechanicCategory(candidate.name, candidate.description || null, behavior);
+        let inference = inferMechanicCategory(candidate.name, candidate.description || null, behavior, aggregateBehavior);
         if (wasInterruptedInReference && inference?.category !== 'interrupt') {
           // Evidencia real (evento Interrupts observado) por encima de cualquier heurística de texto/comportamiento.
           inference = {
@@ -324,10 +426,19 @@ Deno.serve(async (req: Request) => {
             reasons: ['Log de referencia: se interrumpió de verdad (evento Interrupts real).', ...(inference?.reasons ?? [])],
           };
         }
-        const referenceAvgPlayersHit =
-          behavior && behavior.occurrences
-            ? Math.round((behavior.targetRatiosPerCast.reduce((a, b) => a + b, 0) / behavior.targetRatiosPerCast.length) * avgReferenceRaidSize * 10) / 10
-            : null;
+        // El número enseñado tiene que ser coherente con la categoría
+        // enseñada: si la categoría final vino del agregado (porque el
+        // cruce por-cast existía pero cayó en la banda ambigua, ver arriba),
+        // enseñar el ratio POR-CAST aquí sería contradictorio (ej. "raid-damage,
+        // golpeó al 58%" cuando la razón real fue el 100% del agregado).
+        const perCastDecided = behavior ? inferCategoryFromBehavior(behavior) : null;
+        const referenceAvgPlayersHit = perCastDecided
+          ? Math.round((behavior!.targetRatiosPerCast.reduce((a, b) => a + b, 0) / behavior!.targetRatiosPerCast.length) * avgReferenceRaidSize * 10) / 10
+          : aggregateBehavior
+            ? Math.round(aggregateBehavior.playersHitRatio * avgReferenceRaidSize * 10) / 10
+            : behavior && behavior.occurrences
+              ? Math.round((behavior.targetRatiosPerCast.reduce((a, b) => a + b, 0) / behavior.targetRatiosPerCast.length) * avgReferenceRaidSize * 10) / 10
+              : null;
 
         const { error } = await supabase
           .from('boss_mechanics_candidates')
@@ -337,6 +448,7 @@ Deno.serve(async (req: Request) => {
               difficulty: difficultyName,
               ability_id: candidate.abilityId,
               name: candidate.name,
+              name_es: abilityNamesEs.get(candidate.abilityId) ?? null,
               description: candidate.description || null,
               icon_url: null,
               sources: ['blizzard-journal'],

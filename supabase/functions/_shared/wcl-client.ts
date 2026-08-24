@@ -486,3 +486,176 @@ export function sumGraphSeries(series: WclGraphSeries[]): { pointIntervalMs: num
   }
   return { pointIntervalMs, points };
 }
+
+// --- table(dataType: DamageTaken, hostilityType: Friendlies) ---------------
+// §"sync profundo... no se ha rellenado nada de nada": la correlación
+// cast-a-cast (getFightEvents + ventana de reacción) exige que un candidato
+// tenga al menos un CAST observado y emparejado por nombre — con bosses de
+// pocos casts reales por log, la mayoría de candidatas del Journal se
+// quedaban sin ninguna evidencia ni con 20 referencias. Esta tabla da, en
+// UNA sola llamada por fight de referencia, el desglose completo de daño
+// entrante DE TODO EL FIGHT por jugador — sumando en cuántas filas de
+// jugador aparece cada ability se obtiene "a cuánta gente golpeó esta
+// habilidad en algún momento del fight", sin depender de que el cast
+// individual se haya podido emparejar. Pierde precisión por-cast (no sirve
+// para sameTargetEveryTime, que sigue viniendo del cruce cast-a-cast), pero
+// sube el suelo de cobertura de "cero evidencia" a "evidencia agregada real"
+// para prácticamente cualquier habilidad que haya hecho daño a algún
+// jugador en el fight. Verificado en real contra un log de Nek'zali the
+// Soulcoiler: 14-15 abilities distintas con conteo de jugadores golpeados
+// coherente entre un kill y un wipe del mismo boss.
+export interface WclPlayerDamageTakenRow {
+  name: string;
+  id: number;
+  guid: number;
+  type: string;
+  abilities: { guid: number; name: string; total: number }[];
+}
+
+const DAMAGE_TAKEN_TABLE_QUERY = `
+query DamageTakenByPlayer($code: String!, $fightId: Int!, $startTime: Float!, $endTime: Float!) {
+  reportData {
+    report(code: $code) {
+      table(dataType: DamageTaken, hostilityType: Friendlies, fightIDs: [$fightId], startTime: $startTime, endTime: $endTime)
+    }
+  }
+}`;
+
+export async function getDamageTakenByPlayerTable(params: { code: string; fightId: number; startTime: number; endTime: number }): Promise<WclPlayerDamageTakenRow[] | null> {
+  const data = await graphql<{
+    reportData: { report: { table: { data: { entries: WclPlayerDamageTakenRow[] } } } | null };
+  }>(DAMAGE_TAKEN_TABLE_QUERY, params);
+  const entries = data.reportData.report?.table?.data?.entries;
+  return Array.isArray(entries) ? entries : null;
+}
+
+export interface AbilityPlayerTally {
+  playersHit: Set<string>;
+  totalDamage: number;
+}
+
+/** ability guid -> a cuántos jugadores distintos golpeó en TODO el fight (agregado, no por-cast). */
+export function tallyPlayersHitPerAbility(rows: WclPlayerDamageTakenRow[]): Map<number, AbilityPlayerTally> {
+  const out = new Map<number, AbilityPlayerTally>();
+  for (const row of rows) {
+    for (const ab of row.abilities ?? []) {
+      let entry = out.get(ab.guid);
+      if (!entry) {
+        entry = { playersHit: new Set(), totalDamage: 0 };
+        out.set(ab.guid, entry);
+      }
+      entry.playersHit.add(row.name);
+      entry.totalDamage += ab.total ?? 0;
+    }
+  }
+  return out;
+}
+
+// --- table(dataType: Summary) — solo para composition[].specs[].role -------
+// Necesario para distinguir tankbuster (golpea casi siempre al rol tank) de
+// la categoría nueva "boss-mechanic" (golpea a poca gente pero sin afinidad
+// de rol — "te toca a ti, sin más"). Roles reales por NOMBRE dentro del
+// MISMO fight de referencia (no hace falta comparar entre fights de guilds
+// distintas, donde los nombres no coinciden).
+const SUMMARY_ROLES_QUERY = `
+query FightSummaryRoles($code: String!, $fightId: Int!, $startTime: Float!, $endTime: Float!) {
+  reportData {
+    report(code: $code) {
+      table(dataType: Summary, fightIDs: [$fightId], startTime: $startTime, endTime: $endTime)
+    }
+  }
+}`;
+
+// --- worldData.zone(id).encounters — catálogo de bosses de una raid --------
+// §9.1 "los bosses solo se cargan si hay un pull propio": esto da la lista
+// COMPLETA de encuentros de la instancia con el ID de WCL (el mismo espacio
+// de IDs que ya usan report_encounters/pulls/boss_mechanics_candidates —
+// verificado en real que Blizzard Journal usa un ID totalmente distinto
+// para el mismo boss, así que esta es la única fuente que sirve para
+// sembrar un catálogo sin crear una identidad duplicada el día que el boss
+// se pullee de verdad).
+export interface WclZoneEncounter {
+  id: number;
+  name: string;
+}
+
+const ZONE_ENCOUNTERS_QUERY = `
+query ZoneEncounters($zoneId: Int!) {
+  worldData {
+    zone(id: $zoneId) {
+      id
+      name
+      encounters { id name }
+    }
+  }
+}`;
+
+export async function getZoneEncounters(zoneId: number): Promise<{ id: number; name: string; encounters: WclZoneEncounter[] } | null> {
+  const data = await graphql<{
+    worldData: { zone: { id: number; name: string; encounters: WclZoneEncounter[] } | null };
+  }>(ZONE_ENCOUNTERS_QUERY, { zoneId });
+  return data.worldData.zone;
+}
+
+// --- Report.rankings — percentil real por jugador para UN pull -------------
+// §3.1/§7.1: "cómo de bien lo está haciendo cada uno comparado con el mundo,
+// jugando su misma spec en este boss+dificultad". Da el percentil YA
+// RESUELTO por WCL (rankPercent) en una sola llamada por pull — nada de
+// paginar characterRankings y comparar a mano. Verificado en real: fightIDs
+// por sí solo YA acota al fight correcto (a diferencia de graph(), que
+// necesitaba startTime/endTime explícitos — este no los pide ni falta que
+// hacen, confirmado con la duración real del fight en la respuesta).
+export interface WclRankingCharacter {
+  name: string;
+  class: string;
+  spec: string;
+  amount: number;
+  rankPercent: number;
+  totalParses: number;
+}
+interface WclFightRankingsEntry {
+  fightID: number;
+  kill: number;
+  roles?: Record<string, { characters?: WclRankingCharacter[] }>;
+}
+
+const REPORT_RANKINGS_QUERY = `
+query ReportRankings($code: String!, $fightId: Int!) {
+  reportData {
+    report(code: $code) {
+      rankings(fightIDs: [$fightId])
+    }
+  }
+}`;
+
+/** name -> {rankPercent, totalParses}. Cruce por NOMBRE (igual que el resto del pipeline) — WCL no da un ID que ya tengamos guardado en ningún otro sitio para este propósito. */
+export async function getFightPlayerRankings(code: string, fightId: number): Promise<Map<string, { rankPercent: number; totalParses: number }> | null> {
+  const data = await graphql<{
+    reportData: { report: { rankings: { data?: WclFightRankingsEntry[] } } | null };
+  }>(REPORT_RANKINGS_QUERY, { code, fightId });
+  const entry = data.reportData.report?.rankings?.data?.[0];
+  if (!entry) return null;
+  const out = new Map<string, { rankPercent: number; totalParses: number }>();
+  for (const role of Object.values(entry.roles ?? {})) {
+    for (const c of role.characters ?? []) {
+      if (typeof c.rankPercent === 'number') out.set(c.name, { rankPercent: c.rankPercent, totalParses: c.totalParses ?? 0 });
+    }
+  }
+  return out;
+}
+
+export async function getFightPlayerRoles(params: { code: string; fightId: number; startTime: number; endTime: number }): Promise<Map<string, 'tank' | 'healer' | 'dps'> | null> {
+  const data = await graphql<{
+    reportData: {
+      report: { table: { data: { composition?: { name: string; specs?: { role?: string }[] }[] } } } | null;
+    };
+  }>(SUMMARY_ROLES_QUERY, params);
+  const composition = data.reportData.report?.table?.data?.composition;
+  if (!Array.isArray(composition)) return null;
+  const roles = new Map<string, 'tank' | 'healer' | 'dps'>();
+  for (const p of composition) {
+    const role = p.specs?.[0]?.role;
+    if (role === 'tank' || role === 'healer' || role === 'dps') roles.set(p.name, role);
+  }
+  return roles;
+}

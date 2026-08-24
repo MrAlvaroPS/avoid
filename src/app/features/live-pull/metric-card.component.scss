@@ -1,8 +1,22 @@
+// §bug real (feedback: "las cards tienen distintas alturas") — .metrics-row
+// es un grid, que por defecto ya estira los hijos (align-items:stretch) a
+// la altura de la fila más alta... pero solo estira el HOST del componente
+// (<app-metric-card>), no este <button> de dentro, que sin height:100% se
+// queda con su altura natural de contenido — de ahí que 4 cards con
+// distinta cantidad de texto/gauge acabaran con 4 alturas distintas pese al
+// grid ya estar estirando por debajo.
+:host {
+  display: block;
+  height: 100%;
+}
+
 .metric-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
   width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   padding: 16px;
   // .card-surface (styles.scss) inline aquí (un <button> no puede llevar la
   // clase global fácilmente desde el template sin acoplar el componente a
@@ -83,6 +97,13 @@
   font-weight: 700;
   line-height: 1.05;
   color: var(--text);
+  // §"distintas letras" (feedback real) — un valor de texto largo (ej. "2×
+  // Rivax" en Racha del problema) podía envolver a 2 líneas mientras un
+  // número corto ("23") se quedaba en 1, dando una impresión de tamaño de
+  // letra inconsistente entre cards aunque el font-size fuera el mismo.
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card-gauge {

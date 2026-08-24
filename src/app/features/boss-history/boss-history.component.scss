@@ -1,0 +1,219 @@
+.boss-history {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.loading,
+.load-error {
+  padding: 24px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.load-error {
+  color: var(--danger);
+}
+
+.back-link {
+  color: var(--text-faint);
+  font-size: 12.5px;
+  text-decoration: none;
+  align-self: flex-start;
+
+  &:hover {
+    color: var(--accent);
+  }
+}
+
+.page-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.page-header h1 {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text);
+}
+.difficulty-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 2px 9px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.stat-row {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stat-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.widget {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 16px;
+}
+.widget-heading {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.table-wrap {
+  // §mismo bug de CSS que night-player-dossier/night-report: overflow-x:auto
+  // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
+  overflow-x: auto;
+  overflow-y: visible;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--surface-2);
+  white-space: nowrap;
+}
+td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--surface-2);
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+tr:last-child td {
+  border-bottom: none;
+}
+.align-right {
+  text-align: right;
+}
+.meta {
+  color: var(--text-faint);
+}
+
+.cell-mechanic {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text);
+  font-weight: 600;
+}
+::ng-deep .cell-mechanic .icon-only,
+.role-col app-role-icon {
+  flex-shrink: 0;
+  display: inline-block;
+
+  .wowhead-link {
+    display: block;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    overflow: hidden;
+    border-bottom: none !important;
+    background-size: cover;
+  }
+}
+.cat-tag {
+  flex-shrink: 0;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.cell-player {
+  color: var(--text);
+  font-weight: 600;
+}
+.role-col {
+  width: 22px;
+  text-align: center;
+}
+
+// §"mejorando/empeorando": tono de estado, no de identidad — mismos tokens
+// success/danger/faint que ya usa el resto de la app.
+.trend-tag {
+  display: inline-block;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+
+  &.tone-improving {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+  &.tone-worsening {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  &.tone-flat {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+}
+
+.reliability-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+
+  &.tone-danger {
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  &.tone-warning {
+    background: var(--warning-soft);
+    color: var(--warning);
+  }
+  &.tone-success {
+    background: var(--success-soft);
+    color: var(--success);
+  }
+}

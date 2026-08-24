@@ -24,6 +24,32 @@ export class ManifestService {
   }
 
   /**
+   * §"señala cuándo una mecánica es exclusiva de cierta dificultad — parece
+   * que las dificultades se están pisando entre sí": el filtro DB2 (Journal
+   * + Wago) resultó ser sparse de verdad para este contenido (verificado en
+   * real: Normal y Mythic de Nek'zali salieron con las 27 candidatas
+   * idénticas, ability por ability) — en vez de intentar arreglar/adivinar
+   * sobre datos DB2 que faltan, esto cruza evidencia YA GUARDADA de otras
+   * dificultades del MISMO boss (reference_occurrences/observed_in_logs, de
+   * sync-boss-mechanics) para dar una pista honesta y visible en vez de
+   * filtrar/decidir en silencio — nunca oculta una candidata, solo informa.
+   */
+  async listOtherDifficultyEvidence(bossId: string, excludeDifficulty: string): Promise<Map<number, { difficulty: string; hasEvidence: boolean }[]>> {
+    const { data, error } = await this.supabase.client
+      .from('boss_mechanics_candidates')
+      .select('ability_id, difficulty, reference_occurrences, observed_in_logs')
+      .eq('boss_id', bossId)
+      .neq('difficulty', excludeDifficulty);
+    if (error) throw error;
+    const byAbility = new Map<number, { difficulty: string; hasEvidence: boolean }[]>();
+    for (const row of (data ?? []) as { ability_id: number; difficulty: string; reference_occurrences: number | null; observed_in_logs: boolean }[]) {
+      if (!byAbility.has(row.ability_id)) byAbility.set(row.ability_id, []);
+      byAbility.get(row.ability_id)!.push({ difficulty: row.difficulty, hasEvidence: (row.reference_occurrences ?? 0) > 0 || row.observed_in_logs });
+    }
+    return byAbility;
+  }
+
+  /**
    * Clasificación automática, pero de verdad (no de un repo de 2017): cuánta
    * gente golpea cada habilidad en vuestros propios pulls ya importados
    * (pull_mechanic_events, rellenado por analyze-report para TODAS las
