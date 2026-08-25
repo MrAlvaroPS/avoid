@@ -160,7 +160,7 @@ export class NightPlayerDossierComponent {
     if (d.deaths.length) {
       lines.push('💀 Muertes:');
       lines.push(
-        ...d.deaths.map((death) => `- ${death.bossName} #${death.pullNumber} (${this.formatDuration(death.timeMs)}): ${death.mechanicName ?? 'sin identificar'}${death.isWipeCall ? ' [wipe call]' : ''}`),
+        ...d.deaths.map((death) => `- ${death.bossName} #${death.pullNumber} (${this.formatDuration(death.timeMs)}): ${death.mechanicName ?? 'sin identificar'}${death.isWipeCall ? ' [wipe call]' : death.statisticalExclusionReason ? ' [mención no evaluable: melee del boss sin tank]' : ''}`),
       );
     }
 

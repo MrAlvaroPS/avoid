@@ -179,7 +179,7 @@
             </thead>
             <tbody>
               @for (death of d.deaths; track death.pullId) {
-                <tr [class.row-wipecall]="death.isWipeCall">
+                <tr [class.row-wipecall]="death.isWipeCall || death.statisticalExclusionReason">
                   <td class="cell-boss">{{ death.bossName }} <span class="meta">#{{ death.pullNumber }}</span></td>
                   <td class="tabular align-right">{{ formatDuration(death.timeMs) }}</td>
                   <td class="cell-mechanic">
@@ -195,10 +195,15 @@
                     @if (death.isWipeCall) {
                       <span class="cat-tag cat-tag-wipecall" title="Excluida de fiabilidad — cluster de wipe call confirmado">WIPE CALL</span>
                     }
+                    @if (death.statisticalExclusionReason === 'boss_melee_on_non_tank') {
+                      <span class="cat-tag cat-tag-wipecall" title="Melee del boss sobre un no-tank tras perder el control del boss. Solo se menciona; no evalúa al objetivo.">TANKS CAÍDOS · NO EVALUABLE</span>
+                    }
                   </td>
-                  <td>{{ rootCauseLabel(death.rootCause, death.category) }}</td>
+                  <td>{{ death.statisticalExclusionReason === 'boss_melee_on_non_tank' ? 'Boss sin tank operativo' : rootCauseLabel(death.rootCause, death.category) }}</td>
                   <td [class.tone-danger]="death.defensivesAvailable.length > 0">
-                    @if (death.defensivesAvailable.length) {
+                    @if (death.statisticalExclusionReason || death.isWipeCall) {
+                      <span class="meta">No evaluable</span>
+                    } @else if (death.defensivesAvailable.length) {
                       <div class="defensive-icons">
                         @for (def of death.defensivesAvailable; track def.spellId) {
                           <app-wowhead-link type="spell" [id]="def.spellId" class="icon-only" [attr.title]="def.name" />
@@ -209,7 +214,9 @@
                     }
                   </td>
                   <td>
-                    @if (death.usedHealthstoneBeforeDeath || death.usedHealthPotionBeforeDeath) {
+                    @if (death.statisticalExclusionReason || death.isWipeCall) {
+                      <span class="meta">No evaluable</span>
+                    } @else if (death.usedHealthstoneBeforeDeath || death.usedHealthPotionBeforeDeath) {
                       {{ death.usedHealthstoneBeforeDeath && death.usedHealthPotionBeforeDeath ? 'Piedra + poción' : death.usedHealthstoneBeforeDeath ? 'Piedra de brujo' : 'Poción de vida' }}
                     } @else {
                       <span class="meta">No</span>

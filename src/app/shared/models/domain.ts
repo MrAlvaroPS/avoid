@@ -73,6 +73,8 @@ export interface DeathCause {
   categoryIsInferred?: boolean;
   avoidable: boolean | null;
   preventableWithDefensive: boolean | null;
+  /** Se muestra como contexto, pero no cuenta como muerte/error/uso defensivo del jugador. */
+  statisticalExclusionReason?: 'boss_melee_on_non_tank' | null;
   /** §10: por qué murió, en términos accionables — no solo "qué le mató". Se decide en analyze-report a partir de la categoría de la mecánica + el perfil de daño + si recibió sanación reciente. 'unclassified' es honesto a propósito: undispelled_debuff/tank_swap_missed (hoja de ruta) todavía no se pueden distinguir con los datos que se traen hoy (haría falta events(dataType: Debuffs) y datos de amenaza) — mejor "no lo sé" que una causa inventada. */
   rootCause: 'self_positioning' | 'unsoaked_mechanic' | 'no_healing_received' | 'unclassified';
   timeMs: number;

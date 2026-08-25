@@ -327,6 +327,8 @@ export async function getReportAbilities(code: string): Promise<WclAbility[]> {
 export interface WclActor {
   id: number;
   name: string;
+  /** Player/NPC/Pet...; permite comprobar que un Melee vino del boss. */
+  type: string;
   /** La clase (ej. "Warrior", "DeathKnight") — la da WCL tal cual, es la clave del catálogo de defensivos. */
   subType: string;
 }
@@ -336,13 +338,13 @@ query ReportActors($code: String!) {
   reportData {
     report(code: $code) {
       masterData {
-        actors(type: "Player") { id name subType }
+        actors { id name type subType }
       }
     }
   }
 }`;
 
-/** Jugadores del report (id -> nombre), para poder etiquetar deaths/damage por persona. */
+/** Actores del report; los jugadores se acotan después con fight.friendlyPlayers. */
 export async function getReportActors(code: string): Promise<WclActor[]> {
   const data = await graphql<{
     reportData: { report: { masterData: { actors: WclActor[] } } | null };

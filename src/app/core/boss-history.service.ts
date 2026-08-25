@@ -13,6 +13,7 @@ import { loadMechanicNotesByName } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
 import type { BossReferenceStatsRow, MechanicCategory, PullMechanicEventRow, PullRow } from '../shared/models/domain';
 import type { ReferencePacing } from '../shared/models/ui';
+import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 
 export interface ProgressionPoint {
   pullNumber: number;
@@ -88,7 +89,7 @@ export class BossHistoryService {
     const [bossNameRes, mechEventsRes, deathsRes, referenceStatsRes, roster] = await Promise.all([
       client.from('known_raid_bosses').select('boss_name').eq('encounter_id', Number(bossId)).maybeSingle(),
       pullIds.length
-        ? client.from('pull_mechanic_events').select('ability_id, mechanic_name, category, outcome, pull_id').in('pull_id', pullIds)
+        ? client.from('pull_mechanic_events').select('ability_id, mechanic_name, category, outcome, pull_id, trigger_time_ms').in('pull_id', pullIds)
         : Promise.resolve({ data: [] as PullMechanicEventRow[], error: null }),
       pullIds.length
         ? client.from('player_pull_records').select('player_name, died, death_cause, pull_id, wipe_call_cluster').in('pull_id', pullIds).eq('died', true)
@@ -119,17 +120,24 @@ export class BossHistoryService {
       durationMs: p.duration_ms,
     }));
 
-    const mechanicTrends = this.buildMechanicTrends((mechEventsRes.data ?? []) as (PullMechanicEventRow & { pull_id: string })[], pullIds, notesByMechanicName);
+    const pullById = new Map(pulls.map((p) => [p.id, p]));
+    const evaluatedMechanicEvents = ((mechEventsRes.data ?? []) as (PullMechanicEventRow & { pull_id: string })[]).filter((event) => {
+      const eventPull = pullById.get(event.pull_id);
+      return eventPull != null && !isMechanicExcludedByWipeCall(eventPull, event);
+    });
+    const mechanicTrends = this.buildMechanicTrends(evaluatedMechanicEvents, pullIds, notesByMechanicName);
     // §"no debería... contar como muerte, marcado como wipe call" (feedback
     // real): "causas de muerte más repetidas" es literalmente sobre
     // muertes, así que las de un cluster de wipe call confirmado/excluido
     // no deben inflar el recuento — mismo criterio que ya aplica
     // pull-analysis.service.ts a un pull individual, aquí agregado sobre
     // TODA la historia del boss.
-    const pullById = new Map(pulls.map((p) => [p.id, p]));
-    const deathRows = (deathsRes.data ?? []) as { player_name: string; death_cause: { mechanicId: number; mechanicName: string | null } | null; pull_id: string; wipe_call_cluster: boolean }[];
+    const deathRows = (deathsRes.data ?? []) as { player_name: string; death_cause: import('../shared/models/domain').DeathCause | null; pull_id: string; wipe_call_cluster: boolean }[];
     const topDeathCauses = this.buildTopDeathCauses(
-      deathRows.filter((d) => !(d.wipe_call_cluster && pullById.get(d.pull_id)?.wipe_call_excluded)),
+      deathRows.filter((death) => {
+        const deathPull = pullById.get(death.pull_id);
+        return deathPull != null && !isDeathExcludedFromStatistics(deathPull, death as import('../shared/models/domain').PlayerPullRecordRow);
+      }),
       notesByMechanicName,
     );
 

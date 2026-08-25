@@ -50,7 +50,7 @@
             </thead>
             <tbody>
               @for (death of d.recentDeaths; track death.pullId) {
-                <tr [class.row-wipecall]="death.isWipeCall">
+                <tr [class.row-wipecall]="death.isWipeCall || death.statisticalExclusionReason">
                   <td class="cell-boss">
                     <a [routerLink]="['/boss', death.bossId, death.difficulty]">{{ death.bossName }}</a>
                     <span class="difficulty-tag">{{ death.difficulty }}</span>
@@ -69,9 +69,12 @@
                     @if (death.isWipeCall) {
                       <span class="cat-tag cat-tag-wipecall" title="Excluida de fiabilidad — cluster de wipe call confirmado">WIPE CALL</span>
                     }
+                    @if (death.statisticalExclusionReason === 'boss_melee_on_non_tank') {
+                      <span class="cat-tag cat-tag-wipecall" title="Mención no evaluable: el boss atacó a un no-tank con Melee.">TANKS CAÍDOS · NO EVALUABLE</span>
+                    }
                   </td>
-                  <td>{{ rootCauseLabel(death.rootCause, death.category) }}</td>
-                  <td [class.tone-danger]="death.preventableWithDefensive === true">{{ defensiveLabel(death.preventableWithDefensive) }}</td>
+                  <td>{{ death.statisticalExclusionReason === 'boss_melee_on_non_tank' ? 'Boss sin tank operativo' : rootCauseLabel(death.rootCause, death.category) }}</td>
+                  <td [class.tone-danger]="death.preventableWithDefensive === true">{{ death.statisticalExclusionReason ? 'No evaluable' : defensiveLabel(death.preventableWithDefensive) }}</td>
                 </tr>
               }
             </tbody>

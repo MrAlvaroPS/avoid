@@ -81,6 +81,8 @@ export interface CoachingCallout {
   oneshot: boolean | null;
   /** §"esa gente no debería... contar como muerte, marcado como wipe call" (feedback real): true = esta fila NO cuenta en el recuento de "Muertes" ni en fiabilidad/racha — se sigue mostrando (el RL quiere verla) pero marcada aparte en vez de mezclada con fallos reales. */
   isWipeCall: boolean;
+  /** Mención contextual no atribuible al jugador (p. ej. Melee del boss sobre no-tank tras perder tanks). */
+  statisticalExclusionReason: import('../death-statistics.util').DeathStatisticalExclusionReason | null;
   damageWindowTotal: number | null;
   /** 0 real = de verdad nadie le curó nada; no confundir con null (no evaluable). */
   healingWindowTotal: number | null;

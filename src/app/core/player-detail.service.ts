@@ -32,6 +32,7 @@ export interface RecentDeathRow {
   difficulty: string;
   closedAt: string;
   isWipeCall: boolean;
+  statisticalExclusionReason: DeathCause['statisticalExclusionReason'];
   mechanicName: string | null;
   mechanicId: number | null;
   category: MechanicCategory | null;
@@ -121,11 +122,12 @@ export class PlayerDetailService {
         // resuelto): se sigue mostrando la fila (el RL quiere verla), solo
         // marcada — mismo criterio que "a quién dirigir" en un pull.
         isWipeCall: r.wipe_call_cluster && r.pulls.wipe_call_excluded,
+        statisticalExclusionReason: r.death_cause?.statisticalExclusionReason ?? null,
         mechanicName: mechanicDisplayName(r.death_cause?.mechanicName ?? null),
         mechanicId: r.death_cause?.mechanicId || null,
         category: r.death_cause?.category ?? null,
         rootCause: r.death_cause?.rootCause ?? 'unclassified',
-        preventableWithDefensive: r.death_cause?.preventableWithDefensive ?? null,
+        preventableWithDefensive: r.death_cause?.statisticalExclusionReason ? null : (r.death_cause?.preventableWithDefensive ?? null),
         aiNote: (r.death_cause?.mechanicName && notesByMechanicName.get(r.death_cause.mechanicName)) || null,
       };
     });

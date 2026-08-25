@@ -1,6 +1,7 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { getJournalEncounterLocalized } from './blizzard-client.ts';
 import { normalizeAbilityName } from './ability-name-match.ts';
+import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './statistical-exclusions.ts';
 
 // §"informe de la noche... qué podemos poner que sea real y sin inventar,
 // o qué podemos obtener/calcular/derivar" (feedback real, 2026-08-24).
@@ -143,7 +144,7 @@ export interface NightTimelinePatterns {
 }
 
 export interface NightFullReport {
-  schemaVersion: 9;
+  schemaVersion: 10;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -317,6 +318,7 @@ interface PullLite {
   duration_ms: number | null;
   raid_damage_taken_series: { pointIntervalMs: number; points: number[] } | null;
   wipe_call_excluded: boolean;
+  wipe_call_signals: Record<string, unknown> | null;
   closed_at: string;
 }
 interface RecordLite {
@@ -335,6 +337,7 @@ interface RecordLite {
     damageWindowTotal?: number;
     damageWindowEvents?: { time_ms: number; amount: number; ability_id: number | null; ability_name: string | null }[];
     defensiveOptions?: { spellId: number; status: string }[];
+    statisticalExclusionReason?: string | null;
   } | null;
   wipe_call_cluster: boolean;
   avoidable_damage_taken: number;
@@ -354,7 +357,8 @@ interface MechEventLite {
   responsibility: string | null;
   outcome: string;
   players_hit: number;
-  player_hit_details: { damage_taken?: number }[];
+  avoidable: boolean | null;
+  player_hit_details: { name?: string; damage_taken?: number }[];
 }
 
 interface MechanicManifestLite {
@@ -382,7 +386,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   const pulls = await fetchAllByValues<PullLite>(
     supabase,
     'pulls',
-    'id, fight_id, boss_id, difficulty, pull_number, wipe_pct, duration_ms, raid_damage_taken_series, wipe_call_excluded, closed_at',
+    'id, fight_id, boss_id, difficulty, pull_number, wipe_pct, duration_ms, raid_damage_taken_series, wipe_call_excluded, wipe_call_signals, closed_at',
     'report_code',
     [reportCode],
     'closed_at',
@@ -404,7 +408,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     fetchAllByValues<MechEventLite>(
       supabase,
       'pull_mechanic_events',
-      'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, responsibility, outcome, players_hit, player_hit_details',
+      'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, responsibility, outcome, players_hit, avoidable, player_hit_details',
       'pull_id',
       pullIds,
     ),
@@ -488,8 +492,12 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   const manifestByMechanicKey = new Map(
     relevantManifest.map((m) => [`${m.boss_id}|${m.difficulty}|${normalizeAbilityName(m.name)}`, m]),
   );
+  const statisticallyEvaluableMechEvents = mechEvents.filter((event) => {
+    const pull = pullById.get(event.pull_id);
+    return pull != null && !isMechanicExcludedByWipeCall(pull, event.trigger_time_ms);
+  });
   const reportObservedInterruptKeys = new Set(
-    mechEvents
+    statisticallyEvaluableMechEvents
       .filter((event) => event.category === 'interrupt' && event.outcome === 'interrupted')
       .flatMap((event) => {
         const pull = pullById.get(event.pull_id);
@@ -513,11 +521,14 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   // Las filas históricas podían tratar como interrupt cualquier sugerencia
   // inferida por texto. Para el informe compartible solo valen categorías
   // confirmadas o inferencias respaldadas por un evento Interrupt real.
-  const reportableMechEvents = mechEvents.filter(isTrustedInterruptEvent);
-  const excludedUnverifiedInterruptCasts = mechEvents.filter((ev) => ev.category === 'interrupt' && !isTrustedInterruptEvent(ev)).length;
+  const reportableMechEvents = statisticallyEvaluableMechEvents.filter(isTrustedInterruptEvent);
+  const excludedUnverifiedInterruptCasts = statisticallyEvaluableMechEvents.filter((ev) => ev.category === 'interrupt' && !isTrustedInterruptEvent(ev)).length;
 
   const isExcludedWipeCallDeath = (r: RecordLite) => Boolean(r.wipe_call_cluster && pullById.get(r.pull_id)?.wipe_call_excluded);
-  const realDeaths = records.filter((r) => r.died && r.death_cause && !isExcludedWipeCallDeath(r));
+  const realDeaths = records.filter((record) => {
+    const pull = pullById.get(record.pull_id);
+    return record.died && record.death_cause && pull != null && !isDeathExcludedFromStatistics(pull, record);
+  });
   // Versiones anteriores contaban impactos absorbidos/de importe 0 para
   // decidir que había daño sostenido. Eso podía producir una falsa señal de
   // “sin sanación” aun cuando el daño real de la ventana era exactamente 0.
@@ -657,22 +668,19 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     const key = `${pull.boss_id}|${pull.difficulty}|${normalizeAbilityName(r.death_cause.mechanicName)}`;
     deathsByMechanicKey.set(key, (deathsByMechanicKey.get(key) ?? 0) + 1);
   }
-  // mechanic_damage YA viene desglosado por mecánica de verdad (analyze-report
-  // solo lo rellena para abilityIds marcados avoidable:true en el manifiesto)
-  // — no es una aproximación, es el dato real agregado por mecánica+boss+dificultad.
+  // Se suma desde instancias evaluables para cortar exactamente en
+  // wipeCallStartMs; el agregado de player_pull_records incluye todo el pull.
   const avoidableDamageByMechanicKey = new Map<string, number>();
   let totalAvoidableDamage = 0;
-  for (const r of records) {
-    const pull = pullById.get(r.pull_id);
-    if (!pull) continue;
+  for (const event of reportableMechEvents) {
+    const pull = pullById.get(event.pull_id);
+    if (!pull || event.avoidable !== true) continue;
     const scope = `${pull.boss_id}|${pull.difficulty}`;
     if (!measuredAvoidableScopes.has(scope)) continue;
-    totalAvoidableDamage += r.avoidable_damage_taken ?? 0;
-    for (const entry of r.mechanic_damage ?? []) {
-      if (!entry.mechanicName) continue;
-      const key = `${pull.boss_id}|${pull.difficulty}|${normalizeAbilityName(entry.mechanicName)}`;
-      avoidableDamageByMechanicKey.set(key, (avoidableDamageByMechanicKey.get(key) ?? 0) + (entry.amount ?? 0));
-    }
+    const eventDamage = (event.player_hit_details ?? []).reduce((sum, detail) => sum + (detail.damage_taken ?? 0), 0);
+    totalAvoidableDamage += eventDamage;
+    const key = `${pull.boss_id}|${pull.difficulty}|${normalizeAbilityName(event.mechanic_name)}`;
+    avoidableDamageByMechanicKey.set(key, (avoidableDamageByMechanicKey.get(key) ?? 0) + eventDamage);
   }
 
   const MIN_PULLS_PER_HALF_FOR_TREND = 3;
@@ -1676,7 +1684,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     .reduce((sum, p) => sum + (p.raid_damage_taken_series?.points ?? []).reduce((pointSum, point) => pointSum + point, 0), 0);
 
   return {
-    schemaVersion: 9,
+    schemaVersion: 10,
     reportCode,
     reportTitle: (reportResult.data as { title: string } | null)?.title ?? reportCode,
     reportDate: (reportResult.data as { start_time: number } | null)?.start_time ? new Date((reportResult.data as { start_time: number }).start_time).toISOString() : '',

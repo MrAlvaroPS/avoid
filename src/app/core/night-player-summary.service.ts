@@ -13,8 +13,9 @@ import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-rost
 import { PERSONAL_RESPONSIBILITY_CATEGORIES, mapBrief } from './pull-analysis.service';
 import { loadMechanicNotesByName } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
-import type { DeathCause, MechanicCategory, PlayerPullRecordRow, WclGearItem } from '../shared/models/domain';
+import type { DeathCause, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
 import type { LlmPullAnalysis } from '../shared/models/ui';
+import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 
 export interface NightPullSummary {
   pullId: string;
@@ -42,6 +43,7 @@ export interface NightDeathRow {
   /** §"que lo pueda usar efectiva y realmente porque lo tenga en sus habilidades y no esté en CD" (feedback real): exactamente status==='available_unused' — lo tiene en su catálogo real de clase/spec/talentos (defensivesForClass en analyze-report) Y no estaba en cooldown Y no lo tenía ya activo. Lista completa (no solo sí/no) para pintar los iconos reales. */
   defensivesAvailable: { spellId: number; name: string }[];
   isWipeCall: boolean;
+  statisticalExclusionReason: DeathCause['statisticalExclusionReason'];
   /** §"columna de si se ha usado poción o piedra de brujo segundos antes de morir" (feedback real): true = hay un timestamp real de uso dentro de EMERGENCY_CONSUMABLE_LOOKBACK_MS antes de morir (no "en algún momento del pull"). */
   usedHealthstoneBeforeDeath: boolean;
   usedHealthPotionBeforeDeath: boolean;
@@ -57,6 +59,7 @@ export interface NightMechanicFailRow {
   mechanicId: number;
   category: MechanicCategory | null;
   outcome: 'partial_fail' | 'fail';
+  timeMs: number;
   damageTaken: number;
   aiNote: string | null;
 }
@@ -154,7 +157,7 @@ export class NightPlayerSummaryService {
 
     const [{ data: reportRow }, { data: pullsData, error: pullsErr }, { data: encounters }] = await Promise.all([
       client.from('reports').select('title, start_time').eq('code', reportCode).maybeSingle(),
-      client.from('pulls').select('*').eq('report_code', reportCode).order('pull_number', { ascending: true }),
+      client.from('pulls').select('*').eq('report_code', reportCode).order('fight_id', { ascending: true }),
       client.from('report_encounters').select('fight_id, boss_name').eq('report_code', reportCode),
     ]);
     if (pullsErr) throw pullsErr;
@@ -168,7 +171,7 @@ export class NightPlayerSummaryService {
         ? client.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName)
         : Promise.resolve({ data: [] as PlayerPullRecordRow[], error: null }),
       pullIds.length
-        ? client.from('pull_mechanic_events').select('pull_id, ability_id, mechanic_name, category, outcome, player_hit_details').in('pull_id', pullIds).neq('outcome', 'clean').contains('players_hit_names', [playerName])
+        ? client.from('pull_mechanic_events').select('pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms, player_hit_details').in('pull_id', pullIds).neq('outcome', 'clean').contains('players_hit_names', [playerName])
         : Promise.resolve({ data: [] as MechEventRowLite[], error: null }),
       this.wowauditRoster.listRoster().catch(() => []),
       this.reliability.listPlayerReliability().catch(() => []),
@@ -182,6 +185,10 @@ export class NightPlayerSummaryService {
     const records = (recordsData ?? []) as PlayerPullRecordRow[];
     const recordByPullId = new Map(records.map((r) => [r.pull_id, r]));
     const pullById = new Map(allPulls.map((p) => [p.id, p]));
+    const bossOrder = new Map<string, number>();
+    for (const pull of allPulls) {
+      if (!bossOrder.has(pull.boss_id)) bossOrder.set(pull.boss_id, bossOrder.size);
+    }
 
     // Solo los pulls donde este jugador de verdad participó (tiene fila en
     // player_pull_records) — un report puede tener bosses/pulls donde
@@ -212,6 +219,7 @@ export class NightPlayerSummaryService {
         const pull = pullById.get(r.pull_id)!;
         const dc = r.death_cause!;
         const isWipeCall = r.wipe_call_cluster && pull.wipe_call_excluded;
+        const excludedFromStatistics = isDeathExcludedFromStatistics(pull as PullRow, r);
         return {
           pullId: r.pull_id,
           bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
@@ -227,21 +235,30 @@ export class NightPlayerSummaryService {
           mechanicId: dc.mechanicId || null,
           category: dc.category ?? null,
           rootCause: dc.rootCause,
-          defensivesAvailable: (dc.defensiveOptions ?? []).filter((o) => o.status === 'available_unused').map((o) => ({ spellId: o.spellId, name: o.name })),
+          defensivesAvailable: excludedFromStatistics ? [] : (dc.defensiveOptions ?? []).filter((o) => o.status === 'available_unused').map((o) => ({ spellId: o.spellId, name: o.name })),
           isWipeCall,
-          usedHealthstoneBeforeDeath: usedConsumableBeforeDeath(r.consumables?.healthstone?.timestampsMs, dc.timeMs),
-          usedHealthPotionBeforeDeath: usedConsumableBeforeDeath(r.consumables?.healthPotion?.timestampsMs, dc.timeMs),
+          statisticalExclusionReason: dc.statisticalExclusionReason ?? null,
+          usedHealthstoneBeforeDeath: excludedFromStatistics ? false : usedConsumableBeforeDeath(r.consumables?.healthstone?.timestampsMs, dc.timeMs),
+          usedHealthPotionBeforeDeath: excludedFromStatistics ? false : usedConsumableBeforeDeath(r.consumables?.healthPotion?.timestampsMs, dc.timeMs),
           aiNote: (dc.mechanicName && notesByMechanicName.get(dc.mechanicName)) || null,
         };
       })
-      .sort((a, b) => a.pullNumber - b.pullNumber || a.timeMs - b.timeMs);
+      .sort((a, b) => {
+        const aPull = pullById.get(a.pullId)!;
+        const bPull = pullById.get(b.pullId)!;
+        return (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) || a.pullNumber - b.pullNumber || a.timeMs - b.timeMs;
+      });
 
     // §"mecánicas falladas... a quién dirigir" a nivel de una noche entera:
     // mismo criterio que buildMechanicFails (categorías de responsabilidad
     // individual, o sin clasificar todavía) — no se descarta una muerte ya
     // cubierta arriba, para no duplicar la misma instancia dos veces.
-    const deathCoverage = new Set(deaths.map((d) => `${d.pullId}|${d.mechanicName}`));
+    const evaluatedDeaths = deaths.filter((death) => !death.isWipeCall && !death.statisticalExclusionReason);
     const mechanicFails: NightMechanicFailRow[] = ((mechEventsData ?? []) as MechEventRowLite[])
+      .filter((ev) => {
+        const pull = pullById.get(ev.pull_id);
+        return pull != null && !isMechanicExcludedByWipeCall(pull as PullRow, ev as PullMechanicEventRow);
+      })
       .filter((ev) => ev.category == null || PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category))
       .map((ev) => {
         const pull = pullById.get(ev.pull_id)!;
@@ -254,19 +271,24 @@ export class NightPlayerSummaryService {
           mechanicId: ev.ability_id,
           category: ev.category,
           outcome: ev.outcome as 'partial_fail' | 'fail',
+          timeMs: ev.trigger_time_ms,
           damageTaken: detail?.damage_taken ?? 0,
           aiNote: notesByMechanicName.get(ev.mechanic_name) ?? null,
         };
       })
-      .filter((row) => !deathCoverage.has(`${row.pullId}|${row.mechanicName}`))
-      .sort((a, b) => a.pullNumber - b.pullNumber);
+      .filter((row) => !evaluatedDeaths.some((death) => death.pullId === row.pullId && death.mechanicId === row.mechanicId && Math.abs(death.timeMs - row.timeMs) <= 4000))
+      .sort((a, b) => {
+        const aPull = pullById.get(a.pullId)!;
+        const bPull = pullById.get(b.pullId)!;
+        return (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) || a.pullNumber - b.pullNumber || a.timeMs - b.timeMs;
+      });
 
     // §"patrones repetidos esa noche concreta... murió 3 veces a zona
     // evitable en 3 bosses distintos" — agrega muertes+fallos por mecánica,
     // sin distinguir cuál de las dos listas viene cada instancia (para el
     // patrón da igual si murió o solo la falló sin morir).
     const patternSource = [
-      ...deaths.filter((d) => !d.isWipeCall).map((d) => ({ mechanicName: d.mechanicName ?? 'Sin identificar', mechanicId: d.mechanicId, category: d.category, bossName: d.bossName })),
+      ...deaths.filter((d) => !d.isWipeCall && !d.statisticalExclusionReason).map((d) => ({ mechanicName: d.mechanicName ?? 'Sin identificar', mechanicId: d.mechanicId, category: d.category, bossName: d.bossName })),
       ...mechanicFails.map((f) => ({ mechanicName: f.mechanicName, mechanicId: f.mechanicId as number | null, category: f.category, bossName: f.bossName })),
     ];
     const byMechanic = new Map<string, { mechanicId: number | null; category: MechanicCategory | null; bosses: Set<string>; count: number }>();
@@ -313,7 +335,7 @@ export class NightPlayerSummaryService {
       reliability: reliabilityEntry,
       nightReliability,
       pulls,
-      totalDeaths: deaths.filter((d) => !d.isWipeCall).length,
+      totalDeaths: deaths.filter((d) => !d.isWipeCall && !d.statisticalExclusionReason).length,
       totalMechanicFails: mechanicFails.length,
       deaths,
       mechanicFails,
@@ -363,6 +385,7 @@ interface PullRowLite {
   duration_ms: number | null;
   closed_at: string;
   wipe_call_excluded: boolean;
+  wipe_call_signals: Record<string, number | boolean | null> | null;
 }
 
 interface MechEventRowLite {
@@ -371,5 +394,6 @@ interface MechEventRowLite {
   mechanic_name: string;
   category: MechanicCategory | null;
   outcome: string;
+  trigger_time_ms: number;
   player_hit_details: { name: string; damage_taken: number; damage_hits: number; healing_received: number; used_defensive_spell_id: number | null }[];
 }

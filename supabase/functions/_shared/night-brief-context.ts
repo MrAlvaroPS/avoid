@@ -1,4 +1,5 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+import { isDeathExcludedFromStatistics } from './statistical-exclusions.ts';
 
 // §"los que sean unknown ability pon: unknown cause - WC" (feedback real,
 // 2026-08-24) — mismo texto que shared/format.util.ts (Angular), duplicado
@@ -50,7 +51,7 @@ export interface NightBriefContext {
 
 export async function buildNightBriefContext(supabase: SupabaseClient, reportCode: string): Promise<NightBriefContext | null> {
   const { data: pullsData } = await supabase.from('pulls').select('*').eq('report_code', reportCode).order('pull_number', { ascending: true });
-  const pulls = (pullsData ?? []) as { id: string; fight_id: number; boss_id: string; difficulty: string; wipe_pct: number | null; wipe_call_excluded: boolean }[];
+  const pulls = (pullsData ?? []) as { id: string; fight_id: number; boss_id: string; difficulty: string; wipe_pct: number | null; wipe_call_excluded: boolean; wipe_call_signals: Record<string, unknown> | null }[];
   if (!pulls.length) return null;
   const pullIds = pulls.map((p) => p.id);
 
@@ -78,13 +79,12 @@ export async function buildNightBriefContext(supabase: SupabaseClient, reportCod
   const totalKills = pulls.filter((p) => p.wipe_pct === 0).length;
   const wipeCallCount = pulls.filter((p) => p.wipe_call_excluded).length;
 
-  type RecordRow = { pull_id: string; player_name: string; died: boolean; death_cause: { mechanicName: string | null } | null; wipe_call_cluster: boolean };
+  type RecordRow = { pull_id: string; player_name: string; died: boolean; death_cause: { mechanicName: string | null; statisticalExclusionReason?: string | null } | null; wipe_call_cluster: boolean };
   const records = (recordsData ?? []) as RecordRow[];
-  const isExcludedWipeCallDeath = (r: RecordRow) => {
+  const realDeaths = records.filter((r) => {
     const pull = pullById.get(r.pull_id);
-    return Boolean(r.wipe_call_cluster && pull?.wipe_call_excluded);
-  };
-  const realDeaths = records.filter((r) => r.died && r.death_cause && !isExcludedWipeCallDeath(r));
+    return r.died && r.death_cause && pull != null && !isDeathExcludedFromStatistics(pull, r);
+  });
 
   const deathsByMechanic = new Map<string, { count: number; players: Set<string> }>();
   const deathsByPlayer = new Map<string, number>();

@@ -2,6 +2,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import {
   getFightEvents,
   getFightGraph,
+  getFightPlayerRoles,
   sumGraphSeries,
   getFightPlayerRankings,
   getReportAbilities,
@@ -48,6 +49,7 @@ interface DeathEvent {
 }
 interface DamageEvent {
   timestamp?: number;
+  sourceID?: number;
   targetID?: number;
   abilityGameID?: number;
   amount?: number;
@@ -296,6 +298,16 @@ Deno.serve(async (req: Request) => {
       for (const fight of batch) {
         const bossId = String(fight.encounterID);
         const difficulty = fight.difficulty != null ? (WCL_DIFFICULTY_NAME_BY_ID[fight.difficulty] ?? `Dificultad ${fight.difficulty}`) : 'Desconocida';
+        const normalizedFightName = normalizeAbilityName(fight.name);
+        const bossActorIds = new Set(
+          actors
+            .filter((actor) => {
+              if (actor.type !== 'NPC') return false;
+              const actorName = normalizeAbilityName(actor.name);
+              return actorName === normalizedFightName || actorName.includes(normalizedFightName) || normalizedFightName.includes(actorName);
+            })
+            .map((actor) => actor.id),
+        );
 
         const { count: priorPulls } = await supabase
           .from('pulls')
@@ -324,6 +336,15 @@ Deno.serve(async (req: Request) => {
           playerRankings = await getFightPlayerRankings(reportCode, fight.id);
         } catch (err) {
           console.error('analyze-report: no se pudo traer rankings() para el pull', fight.id, err);
+        }
+
+        // Rol real del mismo fight para reconocer autoataques del boss sobre
+        // no-tanks. Best-effort: si Summary falla se usa la spec como fallback.
+        let playerRoles: Map<string, 'tank' | 'healer' | 'dps'> | null = null;
+        try {
+          playerRoles = await getFightPlayerRoles({ code: reportCode, fightId: fight.id, startTime: fight.startTime, endTime: fight.endTime });
+        } catch (err) {
+          console.error('analyze-report: no se pudieron traer roles de Summary para el pull', fight.id, err);
         }
 
         const { data: insertedPull, error: pullError } = await supabase
@@ -443,6 +464,13 @@ Deno.serve(async (req: Request) => {
         function resolveSpec(actorId: number): string | null {
           const specId = combatantInfoByActor.get(actorId)?.specID;
           return typeof specId === 'number' ? (specNameById.get(specId) ?? null) : null;
+        }
+
+        const TANK_SPECS = new Set(['Blood', 'Vengeance', 'Guardian', 'Brewmaster', 'Protection']);
+        function isTankActor(actorId: number): boolean {
+          const actor = actorById.get(actorId);
+          if (actor && playerRoles?.get(actor.name) === 'tank') return true;
+          return TANK_SPECS.has(resolveSpec(actorId) ?? '');
         }
 
         // §"que los defensivos disponibles sean propios de la clase o de los
@@ -594,6 +622,29 @@ Deno.serve(async (req: Request) => {
           return { damageProfile, killingBlowAmount, damageWindowTotal: windowTotal, damageWindowHits: events.length, damageWindowEvents };
         }
 
+        // Un autoataque del boss sobre un no-tank significa que el boss ya no
+        // tenía un tank operativo (muerto, fuera de combate o sin poder
+        // mantenerlo). Se conserva como hecho en la tabla, pero no se evalúa
+        // como error del objetivo ni como oportunidad de usar defensivo,
+        // piedra o poción. La comprobación es deliberadamente estricta:
+        // killing ability "Melee", fuente = actor del boss y sin otro daño
+        // mezclado en los 2s finales.
+        const BOSS_MELEE_EXCLUSIVE_WINDOW_MS = 2000;
+        function isBossMeleeOnNonTank(actorId: number, death: { timestamp: number; killingAbilityGameID: number }): boolean {
+          if (isTankActor(actorId) || bossActorIds.size === 0) return false;
+          if (normalizeAbilityName(abilityNameById.get(death.killingAbilityGameID) ?? '') !== 'melee') return false;
+          const recentDamage = (damageEventsByTarget.get(actorId) ?? []).filter(
+            (event) => (event.amount ?? 0) > 0 && (event.timestamp ?? 0) <= death.timestamp && (event.timestamp ?? 0) >= death.timestamp - BOSS_MELEE_EXCLUSIVE_WINDOW_MS,
+          );
+          if (!recentDamage.length) return false;
+          return recentDamage.every(
+            (event) =>
+              event.abilityGameID === death.killingAbilityGameID &&
+              typeof event.sourceID === 'number' &&
+              bossActorIds.has(event.sourceID),
+          );
+        }
+
         // §10 (hoja de ruta / auditoría v2): "no es lo mismo un oneshot que
         // una muerte por daño sostenido sin sanar, y dentro de cada una la
         // causa real puede ser muy distinta". Deliberadamente MÁS ACOTADO que
@@ -656,6 +707,7 @@ Deno.serve(async (req: Request) => {
         const WIPE_CALL_CLUSTER_WINDOW_MS = 8000;
         const WIPE_CALL_MIN_FRACTION = 0.6; // §"si somos 20 y mueren 16 en 6s" ≈ 0.8 de ejemplo — 0.6 de margen para no dejar escapar el caso real
         const WIPE_CALL_NEAR_END_MS = 15_000; // el cluster tiene que estar pegado al final del pull — un pico de muertes a mitad de pull que luego se recuperó no cuenta
+        const EARLY_MASS_WIPE_MS = 10_000;
         const WIPE_CALL_CONFIDENCE_THRESHOLD = 55; // 0-100 — por debajo se guarda como "posible" visible en la UI, pero NO se auto-excluye
         // §"aunque sea un wipe call los primeros 2-3-4 que mueren no suelen
         // ser parte de ese wipe call... es mecánica fallida seguramente, lo
@@ -680,7 +732,10 @@ Deno.serve(async (req: Request) => {
             healingCollapseRatio: number | null;
             damageCollapseRatio: number | null;
             sustainedDeathFraction: number;
+            unknownDeathFraction: number;
             triggerDeathsKept: number;
+            wipeCallStartMs: number;
+            earlyMassDeath: boolean;
           };
         }
 
@@ -692,15 +747,17 @@ Deno.serve(async (req: Request) => {
             .sort((a, b) => a.timestamp - b.timestamp);
           if (deaths.length < 2) return null;
 
-          // Mayor cluster por ventana deslizante — mismo espíritu que
-          // attributeDeaths()/UNCOVERED_DEATH_GROUP_WINDOW_MS en
-          // pull-analysis.service.ts, ventana más ancha aquí porque un wipe
-          // call se desangra durante varios segundos, no es un solo cast que
-          // golpea a todos a la vez.
+          // Mayor cluster TERMINAL por ventana deslizante. Antes se elegía el
+          // mayor de todo el pull y solo después se comprobaba si estaba al
+          // final: un pico grande a mitad podía tapar un wipe call terminal
+          // algo menor y hacer que no se detectara ninguno.
           let bestCluster: typeof deaths = [];
           for (const start of deaths) {
             const cluster = deaths.filter((d) => d.timestamp >= start.timestamp && d.timestamp <= start.timestamp + WIPE_CALL_CLUSTER_WINDOW_MS);
-            if (cluster.length > bestCluster.length) bestCluster = cluster;
+            if (!cluster.length || fight.endTime - cluster.at(-1)!.timestamp > WIPE_CALL_NEAR_END_MS) continue;
+            if (cluster.length > bestCluster.length || (cluster.length === bestCluster.length && cluster.at(-1)!.timestamp > (bestCluster.at(-1)?.timestamp ?? 0))) {
+              bestCluster = cluster;
+            }
           }
           if (bestCluster.length < 2) return null;
 
@@ -710,33 +767,48 @@ Deno.serve(async (req: Request) => {
           const clusterStart = bestCluster[0].timestamp;
           const clusterEnd = bestCluster.at(-1)!.timestamp;
           const nearEndMs = fight.endTime - clusterEnd;
-          if (simultaneityFraction < WIPE_CALL_MIN_FRACTION || nearEndMs > WIPE_CALL_NEAR_END_MS) return null; // gates duros — por debajo, ni se guarda como "posible"
+          const earlyMassDeath = clusterEnd - fight.startTime <= EARLY_MASS_WIPE_MS && bestCluster.length / localRaidSize >= WIPE_CALL_MIN_FRACTION;
+          if (simultaneityFraction < WIPE_CALL_MIN_FRACTION) return null;
 
           // Señal 1: diversidad de killing ability — 0 = todos murieron a la
           // MISMA habilidad (mecánica real), 1 = todos a algo distinto (cada
           // uno se murió a lo que tenía encima, típico de "ya nadie reacciona").
-          const distinctAbilities = new Set(bestCluster.map((d) => d.killingAbilityGameID)).size;
-          const abilityDiversity = Math.min(1, (distinctAbilities - 1) / Math.max(1, bestCluster.length - 1));
+          const knownAbilities = bestCluster.map((d) => d.killingAbilityGameID).filter((id) => id > 0);
+          const distinctAbilities = new Set(knownAbilities).size;
+          const abilityDiversity = knownAbilities.length > 1 ? Math.min(1, (distinctAbilities - 1) / (knownAbilities.length - 1)) : 0;
+          const unknownDeathFraction = bestCluster.filter((d) => d.killingAbilityGameID === 0).length / bestCluster.length;
+
+          // Las primeras muertes suelen ser la causa real. El límite explícito
+          // permite conservar toda mecánica anterior y excluir solo el pile-on.
+          // En una muerte masiva durante los primeros 10s no hay fase previa
+          // evaluable: se considera reset/wipe call desde el inicio.
+          const triggerDeathCount = earlyMassDeath ? 0 : Math.min(WIPE_CALL_TRIGGER_DEATHS, Math.max(1, Math.floor(bestCluster.length * 0.2)));
+          const pileOnDeaths = bestCluster.slice(triggerDeathCount);
+          const wipeCallStartTimestamp = earlyMassDeath ? fight.startTime : pileOnDeaths[0].timestamp;
 
           // Señal 2/3: sanación y daño de la RAID (no de un jugador) en los
-          // 10s justo antes del cluster, comparado contra la media de la
-          // propia pelea hasta ese instante — un colapso fuerte (nadie
-          // curando/pegando ya) apoya "wipe call"; actividad normal hasta el
-          // final apoya "mecánica real que remató a todos de golpe".
-          const preClusterStart = clusterStart - 10_000;
-          const fightSoFarMs = Math.max(1, clusterStart - fight.startTime);
+          // actividad DESPUÉS de las muertes desencadenantes, comparada con la
+          // media anterior. Medir antes del primer muerto evaluaba la ejecución
+          // previa al fallo, no el momento en que la raid dio el pull por perdido.
+          const fightSoFarMs = Math.max(1, wipeCallStartTimestamp - fight.startTime);
+          const postWindowEnd = Math.min(fight.endTime, wipeCallStartTimestamp + 10_000);
+          const postWindowMs = Math.max(1000, postWindowEnd - wipeCallStartTimestamp);
           const allHealing = [...healingEventsByTarget.values()].flat();
-          const priorHealing = allHealing.filter((h) => h.timestamp < clusterStart);
-          const preClusterHealing = priorHealing.filter((h) => h.timestamp >= preClusterStart).reduce((s, h) => s + h.amount, 0);
+          const priorHealing = allHealing.filter((h) => h.timestamp < wipeCallStartTimestamp);
+          const postTriggerHealing = allHealing.filter((h) => h.timestamp >= wipeCallStartTimestamp && h.timestamp <= postWindowEnd).reduce((s, h) => s + h.amount, 0);
           const avgHealingPer10s = (priorHealing.reduce((s, h) => s + h.amount, 0) / fightSoFarMs) * 10_000;
-          const healingCollapseRatio = avgHealingPer10s > 0 ? Math.min(1, preClusterHealing / avgHealingPer10s) : null;
+          const projectedHealingPer10s = (postTriggerHealing / postWindowMs) * 10_000;
+          const healingCollapseRatio = avgHealingPer10s > 0 ? Math.min(1, projectedHealingPer10s / avgHealingPer10s) : null;
 
           const friendlyIds = new Set(fight.friendlyPlayers);
-          const priorFriendlyDamage = (damageDoneEvents as ThroughputEvent[]).filter((e) => typeof e.sourceID === 'number' && friendlyIds.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp < clusterStart);
+          const priorFriendlyDamage = (damageDoneEvents as ThroughputEvent[]).filter((e) => typeof e.sourceID === 'number' && friendlyIds.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp < wipeCallStartTimestamp);
           const totalPriorDamage = priorFriendlyDamage.reduce((s, e) => s + (e.amount ?? 0), 0);
           const avgDamagePer10s = (totalPriorDamage / fightSoFarMs) * 10_000;
-          const preClusterDamage = priorFriendlyDamage.filter((e) => (e.timestamp ?? 0) >= preClusterStart).reduce((s, e) => s + (e.amount ?? 0), 0);
-          const damageCollapseRatio = avgDamagePer10s > 0 ? Math.min(1, preClusterDamage / avgDamagePer10s) : null;
+          const postTriggerDamage = (damageDoneEvents as ThroughputEvent[])
+            .filter((e) => typeof e.sourceID === 'number' && friendlyIds.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp >= wipeCallStartTimestamp && e.timestamp <= postWindowEnd)
+            .reduce((s, e) => s + (e.amount ?? 0), 0);
+          const projectedDamagePer10s = (postTriggerDamage / postWindowMs) * 10_000;
+          const damageCollapseRatio = avgDamagePer10s > 0 ? Math.min(1, projectedDamagePer10s / avgDamagePer10s) : null;
 
           // Señal 4: perfil de daño de cada muerte del cluster — reutiliza
           // computeDeathDamageProfile tal cual (mismo dato que ya se calcula
@@ -746,20 +818,28 @@ Deno.serve(async (req: Request) => {
           const nonBurstCount = bestCluster.filter((d) => computeDeathDamageProfile(d.actorId, d.timestamp).damageProfile !== 'burst').length;
           const sustainedDeathFraction = nonBurstCount / bestCluster.length;
 
+          // Contraseñal fuerte: casi todos mueren a la misma habilidad y de
+          // burst. Es una mecánica letal de raid, aunque el pull termine justo
+          // después y la actividad caiga a cero por haberse muerto todos.
+          const abilityCounts = new Map<number, number>();
+          for (const abilityId of knownAbilities) abilityCounts.set(abilityId, (abilityCounts.get(abilityId) ?? 0) + 1);
+          const dominantAbilityFraction = Math.max(0, ...abilityCounts.values()) / bestCluster.length;
+          if (!earlyMassDeath && dominantAbilityFraction >= 0.7 && sustainedDeathFraction <= 0.4) return null;
+
+          const evidenceCount = [
+            abilityDiversity >= 0.2 || unknownDeathFraction >= 0.3,
+            healingCollapseRatio != null && healingCollapseRatio <= 0.35,
+            damageCollapseRatio != null && damageCollapseRatio <= 0.35,
+            sustainedDeathFraction >= 0.5,
+          ].filter(Boolean).length;
+          if (!earlyMassDeath && evidenceCount < 2) return null;
+
           const healingSignal = healingCollapseRatio != null ? 1 - healingCollapseRatio : 0.5; // sin dato = neutral, no penaliza ni favorece
           const damageSignal = damageCollapseRatio != null ? 1 - damageCollapseRatio : 0.5;
-          const confidence = Math.round(
-            (simultaneityFraction * 0.25 + abilityDiversity * 0.25 + healingSignal * 0.25 + damageSignal * 0.1 + sustainedDeathFraction * 0.15) * 100,
+          const calculatedConfidence = Math.round(
+            (simultaneityFraction * 0.2 + abilityDiversity * 0.2 + unknownDeathFraction * 0.1 + healingSignal * 0.2 + damageSignal * 0.1 + sustainedDeathFraction * 0.1 + (1 - nearEndMs / WIPE_CALL_NEAR_END_MS) * 0.1) * 100,
           );
-
-          // Las señales de arriba (confianza) se calculan sobre el cluster
-          // COMPLETO — esa es la pregunta "¿esto parece un wipe call?".
-          // La EXCLUSIÓN real solo cae sobre el pile-on: bestCluster ya
-          // viene ordenado cronológicamente, así que las primeras
-          // WIPE_CALL_TRIGGER_DEATHS muertes se quitan del set que se
-          // excluye — siguen contando como fallo real en todo lo demás.
-          const triggerDeathCount = Math.min(WIPE_CALL_TRIGGER_DEATHS, Math.floor(bestCluster.length / 2));
-          const pileOnDeaths = bestCluster.slice(triggerDeathCount);
+          const confidence = earlyMassDeath ? Math.max(85, calculatedConfidence) : calculatedConfidence;
 
           return {
             clusterActorIds: new Set(pileOnDeaths.map((d) => d.actorId)),
@@ -771,6 +851,7 @@ Deno.serve(async (req: Request) => {
               healingCollapseRatio: healingCollapseRatio != null ? Math.round(healingCollapseRatio * 100) / 100 : null,
               damageCollapseRatio: damageCollapseRatio != null ? Math.round(damageCollapseRatio * 100) / 100 : null,
               sustainedDeathFraction: Math.round(sustainedDeathFraction * 100) / 100,
+              unknownDeathFraction: Math.round(unknownDeathFraction * 100) / 100,
               // §"los primeros 2-3-4 que mueren no suelen ser parte de ese
               // wipe call" (feedback real): cuántas de las bestCluster.length
               // muertes del cluster se dejaron FUERA de la exclusión por ser
@@ -778,6 +859,8 @@ Deno.serve(async (req: Request) => {
               // "ver evidencia" del banner para que quede claro que no TODO
               // el cluster se excluyó.
               triggerDeathsKept: triggerDeathCount,
+              wipeCallStartMs: Math.max(0, wipeCallStartTimestamp - fight.startTime),
+              earlyMassDeath,
             },
           };
         }
@@ -804,6 +887,7 @@ Deno.serve(async (req: Request) => {
           const deathEffectiveCategory = mechanic ? effectiveMechanicCategory(mechanic) : null;
           const deathDamageProfile = death ? computeDeathDamageProfile(actorId, death.timestamp) : null;
           const deathHealingReceived = death ? computeHealingReceived(actorId, death.timestamp) : null;
+          const bossMeleeOnNonTank = death ? isBossMeleeOnNonTank(actorId, death) : false;
           const buffsSnapshot = death ? lastBuffsSnapshotByTarget.get(actorId) : undefined;
           const buffsSnapshotIsFresh = death != null && buffsSnapshot != null && Math.abs(death.timestamp - buffsSnapshot.timestamp) <= DEATH_BUFF_STALENESS_MS;
           const defensivesAtDeath = buffsSnapshotIsFresh && actor ? activeDefensives(buffsSnapshot.buffs, actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)) : [];
@@ -894,7 +978,8 @@ Deno.serve(async (req: Request) => {
                   responsibility: mechanic?.responsibility ?? null,
                   categoryIsInferred: mechanic ? mechanic.category == null && deathEffectiveCategory != null : false,
                   avoidable: mechanic?.avoidable ?? null,
-                  preventableWithDefensive: buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
+                  preventableWithDefensive: bossMeleeOnNonTank ? null : buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
+                  statisticalExclusionReason: bossMeleeOnNonTank ? 'boss_melee_on_non_tank' : null,
                   // §10: "no es lo mismo un oneshot que una muerte por daño
                   // sostenido sin sanar, y la causa real puede ser muy
                   // distinta" — ver computeRootCause para el alcance real
@@ -912,7 +997,7 @@ Deno.serve(async (req: Request) => {
                   // (activeDefensivesAtDeath/neverCastDefensives), que solo
                   // decían "algo activo sí/no" y "lo lanzó alguna vez sí/no"
                   // sin cruzar ambas cosas con el tiempo real.
-                  defensiveOptions,
+                  defensiveOptions: bossMeleeOnNonTank ? [] : defensiveOptions,
                   // Offset relativo al inicio del pull, en el mismo espacio de
                   // tiempo que trigger_time_ms de pull_mechanic_events — así
                   // el front puede alinear muertes y chips de mecánica en una

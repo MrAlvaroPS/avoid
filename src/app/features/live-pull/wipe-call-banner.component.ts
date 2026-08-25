@@ -47,6 +47,7 @@ export class WipeCallBannerComponent {
   signalLines(): string[] {
     const s = this.signals();
     const lines: string[] = [];
+    if (s['earlyMassDeath'] === true) lines.push('murió al menos el 60% de la party durante los primeros 10s: se trata como reset/wipe call temprano');
     if (typeof s['simultaneityFraction'] === 'number') lines.push(`${Math.round(s['simultaneityFraction'] * 100)}% de los vivos murieron casi a la vez`);
     if (typeof s['abilityDiversity'] === 'number') {
       lines.push(
@@ -58,8 +59,8 @@ export class WipeCallBannerComponent {
     if (typeof s['healingCollapseRatio'] === 'number') {
       lines.push(
         s['healingCollapseRatio'] < 0.3
-          ? 'la sanación de la raid casi desapareció justo antes'
-          : 'la raid seguía sanando con normalidad justo antes',
+          ? 'la sanación de la raid casi desapareció después de las muertes desencadenantes'
+          : 'la raid siguió sanando después de las muertes desencadenantes',
       );
     }
     if (typeof s['sustainedDeathFraction'] === 'number' && s['sustainedDeathFraction'] > 0.5) {
@@ -72,6 +73,10 @@ export class WipeCallBannerComponent {
     // parezca que todo el cluster se perdonó por igual.
     if (typeof s['triggerDeathsKept'] === 'number' && s['triggerDeathsKept'] > 0) {
       lines.push(`las primeras ${s['triggerDeathsKept']} muertes del grupo siguen contando como fallo real — solo se excluye el resto (probablemente ya dado por perdido)`);
+    }
+    if (typeof s['wipeCallStartMs'] === 'number') {
+      const seconds = Math.round(s['wipeCallStartMs'] / 1000);
+      lines.push(`el límite estadístico empieza en ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}; todo lo anterior sigue contando`);
     }
     return lines;
   }

@@ -94,12 +94,12 @@
           <button
             type="button"
             class="row"
-            [class.row-fail]="c.severity === 'critical' && !c.isWipeCall"
+            [class.row-fail]="c.severity === 'critical' && !c.isWipeCall && !c.statisticalExclusionReason"
             [class.row-positive]="c.severity === 'positive'"
             [class.row-wipecall]="c.isWipeCall"
             (click)="provenanceRequested.emit(c.provenance)"
           >
-            <span class="cell-icon" aria-hidden="true">{{ c.isWipeCall ? '🏳️' : c.severity === 'critical' ? '💀' : '📈' }}</span>
+            <span class="cell-icon" aria-hidden="true">{{ c.isWipeCall ? '🏳️' : c.statisticalExclusionReason ? 'ℹ️' : c.severity === 'critical' ? '💀' : '📈' }}</span>
             <span class="cell-player"><app-class-icon [wclClass]="c.raiderClass" />{{ c.raiderName }}</span>
             <span class="cell-mechanic">
               @if (c.mechanic.wowheadSpellId) {
@@ -109,6 +109,9 @@
               <app-mechanic-info-icon [note]="c.notes" />
               @if (c.isWipeCall) {
                 <span class="cat-tag cat-tag-unknown" title="Excluida de fiabilidad/métricas/racha — ver el aviso de wipe call arriba del pull.">WIPE CALL</span>
+              }
+              @if (c.statisticalExclusionReason === 'boss_melee_on_non_tank') {
+                <span class="cat-tag cat-tag-unknown" title="Melee del boss sobre un no-tank; se menciona, pero no evalúa defensivos ni consumibles del objetivo.">TANKS CAÍDOS · NO EVALUABLE</span>
               }
             </span>
             <span class="cell-time tabular align-right">{{ c.timeLabel || '—' }}</span>

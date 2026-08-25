@@ -16,6 +16,7 @@ import type { TrendBar } from '../shared/charts/trend-bars.component';
 import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { LlmPullAnalysis } from '../shared/models/ui';
 import type { NightFullReport, StoredNightFullReport } from '../shared/models/night-full-report';
+import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 
 export interface NightBossSummary {
   bossId: string;
@@ -89,7 +90,7 @@ export class NightReportService {
     if (error) throw error;
     if (!data) return null;
     const report = data.report as unknown as NightFullReport;
-    if (report.schemaVersion !== 9) return null;
+    if (report.schemaVersion !== 10) return null;
     return { report, generatedAt: data.generated_at as string };
   }
 
@@ -114,7 +115,7 @@ export class NightReportService {
         ? client.from('player_pull_records').select('pull_id, player_name, died, death_cause, wipe_call_cluster').in('pull_id', pullIds)
         : Promise.resolve({ data: [] as RecordLite[], error: null }),
       pullIds.length
-        ? client.from('pull_mechanic_events').select('pull_id, category, outcome, players_hit').in('pull_id', pullIds)
+        ? client.from('pull_mechanic_events').select('pull_id, category, outcome, players_hit, trigger_time_ms').in('pull_id', pullIds)
         : Promise.resolve({ data: [] as MechEventLite[], error: null }),
       loadMechanicNotesByName(client, pulls.map((p) => p.boss_id)).catch(() => new Map<string, string>()),
       client.from('night_briefs').select('*').eq('report_code', reportCode).maybeSingle(),
@@ -123,7 +124,10 @@ export class NightReportService {
     if (mechErr) throw mechErr;
 
     const records = (recordsData ?? []) as RecordLite[];
-    const mechEvents = (mechEventsData ?? []) as MechEventLite[];
+    const mechEvents = ((mechEventsData ?? []) as MechEventLite[]).filter((event) => {
+      const eventPull = pullById.get(event.pull_id);
+      return eventPull != null && !isMechanicExcludedByWipeCall(eventPull, event as import('../shared/models/domain').PullMechanicEventRow);
+    });
 
     // §"a nivel de raid, no solo individual": bosses agrupados con el mismo
     // criterio que ya usa raid-session.component.ts (pullGroups) — aquí
@@ -167,7 +171,10 @@ export class NightReportService {
       const pull = pullById.get(r.pull_id);
       return Boolean(r.wipe_call_cluster && pull?.wipe_call_excluded);
     };
-    const realDeaths = records.filter((r) => r.died && r.death_cause && !isExcludedWipeCallDeath(r));
+    const realDeaths = records.filter((record) => {
+      const recordPull = pullById.get(record.pull_id);
+      return record.died && record.death_cause && recordPull != null && !isDeathExcludedFromStatistics(recordPull, record as import('../shared/models/domain').PlayerPullRecordRow);
+    });
     const wipeCallDeaths = records.filter((r) => r.died && isExcludedWipeCallDeath(r));
 
     const wipeCallPulls: NightWipeCallPull[] = pulls
@@ -272,4 +279,5 @@ interface MechEventLite {
   category: MechanicCategory | null;
   outcome: string;
   players_hit: number;
+  trigger_time_ms: number;
 }

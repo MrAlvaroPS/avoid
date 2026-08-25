@@ -34,7 +34,7 @@ export class CoachingCalloutListComponent {
   // wipe-call se SIGUE mostrando (el RL quiere verla) pero no infla el
   // contador de la pestaña — mismo criterio que ya excluye estas filas de
   // deathsCard/fiabilidad/racha en pull-analysis.service.ts.
-  deathCount = computed(() => this.callouts().filter((c) => c.severity === 'critical' && !c.isWipeCall).length);
+  deathCount = computed(() => this.callouts().filter((c) => c.severity === 'critical' && !c.isWipeCall && !c.statisticalExclusionReason).length);
   streakCount = computed(() => this.callouts().filter((c) => c.severity === 'positive').length);
 
   categoryMeta = mechanicCategoryMeta;

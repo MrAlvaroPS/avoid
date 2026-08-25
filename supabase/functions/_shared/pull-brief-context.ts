@@ -1,4 +1,5 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './statistical-exclusions.ts';
 
 // §"un botón para copiar el prompt completo... como si hubiese sido a
 // través de la API": factorizado desde generate-pull-brief/index.ts para
@@ -59,6 +60,7 @@ interface DeathCauseRow {
   rootCause: string;
   timeMs: number;
   defensiveOptions?: { status: string }[];
+  statisticalExclusionReason?: string | null;
 }
 
 // §"los que sean unknown ability pon: unknown cause - WC porque quizá es un
@@ -93,10 +95,10 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
 
   const [{ data: records }, { data: mechEvents }, { data: priorPulls }] = await Promise.all([
     supabase.from('player_pull_records').select('player_name,died,death_cause,avoidable_damage_taken,wipe_call_cluster').eq('pull_id', pullId),
-    supabase.from('pull_mechanic_events').select('mechanic_name,category,outcome,players_hit').eq('pull_id', pullId).neq('outcome', 'clean'),
+    supabase.from('pull_mechanic_events').select('mechanic_name,category,outcome,players_hit,trigger_time_ms').eq('pull_id', pullId).neq('outcome', 'clean'),
     supabase
       .from('pulls')
-      .select('id,pull_number,wipe_pct,duration_ms')
+      .select('id,pull_number,wipe_pct,duration_ms,wipe_call_excluded,wipe_call_signals')
       .eq('boss_id', pull.boss_id)
       .eq('difficulty', pull.difficulty)
       .lt('pull_number', pull.pull_number)
@@ -110,7 +112,7 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
   // §"esa gente no debería... contar como muerte, marcado como wipe call":
   // el LLM no debe leer estas muertes como fallos individuales reales.
   const deaths: PullBriefDeath[] = recordRows
-    .filter((r) => r.died && r.death_cause && !(r.wipe_call_cluster && pull.wipe_call_excluded))
+    .filter((r) => r.died && r.death_cause && !isDeathExcludedFromStatistics(pull, r))
     .map((r) => {
       const dc = r.death_cause!;
       const options = dc.defensiveOptions ?? [];
@@ -124,23 +126,27 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
       };
     });
 
-  const mechanicFails: PullBriefMechanicFail[] = ((mechEvents ?? []) as { mechanic_name: string; category: string | null; outcome: 'partial_fail' | 'fail'; players_hit: number }[])
+  const evaluatedMechEvents = ((mechEvents ?? []) as { mechanic_name: string; category: string | null; outcome: 'partial_fail' | 'fail'; players_hit: number; trigger_time_ms: number }[])
+    .filter((event) => !isMechanicExcludedByWipeCall(pull, event.trigger_time_ms));
+  const mechanicFails: PullBriefMechanicFail[] = evaluatedMechEvents
     .map((ev) => ({ mechanic: ev.mechanic_name, category: ev.category, outcome: ev.outcome, playersHit: ev.players_hit }))
     .sort((a, b) => b.playersHit - a.playersHit)
     .slice(0, 8); // acotado: la lista completa puede tener docenas de instancias de la misma mecánica repitiéndose (ticks), no aporta más al LLM que las top-N más golpeadas
 
-  const priorPullRows = (priorPulls ?? []) as { id: string; pull_number: number; wipe_pct: number | null; duration_ms: number | null }[];
+  const priorPullRows = (priorPulls ?? []) as { id: string; pull_number: number; wipe_pct: number | null; duration_ms: number | null; wipe_call_excluded: boolean; wipe_call_signals: Record<string, unknown> | null }[];
   let previousPulls: PullBriefContext['previousPulls'] = [];
   let repeatedIssues: PullBriefRepeatedIssue[] = [];
   if (priorPullRows.length) {
     const priorPullIds = priorPullRows.map((p) => p.id);
     const [{ data: priorDeathRows }, { data: priorMechEvents }] = await Promise.all([
-      supabase.from('player_pull_records').select('pull_id,died').in('pull_id', priorPullIds),
-      supabase.from('pull_mechanic_events').select('pull_id,mechanic_name,outcome').in('pull_id', priorPullIds),
+      supabase.from('player_pull_records').select('pull_id,died,death_cause,wipe_call_cluster').in('pull_id', priorPullIds),
+      supabase.from('pull_mechanic_events').select('pull_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
     ]);
+    const priorPullById = new Map(priorPullRows.map((priorPull) => [priorPull.id, priorPull]));
     const deathsByPullId = new Map<string, number>();
-    for (const r of (priorDeathRows ?? []) as { pull_id: string; died: boolean }[]) {
-      if (r.died) deathsByPullId.set(r.pull_id, (deathsByPullId.get(r.pull_id) ?? 0) + 1);
+    for (const r of (priorDeathRows ?? []) as { pull_id: string; died: boolean; death_cause: DeathCauseRow | null; wipe_call_cluster: boolean }[]) {
+      const priorPull = priorPullById.get(r.pull_id);
+      if (r.died && priorPull && !isDeathExcludedFromStatistics(priorPull, r)) deathsByPullId.set(r.pull_id, (deathsByPullId.get(r.pull_id) ?? 0) + 1);
     }
     previousPulls = priorPullRows.map((p) => ({ pullNumber: p.pull_number, wipePct: p.wipe_pct, durationMs: p.duration_ms, deaths: deathsByPullId.get(p.id) ?? 0 }));
 
@@ -148,8 +154,11 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
     // vistos Y >=2 fallos entre el pull actual y los anteriores traídos.
     const byMechanic = new Map<string, { pullIds: Set<string>; failedPullIds: Set<string> }>();
     const allEvents = [
-      ...((mechEvents ?? []) as { mechanic_name: string; outcome: string }[]).map((e) => ({ pull_id: pullId, mechanic_name: e.mechanic_name, outcome: e.outcome })),
-      ...((priorMechEvents ?? []) as { pull_id: string; mechanic_name: string; outcome: string }[]),
+      ...evaluatedMechEvents.map((e) => ({ pull_id: pullId, mechanic_name: e.mechanic_name, outcome: e.outcome })),
+      ...((priorMechEvents ?? []) as { pull_id: string; mechanic_name: string; outcome: string; trigger_time_ms: number }[]).filter((event) => {
+        const priorPull = priorPullById.get(event.pull_id);
+        return priorPull != null && !isMechanicExcludedByWipeCall(priorPull, event.trigger_time_ms);
+      }),
     ];
     for (const ev of allEvents) {
       if (!byMechanic.has(ev.mechanic_name)) byMechanic.set(ev.mechanic_name, { pullIds: new Set(), failedPullIds: new Set() });

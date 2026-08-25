@@ -15,6 +15,7 @@ import type { BossReferenceStatsRow, DefensiveOption, PlayerPullRecordRow, PullB
 import type { CoachingCallout, LlmPullAnalysis, MechanicFailRow, MetricCardData, PullDifficulty, PullResult, ReferencePacing, TimelineChip } from '../shared/models/ui';
 import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { TrendBar } from '../shared/charts/trend-bars.component';
+import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 
 export interface PullHeaderData {
   encounterName: string;
@@ -97,8 +98,8 @@ const CLOSE_TO_DEATH_MS = 10_000;
 const MECHANIC_ATTRIBUTION_WINDOW_MS = 4000;
 
 /** §"esa gente no debería... contar como muerte, marcado como wipe call": true solo cuando la muerte formó parte del cluster detectado EN ESE PULL y el RL no la ha restaurado (pull.wipe_call_excluded). La fila se sigue mostrando en "a quién dirigir" — esto solo decide si cuenta en métricas/fiabilidad/racha. */
-function isExcludedWipeCallDeath(pull: PullRow, record: PlayerPullRecordRow): boolean {
-  return record.wipe_call_cluster && pull.wipe_call_excluded;
+function isExcludedStatisticalDeath(pull: PullRow, record: PlayerPullRecordRow): boolean {
+  return isDeathExcludedFromStatistics(pull, record);
 }
 
 @Injectable({ providedIn: 'root' })
@@ -159,7 +160,9 @@ export class PullAnalysisService {
     const notesByMechanicName = new Map(candidateRows.filter((c) => c.ai_classification?.notes).map((c) => [c.name, c.ai_classification!.notes]));
     const priorPulls = (priorPullsRes.data ?? []) as PullRow[];
     const previousPull = priorPulls[0] ?? null;
+    const pullByIdForEvaluation = new Map([pull, ...priorPulls].map((p) => [p.id, p]));
     const referenceStats = referenceStatsRes.data as BossReferenceStatsRow | null;
+    const evaluatedMechEvents = mechEvents.filter((event) => !isMechanicExcludedByWipeCall(pull, event));
 
     let previousRecords: PlayerPullRecordRow[] = [];
     let previousMechFailCount = 0;
@@ -168,7 +171,7 @@ export class PullAnalysisService {
     // misma mecánica fallando en pulls consecutivos DEL BOSS, cruzando
     // pull_mechanic_events de este pull + los anteriores ya traídos arriba —
     // no es un dato nuevo que pedir aparte, es agregar lo que ya se tiene.
-    let mechanicEventsAcrossPulls: { pull_id: string; ability_id: number; mechanic_name: string; outcome: string }[] = mechEvents.map((e) => ({
+    let mechanicEventsAcrossPulls: { pull_id: string; ability_id: number; mechanic_name: string; outcome: string }[] = evaluatedMechEvents.map((e) => ({
       pull_id: pullId,
       ability_id: e.ability_id,
       mechanic_name: e.mechanic_name,
@@ -178,14 +181,18 @@ export class PullAnalysisService {
       const priorPullIds = priorPulls.map((p) => p.id);
       const [priorRecordsRes, priorMechEventsRes] = await Promise.all([
         client.from('player_pull_records').select('*').in('pull_id', priorPullIds),
-        client.from('pull_mechanic_events').select('pull_id,ability_id,mechanic_name,outcome').in('pull_id', priorPullIds),
+        client.from('pull_mechanic_events').select('pull_id,ability_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
       ]);
       for (const r of (priorRecordsRes.data ?? []) as PlayerPullRecordRow[]) {
         if (!priorRecordsByPullId.has(r.pull_id)) priorRecordsByPullId.set(r.pull_id, []);
         priorRecordsByPullId.get(r.pull_id)!.push(r);
       }
+      const priorMechanicEvents = (priorMechEventsRes.data ?? []) as { pull_id: string; ability_id: number; mechanic_name: string; outcome: string; trigger_time_ms: number }[];
       mechanicEventsAcrossPulls = mechanicEventsAcrossPulls.concat(
-        (priorMechEventsRes.data ?? []) as { pull_id: string; ability_id: number; mechanic_name: string; outcome: string }[],
+        priorMechanicEvents.filter((event) => {
+          const eventPull = pullByIdForEvaluation.get(event.pull_id);
+          return eventPull != null && !isMechanicExcludedByWipeCall(eventPull, event as PullMechanicEventRow);
+        }),
       );
       if (previousPull) {
         previousRecords = priorRecordsByPullId.get(previousPull.id) ?? [];
@@ -220,13 +227,13 @@ export class PullAnalysisService {
     // su propio chip descriptivo en la timeline (buildTimeline usa
     // `records` sin filtrar para eso, ver más abajo).
     const deathAttribution = attributeDeaths(
-      records.filter((r) => !isExcludedWipeCallDeath(pull, r)),
-      mechEvents,
+      records.filter((r) => !isExcludedStatisticalDeath(pull, r)),
+      evaluatedMechEvents,
     );
     const metrics = buildMetrics(
       pull,
       records,
-      mechEvents,
+      evaluatedMechEvents,
       previousPull,
       previousRecords,
       previousMechFailCount,
@@ -237,15 +244,15 @@ export class PullAnalysisService {
     );
     const { chips: timeline, background: backgroundMechanics } = buildTimeline(pull, records, mechEvents, hasManifest, deathAttribution.coveredRecordIds);
     const callouts = buildCallouts(pull, records, previousPull, previousRecords, priorPulls, priorRecordsByPullId, notesByMechanicName);
-    const mechanicFails = buildMechanicFails(pull, records, mechEvents, notesByMechanicName);
+    const mechanicFails = buildMechanicFails(pull, records, evaluatedMechEvents, notesByMechanicName);
     // §"pone mecánicas fallidas y luego 'a quién dirigir' no tiene nada"
     // (feedback real): mismo criterio de exclusión que buildMechanicFails,
     // pero contando lo EXCLUIDO en vez de lo incluido — para poder decir
     // "hubo N fallos, pero son de grupo/tank/interrupción" en vez de dejar
     // la pestaña vacía sin explicación cuando la tarjeta de arriba no es 0.
-    const groupMechanicFailCount = mechEvents.filter((m) => m.outcome !== 'clean' && m.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(m.category)).length;
+    const groupMechanicFailCount = evaluatedMechEvents.filter((m) => m.outcome !== 'clean' && m.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(m.category)).length;
     const roleByName = await rosterByNamePromise;
-    const playerStats = buildPlayerStats(records, roleByName);
+    const playerStats = buildPlayerStats(pull, records, roleByName);
 
     // §13: score compuesto, no solo la comparación campo a campo de las 4
     // tarjetas — "¿este intento fue mejor que el anterior en conjunto?" en un
@@ -256,9 +263,9 @@ export class PullAnalysisService {
     if (previousPull) {
       const killDurations = [pull, ...priorPulls].filter((p) => p.wipe_pct === 0 && p.duration_ms != null).map((p) => p.duration_ms!);
       const bestKillDurationMs = killDurations.length ? Math.min(...killDurations) : null;
-      const currentDeaths = records.filter((r) => r.died && !isExcludedWipeCallDeath(pull, r)).length;
-      const currentMechFails = mechEvents.filter((m) => m.outcome !== 'clean').length;
-      const previousDeaths = previousRecords.filter((r) => r.died && !isExcludedWipeCallDeath(previousPull, r)).length;
+      const currentDeaths = records.filter((r) => r.died && !isExcludedStatisticalDeath(pull, r)).length;
+      const currentMechFails = evaluatedMechEvents.filter((m) => m.outcome !== 'clean').length;
+      const previousDeaths = previousRecords.filter((r) => r.died && !isExcludedStatisticalDeath(previousPull, r)).length;
       const currentScore = progressScore(pull, currentDeaths, currentMechFails, bestKillDurationMs);
       const previousScore = progressScore(previousPull, previousDeaths, previousMechFailCount, bestKillDurationMs);
       progressDeltaPct = Math.round((currentScore - previousScore) * 10) / 10;
@@ -280,8 +287,8 @@ export class PullAnalysisService {
       brief: briefRow ? mapBrief(briefRow) : null,
       isFirstPullOfNight: !previousPull,
       progressDeltaPct,
-      mechanicCategoryBreakdown: buildMechanicCategoryBreakdown(mechEvents),
-      defensiveStatusBreakdown: buildDefensiveStatusBreakdown(records.filter((r) => !isExcludedWipeCallDeath(pull, r))),
+      mechanicCategoryBreakdown: buildMechanicCategoryBreakdown(evaluatedMechEvents),
+      defensiveStatusBreakdown: buildDefensiveStatusBreakdown(records.filter((r) => !isExcludedStatisticalDeath(pull, r))),
       progressTrend: buildProgressTrend(pull, priorPulls),
       wipeCall: pull.wipe_call_signals ? { confidence: pull.wipe_call_confidence ?? 0, excluded: pull.wipe_call_excluded, signals: pull.wipe_call_signals } : null,
     };
@@ -310,7 +317,7 @@ function progressScore(pull: PullRow, deaths: number, mechFails: number, bestKil
   return hpTerm + durationTerm - deaths * 5 - mechFails * 3;
 }
 
-function buildPlayerStats(records: PlayerPullRecordRow[], roleByName: Map<string, string>): PlayerStatRow[] {
+function buildPlayerStats(pull: PullRow, records: PlayerPullRecordRow[], roleByName: Map<string, string>): PlayerStatRow[] {
   return records
     .map((r) => ({
       playerName: r.player_name,
@@ -344,10 +351,10 @@ function buildPlayerStats(records: PlayerPullRecordRow[], roleByName: Map<string
           name: d.name,
           casts: d.timestampsMs.map((timeMs) => ({
             timeMs,
-            closeToDeath: r.died && r.death_cause != null && timeMs <= r.death_cause.timeMs && r.death_cause.timeMs - timeMs <= CLOSE_TO_DEATH_MS,
+            closeToDeath: r.died && r.death_cause != null && !isExcludedStatisticalDeath(pull, r) && timeMs <= r.death_cause.timeMs && r.death_cause.timeMs - timeMs <= CLOSE_TO_DEATH_MS,
           })),
         })),
-      defensiveStatusAtDeath: r.died ? (r.death_cause?.defensiveOptions ?? []) : null,
+      defensiveStatusAtDeath: r.died && !isExcludedStatisticalDeath(pull, r) ? (r.death_cause?.defensiveOptions ?? []) : null,
       consumables: r.consumables,
     }))
     .sort((a, b) => b.dps - a.dps);
@@ -471,7 +478,7 @@ function computeDeathStreak(
   let streak = 0;
   for (const p of pullsDesc) {
     const rec = (recordsByPullId.get(p.id) ?? []).find((r) => r.player_name === playerName);
-    if (rec?.died && rec.death_cause?.mechanicId === mechanicId && !isExcludedWipeCallDeath(p, rec)) {
+    if (rec?.died && rec.death_cause?.mechanicId === mechanicId && !isExcludedStatisticalDeath(p, rec)) {
       streak++;
     } else {
       break;
@@ -618,7 +625,7 @@ function buildMetrics(
   mechanicFailurePatterns: MechanicFailurePattern[],
   uncoveredFailedMechanicCount: number,
 ): MetricCardData[] {
-  const deaths = records.filter((r) => r.died && !isExcludedWipeCallDeath(pull, r)).length;
+  const deaths = records.filter((r) => r.died && !isExcludedStatisticalDeath(pull, r)).length;
   // + uncoveredFailedMechanicCount: muertes reales cuya habilidad no generó
   // un cast de boss reconocible — sin esto el número podía leer "0
   // mecánicas falladas" con 7 muertes reales en el mismo pull (ver
@@ -650,7 +657,7 @@ function buildMetrics(
   const deathsCard: MetricCardData = {
     label: 'Muertes',
     value: String(deaths),
-    delta: previousPull ? lowerIsBetterDelta(deaths, previousRecords.filter((r) => r.died).length, deaths === 1 ? ' muerte' : ' muertes', 0) : null,
+    delta: previousPull ? lowerIsBetterDelta(deaths, previousRecords.filter((r) => r.died && !isExcludedStatisticalDeath(previousPull, r)).length, deaths === 1 ? ' muerte' : ' muertes', 0) : null,
     provenance: { source: 'player_pull_records', method: `Recuento de died=true (${deaths} de ${records.length} jugadores).` },
     icon: '💀',
     iconTone: 'danger',
@@ -689,7 +696,7 @@ function buildMetrics(
   let streakPlayer: string | null = null;
   let streakMechanic: string | null = null;
   for (const r of records) {
-    if (!r.died || !r.death_cause || isExcludedWipeCallDeath(pull, r)) continue;
+    if (!r.died || !r.death_cause || isExcludedStatisticalDeath(pull, r)) continue;
     const priorStreak = computeDeathStreak(r.player_name, r.death_cause.mechanicId, priorPulls, priorRecordsByPullId);
     const total = priorStreak + 1;
     if (total > maxStreak) {
@@ -943,7 +950,8 @@ function buildCallouts(
   for (const r of records) {
     if (!r.died || !r.death_cause) continue;
 
-    const options = r.death_cause.defensiveOptions ?? [];
+    const excludedFromStatistics = isExcludedStatisticalDeath(pull, r);
+    const options = excludedFromStatistics ? [] : (r.death_cause.defensiveOptions ?? []);
     const castTimestamps = new Map((r.defensive_casts ?? []).map((d) => [d.spellId, d.timestampsMs]));
 
     callouts.push({
@@ -954,7 +962,8 @@ function buildCallouts(
       notes: (r.death_cause.mechanicName && notesByMechanicName.get(r.death_cause.mechanicName)) || null,
       timeLabel: formatTimeLabel(r.death_cause.timeMs),
       timeMs: r.death_cause.timeMs,
-      isWipeCall: isExcludedWipeCallDeath(pull, r),
+      isWipeCall: r.wipe_call_cluster && pull.wipe_call_excluded,
+      statisticalExclusionReason: r.death_cause.statisticalExclusionReason ?? null,
       // 'unknown' (sin eventos de daño en la ventana) se queda en null —
       // honesto: no es lo mismo "sabemos que no fue un golpe único" que "no lo sabemos".
       oneshot: r.death_cause.damageProfile === 'unknown' ? null : r.death_cause.damageProfile === 'burst',
@@ -982,7 +991,7 @@ function buildCallouts(
   if (previousPull) {
     const olderPulls = priorPulls.slice(1); // pulls anteriores a previousPull, para medir la racha que se rompió
     for (const prev of previousRecords) {
-      if (!prev.died || !prev.death_cause || isExcludedWipeCallDeath(previousPull, prev)) continue;
+      if (!prev.died || !prev.death_cause || isExcludedStatisticalDeath(previousPull, prev)) continue;
       const current = records.find((r) => r.player_name === prev.player_name);
       const stillFailing = current?.died && current.death_cause?.mechanicId === prev.death_cause.mechanicId;
       if (stillFailing) continue;
@@ -999,6 +1008,7 @@ function buildCallouts(
           timeLabel: '',
           timeMs: null,
           isWipeCall: false,
+          statisticalExclusionReason: null,
           oneshot: null,
           damageWindowTotal: null,
           healingWindowTotal: null,
@@ -1047,10 +1057,7 @@ function buildMechanicFails(
   mechEvents: PullMechanicEventRow[],
   notesByMechanicName: Map<string, string>,
 ): MechanicFailRow[] {
-  const deathCoverage = new Set<string>(); // "player|abilityId"
-  for (const r of records) {
-    if (r.died && r.death_cause) deathCoverage.add(`${r.player_name}|${r.death_cause.mechanicId}`);
-  }
+  const evaluatedDeaths = records.filter((r) => r.died && r.death_cause && !isExcludedStatisticalDeath(pull, r));
   const classByName = new Map(records.map((r) => [r.player_name, r.class]));
 
   const rows: MechanicFailRow[] = [];
@@ -1069,7 +1076,16 @@ function buildMechanicFails(
     // (cuánta gente golpeó) en vez de que se lo ocultemos.
     if (ev.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category)) continue;
     for (const detail of ev.player_hit_details) {
-      if (deathCoverage.has(`${detail.name}|${ev.ability_id}`)) continue;
+      // Una muerte solo cubre ESTA instancia correlacionada. El Set antiguo
+      // player|ability ocultaba también un fallo anterior de la misma spell,
+      // justo el caso en el que después se canta wipe.
+      const coveredByDeath = evaluatedDeaths.some(
+        (record) =>
+          record.player_name === detail.name &&
+          record.death_cause!.mechanicId === ev.ability_id &&
+          Math.abs(record.death_cause!.timeMs - ev.trigger_time_ms) <= MECHANIC_ATTRIBUTION_WINDOW_MS,
+      );
+      if (coveredByDeath) continue;
       rows.push({
         raiderName: detail.name,
         raiderClass: classByName.get(detail.name) ?? null,

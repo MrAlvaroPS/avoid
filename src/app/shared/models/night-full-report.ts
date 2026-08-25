@@ -1,7 +1,7 @@
 export type NightReportTrend = 'improving' | 'worsening' | 'flat' | 'insufficient_data';
 
 export interface NightFullReport {
-  schemaVersion: 9;
+  schemaVersion: 10;
   reportCode: string;
   reportTitle: string;
   reportDate: string;

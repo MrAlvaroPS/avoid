@@ -1,4 +1,5 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
+import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './statistical-exclusions.ts';
 
 // §"meter en el dosier de un jugador... la consulta de IA... teniendo en
 // cuenta el dossier y ese jugador concreto" (feedback real, 2026-08-24).
@@ -75,7 +76,7 @@ export async function buildNightPlayerBriefContext(
   playerName: string,
 ): Promise<NightPlayerBriefContext | null> {
   const { data: pullsData } = await supabase.from('pulls').select('*').eq('report_code', reportCode).order('pull_number', { ascending: true });
-  const pulls = (pullsData ?? []) as { id: string; fight_id: number; boss_id: string; pull_number: number; wipe_pct: number | null; closed_at: string; wipe_call_excluded: boolean }[];
+  const pulls = (pullsData ?? []) as { id: string; fight_id: number; boss_id: string; pull_number: number; wipe_pct: number | null; closed_at: string; wipe_call_excluded: boolean; wipe_call_signals: Record<string, unknown> | null }[];
   if (!pulls.length) return null;
   const pullIds = pulls.map((p) => p.id);
 
@@ -86,7 +87,7 @@ export async function buildNightPlayerBriefContext(
     supabase.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName),
     supabase
       .from('pull_mechanic_events')
-      .select('pull_id, mechanic_name, category, outcome')
+      .select('pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms')
       .in('pull_id', pullIds)
       .neq('outcome', 'clean')
       .contains('players_hit_names', [playerName]),
@@ -96,7 +97,7 @@ export async function buildNightPlayerBriefContext(
   type RecordRow = {
     pull_id: string;
     died: boolean;
-    death_cause: { mechanicId: number; mechanicName: string | null; category: string | null; rootCause: string; timeMs: number; defensiveOptions?: { status: string }[] } | null;
+    death_cause: { mechanicId: number; mechanicName: string | null; category: string | null; rootCause: string; timeMs: number; defensiveOptions?: { status: string }[]; statisticalExclusionReason?: string | null } | null;
     wipe_call_cluster: boolean;
     consumables?: { healthstone?: { timestampsMs: number[] }; healthPotion?: { timestampsMs: number[] } };
     class: string | null;
@@ -123,13 +124,14 @@ export async function buildNightPlayerBriefContext(
     return (timestampsMs ?? []).some((t) => t <= deathTimeMs && t >= deathTimeMs - EMERGENCY_CONSUMABLE_LOOKBACK_MS);
   }
 
-  const deaths: NightPlayerBriefDeath[] = records
-    .filter((r) => r.died && r.death_cause)
+  const evaluatedDeathRecords = records.filter((record) => {
+    const pull = pullById.get(record.pull_id);
+    return record.died && record.death_cause && pull != null && !isDeathExcludedFromStatistics(pull, record);
+  });
+  const deaths: NightPlayerBriefDeath[] = evaluatedDeathRecords
     .map((r) => {
       const pull = pullById.get(r.pull_id)!;
       const dc = r.death_cause!;
-      const isWipeCall = r.wipe_call_cluster && pull.wipe_call_excluded;
-      if (isWipeCall) return null;
       const hadDefensiveAvailableUnused = (dc.defensiveOptions ?? []).some((o) => o.status === 'available_unused');
       const usedHealthstone = usedConsumableBeforeDeath(r.consumables?.healthstone?.timestampsMs, dc.timeMs);
       const usedPotion = usedConsumableBeforeDeath(r.consumables?.healthPotion?.timestampsMs, dc.timeMs);
@@ -144,25 +146,20 @@ export async function buildNightPlayerBriefContext(
         usedEmergencyConsumable: usedHealthstone || usedPotion,
       };
     })
-    .filter((d): d is NightPlayerBriefDeath => d != null)
     .sort((a, b) => a.pullNumber - b.pullNumber);
 
-  const deathCoverage = new Set(deaths.map((d) => `${d.bossName}|${d.pullNumber}|${d.mechanic}`));
-  const mechEvents = (mechEventsData ?? []) as { pull_id: string; mechanic_name: string; category: string | null; outcome: string }[];
+  const mechEvents = ((mechEventsData ?? []) as { pull_id: string; ability_id: number; mechanic_name: string; category: string | null; outcome: string; trigger_time_ms: number }[]).filter((event) => {
+    const pull = pullById.get(event.pull_id);
+    return pull != null && !isMechanicExcludedByWipeCall(pull, event.trigger_time_ms);
+  });
   const mechanicFails: NightPlayerBriefMechanicFail[] = mechEvents
     .filter((ev) => ev.category == null || PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category))
+    .filter((event) => !evaluatedDeathRecords.some((record) => record.pull_id === event.pull_id && record.death_cause!.mechanicId === event.ability_id && Math.abs(record.death_cause!.timeMs - event.trigger_time_ms) <= 4000))
     .map((ev) => {
       const pull = pullById.get(ev.pull_id)!;
       return { bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`, mechanic: ev.mechanic_name, category: ev.category, outcome: ev.outcome };
     })
-    .filter((row) => !deathCoverage.has(`${row.bossName}|${pullById.get(row.bossName)?.pull_number}|${row.mechanic}`) || true) // ver nota abajo
     .slice(0, 20);
-
-  // §nota: la deduplicación exacta por pull_id+mecánica (como hace el
-  // servicio Angular) exige guardar pull_id junto al fail, no solo el
-  // nombre del boss — se simplifica aquí porque el LLM solo necesita "qué
-  // pasó" para razonar, un pequeño solape entre "murió a X" y "falló X sin
-  // morir" en la misma instancia no cambia la conclusión que puede sacar.
 
   const byMechanic = new Map<string, { bosses: Set<string>; count: number }>();
   for (const d of deaths) {
