@@ -30,6 +30,13 @@ const MECHANIC_CATEGORY_LABEL: Record<string, string> = {
   'personal-target': 'Objetivo individual',
   enrage: 'Enrage',
 };
+const MECHANIC_RESPONSIBILITY_LABEL: Record<string, string> = {
+  tank: 'Tanks',
+  dps: 'DPS',
+  healer: 'Healers',
+  raid: 'Raid',
+  personal: 'Personal',
+};
 const ROOT_CAUSE_LABEL: Record<string, string> = {
   self_positioning: 'Posicionamiento propio',
   unsoaked_mechanic: 'Mecánica sin resolver',
@@ -115,12 +122,14 @@ export interface NightTimeline {
   anchorWowheadSpellId: number | null;
   anchorCategory: string | null;
   anchorCategoryLabel: string | null;
+  anchorResponsibility: string | null;
+  anchorResponsibilityLabel: string | null;
   medianTimeMs: number;
   occurrences: number;
   failures: number;
   lethalFinalBlows: number;
   pulls: number[];
-  prepNote: string;
+  resolution: string | null;
   markers: NightTimelineMarker[];
 }
 
@@ -134,7 +143,7 @@ export interface NightTimelinePatterns {
 }
 
 export interface NightFullReport {
-  schemaVersion: 7;
+  schemaVersion: 9;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -166,6 +175,8 @@ export interface NightFullReport {
     wowheadSpellId: number | null;
     category: string | null;
     categoryLabel: string | null;
+    responsibility: string | null;
+    responsibilityLabel: string | null;
     note: string | null;
     bossName: string;
     bossNameEs: string | null;
@@ -224,6 +235,21 @@ export interface NightFullReport {
     }[];
     pctWithDefensiveAvailableUnused: number;
     defensiveEvaluableCount: number;
+  };
+  responsibilities: {
+    classifiedMechanics: number;
+    totalMechanics: number;
+    classificationCoveragePct: number;
+    byResponsibility: {
+      responsibility: string;
+      label: string;
+      mechanics: number;
+      failedEvents: number;
+      pullsAffected: number;
+      deaths: number;
+      playersHit: number;
+      damageTaken: number;
+    }[];
   };
   survival: {
     emergencyLookbackMs: number;
@@ -303,6 +329,7 @@ interface RecordLite {
     mechanicId: number;
     mechanicName: string | null;
     category: string | null;
+    responsibility?: string | null;
     rootCause: string;
     timeMs: number;
     damageWindowTotal?: number;
@@ -324,8 +351,10 @@ interface MechEventLite {
   ability_id: number;
   trigger_time_ms: number;
   category: string | null;
+  responsibility: string | null;
   outcome: string;
   players_hit: number;
+  player_hit_details: { damage_taken?: number }[];
 }
 
 interface MechanicManifestLite {
@@ -334,10 +363,12 @@ interface MechanicManifestLite {
   name: string;
   name_es: string | null;
   category: string | null;
+  responsibility: string | null;
   inferred_category: string | null;
   observed_as_interrupt: boolean;
   avoidable: boolean | null;
   ai_classification: { notes?: string } | null;
+  resolution: string | null;
 }
 
 export async function buildNightFullReport(supabase: SupabaseClient, reportCode: string): Promise<NightFullReport | null> {
@@ -373,7 +404,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     fetchAllByValues<MechEventLite>(
       supabase,
       'pull_mechanic_events',
-      'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, outcome, players_hit',
+      'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, responsibility, outcome, players_hit, player_hit_details',
       'pull_id',
       pullIds,
     ),
@@ -388,7 +419,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     fetchAllByValues<MechanicManifestLite>(
       supabase,
       'boss_mechanics_candidates',
-      'id, boss_id, difficulty, name, name_es, category, inferred_category, observed_as_interrupt, avoidable, ai_classification',
+      'id, boss_id, difficulty, name, name_es, category, responsibility, inferred_category, observed_as_interrupt, avoidable, ai_classification, resolution',
       'boss_id',
       bossIds,
     ),
@@ -428,6 +459,8 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   const nameEsByNormalizedName = new Map<string, string>();
   const noteByMechanicKey = new Map<string, string>();
   const noteByNormalizedName = new Map<string, string>();
+  const resolutionByMechanicKey = new Map<string, string>();
+  const responsibilityByMechanicKey = new Map<string, string>();
   for (const m of manifest) {
     const normalizedName = normalizeAbilityName(m.name);
     if (m.name_es && m.name_es.toLowerCase() !== m.name.toLowerCase()) {
@@ -439,11 +472,18 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       noteByMechanicKey.set(`${m.boss_id}|${m.difficulty}|${normalizedName}`, note);
       if (!noteByNormalizedName.has(normalizedName)) noteByNormalizedName.set(normalizedName, note);
     }
+    const resolution = m.resolution?.trim();
+    if (resolution) resolutionByMechanicKey.set(`${m.boss_id}|${m.difficulty}|${normalizedName}`, resolution);
+    if (m.responsibility) responsibilityByMechanicKey.set(`${m.boss_id}|${m.difficulty}|${normalizedName}`, m.responsibility);
   }
   const mechanicNameEs = (bossId: string, difficulty: string, name: string): string | null =>
     nameEsByMechanicKey.get(`${bossId}|${difficulty}|${normalizeAbilityName(name)}`) ?? nameEsByNormalizedName.get(normalizeAbilityName(name)) ?? null;
   const mechanicNote = (bossId: string, difficulty: string, name: string): string | null =>
     noteByMechanicKey.get(`${bossId}|${difficulty}|${normalizeAbilityName(name)}`) ?? noteByNormalizedName.get(normalizeAbilityName(name)) ?? null;
+  const mechanicResolution = (bossId: string, difficulty: string, name: string): string | null =>
+    resolutionByMechanicKey.get(`${bossId}|${difficulty}|${normalizeAbilityName(name)}`) ?? null;
+  const mechanicResponsibility = (bossId: string, difficulty: string, name: string): string | null =>
+    responsibilityByMechanicKey.get(`${bossId}|${difficulty}|${normalizeAbilityName(name)}`) ?? null;
 
   const manifestByMechanicKey = new Map(
     relevantManifest.map((m) => [`${m.boss_id}|${m.difficulty}|${normalizeAbilityName(m.name)}`, m]),
@@ -569,6 +609,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       mechanicName: string;
       wowheadSpellId: number | null;
       category: string | null;
+      responsibility: string | null;
       bossName: string;
       bossNameEs: string | null;
       difficulty: string;
@@ -588,6 +629,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
         mechanicName: ev.mechanic_name,
         wowheadSpellId: ev.ability_id || null,
         category: ev.category,
+        responsibility: mechanicResponsibility(pull.boss_id, pull.difficulty, ev.mechanic_name) ?? ev.responsibility,
         bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
         bossNameEs: bossNameEsByBossId.get(pull.boss_id) ?? null,
         difficulty: pull.difficulty,
@@ -658,6 +700,8 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
         wowheadSpellId: e.wowheadSpellId,
         category: e.category,
         categoryLabel: e.category ? (MECHANIC_CATEGORY_LABEL[e.category] ?? e.category) : null,
+        responsibility: e.responsibility,
+        responsibilityLabel: e.responsibility ? (MECHANIC_RESPONSIBILITY_LABEL[e.responsibility] ?? e.responsibility) : null,
         note: mechanicNote(e.bossId, e.difficulty, e.mechanicName),
         bossName: e.bossName,
         bossNameEs: e.bossNameEs,
@@ -676,8 +720,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     .sort((a, b) =>
       Number(b.isProgressBoss) * 10_000 + b.lethalFinalBlows * 3 + b.pullsAffected -
       (Number(a.isProgressBoss) * 10_000 + a.lethalFinalBlows * 3 + a.pullsAffected),
-    )
-    .slice(0, 12);
+    );
 
   // ---- 3. Muertes clasificadas ----
   const rootCauseCounts = new Map<string, number>();
@@ -799,6 +842,79 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     defensiveEvaluableCount: defensiveEvaluable,
   };
 
+  // ---- 3b. Responsabilidad editorial de las mecánicas ----
+  // Describe quién tenía la acción principal, no quién recibió el golpe.
+  // La atribución se resuelve contra el manifiesto actual para que también
+  // cubra eventos históricos anteriores a que existiera esta columna.
+  const responsibilityBuckets = new Map<string, {
+    mechanics: Set<string>;
+    failedEvents: number;
+    pullsAffected: Set<string>;
+    deaths: number;
+    playersHit: number;
+    damageTaken: number;
+  }>();
+  const bucketFor = (responsibility: string) => {
+    if (!responsibilityBuckets.has(responsibility)) {
+      responsibilityBuckets.set(responsibility, {
+        mechanics: new Set(),
+        failedEvents: 0,
+        pullsAffected: new Set(),
+        deaths: 0,
+        playersHit: 0,
+        damageTaken: 0,
+      });
+    }
+    return responsibilityBuckets.get(responsibility)!;
+  };
+  const relevantMechanicKeys = new Set<string>();
+  const classifiedResponsibilityKeys = new Set<string>();
+  for (const mechanic of relevantManifest) {
+    const key = `${mechanic.boss_id}|${mechanic.difficulty}|${normalizeAbilityName(mechanic.name)}`;
+    relevantMechanicKeys.add(key);
+    if (!mechanic.responsibility) continue;
+    classifiedResponsibilityKeys.add(key);
+    bucketFor(mechanic.responsibility).mechanics.add(key);
+  }
+  for (const event of reportableMechEvents) {
+    const pull = pullById.get(event.pull_id);
+    if (!pull) continue;
+    const responsibility = mechanicResponsibility(pull.boss_id, pull.difficulty, event.mechanic_name) ?? event.responsibility;
+    if (!responsibility) continue;
+    const bucket = bucketFor(responsibility);
+    bucket.mechanics.add(`${pull.boss_id}|${pull.difficulty}|${normalizeAbilityName(event.mechanic_name)}`);
+    if (event.outcome !== 'clean') {
+      bucket.failedEvents++;
+      bucket.pullsAffected.add(event.pull_id);
+      bucket.playersHit += event.players_hit;
+      bucket.damageTaken += (event.player_hit_details ?? []).reduce((sum, detail) => sum + (detail.damage_taken ?? 0), 0);
+    }
+  }
+  for (const record of realDeaths) {
+    const pull = pullById.get(record.pull_id);
+    const mechanicName = record.death_cause?.mechanicName;
+    if (!pull || !mechanicName) continue;
+    const responsibility = mechanicResponsibility(pull.boss_id, pull.difficulty, mechanicName) ?? record.death_cause?.responsibility ?? null;
+    if (responsibility) bucketFor(responsibility).deaths++;
+  }
+  const responsibilities: NightFullReport['responsibilities'] = {
+    classifiedMechanics: classifiedResponsibilityKeys.size,
+    totalMechanics: relevantMechanicKeys.size,
+    classificationCoveragePct: pct(classifiedResponsibilityKeys.size, relevantMechanicKeys.size),
+    byResponsibility: [...responsibilityBuckets.entries()]
+      .map(([responsibility, bucket]) => ({
+        responsibility,
+        label: MECHANIC_RESPONSIBILITY_LABEL[responsibility] ?? responsibility,
+        mechanics: bucket.mechanics.size,
+        failedEvents: bucket.failedEvents,
+        pullsAffected: bucket.pullsAffected.size,
+        deaths: bucket.deaths,
+        playersHit: bucket.playersHit,
+        damageTaken: Math.round(bucket.damageTaken),
+      }))
+      .sort((left, right) => right.deaths - left.deaths || right.failedEvents - left.failedEvents || left.label.localeCompare(right.label)),
+  };
+
   // ---- 4. Ventanas temporales del boss de progress ----
   // Se alinean secuencias observadas alrededor de habilidades prioritarias.
   // Es deliberadamente descriptivo: que dos eventos estén próximos no
@@ -816,20 +932,6 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     outcome === 'fail' ? 'fail' : outcome === 'partial_fail' ? 'partial_fail' : 'clean';
   const outcomeRank = (outcome: 'clean' | 'partial_fail' | 'fail' | null): number =>
     outcome === 'fail' ? 3 : outcome === 'partial_fail' ? 2 : outcome === 'clean' ? 1 : 0;
-  const actionForCategory = (category: string | null): string => ({
-    'raid-damage': 'Raid: entrad a vida alta y usad el defensivo personal asignado; healers, reservad un CD para el impacto.',
-    'avoidable-ground': 'Raid: priorizad salir por la ruta acordada aunque haya que cortar un casteo; no apuréis GCD dentro de la zona.',
-    soak: 'RL: fijad los grupos antes del pull; cada jugador debe comprobar su grupo y posición antes de esta señal.',
-    spread: 'Raid: preposicionad la separación y dejad una salida libre; no improviséis el movimiento al recibir el target.',
-    tankbuster: 'Tanks: anunciad mitigación y relevo; el resto, fuera del frontal para no añadir daño a la ventana.',
-    'debuff-stack': 'RL: fijad el umbral de relevo o limpieza; jugadores, anunciad si llegáis a la ventana por encima de él.',
-    interrupt: 'RL: confirmad orden y backup; el siguiente jugador debe cortar si el asignado no está disponible.',
-    'healing-absorb': 'Healers: preparad sanación para retirar el absorb; raid, evitad solapar daño y usad personal si llegáis bajos.',
-    'personal-target': 'Objetivos: salid por la ruta acordada; resto de la raid, no invadáis esa ruta ni persigáis al target.',
-    enrage: 'RL: tratadla como límite del intento y confirmad antes de la ventana quién resuelve la mecánica especial.',
-  } as Record<string, string>)[category ?? '']
-    ?? 'Raid: usad la señal previa para llegar colocados; anunciad antes del impacto si falta una asignación o un recurso clave.';
-
   type ObservedTimelineEvent = {
     pullId: string;
     timeMs: number;
@@ -1175,17 +1277,8 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
           .sort((a, b) => a.offsetMs - b.offsetMs)
           .slice(0, 3)
           .map(({ score: _score, ...marker }) => marker);
-        const precedingFailures = contextualMarkers
-          .filter((marker) => marker.kind === 'ability' && marker.offsetMs < 0 && marker.outcome !== 'clean')
-          .sort((a, b) => Math.abs(a.offsetMs) - Math.abs(b.offsetMs));
-        const cue = precedingFailures.length
-          ? `Señal: ${precedingFailures.map((marker) => marker.mechanicName).join(' + ')} ≈${Math.max(1, Math.round(Math.max(...precedingFailures.map((marker) => Math.abs(marker.offsetMs))) / 1_000))} s antes. `
-          : '';
-        const action = candidate.normalizedName.includes('final ascension')
-          ? 'RL: asignad quién usa el siguiente Disgusting Fish y confirmad que está disponible; no es un kick estándar.'
-          : candidate.normalizedName.includes('elemental explosion')
-            ? 'Raid: terminad la interacción Fire/Frost, llegad estabilizados y usad el defensivo asignado en el impacto.'
-            : actionForCategory(candidate.category);
+        const resolution = mechanicResolution(progressBossGroup.bossId, progressBossGroup.difficulty, candidate.mechanicName);
+        const responsibility = mechanicResponsibility(progressBossGroup.bossId, progressBossGroup.difficulty, candidate.mechanicName);
 
         timelineCandidates.push({
           anchorMechanicName: candidate.mechanicName,
@@ -1193,12 +1286,14 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
           anchorWowheadSpellId: candidate.wowheadSpellId,
           anchorCategory: candidate.category,
           anchorCategoryLabel: candidate.category ? (MECHANIC_CATEGORY_LABEL[candidate.category] ?? candidate.category) : null,
+          anchorResponsibility: responsibility,
+          anchorResponsibilityLabel: responsibility ? (MECHANIC_RESPONSIBILITY_LABEL[responsibility] ?? responsibility) : null,
           medianTimeMs: medianRounded(windowOccurrences.map((occurrence) => occurrence.timeMs)),
           occurrences: windowOccurrences.length,
           failures,
           lethalFinalBlows,
           pulls: pullNumbers,
-          prepNote: `${cue}${action}`,
+          resolution,
           markers: [...contextualMarkers, anchorMarker].sort((a, b) => a.offsetMs - b.offsetMs),
           score: lethalFinalBlows * 20 + failures * 6 + pullNumbers.length * 4 + windowOccurrences.length,
           normalizedName: candidate.normalizedName,
@@ -1581,7 +1676,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     .reduce((sum, p) => sum + (p.raid_damage_taken_series?.points ?? []).reduce((pointSum, point) => pointSum + point, 0), 0);
 
   return {
-    schemaVersion: 7,
+    schemaVersion: 9,
     reportCode,
     reportTitle: (reportResult.data as { title: string } | null)?.title ?? reportCode,
     reportDate: (reportResult.data as { start_time: number } | null)?.start_time ? new Date((reportResult.data as { start_time: number }).start_time).toISOString() : '',
@@ -1610,6 +1705,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     mechanics,
     timelinePatterns,
     deaths,
+    responsibilities,
     survival,
     defensives,
     interrupts,

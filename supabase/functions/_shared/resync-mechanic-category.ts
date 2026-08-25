@@ -47,3 +47,59 @@ export async function resyncMechanicCategory(supabase: SupabaseClient, bossId: s
       .eq('id', r.id);
   }
 }
+
+/** Propaga la responsabilidad confirmada a eventos y muertes históricos. */
+export async function resyncMechanicResponsibility(
+  supabase: SupabaseClient,
+  bossId: string,
+  difficulty: string,
+  mechanicName: string,
+  responsibility: string,
+): Promise<void> {
+  const { data: pullRows } = await supabase.from('pulls').select('id').eq('boss_id', bossId).eq('difficulty', difficulty);
+  const pullIds = ((pullRows ?? []) as { id: string }[]).map((pull) => pull.id);
+  if (!pullIds.length) return;
+
+  await supabase
+    .from('pull_mechanic_events')
+    .update({ responsibility })
+    .eq('mechanic_name', mechanicName)
+    .in('pull_id', pullIds);
+
+  const { data: deathRows } = await supabase.from('player_pull_records').select('id, death_cause').in('pull_id', pullIds);
+  for (const row of (deathRows ?? []) as { id: string; death_cause: Record<string, unknown> | null }[]) {
+    if (!row.death_cause || row.death_cause.mechanicName !== mechanicName) continue;
+    await supabase
+      .from('player_pull_records')
+      .update({ death_cause: { ...row.death_cause, responsibility } })
+      .eq('id', row.id);
+  }
+}
+
+/** Mantiene el indicador evitable de los históricos alineado con Ajustes. */
+export async function resyncMechanicAvoidable(
+  supabase: SupabaseClient,
+  bossId: string,
+  difficulty: string,
+  mechanicName: string,
+  avoidable: boolean,
+): Promise<void> {
+  const { data: pullRows } = await supabase.from('pulls').select('id').eq('boss_id', bossId).eq('difficulty', difficulty);
+  const pullIds = ((pullRows ?? []) as { id: string }[]).map((pull) => pull.id);
+  if (!pullIds.length) return;
+
+  await supabase
+    .from('pull_mechanic_events')
+    .update({ avoidable })
+    .eq('mechanic_name', mechanicName)
+    .in('pull_id', pullIds);
+
+  const { data: deathRows } = await supabase.from('player_pull_records').select('id, death_cause').in('pull_id', pullIds);
+  for (const row of (deathRows ?? []) as { id: string; death_cause: Record<string, unknown> | null }[]) {
+    if (!row.death_cause || row.death_cause.mechanicName !== mechanicName) continue;
+    await supabase
+      .from('player_pull_records')
+      .update({ death_cause: { ...row.death_cause, avoidable } })
+      .eq('id', row.id);
+  }
+}

@@ -2,7 +2,7 @@ import type { NightFullReport } from '../../shared/models/night-full-report';
 import { bilingualName, buildNightDiscordSummary, buildNightFullReportMarkdown } from './night-full-report-markdown';
 
 const report: NightFullReport = {
-  schemaVersion: 7,
+    schemaVersion: 9,
   reportCode: 'ABC123',
   reportTitle: 'Raid test',
   reportDate: '2026-08-24T18:00:00.000Z',
@@ -26,6 +26,8 @@ const report: NightFullReport = {
     wowheadSpellId: 12345,
     category: 'avoidable-ground',
     categoryLabel: 'Zona evitable',
+    responsibility: 'personal',
+    responsibilityLabel: 'Personal',
     note: 'Evita el área de fuego antes de que explote.',
     bossName: 'The Test Boss',
     bossNameEs: 'El Boss de Prueba',
@@ -56,6 +58,12 @@ const report: NightFullReport = {
     topLastDamageBeforeUnknownFinalBlow: [{ mechanicName: 'Lingering Fire', mechanicNameEs: 'Fuego persistente', wowheadSpellId: 333, bossName: 'The Test Boss', bossNameEs: 'El Boss de Prueba', difficulty: 'Heroic', isProgressBoss: true, note: null, count: 1 }],
     pctWithDefensiveAvailableUnused: 25,
     defensiveEvaluableCount: 8,
+  },
+  responsibilities: {
+    classifiedMechanics: 1,
+    totalMechanics: 1,
+    classificationCoveragePct: 100,
+    byResponsibility: [{ responsibility: 'personal', label: 'Personal', mechanics: 1, failedEvents: 5, pullsAffected: 4, deaths: 3, playersHit: 8, damageTaken: 500_000 }],
   },
   survival: {
     emergencyLookbackMs: 15_000,

@@ -105,7 +105,7 @@
                 <p class="error" role="alert">{{ pe }}</p>
               } @else {
                 <div class="classify-step">
-                  <span class="step-label">1. Copia el prompt y pégalo en un chat de IA con acceso a internet ({{ classifyMechanicCount() }} mecánicas)</span>
+                  <span class="step-label">1. Prompt v{{ classifyPromptVersion() ?? '—' }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyMechanicCount() }} mecánicas). Clasificará cada habilidad, decidirá si es evitable, quién debe resolverla y cómo hacerlo, contrastándolo en dos fuentes.</span>
                   <pre class="prompt-box">{{ classifyFullPrompt }}</pre>
                   <button type="button" class="copy-btn" (click)="copyClassifyPrompt()">{{ classifyCopied() ? '✓ Copiado' : 'Copiar prompt' }}</button>
                 </div>
@@ -132,6 +132,30 @@
                   <div class="classify-result">
                     @if (r.applied.length) {
                       <p class="result-line result-ok">✓ {{ r.applied.length }} mecánica{{ r.applied.length === 1 ? '' : 's' }} clasificada{{ r.applied.length === 1 ? '' : 's' }}: {{ r.applied.map((a) => a.name + ' → ' + a.category).join(', ') }}</p>
+                    }
+                    @if (r.resolutionsApplied.length) {
+                      <p class="result-line result-ok">✓ {{ r.resolutionsApplied.length }} resolución{{ r.resolutionsApplied.length === 1 ? '' : 'es' }} contrastada{{ r.resolutionsApplied.length === 1 ? '' : 's' }} y guardada{{ r.resolutionsApplied.length === 1 ? '' : 's' }}.</p>
+                    }
+                    @if (r.resolutionContractMissing) {
+                      <p class="result-line result-error">✕ La respuesta de la IA no contiene <code>resolution</code>. Las categorías sí se han procesado, pero no se ha guardado ninguna resolución. Vuelve a copiar el prompt actualizado y repite la consulta.</p>
+                    } @else if (r.resolutionsSkipped.length) {
+                      <p class="result-line result-warn">⚠ {{ r.resolutionsSkipped.length }} resolución{{ r.resolutionsSkipped.length === 1 ? '' : 'es' }} sin guardar: {{ r.resolutionsSkipped.map((s) => s.name + ' (' + s.reason + ')').join(' · ') }}</p>
+                    }
+                    @if (r.responsibilitiesApplied.length) {
+                      <p class="result-line result-ok">✓ {{ r.responsibilitiesApplied.length }} responsable{{ r.responsibilitiesApplied.length === 1 ? '' : 's' }} guardado{{ r.responsibilitiesApplied.length === 1 ? '' : 's' }}.</p>
+                    }
+                    @if (r.responsibilityContractMissing) {
+                      <p class="result-line result-error">✕ La respuesta no contiene <code>responsibility</code>; no se ha asignado ningún responsable.</p>
+                    } @else if (r.responsibilitiesSkipped.length) {
+                      <p class="result-line result-warn">⚠ {{ r.responsibilitiesSkipped.length }} responsable{{ r.responsibilitiesSkipped.length === 1 ? '' : 's' }} sin guardar.</p>
+                    }
+                    @if (r.avoidablesApplied.length) {
+                      <p class="result-line result-ok">✓ “Evitable” actualizado en {{ r.avoidablesApplied.length }} mecánica{{ r.avoidablesApplied.length === 1 ? '' : 's' }}.</p>
+                    }
+                    @if (r.avoidableContractMissing) {
+                      <p class="result-line result-error">✕ La respuesta no contiene <code>avoidable</code>; la columna “Evitable” no se ha actualizado.</p>
+                    } @else if (r.avoidablesSkipped.length) {
+                      <p class="result-line result-warn">⚠ {{ r.avoidablesSkipped.length }} valor{{ r.avoidablesSkipped.length === 1 ? '' : 'es' }} de “Evitable” sin guardar por falta de decisión fiable.</p>
                     }
                     @if (r.skippedLowConfidence.length) {
                       <p class="result-line result-warn">
@@ -162,6 +186,8 @@
               <tr>
                 <th>Habilidad</th>
                 <th title="Razonamiento de la IA al clasificarla, si vino de ese flujo">IA</th>
+                <th title="Ejecución práctica contrastada en dos fuentes independientes">Cómo resolverlo</th>
+                <th title="Quién tiene la acción principal que evita el fallo">Responsable</th>
                 <th>Visto en logs</th>
                 <th>Categoría</th>
                 <th>Evitable</th>
@@ -197,6 +223,17 @@
                     } @else {
                       <span class="meta">—</span>
                     }
+                  </td>
+                  <td class="resolution-cell">
+                    <app-mechanic-resolution-icon [resolution]="c.resolution" />
+                  </td>
+                  <td class="responsibility-cell">
+                    <select (change)="onEdit(c, { responsibility: $any($event.target).value || null })">
+                      <option value="" [selected]="!c.responsibility">Sin decidir</option>
+                      @for (responsibility of responsibilities; track responsibility) {
+                        <option [value]="responsibility" [selected]="responsibility === c.responsibility">{{ responsibility }}</option>
+                      }
+                    </select>
                   </td>
                   <td>
                     @if (hitStatFor(c.ability_id); as stat) {

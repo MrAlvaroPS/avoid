@@ -5,6 +5,7 @@
 // Mismo enum que el check constraint de boss_mechanics_candidates.category
 // (ver migraciones 20260822000000 y 20260822080000).
 export type MechanicCategory = 'tankbuster' | 'raid-damage' | 'avoidable-ground' | 'debuff-stack' | 'interrupt' | 'soak' | 'spread' | 'healing-absorb' | 'personal-target' | 'enrage';
+export type MechanicResponsibility = 'tank' | 'dps' | 'healer' | 'raid' | 'personal';
 
 export interface ReportRow {
   code: string;
@@ -66,6 +67,8 @@ export interface DeathCause {
   mechanicDescription?: string | null;
   /** tankbuster/raid-damage/avoidable-ground/debuff-stack/interrupt/soak/spread/healing-absorb/personal-target. Confirmada a mano si existe, si no la sugerencia de sync-boss-mechanics. */
   category?: MechanicCategory | null;
+  /** Quién debe resolver principalmente la mecánica; no es el rol del jugador que murió. */
+  responsibility?: MechanicResponsibility | null;
   /** true = `category` es una sugerencia automática sin confirmar todavía (ver categoryIsInferred en analyze-report). */
   categoryIsInferred?: boolean;
   avoidable: boolean | null;
@@ -159,6 +162,7 @@ export interface PullMechanicEventRow {
   mechanic_name: string;
   description: string | null;
   category: MechanicCategory | null;
+  responsibility: MechanicResponsibility | null;
   trigger_time_ms: number;
   outcome: 'clean' | 'partial_fail' | 'fail';
   players_hit: number;
@@ -222,6 +226,8 @@ export interface BossMechanicCandidateRow {
   db2_difficulty_id: number | null;
   difficulty_mapping_status: string | null;
   category: MechanicCategory | null;
+  /** Acción principal: rol específico, ejecución colectiva o chequeo personal. */
+  responsibility: MechanicResponsibility | null;
   /** Sugerencia automática de sync-boss-mechanics (texto del Journal + comportamiento en un log público de referencia) — nunca pisa `category` una vez confirmada a mano. */
   inferred_category: MechanicCategory | null;
   /** Evidencia legible de por qué se sugirió inferred_category — para el botón de provenance. */
@@ -237,4 +243,7 @@ export interface BossMechanicCandidateRow {
   updated_at: string;
   /** §"un botón de información con lo que dice 'notas' al preguntarle a una IA" (feedback real): solo presente en mecánicas clasificadas vía el flujo de prompt de IA — null = clasificada a mano o sin clasificar. */
   ai_classification: { confidence: 'high' | 'medium'; sources: string[]; notes: string; classifiedAt: string } | null;
+  /** Instrucción práctica para ejecutar esta mecánica en este boss+dificultad. Independiente de la categoría y de la nota descriptiva. */
+  resolution: string | null;
+  resolution_verified_at: string | null;
 }

@@ -1,7 +1,7 @@
 export type NightReportTrend = 'improving' | 'worsening' | 'flat' | 'insufficient_data';
 
 export interface NightFullReport {
-  schemaVersion: 7;
+  schemaVersion: 9;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -54,6 +54,8 @@ export interface NightFullReport {
     wowheadSpellId: number | null;
     category: string | null;
     categoryLabel: string | null;
+    responsibility: string | null;
+    responsibilityLabel: string | null;
     note: string | null;
     bossName: string;
     bossNameEs: string | null;
@@ -79,12 +81,14 @@ export interface NightFullReport {
       anchorWowheadSpellId: number | null;
       anchorCategory: string | null;
       anchorCategoryLabel: string | null;
+      anchorResponsibility: string | null;
+      anchorResponsibilityLabel: string | null;
       medianTimeMs: number;
       occurrences: number;
       failures: number;
       lethalFinalBlows: number;
       pulls: number[];
-      prepNote: string;
+      resolution: string | null;
       markers: {
         kind: 'ability' | 'deaths';
         offsetMs: number;
@@ -142,6 +146,21 @@ export interface NightFullReport {
     }[];
     pctWithDefensiveAvailableUnused: number;
     defensiveEvaluableCount: number;
+  };
+  responsibilities: {
+    classifiedMechanics: number;
+    totalMechanics: number;
+    classificationCoveragePct: number;
+    byResponsibility: {
+      responsibility: string;
+      label: string;
+      mechanics: number;
+      failedEvents: number;
+      pullsAffected: number;
+      deaths: number;
+      playersHit: number;
+      damageTaken: number;
+    }[];
   };
   survival: {
     emergencyLookbackMs: number;

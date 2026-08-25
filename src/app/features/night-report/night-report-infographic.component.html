@@ -138,6 +138,8 @@
             </div>
           </section>
 
+          <div class="iris-report-columns">
+            <div class="iris-report-column iris-report-column-left">
           <section class="iris-sheet-section iris-focus-section">
             <div class="iris-section-title inline">
               <div><span>02 · DECISIÓN</span><h2>Foco para la próxima raid</h2></div>
@@ -166,6 +168,11 @@
             </div>
           </section>
 
+              <ng-container [ngTemplateOutlet]="mechanicsSection" />
+            </div>
+
+            <div class="iris-report-column iris-report-column-right">
+
           @if (timelinePatterns(); as patterns) {
             <section class="iris-sheet-section iris-timelines-section">
               <div class="iris-section-title inline">
@@ -192,7 +199,7 @@
                           }
                         </div>
                         <div>
-                          <span>VENTANA ~{{ formatDuration(timeline.medianTimeMs) }} · {{ timeline.anchorCategoryLabel || 'MECÁNICA' }}</span>
+                          <span>VENTANA ~{{ formatDuration(timeline.medianTimeMs) }} · {{ timeline.anchorCategoryLabel || 'MECÁNICA' }}@if (timeline.anchorResponsibilityLabel) { · {{ timeline.anchorResponsibilityLabel }} }</span>
                           <strong>{{ bilingualName(timeline.anchorMechanicName, timeline.anchorMechanicNameEs) }}</strong>
                         </div>
                       </div>
@@ -258,9 +265,13 @@
                       }
                     </div>
 
-                    <footer class="iris-timeline-prep">
+                    <footer class="iris-timeline-prep" [class.unverified]="!timeline.resolution">
                       <span aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 16h19m-6-7 7 7-7 7"/><circle cx="8" cy="16" r="5"/></svg></span>
-                      <p><b>Cómo prepararlo:</b> {{ timeline.prepNote }}</p>
+                      @if (timeline.resolution) {
+                        <p><b>Cómo resolverlo</b>{{ timeline.resolution }}</p>
+                      } @else {
+                        <p><b>Cómo resolverlo</b>Sin resolución contrastada todavía. Se completa desde Ajustes al investigar esta mecánica.</p>
+                      }
                     </footer>
                   </article>
                 }
@@ -269,6 +280,7 @@
             </section>
           }
 
+          <ng-template #mechanicsSection>
           <section class="iris-sheet-section iris-mechanics-section">
             <div class="iris-section-title inline">
               <div><span>04 · EJECUCIÓN</span><h2>Mecánicas que están decidiendo los pulls</h2></div>
@@ -287,7 +299,7 @@
                   </div>
                   <div class="iris-mechanic-name">
                     <strong>{{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }}</strong>
-                    <span>{{ bilingualName(mechanic.bossName, mechanic.bossNameEs) }} · {{ mechanic.categoryLabel || 'mecánica' }}</span>
+                    <span>{{ bilingualName(mechanic.bossName, mechanic.bossNameEs) }} · {{ mechanic.categoryLabel || 'mecánica' }}@if (mechanic.responsibilityLabel) { · {{ mechanic.responsibilityLabel }} }</span>
                     @if (mechanic.note) { <small>{{ mechanic.note }}</small> }
                   </div>
                   <div class="iris-mechanic-stat"><b>{{ mechanic.pullsAffected }}/{{ mechanic.totalPulls }}</b><span>pulls</span></div>
@@ -300,7 +312,47 @@
                 <div class="iris-priority-empty">No hay fallos mecánicos registrados para esta noche.</div>
               }
             </div>
+            @if (report().responsibilities.byResponsibility.length) {
+              <div class="iris-responsibility-strip">
+                <span class="label">RESPONSABILIDAD · {{ report().responsibilities.classifiedMechanics }}/{{ report().responsibilities.totalMechanics }} MECÁNICAS</span>
+                @for (entry of report().responsibilities.byResponsibility; track entry.responsibility) {
+                  <span><b>{{ entry.label }}</b> {{ entry.failedEvents }} fallos · {{ entry.deaths }} muertes</span>
+                }
+              </div>
+            }
           </section>
+
+          <section class="iris-sheet-section iris-shared-responsibilities">
+            <div class="iris-section-title inline">
+              <div><span>LECTURA COMPARTIDA</span><h2>Lo que depende de todos</h2></div>
+              <p>La etiqueta indica quién debe ejecutar la respuesta</p>
+            </div>
+            <div class="iris-shared-grid">
+              <article>
+                <header><strong>RAID</strong><span>Coordinación o asignación que puede recaer en cualquier rol.</span></header>
+                @if (responsibilityMetric('raid'); as metric) {
+                  <p><b>{{ metric.failedEvents }}</b> fallos · <b>{{ metric.deaths }}</b> muertes observadas</p>
+                }
+                <div>
+                  @for (mechanic of sharedMechanicHighlights().raid; track mechanic.bossName + mechanic.mechanicName) {
+                    <span>{{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }} <b>{{ mechanic.totalFails }} fallos · {{ mechanic.lethalFinalBlows }} muertes</b></span>
+                  } @empty { <span>Sin fallo compartido clasificable en la muestra.</span> }
+                </div>
+              </article>
+              <article>
+                <header><strong>PERSONAL</strong><span>Cada jugador debe resolverla por sí mismo, sea cual sea su rol.</span></header>
+                @if (responsibilityMetric('personal'); as metric) {
+                  <p><b>{{ metric.failedEvents }}</b> fallos · <b>{{ metric.deaths }}</b> muertes observadas</p>
+                }
+                <div>
+                  @for (mechanic of sharedMechanicHighlights().personal; track mechanic.bossName + mechanic.mechanicName) {
+                    <span>{{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }} <b>{{ mechanic.totalFails }} fallos · {{ mechanic.lethalFinalBlows }} muertes</b></span>
+                  } @empty { <span>Sin fallo personal clasificable en la muestra.</span> }
+                </div>
+              </article>
+            </div>
+          </section>
+          </ng-template>
 
           <div class="iris-lower-grid">
             <section class="iris-sheet-section iris-roles-section">
@@ -308,29 +360,47 @@
               <div class="iris-role-grid">
                 <article class="tank">
                   <div class="iris-role-heading">
-                    <span class="iris-role-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 4 7 11v12c0 10.2 7.2 17.7 17 21 9.8-3.3 17-10.8 17-21V11L24 4Z"/><path d="M24 11v25M13 17h22"/></svg></span>
+                    <span class="iris-role-icon"><img src="/assets/tank.png" alt="" /></span>
                     <div><span>TANKS</span><strong>{{ report().roleInsights.tanks.players }} jugadores</strong></div>
                   </div>
                   <b>{{ report().roleInsights.tanks.deathsPerPull }} <small>muertes / pull</small></b>
                   <p>{{ report().roleInsights.tanks.tankbusterDeaths }} muertes por tankbuster</p>
+                  <div class="iris-role-mechanics">
+                    <strong>Foco específico de tanks</strong>
+                    @for (mechanic of roleMechanicHighlights().tank; track mechanic.bossName + mechanic.mechanicName) {
+                      <span>{{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }} <b>{{ mechanic.totalFails }} fallos · {{ mechanic.lethalFinalBlows }} muertes</b></span>
+                    } @empty { <span>Sin fallo específico de tank clasificado.</span> }
+                  </div>
                   <p>Defensivo: {{ report().roleInsights.tanks.playersUsingDefensive }}/{{ report().roleInsights.tanks.players }}</p>
                 </article>
                 <article class="healer">
                   <div class="iris-role-heading">
-                    <span class="iris-role-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="19"/><path d="M24 13v22M13 24h22"/></svg></span>
+                    <span class="iris-role-icon"><img src="/assets/heal.png" alt="" /></span>
                     <div><span>HEALERS</span><strong>{{ report().roleInsights.healers.players }} jugadores</strong></div>
                   </div>
                   <b>{{ report().roleInsights.healers.deathsPerPull }} <small>muertes / pull</small></b>
                   <p>{{ report().roleInsights.healers.raidDeathsWithSustainedNoHealingSignal }} señales de daño sostenido</p>
+                  <div class="iris-role-mechanics">
+                    <strong>Foco específico de healers</strong>
+                    @for (mechanic of roleMechanicHighlights().healer; track mechanic.bossName + mechanic.mechanicName) {
+                      <span>{{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }} <b>{{ mechanic.totalFails }} fallos · {{ mechanic.lethalFinalBlows }} muertes</b></span>
+                    } @empty { <span>Sin fallo específico de healer clasificado.</span> }
+                  </div>
                   <p>Defensivo: {{ report().roleInsights.healers.playersUsingDefensive }}/{{ report().roleInsights.healers.players }}</p>
                 </article>
                 <article class="dps">
                   <div class="iris-role-heading">
-                    <span class="iris-role-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="m9 39 13-13M18 8l22 22-10 10L8 18l10-10Z"/><path d="m27 13 8-8M34 20l8-8"/></svg></span>
+                    <span class="iris-role-icon dual"><img src="/assets/melee.png" alt="" /><img src="/assets/ranged.png" alt="" /></span>
                     <div><span>DPS</span><strong>{{ report().roleInsights.dps.players }} jugadores</strong></div>
                   </div>
                   <b>{{ report().roleInsights.dps.deathsPerPull }} <small>muertes / pull</small></b>
                   <p>{{ report().roleInsights.dps.personalMechanicDeaths }} muertes de posición / soak</p>
+                  <div class="iris-role-mechanics">
+                    <strong>Foco específico de DPS</strong>
+                    @for (mechanic of roleMechanicHighlights().dps; track mechanic.bossName + mechanic.mechanicName) {
+                      <span>{{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }} <b>{{ mechanic.totalFails }} fallos · {{ mechanic.lethalFinalBlows }} muertes</b></span>
+                    } @empty { <span>Sin fallo exclusivo de DPS; revisar Raid y Personal.</span> }
+                  </div>
                   <p>Defensivo: {{ report().roleInsights.dps.playersUsingDefensive }}/{{ report().roleInsights.dps.players }}</p>
                 </article>
               </div>
@@ -395,6 +465,8 @@
               </div>
             </div>
           </section>
+            </div>
+          </div>
 
           @if (topLethal(); as lethal) {
             <section class="iris-lethal-banner">

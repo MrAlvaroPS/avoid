@@ -35,10 +35,17 @@ create table if not exists boss_mechanics_candidates (
   difficulty_mapping_status text, -- ver difficulty-mapping.ts: 'mapped-by-*' | 'difficulty-mapping-unresolved' | 'difficulty-mapping-ambiguous' | 'difficulty-metadata-unavailable'
   -- Campos editables a mano, persistentes entre resyncs:
   category text check (category in ('tankbuster','raid-damage','avoidable-ground','debuff-stack','interrupt','soak','spread')),
+  responsibility text check (responsibility in ('tank','dps','healer','raid','personal')),
   avoidable boolean,
   expected_response jsonb, -- { type, scope }
   severity_threshold numeric,
   reviewed boolean not null default false,
+  -- Resultado independiente del flujo manual con IA: cómo ejecutar la
+  -- mecánica. Las fuentes generales de ai_classification respaldan también
+  -- esta resolución; resolution_sources queda solo por compatibilidad.
+  resolution text,
+  resolution_sources jsonb not null default '[]'::jsonb,
+  resolution_verified_at timestamptz,
   updated_at timestamptz not null default now(),
   unique (boss_id, difficulty, ability_id)
 );
@@ -106,6 +113,7 @@ create table if not exists pull_mechanic_events (
   pull_id uuid not null references pulls (id) on delete cascade,
   ability_id bigint not null,
   mechanic_name text not null,
+  responsibility text check (responsibility in ('tank','dps','healer','raid','personal')),
   trigger_time_ms integer not null,
   outcome text not null check (outcome in ('clean', 'partial_fail', 'fail')),
   players_hit integer not null default 0,

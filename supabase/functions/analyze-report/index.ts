@@ -87,6 +87,7 @@ interface MechanicRow {
   name: string;
   description: string | null;
   category: string | null;
+  responsibility: string | null;
   inferred_category: string | null;
   observed_as_interrupt: boolean;
   avoidable: boolean | null;
@@ -347,7 +348,7 @@ Deno.serve(async (req: Request) => {
         // directamente de lo que se haya sincronizado/revisado en la sección de mecánicas.
         const { data: mechanics } = await supabase
           .from('boss_mechanics_candidates')
-          .select('ability_id,name,description,category,inferred_category,observed_as_interrupt,avoidable,severity_threshold')
+          .select('ability_id,name,description,category,responsibility,inferred_category,observed_as_interrupt,avoidable,severity_threshold')
           .eq('boss_id', bossId)
           .eq('difficulty', difficulty)
           .returns<MechanicRow[]>();
@@ -890,6 +891,7 @@ Deno.serve(async (req: Request) => {
                   // — categoryIsInferred dice cuál de las dos es, para que el
                   // front pueda pintarla distinto (confirmada vs. sugerida).
                   category: deathEffectiveCategory,
+                  responsibility: mechanic?.responsibility ?? null,
                   categoryIsInferred: mechanic ? mechanic.category == null && deathEffectiveCategory != null : false,
                   avoidable: mechanic?.avoidable ?? null,
                   preventableWithDefensive: buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
@@ -1032,6 +1034,7 @@ Deno.serve(async (req: Request) => {
           mechanic_name: string;
           description: string | null;
           category: string | null;
+          responsibility: string | null;
           trigger_time_ms: number;
           outcome: 'clean' | 'partial_fail' | 'fail';
           players_hit: number;
@@ -1073,6 +1076,7 @@ Deno.serve(async (req: Request) => {
               mechanic_name: mech.name,
               description: mech.description,
               category: effectiveCategory,
+              responsibility: mech.responsibility,
               trigger_time_ms: t0 - fight.startTime,
               outcome: wasInterrupted ? 'clean' : 'fail',
               players_hit: wasInterrupted ? 1 : 0, // reutilizado como "¿se resolvió?" para esta categoría, no cuenta jugadores golpeados
@@ -1122,6 +1126,7 @@ Deno.serve(async (req: Request) => {
             mechanic_name: mech.name,
             description: mech.description,
             category: effectiveCategory,
+            responsibility: mech.responsibility,
             trigger_time_ms: t0 - fight.startTime,
             outcome,
             players_hit: hitTargets.size,
@@ -1197,6 +1202,7 @@ Deno.serve(async (req: Request) => {
               mechanic_name: mech.name,
               description: mech.description,
               category: effectiveCategory,
+              responsibility: mech.responsibility,
               trigger_time_ms: t0 - fight.startTime,
               outcome,
               players_hit: hitTargets.size,

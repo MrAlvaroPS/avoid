@@ -1,4 +1,4 @@
-import { DatePipe } from '@angular/common';
+import { DatePipe, NgTemplateOutlet } from '@angular/common';
 import {
   AfterViewInit,
   Component,
@@ -28,9 +28,12 @@ interface InfographicPriority {
   category: string | null;
 }
 
-const SHEET_WIDTH = 1200;
-const MIN_SHEET_HEIGHT = 1600;
-const EXPORT_PIXEL_RATIO = 1.7;
+const SHEET_WIDTH = 2560;
+const MIN_SHEET_HEIGHT = 1500;
+// 2560 × 1.8 = 4608 px de ancho. El lienzo base más panorámico permite
+// aumentar la tipografía y reducir la altura sin sacrificar información;
+// la exportación 4.6K conserva detalle tras la recompresión de Discord.
+const EXPORT_PIXEL_RATIO = 1.8;
 const FALLBACK_ICON_URL =
   'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
 const BOSS_ARTWORKS: Record<string, string> = {
@@ -47,7 +50,7 @@ const BOSS_ARTWORKS: Record<string, string> = {
 @Component({
   selector: 'app-night-report-infographic',
   standalone: true,
-  imports: [DatePipe],
+  imports: [DatePipe, NgTemplateOutlet],
   templateUrl: './night-report-infographic.component.html',
   encapsulation: ViewEncapsulation.None,
 })
@@ -103,6 +106,44 @@ export class NightReportInfographicComponent implements OnInit, AfterViewInit, O
       )
       .slice(0, 5),
   );
+  readonly roleMechanicHighlights = computed(() => {
+    const mechanics = this.report().mechanics;
+    return Object.fromEntries(
+      (['tank', 'healer', 'dps'] as const).map((responsibility) => [
+        responsibility,
+        mechanics
+          .filter((mechanic) =>
+            mechanic.responsibility === responsibility
+            && (mechanic.totalFails > 0 || mechanic.lethalFinalBlows > 0),
+          )
+          .sort((left, right) =>
+            Number(right.isProgressBoss) - Number(left.isProgressBoss)
+            || right.lethalFinalBlows - left.lethalFinalBlows
+            || right.totalFails - left.totalFails,
+          )
+          .slice(0, 2),
+      ]),
+    ) as Record<'tank' | 'healer' | 'dps', NightFullReport['mechanics']>;
+  });
+  readonly sharedMechanicHighlights = computed(() => {
+    const mechanics = this.report().mechanics;
+    return Object.fromEntries(
+      (['raid', 'personal'] as const).map((responsibility) => [
+        responsibility,
+        mechanics
+          .filter((mechanic) =>
+            mechanic.responsibility === responsibility
+            && (mechanic.totalFails > 0 || mechanic.lethalFinalBlows > 0),
+          )
+          .sort((left, right) =>
+            Number(right.isProgressBoss) - Number(left.isProgressBoss)
+            || right.lethalFinalBlows - left.lethalFinalBlows
+            || right.totalFails - left.totalFails,
+          )
+          .slice(0, 2),
+      ]),
+    ) as Record<'raid' | 'personal', NightFullReport['mechanics']>;
+  });
   readonly bossArtworkUrl = computed(() => {
     const bossName = this.report().summary.progressBoss?.bossName ?? this.report().summary.bestPull?.bossName;
     return bossName ? BOSS_ARTWORKS[this.normalize(bossName).replace(/[^a-z0-9 ]/g, '')] ?? null : null;
@@ -241,6 +282,10 @@ export class NightReportInfographicComponent implements OnInit, AfterViewInit, O
 
   pullList(pulls: number[]): string {
     return pulls.map((pull) => `#${pull}`).join(', ');
+  }
+
+  responsibilityMetric(responsibility: string): NightFullReport['responsibilities']['byResponsibility'][number] | null {
+    return this.report().responsibilities.byResponsibility.find((entry) => entry.responsibility === responsibility) ?? null;
   }
 
   private async renderPng(): Promise<Blob | null> {

@@ -307,6 +307,13 @@ h1 {
 .result-warn {
   color: var(--warning);
 }
+.result-error {
+  color: var(--danger);
+}
+.result-line code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+}
 
 .candidates {
   width: 100%;
@@ -335,6 +342,14 @@ h1 {
   tr.saving {
     opacity: 0.5;
   }
+}
+
+.resolution-cell {
+  min-width: 105px;
+}
+
+.responsibility-cell {
+  min-width: 106px;
 }
 
 .name {

@@ -145,6 +145,17 @@ export function buildNightDiscordSummary(report: NightFullReport): string {
     '  - La señal de sanación describe la ventana registrada: no atribuye responsabilidad ni demuestra que la muerte fuese salvable.',
   );
 
+  if (report.responsibilities.byResponsibility.length) {
+    lines.push(
+      '',
+      `## Responsabilidad de las mecánicas · cobertura ${report.responsibilities.classifiedMechanics}/${report.responsibilities.totalMechanics}`,
+      ...report.responsibilities.byResponsibility.map((entry) =>
+        `- **${escapeMarkdown(entry.label)}:** ${entry.failedEvents} fallos en ${entry.pullsAffected} pulls · ${entry.deaths} muertes · ${entry.playersHit} impactos sobre jugadores`,
+      ),
+      '  - “Responsable” señala quién controla la resolución; no identifica culpables individuales ni convierte cada muerte en una atribución automática.',
+    );
+  }
+
   const progressWins: string[] = [];
   const progress = report.summary.progressBoss;
   if (progress?.firstWipePct != null && progress.lastWipePct != null && progress.lastWipePct < progress.firstWipePct) {
@@ -215,13 +226,23 @@ export function buildNightFullReportMarkdown(report: NightFullReport, generatedA
     for (const mechanic of report.mechanics) {
       lines.push(
         `- **${mechanicLink(mechanic.mechanicName, mechanic.mechanicNameEs, mechanic.wowheadSpellId)}** · ${escapeMarkdown(bilingualName(mechanic.bossName, mechanic.bossNameEs))} [${escapeMarkdown(mechanic.difficulty)}]`,
-        `  - ${mechanic.totalFails} fallos en ${mechanic.pullsAffected}/${mechanic.totalPulls} pulls (${formatNumber(mechanic.pctPullsAffected)}%) · ${mechanic.lethalFinalBlows} golpes finales letales · tendencia: ${trendLabel(mechanic.trend)}${mechanic.avoidableDamageTotal == null ? '' : ` · daño evitable ${formatCompact(mechanic.avoidableDamageTotal)}`}`,
+        `  - ${mechanic.totalFails} fallos en ${mechanic.pullsAffected}/${mechanic.totalPulls} pulls (${formatNumber(mechanic.pctPullsAffected)}%) · ${mechanic.lethalFinalBlows} golpes finales letales · responsable: ${escapeMarkdown(mechanic.responsibilityLabel ?? 'sin clasificar')} · tendencia: ${trendLabel(mechanic.trend)}${mechanic.avoidableDamageTotal == null ? '' : ` · daño evitable ${formatCompact(mechanic.avoidableDamageTotal)}`}`,
       );
       if (mechanic.note) lines.push(`  - **Qué hace:** ${escapeMarkdown(plainNote(mechanic.note))}`);
     }
   } else {
     lines.push('- No hay fallos mecánicos verificables registrados.');
   }
+
+  lines.push(
+    '',
+    '## Responsabilidad de las mecánicas',
+    `- **Cobertura:** ${report.responsibilities.classifiedMechanics}/${report.responsibilities.totalMechanics} mecánicas (${formatNumber(report.responsibilities.classificationCoveragePct)}%)`,
+    ...report.responsibilities.byResponsibility.map((entry) =>
+      `- **${escapeMarkdown(entry.label)}:** ${entry.mechanics} mecánicas · ${entry.failedEvents} fallos en ${entry.pullsAffected} pulls · ${entry.deaths} muertes · ${entry.playersHit} jugadores alcanzados · ${formatCompact(entry.damageTaken)} de daño registrado en esos fallos`,
+    ),
+    '> La responsabilidad indica quién tenía la acción principal para resolver la mecánica. Es una señal agregada para preparar la raid, no una atribución individual de culpa.',
+  );
 
   lines.push(
     '',

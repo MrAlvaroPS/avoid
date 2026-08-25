@@ -85,14 +85,19 @@ app-night-report-infographic {
   }
 
   .iris-infographic-stage { position: relative; margin: 0 auto; }
-  .iris-infographic-scaler { width: 1200px; min-height: 1600px; transform-origin: top left; }
+  .iris-infographic-scaler { width: 2560px; min-height: 1500px; transform-origin: top left; }
 
   .iris-infographic-sheet {
     position: relative;
-    width: 1200px;
-    min-height: 1600px;
-    overflow: visible;
-    padding: 62px 66px 44px;
+    width: 2560px;
+    min-height: 1500px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
+    column-gap: 38px;
+    row-gap: 30px;
+    overflow: hidden;
+    padding: 68px 96px 50px;
     color: #f7f3f9;
     background:
       radial-gradient(circle at 12% 8%, rgb(117 67 156 / 22%), transparent 27%),
@@ -102,6 +107,37 @@ app-night-report-infographic {
     box-shadow: 0 40px 120px rgb(0 0 0 / 72%);
     font-family: Arial, Helvetica, sans-serif;
     isolation: isolate;
+  }
+
+  // Composición panorámica: resumen y recorrido comparten una fila. Desde
+  // ahí cada columna fluye de forma independiente, evitando que una ventana
+  // temporal alta deje un hueco artificial bajo las prioridades de la otra.
+  .iris-sheet-header { grid-column: 1 / -1; grid-row: 1; }
+  .iris-hero { grid-column: 1 / -1; grid-row: 2; }
+  .iris-stat-strip { grid-column: 1; grid-row: 3; align-self: stretch; }
+  .iris-route-section { grid-column: 2; grid-row: 3; }
+  .iris-report-columns { grid-column: 1 / -1; grid-row: 4; }
+  .iris-lethal-banner { grid-column: 1 / -1; grid-row: 5; }
+  .iris-sheet-footer { grid-column: 1 / -1; grid-row: 6; }
+  .iris-infographic-sheet > .iris-sheet-section,
+  .iris-report-column > .iris-sheet-section,
+  .iris-report-column > .iris-lower-grid,
+  .iris-lower-grid > .iris-sheet-section,
+  .iris-infographic-sheet > .iris-lethal-banner,
+  .iris-infographic-sheet > .iris-sheet-footer { margin-top: 0; }
+
+  .iris-report-columns {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 38px;
+    align-items: start;
+  }
+  .iris-report-column {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
   }
 
   .iris-bg-orb { position: absolute; z-index: -2; border-radius: 50%; filter: blur(8px); opacity: .65; }
@@ -120,8 +156,8 @@ app-night-report-infographic {
   .iris-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 36px; }
   .iris-brand { display: flex; align-items: center; gap: 19px; }
   .iris-brand-mark {
-    width: 88px;
-    height: 88px;
+    width: 98px;
+    height: 98px;
     display: grid;
     place-items: center;
     overflow: hidden;
@@ -134,22 +170,22 @@ app-night-report-infographic {
   .iris-section-title > span,
   .iris-section-title > div > span {
     color: #c49bd9;
-    font-size: 11px;
+    font-size: 14px;
     font-weight: 900;
     letter-spacing: .17em;
   }
-  .iris-brand h1 { margin: 4px 0 0; font-family: Georgia, 'Times New Roman', serif; font-size: 36px; font-weight: 500; letter-spacing: -.035em; }
+  .iris-brand h1 { margin: 4px 0 0; font-family: Georgia, 'Times New Roman', serif; font-size: 51px; font-weight: 500; letter-spacing: -.035em; }
   .iris-date-block { text-align: right; }
-  .iris-date-block strong { display: block; font-family: Georgia, 'Times New Roman', serif; color: #ead6b0; font-size: 19px; font-weight: 500; text-transform: capitalize; }
-  .iris-date-block span { display: block; margin-top: 7px; color: #a99faf; font-size: 10px; }
+  .iris-date-block strong { display: block; font-family: Georgia, 'Times New Roman', serif; color: #ead6b0; font-size: 29px; font-weight: 500; text-transform: capitalize; }
+  .iris-date-block span { display: block; margin-top: 7px; color: #ddd5e0; font-size: 17px; }
 
   .iris-hero {
     position: relative;
-    height: 324px;
+    height: 330px;
     display: grid;
     grid-template-columns: 1.45fr .95fr;
     overflow: hidden;
-    margin-top: 42px;
+    margin-top: 0;
     background: linear-gradient(105deg, rgb(26 18 37 / 92%), rgb(13 10 20 / 96%));
     border: 1px solid rgb(206 166 226 / 22%);
     border-radius: 28px;
@@ -159,9 +195,9 @@ app-night-report-infographic {
   .iris-boss-visual > svg { width: 100%; height: 100%; display: block; }
   .iris-boss-artwork { width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; filter: saturate(.9) contrast(1.08); }
   .iris-boss-visual::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 50%, #0e0a17 100%); }
-  .iris-boss-label { position: absolute; z-index: 2; left: 36px; bottom: 31px; max-width: 510px; }
-  .iris-boss-label span { display: block; margin-bottom: 8px; color: #d6b2e9; font-size: 10px; font-weight: 900; letter-spacing: .16em; }
-  .iris-boss-label strong { display: block; font-family: Georgia, 'Times New Roman', serif; font-size: 30px; font-weight: 500; line-height: 1.08; text-shadow: 0 3px 14px #000; }
+  .iris-boss-label { position: absolute; z-index: 2; left: 40px; bottom: 34px; max-width: 760px; }
+  .iris-boss-label span { display: block; margin-bottom: 8px; color: #dfbbed; font-size: 11.5px; font-weight: 900; letter-spacing: .16em; }
+  .iris-boss-label strong { display: block; font-family: Georgia, 'Times New Roman', serif; font-size: 47px; font-weight: 500; line-height: 1.08; text-shadow: 0 3px 14px #000; }
   .iris-progress-panel { position: relative; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 30px; background: linear-gradient(90deg, transparent, rgb(9 7 14 / 72%) 16%); }
   .iris-progress-ring {
     --progress: 0%;
@@ -176,13 +212,13 @@ app-night-report-infographic {
     &::before { content: ''; grid-area: 1 / 1; width: 136px; height: 136px; background: #110d19; border: 1px solid rgb(255 255 255 / 7%); border-radius: 50%; }
     > div { z-index: 1; grid-area: 1 / 1; text-align: center; }
     strong { display: block; color: #f0d49b; font-family: Georgia, 'Times New Roman', serif; font-size: 31px; font-weight: 500; }
-    span { display: block; margin-top: 3px; color: #aaa0b0; font-size: 9.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    span { display: block; margin-top: 3px; color: #c1b7c6; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
   }
   .iris-progress-copy { width: 100%; margin-top: 18px; text-align: center; }
-  .iris-progress-copy > span { color: #aca2b2; font-size: 9.5px; font-weight: 900; letter-spacing: .13em; }
-  .iris-progress-copy > strong { display: block; margin-top: 5px; font-size: 17px; }
+  .iris-progress-copy > span { color: #c7bdcc; font-size: 11px; font-weight: 900; letter-spacing: .13em; }
+  .iris-progress-copy > strong { display: block; margin-top: 5px; font-size: 21px; }
   .iris-progress-copy > strong i { padding: 0 8px; color: #a77ac0; font-style: normal; }
-  .iris-progress-copy small { display: block; margin-top: 7px; color: #aaa1af; font-size: 10px; }
+  .iris-progress-copy small { display: block; margin-top: 7px; color: #c4bbc9; font-size: 11.5px; }
   .iris-progress-track { height: 5px; overflow: hidden; margin-top: 10px; background: #302638; border-radius: 20px; }
   .iris-progress-track i { display: block; height: 100%; background: linear-gradient(90deg, #8d62ac, #d7b66f); border-radius: inherit; }
 
@@ -190,44 +226,44 @@ app-night-report-infographic {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 1px;
-    margin: 18px 0 0;
+    margin: 0;
     overflow: hidden;
     background: rgb(255 255 255 / 8%);
     border: 1px solid rgb(255 255 255 / 8%);
     border-radius: 16px;
   }
-  .iris-stat-strip > div { min-height: 92px; display: grid; grid-template-columns: 25px auto; align-content: center; column-gap: 9px; padding: 16px 20px; background: #100d17; }
-  .iris-stat-strip svg { grid-row: 1 / 3; align-self: center; width: 23px; height: 23px; fill: none; stroke: #b58acc; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-stat-strip strong { align-self: end; font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: 500; white-space: nowrap; }
-  .iris-stat-strip span { color: #a59baa; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+  .iris-stat-strip > div { min-height: 98px; display: grid; grid-template-columns: 31px auto; align-content: center; column-gap: 11px; padding: 16px 25px; background: #100d17; }
+  .iris-stat-strip svg { grid-row: 1 / 3; align-self: center; width: 29px; height: 29px; fill: none; stroke: #b58acc; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .iris-stat-strip strong { align-self: end; font-family: Georgia, 'Times New Roman', serif; font-size: 28px; font-weight: 500; white-space: nowrap; }
+  .iris-stat-strip span { color: #cbc1cf; font-size: 13px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
   .iris-stat-strip .success { strong, svg { color: #6fc88f; stroke: #6fc88f; } }
   .iris-stat-strip .danger { strong, svg { color: #eb6c7f; stroke: #eb6c7f; } }
 
   .iris-sheet-section { margin-top: 32px; }
   .iris-section-title { margin-bottom: 17px; }
-  .iris-section-title h2 { margin: 4px 0 0; font-family: Georgia, 'Times New Roman', serif; font-size: 24px; font-weight: 500; letter-spacing: -.02em; }
+  .iris-section-title h2 { margin: 4px 0 0; font-family: Georgia, 'Times New Roman', serif; font-size: 37px; font-weight: 500; letter-spacing: -.02em; }
   .iris-section-title.inline { display: flex; align-items: end; justify-content: space-between; gap: 30px; }
-  .iris-section-title.inline p { margin: 0 0 3px; color: #a99faf; font-size: 10.5px; }
+  .iris-section-title.inline p { margin: 0 0 3px; color: #ddd5e0; font-size: 16px; }
 
   .iris-boss-route { display: flex; align-items: center; }
-  .iris-boss-route article { position: relative; min-width: 0; flex: 1; padding: 15px 16px 14px 58px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 15px; }
-  .iris-route-icon { position: absolute; top: 15px; left: 15px; width: 31px; height: 31px; display: grid; place-items: center; color: #e56b7e; background: rgb(229 107 126 / 11%); border: 1px solid rgb(229 107 126 / 28%); border-radius: 10px; }
+  .iris-boss-route article { position: relative; min-width: 0; flex: 1; padding: 18px 20px 17px 68px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 15px; }
+  .iris-route-icon { position: absolute; top: 18px; left: 18px; width: 36px; height: 36px; display: grid; place-items: center; color: #e56b7e; background: rgb(229 107 126 / 11%); border: 1px solid rgb(229 107 126 / 28%); border-radius: 10px; }
   .iris-route-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-boss-route article > span { display: block; color: #a39aaa; font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
-  .iris-boss-route article > strong { display: block; min-height: 34px; margin-top: 5px; font-size: 13px; line-height: 1.3; }
-  .iris-boss-route article > b { display: block; margin-top: 7px; color: #ee7d8d; font-size: 10.5px; }
+  .iris-boss-route article > span { display: block; color: #cbc2ce; font-size: 12.5px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+  .iris-boss-route article > strong { display: block; min-height: 40px; margin-top: 6px; font-size: 17px; line-height: 1.3; }
+  .iris-boss-route article > b { display: block; margin-top: 8px; color: #f18b9a; font-size: 14px; }
   .iris-boss-route article.cleared .iris-route-icon { color: #67c689; background: rgb(103 198 137 / 11%); border-color: rgb(103 198 137 / 28%); }
   .iris-boss-route article.cleared > b { color: #67c689; }
   .iris-boss-route article.current { background: linear-gradient(135deg, rgb(139 93 174 / 16%), rgb(255 255 255 / 3%)); border-color: rgb(196 155 217 / 35%); }
   .iris-route-line { width: 21px; height: 1px; flex: 0 0 auto; background: linear-gradient(90deg, #55445d, #9a70b0); }
 
-  .iris-priority-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .iris-priority-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
   .iris-priority-card {
     position: relative;
     min-width: 0;
-    min-height: 272px;
+    min-height: 360px;
     overflow: hidden;
-    padding: 22px;
+    padding: 25px;
     background: linear-gradient(150deg, rgb(38 28 49 / 96%), rgb(16 12 23 / 96%));
     border: 1px solid rgb(201 164 218 / 18%);
     border-radius: 20px;
@@ -239,9 +275,9 @@ app-night-report-infographic {
   .iris-spell-icon img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: 12px; }
   .iris-spell-icon > svg { width: 100%; height: 100%; padding: 11px; fill: none; stroke: #ead3f4; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; background: #392647; border-radius: 12px; }
   .iris-priority-text { margin-top: 17px; }
-  .iris-priority-text > strong { display: block; padding-right: 30px; color: #f2e8f6; font-family: Georgia, 'Times New Roman', serif; font-size: 17px; font-weight: 500; line-height: 1.22; }
-  .iris-priority-text p { margin: 10px 0 0; color: #c3bbc8; font-size: 11.5px; line-height: 1.55; }
-  .iris-priority-text small { display: block; margin-top: 10px; color: #aaa0af; font-size: 10.2px; line-height: 1.55; }
+  .iris-priority-text > strong { display: block; padding-right: 30px; color: #fffaff; font-family: Georgia, 'Times New Roman', serif; font-size: 25px; font-weight: 500; line-height: 1.25; }
+  .iris-priority-text p { margin: 12px 0 0; color: #eee8f0; font-size: 20px; line-height: 1.48; }
+  .iris-priority-text small { display: block; margin-top: 12px; color: #e2dbe5; font-size: 18px; line-height: 1.5; }
   .iris-priority-text small b { color: #d0a8e2; }
   .iris-priority-empty { grid-column: 1 / -1; padding: 32px; color: #8f8596; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 18px; }
 
@@ -386,16 +422,17 @@ app-night-report-infographic {
   // posición y número, pero no compite con las prioridades del informe.
   .iris-timelines-section { padding: 0; background: none; border: 0; border-radius: 0; box-shadow: none; }
   .iris-timelines-section .iris-section-title { margin-bottom: 10px; }
+  .iris-timelines-section .iris-section-title h2 { white-space: nowrap; }
   .iris-timeline-intro { display: none; }
   .iris-timeline-stack { gap: 0; overflow: hidden; background: rgb(255 255 255 / 2.5%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 15px; }
   .iris-timeline-card {
-    min-height: 104px;
+    min-height: 132px;
     display: grid;
-    grid-template-columns: 265px minmax(0, 1fr) 265px;
-    grid-template-rows: 65px auto;
-    column-gap: 15px;
+    grid-template-columns: 285px minmax(0, 1fr) 350px;
+    grid-template-rows: 76px auto;
+    column-gap: 13px;
     align-items: center;
-    padding: 9px 14px 8px;
+    padding: 12px 15px 11px;
     overflow: visible;
     background: none;
     border: 0;
@@ -406,25 +443,25 @@ app-night-report-infographic {
   .iris-timeline-card-header { grid-column: 1; grid-row: 1 / 3; min-height: 0; display: block; padding: 0; background: none; border: 0; }
   .iris-timeline-anchor-heading { gap: 9px; }
   .iris-timeline-window-number { display: none; }
-  .iris-spell-icon.timeline-anchor-icon { width: 38px; height: 38px; border-radius: 9px; }
+  .iris-spell-icon.timeline-anchor-icon { width: 46px; height: 46px; border-radius: 10px; }
   .iris-spell-icon.timeline-anchor-icon img,
   .iris-spell-icon.timeline-anchor-icon > svg { border-radius: 7px; }
-  .iris-timeline-anchor-heading > div:last-child > span { font-size: 7.5px; letter-spacing: .08em; }
-  .iris-timeline-anchor-heading > div:last-child > strong { margin-top: 3px; font-size: 12px; line-height: 1.2; }
-  .iris-timeline-evidence { max-width: none; justify-content: flex-start; gap: 0; margin: 6px 0 0 47px; }
-  .iris-timeline-evidence > span { padding: 0; color: #aaa1af; background: none; border: 0; border-radius: 0; font-size: 7.6px; }
+  .iris-timeline-anchor-heading > div:last-child > span { color: #e0d7e3; font-size: 13px; letter-spacing: .05em; }
+  .iris-timeline-anchor-heading > div:last-child > strong { margin-top: 4px; font-size: 20px; line-height: 1.22; }
+  .iris-timeline-evidence { max-width: none; justify-content: flex-start; gap: 0; margin: 7px 0 0 55px; }
+  .iris-timeline-evidence > span { padding: 0; color: #ddd5e0; background: none; border: 0; border-radius: 0; font-size: 12.5px; }
   .iris-timeline-evidence > span + span::before { content: ' · '; padding: 0 3px; color: #655e6b; }
-  .iris-timeline-evidence b { font-size: 8px; }
+  .iris-timeline-evidence b { font-size: 11px; }
   .iris-timeline-evidence .warning,
   .iris-timeline-evidence .danger { color: #c4b9c8; background: none; border: 0; }
   .iris-timeline-evidence .danger b { color: #ed8393; }
 
-  .iris-timeline-track { grid-column: 2; grid-row: 1; height: 60px; margin: 0 6px; }
+  .iris-timeline-track { grid-column: 2; grid-row: 1; height: 68px; margin: 0 6px; }
   .iris-timeline-axis { top: 28px; right: 4px; left: 4px; height: 1px; box-shadow: none; }
   .iris-timeline-axis::before,
   .iris-timeline-axis::after { top: -3px; width: 6px; height: 6px; }
   .iris-timeline-axis i { top: -5px; height: 11px; }
-  .iris-timeline-axis-label { top: 38px; font-size: 6.5px; }
+  .iris-timeline-axis-label { top: 41px; color: #c9bfcd; font-size: 9px; }
   .iris-timeline-axis-label.start { left: 2px; }
   .iris-timeline-axis-label.end { right: 2px; }
   .iris-timeline-marker::before { top: 18px; height: 11px; }
@@ -434,7 +471,7 @@ app-night-report-infographic {
   .iris-timeline-marker.lane-two::before { top: 28px; height: 1px; }
   .iris-timeline-marker.lane-two .iris-timeline-marker-node { top: 29px; }
   .iris-timeline-marker-node svg { width: 13px; height: 13px; }
-  .iris-timeline-marker-node > b { top: -5px; right: -5px; min-width: 12px; height: 12px; padding: 0 2px; border-width: 1px; font-size: 6px; }
+  .iris-timeline-marker-node > b { top: -5px; right: -5px; min-width: 13px; height: 13px; padding: 0 2px; border-width: 1px; font-size: 7px; }
   .iris-timeline-marker.anchor .iris-timeline-marker-node { width: 27px; height: 27px; box-shadow: 0 0 0 3px #100c18, 0 0 13px rgb(224 181 103 / 42%); }
   .iris-timeline-marker.death .iris-timeline-marker-node { box-shadow: 0 0 0 3px #100c18, 0 0 11px rgb(226 89 111 / 35%); }
 
@@ -442,8 +479,8 @@ app-night-report-infographic {
   .iris-timeline-event-list > div { position: relative; min-width: 0; flex: 1; display: block; padding: 0 8px 0 0; background: none; border: 0; border-radius: 0; }
   .iris-timeline-event-list > div:not(:last-child)::after { content: '→'; position: absolute; top: 10px; right: 1px; color: #675d6d; font-size: 9px; }
   .iris-timeline-event-index { display: none; }
-  .iris-timeline-event-list > div > div > span { font-size: 6.5px; }
-  .iris-timeline-event-list > div > div > strong { margin-top: 1px; color: #d8cfdc; font-size: 7.5px; line-height: 1.18; }
+  .iris-timeline-event-list > div > div > span { color: #e4c9ef; font-size: 11.5px; }
+  .iris-timeline-event-list > div > div > strong { margin-top: 2px; color: #f8f2fa; font-size: 13.5px; line-height: 1.25; }
   .iris-timeline-event-list > div > div > small { display: none; }
   .iris-timeline-event-list > div.anchor,
   .iris-timeline-event-list > div.death { background: none; border: 0; }
@@ -452,92 +489,127 @@ app-night-report-infographic {
 
   .iris-timeline-prep { grid-column: 3; grid-row: 1 / 3; display: block; margin: 0; padding: 2px 0 2px 14px; color: #c8becd; background: none; border: 0; border-left: 2px solid rgb(194 151 215 / 25%); border-radius: 0; }
   .iris-timeline-prep > span { display: none; }
-  .iris-timeline-prep p { margin: 0; font-size: 8.8px; line-height: 1.42; }
-  .iris-timeline-prep b { display: block; margin-bottom: 3px; color: #cda8de; font-size: 7px; letter-spacing: .1em; text-transform: uppercase; }
-  .iris-timeline-disclaimer { margin: 6px 0 0; color: #8f8595; font-size: 7.5px; text-align: right; }
+  .iris-timeline-prep p { margin: 0; color: #f0e9f2; font-size: 16.5px; line-height: 1.45; }
+  .iris-timeline-prep b { display: block; margin-bottom: 4px; color: #ebcbf8; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+  .iris-timeline-prep.unverified { color: #9f95a5; border-left-color: rgb(255 255 255 / 11%); }
+  .iris-timeline-prep.unverified b { color: #afa4b5; }
+  .iris-timeline-disclaimer { margin: 8px 0 0; color: #d0c7d4; font-size: 12.5px; text-align: right; }
 
   .iris-mechanic-list { display: flex; flex-direction: column; gap: 8px; }
   .iris-mechanic-list article {
-    min-height: 82px;
+    min-height: 126px;
     display: grid;
-    grid-template-columns: 30px 52px minmax(240px, 1fr) repeat(4, 78px) 74px;
+    grid-template-columns: 34px 60px repeat(4, minmax(0, 1fr)) 98px;
+    grid-template-rows: auto auto;
     align-items: center;
-    gap: 11px;
-    padding: 11px 14px;
+    column-gap: 12px;
+    row-gap: 11px;
+    padding: 14px 16px;
     background: rgb(255 255 255 / 3%);
     border: 1px solid rgb(255 255 255 / 8%);
     border-radius: 15px;
   }
   .iris-mechanic-list article.progress { background: linear-gradient(90deg, rgb(139 93 174 / 13%), rgb(255 255 255 / 3%) 44%); border-color: rgb(190 145 211 / 24%); }
-  .iris-mechanic-rank { color: #61596a; font-family: Georgia, 'Times New Roman', serif; font-size: 15px; }
-  .iris-spell-icon.compact { width: 48px; height: 48px; padding: 2px; border-radius: 12px; }
+  .iris-mechanic-rank { grid-column: 1; grid-row: 1 / 3; color: #746a7e; font-family: Georgia, 'Times New Roman', serif; font-size: 18px; }
+  .iris-spell-icon.compact { grid-column: 2; grid-row: 1 / 3; width: 56px; height: 56px; padding: 2px; border-radius: 12px; }
   .iris-spell-icon.compact img,
   .iris-spell-icon.compact > svg { border-radius: 9px; }
-  .iris-mechanic-name { min-width: 0; }
-  .iris-mechanic-name strong { display: block; color: #eee6f1; font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; }
-  .iris-mechanic-name > span { display: block; margin-top: 3px; color: #aaa0af; font-size: 9.5px; text-transform: uppercase; }
-  .iris-mechanic-name small { display: block; margin-top: 6px; color: #b4abb9; font-size: 9.2px; line-height: 1.48; }
-  .iris-mechanic-stat { text-align: center; }
-  .iris-mechanic-stat b { display: block; color: #d8c8df; font-size: 13px; }
-  .iris-mechanic-stat span { display: block; margin-top: 3px; color: #9d93a2; font-size: 8.3px; text-transform: uppercase; }
+  .iris-mechanic-name { min-width: 0; grid-column: 3 / 7; grid-row: 1; }
+  .iris-mechanic-name strong { display: block; color: #fffaff; font-family: Georgia, 'Times New Roman', serif; font-size: 24px; font-weight: 500; }
+  .iris-mechanic-name > span { display: block; margin-top: 4px; color: #e0d8e3; font-size: 15px; text-transform: uppercase; }
+  .iris-mechanic-name small { display: block; margin-top: 7px; color: #eee8f0; font-size: 17.5px; line-height: 1.48; }
+  .iris-mechanic-stat { grid-row: 2; text-align: left; padding-top: 7px; border-top: 1px solid rgb(255 255 255 / 7%); }
+  .iris-mechanic-stat:nth-child(4) { grid-column: 3; }
+  .iris-mechanic-stat:nth-child(5) { grid-column: 4; }
+  .iris-mechanic-stat:nth-child(6) { grid-column: 5; }
+  .iris-mechanic-stat:nth-child(7) { grid-column: 6; }
+  .iris-mechanic-stat b { display: block; color: #f3e8f5; font-size: 20px; }
+  .iris-mechanic-stat span { display: block; margin-top: 3px; color: #d8cedc; font-size: 12.5px; text-transform: uppercase; }
   .iris-mechanic-stat.lethal b { color: #eb7889; }
-  .iris-mechanic-trend { padding: 6px; color: #aaa0af; background: rgb(255 255 255 / 7%); border-radius: 7px; font-size: 8.1px; font-weight: 900; text-align: center; }
+  .iris-mechanic-trend { grid-column: 7; grid-row: 1 / 3; padding: 8px; color: #d3c9d6; background: rgb(255 255 255 / 7%); border-radius: 8px; font-size: 10.5px; font-weight: 900; text-align: center; }
   .iris-mechanic-trend.improving { color: #68c78a; background: rgb(95 191 130 / 11%); }
   .iris-mechanic-trend.worsening { color: #e97183; background: rgb(226 89 111 / 11%); }
 
-  .iris-lower-grid { display: grid; grid-template-columns: 1.45fr .85fr; gap: 18px; }
+  .iris-responsibility-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+  .iris-responsibility-strip > span { padding: 7px 10px; color: #d8cedb; background: rgb(255 255 255 / 4%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 9px; font-size: 12px; }
+  .iris-responsibility-strip > span.label { color: #dcb3ed; background: transparent; border-color: transparent; font-size: 10.5px; font-weight: 900; letter-spacing: .08em; }
+  .iris-responsibility-strip b { color: #f0e8f3; }
+
+  .iris-shared-responsibilities { padding: 22px; background: linear-gradient(145deg, rgb(101 68 126 / 13%), rgb(255 255 255 / 2.5%)); border: 1px solid rgb(197 151 217 / 16%); border-radius: 18px; }
+  .iris-shared-responsibilities .iris-section-title { margin-bottom: 14px; }
+  .iris-shared-responsibilities .iris-section-title h2 { font-size: 31px; }
+  .iris-shared-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .iris-shared-grid article { min-width: 0; padding: 16px 17px; background: rgb(8 6 13 / 50%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 13px; }
+  .iris-shared-grid header strong { display: block; color: #deb4ef; font-size: 14px; letter-spacing: .11em; }
+  .iris-shared-grid header span { display: block; min-height: 40px; margin-top: 5px; color: #e4dce7; font-size: 14.5px; line-height: 1.4; }
+  .iris-shared-grid article > p { margin: 12px 0; padding: 9px 10px; color: #d7ccdb; background: rgb(255 255 255 / 4%); border-radius: 8px; font-size: 14px; }
+  .iris-shared-grid article > p b { color: #f0e7f3; font-size: 17px; }
+  .iris-shared-grid article > div > span { display: block; color: #f2ebf4; font-size: 15.5px; line-height: 1.38; }
+  .iris-shared-grid article > div > span + span { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgb(255 255 255 / 7%); }
+  .iris-shared-grid article > div b { display: block; margin-top: 3px; color: #cfc3d4; font-size: 13px; }
+
+  .iris-lower-grid { display: grid; grid-template-columns: 1fr; gap: 24px; align-content: start; }
   .iris-role-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .iris-role-grid article { min-width: 0; min-height: 179px; padding: 16px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 17px; }
+  .iris-role-grid article { min-width: 0; min-height: 224px; padding: 19px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 17px; }
   .iris-role-heading { display: flex; align-items: center; gap: 10px; }
-  .iris-role-icon { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; color: #7fbbdf; background: rgb(74 145 187 / 14%); border-radius: 11px; }
+  .iris-role-icon { width: 50px; height: 50px; flex: 0 0 auto; display: grid; place-items: center; overflow: visible; color: #7fbbdf; background: transparent; border-radius: 50%; }
+  .iris-role-icon img { width: 50px; height: 50px; display: block; object-fit: contain; image-rendering: crisp-edges; filter: drop-shadow(0 5px 8px rgb(0 0 0 / 35%)); }
+  .iris-role-icon.dual { width: 76px; grid-template-columns: 1fr 1fr; }
+  .iris-role-icon.dual img { width: 47px; height: 47px; }
+  .iris-role-icon.dual img + img { margin-left: -18px; }
   .iris-role-icon svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-role-heading > div > span { display: block; color: #9bcae4; font-size: 9px; font-weight: 900; letter-spacing: .12em; }
-  .iris-role-heading > div > strong { display: block; margin-top: 3px; font-size: 11.5px; }
-  .iris-role-grid article > b { display: block; margin-top: 17px; color: #d8c4e2; font-family: Georgia, 'Times New Roman', serif; font-size: 23px; font-weight: 500; }
-  .iris-role-grid article > b small { color: #9e94a3; font-family: Arial, Helvetica, sans-serif; font-size: 9px; font-weight: 800; text-transform: uppercase; }
-  .iris-role-grid article > p { margin: 7px 0 0; color: #b2a9b7; font-size: 10px; line-height: 1.42; }
+  .iris-role-heading > div > span { display: block; color: #c5e8f7; font-size: 14px; font-weight: 900; letter-spacing: .12em; }
+  .iris-role-heading > div > strong { display: block; margin-top: 4px; font-size: 18px; }
+  .iris-role-grid article > b { display: block; margin-top: 19px; color: #e4d1eb; font-family: Georgia, 'Times New Roman', serif; font-size: 29px; font-weight: 500; }
+  .iris-role-grid article > b small { color: #bfb5c3; font-family: Arial, Helvetica, sans-serif; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+  .iris-role-grid article > p { margin: 8px 0 0; color: #eee8f0; font-size: 17px; line-height: 1.42; }
+  .iris-role-mechanics { margin-top: 13px; padding: 12px 13px; background: rgb(177 126 201 / 8%); border: 1px solid rgb(201 157 221 / 14%); border-radius: 11px; }
+  .iris-role-mechanics > strong { display: block; margin-bottom: 7px; color: #d9b5e8; font-size: 12px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+  .iris-role-mechanics > span { display: block; color: #f0e9f2; font-size: 15px; line-height: 1.38; }
+  .iris-role-mechanics > span + span { margin-top: 7px; padding-top: 7px; border-top: 1px solid rgb(255 255 255 / 7%); }
+  .iris-role-mechanics > span b { display: block; margin-top: 2px; color: #cfc3d4; font-size: 13px; font-weight: 700; }
   .iris-role-grid article.healer .iris-role-icon { color: #69c990; background: rgb(75 175 113 / 13%); }
   .iris-role-grid article.healer .iris-role-heading span { color: #79c797; }
   .iris-role-grid article.dps .iris-role-icon { color: #dd826e; background: rgb(208 91 72 / 13%); }
   .iris-role-grid article.dps .iris-role-heading span { color: #d68b7a; }
 
-  .iris-wins-section { padding: 0 0 0 5px; }
-  .iris-wins-section ul { display: flex; flex-direction: column; gap: 9px; margin: 0; padding: 0; list-style: none; }
-  .iris-wins-section li { display: flex; gap: 10px; padding: 10px 12px; background: rgb(85 177 117 / 7%); border: 1px solid rgb(95 191 130 / 16%); border-radius: 12px; }
+  .iris-wins-section { padding: 0; }
+  .iris-wins-section ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .iris-wins-section li { display: flex; gap: 11px; padding: 12px 14px; background: rgb(85 177 117 / 7%); border: 1px solid rgb(95 191 130 / 16%); border-radius: 12px; }
   .iris-wins-section li > span { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; color: #6cca8e; background: rgb(95 191 130 / 13%); border-radius: 50%; }
   .iris-wins-section li svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-wins-section li p { margin: 2px 0 0; color: #c4bcc8; font-size: 10.4px; line-height: 1.48; }
+  .iris-wins-section li p { margin: 2px 0 0; color: #f0eaf2; font-size: 17px; line-height: 1.45; }
   .iris-resource-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
   .iris-resource-row > div { padding: 10px; background: rgb(255 255 255 / 3%); border-radius: 11px; }
   .iris-resource-row strong { display: block; color: #d8c4e2; font-size: 15px; }
-  .iris-resource-row span { display: block; margin-top: 3px; color: #9e94a3; font-size: 8.8px; text-transform: uppercase; }
+  .iris-resource-row span { display: block; margin-top: 3px; color: #c9bfcd; font-size: 11.5px; text-transform: uppercase; }
 
-  .iris-signal-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-  .iris-signal-grid article { min-width: 0; display: flex; align-items: center; gap: 14px; padding: 16px; background: linear-gradient(145deg, rgb(255 255 255 / 4.5%), rgb(255 255 255 / 2%)); border: 1px solid rgb(255 255 255 / 8%); border-radius: 16px; }
-  .iris-signal-icon { width: 48px; height: 48px; flex: 0 0 auto; display: grid; place-items: center; color: #b78bcd; background: rgb(167 112 192 / 12%); border-radius: 14px; }
+  .iris-signal-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; }
+  .iris-signal-grid article { min-width: 0; display: flex; align-items: center; gap: 13px; padding: 15px; background: linear-gradient(145deg, rgb(255 255 255 / 4.5%), rgb(255 255 255 / 2%)); border: 1px solid rgb(255 255 255 / 8%); border-radius: 16px; }
+  .iris-signal-icon { width: 54px; height: 54px; flex: 0 0 auto; display: grid; place-items: center; color: #b78bcd; background: rgb(167 112 192 / 12%); border-radius: 14px; }
   .iris-signal-icon svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-signal-grid article > div > span { display: block; color: #aaa0b0; font-size: 8.5px; font-weight: 900; letter-spacing: .09em; }
-  .iris-signal-grid article > div > strong { display: block; margin-top: 3px; color: #e5d9e9; font-family: Georgia, 'Times New Roman', serif; font-size: 20px; font-weight: 500; }
-  .iris-signal-grid article > div > small { display: block; margin-top: 4px; color: #a49aa9; font-size: 9px; line-height: 1.35; }
+  .iris-signal-grid article > div > span { display: block; color: #e0d7e3; font-size: 13px; font-weight: 900; letter-spacing: .07em; }
+  .iris-signal-grid article > div > strong { display: block; margin-top: 4px; color: #eee3f1; font-family: Georgia, 'Times New Roman', serif; font-size: 26px; font-weight: 500; }
+  .iris-signal-grid article > div > small { display: block; margin-top: 5px; color: #e0d8e3; font-size: 14px; line-height: 1.38; }
   .iris-signal-grid .defensives .iris-signal-icon { color: #71c88f; background: rgb(95 191 130 / 11%); }
   .iris-signal-grid .consumables .iris-signal-icon { color: #d8b46e; background: rgb(201 169 107 / 11%); }
   .iris-signal-grid .cascade .iris-signal-icon { color: #e26b7d; background: rgb(226 89 111 / 11%); }
-  .iris-diagnostics-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 12px; margin-top: 12px; }
+  .iris-diagnostics-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 12px; margin-top: 12px; }
   .iris-patterns,
   .iris-comparison { padding: 16px 18px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 7%); border-radius: 15px; }
   .iris-patterns > strong,
-  .iris-comparison > strong { display: block; margin-bottom: 10px; color: #cfc0d5; font-size: 10px; }
-  .iris-patterns > div { display: grid; grid-template-columns: 140px 1fr 82px; align-items: center; gap: 10px; padding: 5px 0; }
-  .iris-patterns > div span { color: #b0a7b4; font-size: 9.5px; }
+  .iris-comparison > strong { display: block; margin-bottom: 11px; color: #ddcfe2; font-size: 13px; }
+  .iris-patterns > div { display: grid; grid-template-columns: 150px 1fr 88px; align-items: center; gap: 10px; padding: 6px 0; }
+  .iris-patterns > div span { color: #e7dfea; font-size: 15px; }
   .iris-patterns > div i { height: 4px; overflow: hidden; background: #2a222f; border-radius: 9px; }
   .iris-patterns > div em { display: block; height: 100%; background: linear-gradient(90deg, #875ca5, #d4a967); border-radius: inherit; }
-  .iris-patterns > div b { color: #c0b7c4; font-size: 9px; text-align: right; }
-  .iris-comparison > div { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; border-bottom: 1px solid rgb(255 255 255 / 7%); color: #b0a6b4; font-size: 9.5px; }
+  .iris-patterns > div b { color: #eee7f0; font-size: 14px; text-align: right; }
+  .iris-comparison > div { display: flex; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid rgb(255 255 255 / 7%); color: #e7dfea; font-size: 15px; }
   .iris-comparison > div b { color: #e07080; }
   .iris-comparison > div b.positive { color: #69c789; }
-  .iris-comparison > small { display: block; margin-top: 9px; color: #988e9d; font-size: 8.5px; }
+  .iris-comparison > small { display: block; margin-top: 10px; color: #ddd5e0; font-size: 13.5px; }
   .iris-patterns > p,
-  .iris-comparison > p { margin: 0; color: #a69cab; font-size: 9.5px; }
+  .iris-comparison > p { margin: 0; color: #d2c9d6; font-size: 12px; }
 
   .iris-lethal-banner {
     min-height: 92px;
@@ -545,7 +617,7 @@ app-night-report-infographic {
     grid-template-columns: auto 1fr auto;
     align-items: center;
     gap: 17px;
-    margin-top: 26px;
+    margin-top: 0;
     padding: 14px 22px;
     background: linear-gradient(90deg, rgb(204 73 92 / 13%), rgb(229 173 79 / 7%));
     border: 1px solid rgb(226 89 111 / 23%);
@@ -554,16 +626,16 @@ app-night-report-infographic {
   .iris-spell-icon.lethal { width: 58px; height: 58px; background: linear-gradient(145deg, #ed7788, #783747 60%, #dca54a); }
   .iris-lethal-banner > div:nth-child(2) > span { display: block; color: #ed7d8d; font-size: 9px; font-weight: 900; letter-spacing: .14em; }
   .iris-lethal-banner > div:nth-child(2) > strong { display: block; margin-top: 4px; font-family: Georgia, 'Times New Roman', serif; font-size: 18px; font-weight: 500; }
-  .iris-lethal-banner > div:nth-child(2) > small { display: block; margin-top: 4px; color: #aaa0ae; font-size: 9.5px; }
+  .iris-lethal-banner > div:nth-child(2) > small { display: block; margin-top: 4px; color: #c7bdca; font-size: 10.8px; }
   .iris-lethal-banner > b { color: #ec7586; font-family: Georgia, 'Times New Roman', serif; font-size: 30px; font-weight: 500; text-align: right; }
   .iris-lethal-banner > b small { display: block; color: #bd8e99; font-family: Arial, Helvetica, sans-serif; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
 
-  .iris-sheet-footer { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-top: 28px; padding-top: 17px; border-top: 1px solid rgb(255 255 255 / 9%); }
+  .iris-sheet-footer { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-top: 0; padding-top: 17px; border-top: 1px solid rgb(255 255 255 / 9%); }
   .iris-sheet-footer > div { display: flex; align-items: baseline; gap: 10px; }
   .iris-sheet-footer > div img { width: 31px; height: 31px; align-self: center; object-fit: contain; }
   .iris-sheet-footer > div span { color: #d3ae72; font-family: Georgia, 'Times New Roman', serif; font-size: 18px; }
-  .iris-sheet-footer > div strong { color: #a49aa8; font-size: 8.8px; letter-spacing: .13em; }
-  .iris-sheet-footer p { max-width: 520px; margin: 0; color: #918697; font-size: 8.5px; line-height: 1.45; text-align: right; }
+  .iris-sheet-footer > div strong { color: #bdb3c1; font-size: 10px; letter-spacing: .13em; }
+  .iris-sheet-footer p { max-width: 620px; margin: 0; color: #b4a9b9; font-size: 9.8px; line-height: 1.45; text-align: right; }
 
   button:focus-visible { outline: 2px solid #c59cdb; outline-offset: 2px; }
 }

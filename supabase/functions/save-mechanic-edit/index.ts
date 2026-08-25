@@ -1,12 +1,13 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
-import { resyncMechanicCategory } from '../_shared/resync-mechanic-category.ts';
+import { resyncMechanicAvoidable, resyncMechanicCategory, resyncMechanicResponsibility } from '../_shared/resync-mechanic-category.ts';
 
 interface EditRequest {
   bossId: string;
   difficulty: string;
   abilityId: number;
   category?: string | null;
+  responsibility?: string | null;
   avoidable?: boolean | null;
   expectedResponse?: { type: string; scope: string } | null;
   severityThreshold?: number | null;
@@ -30,6 +31,7 @@ const VALID_CATEGORIES = new Set([
   'personal-target',
   'enrage',
 ]);
+const VALID_RESPONSIBILITIES = new Set(['tank', 'dps', 'healer', 'raid', 'personal']);
 
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
@@ -47,6 +49,9 @@ Deno.serve(async (req: Request) => {
   if (body.category && !VALID_CATEGORIES.has(body.category)) {
     return jsonResponse({ ok: false, error: `category inválida: ${body.category}` }, 400);
   }
+  if (body.responsibility && !VALID_RESPONSIBILITIES.has(body.responsibility)) {
+    return jsonResponse({ ok: false, error: `responsibility inválida: ${body.responsibility}` }, 400);
+  }
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -57,6 +62,7 @@ Deno.serve(async (req: Request) => {
     .from('boss_mechanics_candidates')
     .update({
       category: body.category ?? null,
+      responsibility: body.responsibility ?? null,
       avoidable: body.avoidable ?? null,
       expected_response: body.expectedResponse ?? null,
       severity_threshold: body.severityThreshold ?? null,
@@ -82,6 +88,12 @@ Deno.serve(async (req: Request) => {
   // coincide con el que WCL guardó de verdad en los eventos.
   if (body.category && updated?.name) {
     await resyncMechanicCategory(supabase, body.bossId, body.difficulty, updated.name, body.category);
+  }
+  if (body.responsibility && updated?.name) {
+    await resyncMechanicResponsibility(supabase, body.bossId, body.difficulty, updated.name, body.responsibility);
+  }
+  if (typeof body.avoidable === 'boolean' && updated?.name) {
+    await resyncMechanicAvoidable(supabase, body.bossId, body.difficulty, updated.name, body.avoidable);
   }
 
   return jsonResponse({ ok: true });

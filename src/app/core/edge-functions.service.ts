@@ -138,7 +138,7 @@ export class EdgeFunctionsService {
   }
 
   /** §"un prompt para pasar a la IA y que investigue... clasificar todas las mecánicas" — mismo patrón que manual-pull-brief, sin gastar la API propia. */
-  async getMechanicClassificationPrompt(bossId: string, difficulty: string): Promise<{ ok: true; systemPrompt: string; userMessage: string; mechanicCount: number }> {
+  async getMechanicClassificationPrompt(bossId: string, difficulty: string): Promise<{ ok: true; promptVersion: number; systemPrompt: string; userMessage: string; mechanicCount: number }> {
     return this.invoke('classify-mechanics', { bossId, difficulty, action: 'prompt' });
   }
 
@@ -152,6 +152,15 @@ export class EdgeFunctionsService {
     skippedLowConfidence: { abilityId: number; name: string; category: string | null; notes: string }[];
     skippedUndetermined: { abilityId: number; name: string }[];
     invalid: { abilityId: unknown; reason: string }[];
+    resolutionsApplied: { abilityId: number; name: string; resolution: string }[];
+    resolutionsSkipped: { abilityId: number; name: string; reason: string }[];
+    resolutionContractMissing: boolean;
+    responsibilitiesApplied: { abilityId: number; name: string; responsibility: string }[];
+    responsibilitiesSkipped: { abilityId: number; name: string; reason: string }[];
+    responsibilityContractMissing: boolean;
+    avoidablesApplied: { abilityId: number; name: string; avoidable: boolean }[];
+    avoidablesSkipped: { abilityId: number; name: string; reason: string }[];
+    avoidableContractMissing: boolean;
   }> {
     return this.invoke('classify-mechanics', { bossId, difficulty, action: 'submit', rawResponseText });
   }
@@ -173,6 +182,7 @@ export class EdgeFunctionsService {
     difficulty: string;
     abilityId: number;
     category?: string | null;
+    responsibility?: string | null;
     avoidable?: boolean | null;
     expectedResponse?: { type: string; scope: string } | null;
     severityThreshold?: number | null;

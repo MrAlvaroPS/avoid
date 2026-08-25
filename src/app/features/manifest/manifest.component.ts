@@ -10,9 +10,11 @@ import { ReportsService, type KnownBoss } from '../../core/reports.service';
 import { WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
+import { MechanicResolutionIconComponent } from '../../shared/mechanic-resolution-icon.component';
 import type { BossMechanicCandidateRow } from '../../shared/models/domain';
 
 const CATEGORIES = ['tankbuster', 'raid-damage', 'avoidable-ground', 'debuff-stack', 'interrupt', 'soak', 'spread', 'healing-absorb', 'personal-target', 'enrage'] as const;
+const RESPONSIBILITIES = ['tank', 'dps', 'healer', 'raid', 'personal'] as const;
 
 // §9.1: un boss sembrado por sync-season-bosses pero nunca pulleado no tiene
 // dificultades "vistas" que ofrecer (difficulties queda vacío) — se ofrecen
@@ -22,7 +24,7 @@ const STANDARD_DIFFICULTY_IDS = [1, 3, 4, 5] as const;
 @Component({
   selector: 'app-manifest',
   standalone: true,
-  imports: [WowheadLinkComponent, MechanicInfoIconComponent],
+  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent],
   templateUrl: './manifest.component.html',
   styleUrl: './manifest.component.scss',
 })
@@ -32,6 +34,7 @@ export class ManifestComponent {
   private reportsService = inject(ReportsService);
 
   readonly categories = CATEGORIES;
+  readonly responsibilities = RESPONSIBILITIES;
 
   bosses = signal<KnownBoss[]>([]);
   selectedEncounterId = signal<number | null>(null);
@@ -60,6 +63,7 @@ export class ManifestComponent {
   classifySystemPrompt = signal<string | null>(null);
   classifyUserMessage = signal<string | null>(null);
   classifyMechanicCount = signal(0);
+  classifyPromptVersion = signal<number | null>(null);
   classifyCopied = signal(false);
   classifyPasteText = signal('');
   classifySubmitting = signal(false);
@@ -69,6 +73,15 @@ export class ManifestComponent {
     skippedLowConfidence: { abilityId: number; name: string; category: string | null; notes: string }[];
     skippedUndetermined: { abilityId: number; name: string }[];
     invalid: { abilityId: unknown; reason: string }[];
+    resolutionsApplied: { abilityId: number; name: string; resolution: string }[];
+    resolutionsSkipped: { abilityId: number; name: string; reason: string }[];
+    resolutionContractMissing: boolean;
+    responsibilitiesApplied: { abilityId: number; name: string; responsibility: string }[];
+    responsibilitiesSkipped: { abilityId: number; name: string; reason: string }[];
+    responsibilityContractMissing: boolean;
+    avoidablesApplied: { abilityId: number; name: string; avoidable: boolean }[];
+    avoidablesSkipped: { abilityId: number; name: string; reason: string }[];
+    avoidableContractMissing: boolean;
   } | null>(null);
 
   selectedBoss = computed(() => this.bosses().find((b) => b.encounterId === this.selectedEncounterId()) ?? null);
@@ -184,7 +197,7 @@ export class ManifestComponent {
 
   async onEdit(
     candidate: BossMechanicCandidateRow,
-    patch: Partial<Pick<BossMechanicCandidateRow, 'category' | 'avoidable' | 'severity_threshold' | 'reviewed'>>,
+    patch: Partial<Pick<BossMechanicCandidateRow, 'category' | 'responsibility' | 'avoidable' | 'severity_threshold' | 'reviewed'>>,
   ): Promise<void> {
     const bossId = this.selectedEncounterId();
     const difficulty = this.selectedDifficultyName();
@@ -196,8 +209,9 @@ export class ManifestComponent {
         bossId: String(bossId),
         difficulty,
         abilityId: candidate.ability_id,
-        category: patch.category ?? candidate.category,
-        avoidable: patch.avoidable ?? candidate.avoidable,
+        category: 'category' in patch ? patch.category : candidate.category,
+        responsibility: 'responsibility' in patch ? patch.responsibility : candidate.responsibility,
+        avoidable: 'avoidable' in patch ? patch.avoidable : candidate.avoidable,
         expectedResponse: candidate.expected_response,
         severityThreshold: patch.severity_threshold ?? candidate.severity_threshold,
         reviewed: patch.reviewed ?? true,
@@ -282,6 +296,7 @@ export class ManifestComponent {
       this.classifySystemPrompt.set(res.systemPrompt);
       this.classifyUserMessage.set(res.userMessage);
       this.classifyMechanicCount.set(res.mechanicCount);
+      this.classifyPromptVersion.set(res.promptVersion);
     } catch (err) {
       this.classifyPromptError.set(err instanceof Error ? err.message : String(err));
     } finally {
@@ -293,6 +308,7 @@ export class ManifestComponent {
     this.classifyPanelOpen.set(false);
     this.classifySystemPrompt.set(null);
     this.classifyUserMessage.set(null);
+    this.classifyPromptVersion.set(null);
     this.classifyPasteText.set('');
     this.classifySubmitError.set(null);
     this.classifyResult.set(null);
@@ -329,7 +345,21 @@ export class ManifestComponent {
       // a la vez (los datos SÍ se guardaban bien, solo llegaban tarde a
       // pantalla). Se espera a tener la tabla fresca antes de anunciar éxito.
       await this.loadCandidates();
-      this.classifyResult.set({ applied: res.applied, skippedLowConfidence: res.skippedLowConfidence, skippedUndetermined: res.skippedUndetermined, invalid: res.invalid });
+      this.classifyResult.set({
+        applied: res.applied,
+        skippedLowConfidence: res.skippedLowConfidence,
+        skippedUndetermined: res.skippedUndetermined,
+        invalid: res.invalid,
+        resolutionsApplied: res.resolutionsApplied,
+        resolutionsSkipped: res.resolutionsSkipped,
+        resolutionContractMissing: res.resolutionContractMissing,
+        responsibilitiesApplied: res.responsibilitiesApplied,
+        responsibilitiesSkipped: res.responsibilitiesSkipped,
+        responsibilityContractMissing: res.responsibilityContractMissing,
+        avoidablesApplied: res.avoidablesApplied,
+        avoidablesSkipped: res.avoidablesSkipped,
+        avoidableContractMissing: res.avoidableContractMissing,
+      });
     } catch (err) {
       this.classifySubmitError.set(err instanceof Error ? err.message : String(err));
     } finally {

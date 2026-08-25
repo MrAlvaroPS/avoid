@@ -163,7 +163,7 @@
                         {{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }}
                       }
                     </strong>
-                    <span>{{ bilingualName(mechanic.bossName, mechanic.bossNameEs) }} · {{ mechanic.difficulty }}@if (mechanic.categoryLabel) { · {{ mechanic.categoryLabel }} }</span>
+                    <span>{{ bilingualName(mechanic.bossName, mechanic.bossNameEs) }} · {{ mechanic.difficulty }}@if (mechanic.categoryLabel) { · {{ mechanic.categoryLabel }} }@if (mechanic.responsibilityLabel) { · Responsable: {{ mechanic.responsibilityLabel }} }</span>
                   </div>
                 </div>
                 <div class="mechanic-metrics">
@@ -183,6 +183,30 @@
         } @else {
           <p class="empty-copy">No hay fallos mecánicos registrados.</p>
         }
+      </section>
+
+      <section class="report-section" aria-labelledby="responsibility-heading">
+        <div class="section-heading-row">
+          <div>
+            <div class="section-kicker">Acción principal</div>
+            <h3 id="responsibility-heading">Quién debía resolver las mecánicas</h3>
+          </div>
+          <span class="section-count">{{ report().responsibilities.classifiedMechanics }}/{{ report().responsibilities.totalMechanics }} clasificadas · {{ formatPct(report().responsibilities.classificationCoveragePct) }}</span>
+        </div>
+        @if (report().responsibilities.byResponsibility.length) {
+          <div class="performance-grid responsibility-grid">
+            @for (entry of report().responsibilities.byResponsibility; track entry.responsibility) {
+              <div>
+                <span>{{ entry.label }} · {{ entry.mechanics }} mecánicas</span>
+                <strong>{{ entry.failedEvents }} fallos · {{ entry.deaths }} muertes</strong>
+                <small>{{ entry.pullsAffected }} pulls afectados · {{ entry.playersHit }} jugadores alcanzados · {{ compactNumber(entry.damageTaken) }} de daño en fallos</small>
+              </div>
+            }
+          </div>
+        } @else {
+          <p class="empty-copy">Todavía no hay responsabilidades clasificadas. Se completan desde Ajustes con el prompt v4.</p>
+        }
+        <p class="data-note">“Responsable” indica quién controla principalmente la resolución. No identifica culpables individuales ni demuestra por sí solo la causa de cada muerte.</p>
       </section>
 
       <section class="report-section" aria-labelledby="roles-heading">

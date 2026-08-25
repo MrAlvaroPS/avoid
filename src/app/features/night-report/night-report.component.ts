@@ -124,7 +124,7 @@ export class NightReportComponent {
     this.fullReportError.set(null);
     try {
       const result = await this.edgeFunctions.generateNightFullReport(this.reportCode(), force);
-      if (result.report.schemaVersion !== 7) {
+      if (result.report.schemaVersion !== 9) {
         throw new Error('La función generate-night-full-report desplegada está desactualizada. Hay que desplegar la versión local antes de generar el informe.');
       }
       this.fullReport.set({ report: result.report, generatedAt: result.generatedAt });
