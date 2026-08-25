@@ -15,13 +15,15 @@ import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
 import { LlmAnalysisCardComponent } from '../live-pull/llm-analysis-card.component';
+import { NightFullReportModalComponent } from './night-full-report-modal.component';
 import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-text.component';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
+import type { StoredNightFullReport } from '../../shared/models/night-full-report';
 
 @Component({
   selector: 'app-night-report',
   standalone: true,
-  imports: [DatePipe, RouterLink, TrendBarsComponent, DonutChartComponent, WowheadLinkComponent, EmptyPanelComponent, MechanicInfoIconComponent, LlmAnalysisCardComponent],
+  imports: [DatePipe, RouterLink, TrendBarsComponent, DonutChartComponent, WowheadLinkComponent, EmptyPanelComponent, MechanicInfoIconComponent, LlmAnalysisCardComponent, NightFullReportModalComponent],
   templateUrl: './night-report.component.html',
   styleUrl: './night-report.component.scss',
 })
@@ -34,7 +36,10 @@ export class NightReportComponent {
   data = signal<NightReport | null>(null);
   loading = signal(true);
   error = signal<string | null>(null);
-  copyStatus = signal<'idle' | 'copied' | 'error'>('idle');
+  fullReport = signal<StoredNightFullReport | null>(null);
+  fullReportOpen = signal(false);
+  generatingFullReport = signal(false);
+  fullReportError = signal<string | null>(null);
 
   formatDuration = formatDuration;
   formatPct = formatPct;
@@ -63,8 +68,16 @@ export class NightReportComponent {
   private async load(code: string): Promise<void> {
     this.loading.set(true);
     this.error.set(null);
+    this.fullReport.set(null);
+    this.fullReportOpen.set(false);
+    this.fullReportError.set(null);
     try {
       this.data.set(await this.nightReportService.load(code));
+      try {
+        this.fullReport.set(await this.nightReportService.loadFullReport(code));
+      } catch (err) {
+        this.fullReportError.set(err instanceof Error ? err.message : String(err));
+      }
     } catch (err) {
       this.error.set(err instanceof Error ? err.message : String(err));
     } finally {
@@ -93,38 +106,33 @@ export class NightReportComponent {
     this.data.set({ ...d, brief });
   }
 
-  async copyReport(): Promise<void> {
-    const d = this.data();
-    if (!d) return;
-    const dateLabel = d.reportDate ? new Date(d.reportDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }) : d.reportTitle;
-    const lines = [
-      `📋 Informe de raid — ${dateLabel}`,
-      `Bosses: ${d.bosses.length} · Kills: ${d.totalKills} · Wipes: ${d.totalWipes} · Tiempo en pulls: ${this.formatDuration(d.totalDurationMs)}`,
-      `Asistencia: ${d.attendingMain.length} Main${d.attendingTrial.length ? ` + ${d.attendingTrial.length} Trial` : ''}${d.absentMain.length ? ` · Ausentes: ${d.absentMain.join(', ')}` : ''}`,
-      '',
-      'Por boss:',
-      ...d.bosses.map((b) => `- ${b.bossName} (${b.difficulty}): ${b.attempts} intento${b.attempts === 1 ? '' : 's'}${b.kills ? `, ${b.kills} kill${b.kills === 1 ? '' : 's'}` : `, mejor ${this.formatPct(100 - (b.bestWipePct ?? 100))} de progreso`}`),
-    ];
-    if (d.wipeCallPulls.length) {
-      lines.push('', '🏳️ Wipe calls detectados:');
-      lines.push(...d.wipeCallPulls.map((w) => `- ${w.bossName} #${w.pullNumber} (${w.confidence}% confianza)`));
+  async onFullReportPrimaryAction(): Promise<void> {
+    if (this.fullReport()) {
+      this.fullReportOpen.set(true);
+      return;
     }
-    if (d.topOffenders.length) {
-      lines.push('', '⚠️ Muertes repetidas esta noche:');
-      lines.push(...d.topOffenders.map((o) => `- ${o.playerName}: ${o.deathCount} muertes`));
-    }
-    if (d.topDeathCauses.length) {
-      lines.push('', '💀 Causas de muerte más repetidas:');
-      lines.push(...d.topDeathCauses.slice(0, 5).map((c) => `- ${c.mechanicName}: ${c.deathCount} muertes (${c.distinctPlayers} jugadores distintos)`));
-    }
+    await this.generateFullReport(false);
+  }
 
+  async onUpdateFullReport(): Promise<void> {
+    await this.generateFullReport(true);
+  }
+
+  private async generateFullReport(force: boolean): Promise<void> {
+    if (this.generatingFullReport()) return;
+    this.generatingFullReport.set(true);
+    this.fullReportError.set(null);
     try {
-      await navigator.clipboard.writeText(lines.join('\n').trim());
-      this.copyStatus.set('copied');
-      setTimeout(() => this.copyStatus.set('idle'), 2000);
-    } catch {
-      this.copyStatus.set('error');
-      setTimeout(() => this.copyStatus.set('idle'), 2000);
+      const result = await this.edgeFunctions.generateNightFullReport(this.reportCode(), force);
+      if (result.report.schemaVersion !== 6) {
+        throw new Error('La función generate-night-full-report desplegada está desactualizada. Hay que desplegar la versión local antes de generar el informe.');
+      }
+      this.fullReport.set({ report: result.report, generatedAt: result.generatedAt });
+      this.fullReportOpen.set(true);
+    } catch (err) {
+      this.fullReportError.set(err instanceof Error ? err.message : String(err));
+    } finally {
+      this.generatingFullReport.set(false);
     }
   }
 }

@@ -21,7 +21,8 @@ export type MechanicCategory =
   | 'soak'
   | 'spread'
   | 'healing-absorb'
-  | 'personal-target';
+  | 'personal-target'
+  | 'enrage';
 
 export interface CategoryInference {
   category: MechanicCategory;
@@ -33,7 +34,9 @@ export interface CategoryInference {
 // texto oficial de Blizzard SIEMPRE dice explícitamente qué hacer, porque es
 // el mismo texto que lee un jugador en el juego.
 const TEXT_RULES: { pattern: RegExp; category: MechanicCategory; label: string }[] = [
-  { pattern: /\binterrupt(ed|s|ible)?\b/i, category: 'interrupt', label: 'el texto dice "interrupt"' },
+  // "Interrupted" también aparece cuando una mecánica especial del boss
+  // detiene el cast (peces, orbes, etc.). Solo se sugiere `interrupt`
+  // cuando sync-boss-mechanics observa un evento Interrupt real en WCL.
   // §"falta la clasificación de 'mecánica de boss'... cuando eres target y te
   // toca hacer algo sí o sí, sin más": frases que marcan a UN jugador
   // concreto por selección del boss, no por posición ni por ser el tank —

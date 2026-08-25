@@ -11,10 +11,25 @@
         <h1>Informe de la noche</h1>
         <p class="header-sub">{{ d.reportDate ? (d.reportDate | date: "d 'de' MMMM, y") : d.reportTitle }}</p>
       </div>
-      <button type="button" class="copy-btn" (click)="copyReport()">
-        {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar informe →' }}
-      </button>
+      <div class="report-actions">
+        <button type="button" class="full-report-btn" [disabled]="generatingFullReport()" (click)="onFullReportPrimaryAction()">
+          @if (generatingFullReport() && !fullReport()) {
+            <span class="button-spinner" aria-hidden="true"></span> Generando…
+          } @else {
+            {{ fullReport() ? 'Ver informe' : 'Generar informe' }}
+          }
+        </button>
+        @if (fullReport()) {
+          <button type="button" class="update-report-btn" [disabled]="generatingFullReport()" (click)="onUpdateFullReport()">
+            @if (generatingFullReport()) { <span class="button-spinner" aria-hidden="true"></span> Actualizando… } @else { ↻ Actualizar }
+          </button>
+        }
+      </div>
     </header>
+
+    @if (fullReportError(); as fullError) {
+      <p class="full-report-error" role="alert">No se pudo preparar el informe: {{ fullError }}</p>
+    }
 
     <div class="stat-row">
       <div class="stat">
@@ -198,4 +213,14 @@
       </section>
     </div>
   </div>
+
+  @if (fullReportOpen()) {
+    @if (fullReport(); as storedReport) {
+      <app-night-full-report-modal
+        [report]="storedReport.report"
+        [generatedAt]="storedReport.generatedAt"
+        (closed)="fullReportOpen.set(false)"
+      />
+    }
+  }
 }

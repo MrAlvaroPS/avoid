@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Avoid</title>
+  <desc id="desc">Emblema violeta de la hermandad Avoid</desc>
+  <defs>
+    <radialGradient id="orb" cx="48%" cy="42%" r="60%">
+      <stop offset="0" stop-color="#211541"/>
+      <stop offset=".58" stop-color="#0c0a1b"/>
+      <stop offset="1" stop-color="#04050d"/>
+    </radialGradient>
+    <linearGradient id="purple" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#c07de7"/>
+      <stop offset=".4" stop-color="#754095"/>
+      <stop offset="1" stop-color="#241831"/>
+    </linearGradient>
+    <linearGradient id="letters" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#e3aff6"/>
+      <stop offset=".55" stop-color="#a564c5"/>
+      <stop offset="1" stop-color="#4b285f"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <path d="M256 21 294 72l-38 38-38-38 38-51Zm-117 43c33 10 51 34 52 71l39-28-17 67c17-12 30-26 43-43 12 17 26 31 43 43l-18-67 40 28c1-37 19-61 52-71-20 29-19 62-6 96l39-38c-8 34 0 65 23 93l44-33c-16 36-16 67 1 96l39-18c-20 31-28 61-22 90l-35-12c3 25-5 50-23 76l-30-29c-11 37-33 66-66 87l-21-38-21 38c-33-21-55-50-66-87l-30 29c-18-26-26-51-23-76l-35 12c6-29-2-59-22-90l39 18c17-29 17-60 1-96l44 33c23-28 31-59 23-93l39 38c13-34 14-67-6-96Z" fill="#070711" stroke="#201629" stroke-width="5"/>
+  <path d="M256 105c-70 0-128 57-128 127 0 71 58 129 128 129s128-58 128-129c0-70-58-127-128-127Z" fill="url(#orb)" stroke="url(#purple)" stroke-width="15"/>
+  <path d="m256 31 27 42-27 27-27-27 27-42Z" fill="url(#purple)" stroke="#e0a9f4" stroke-width="3"/>
+  <path d="m256 40-8 32 8 20 8-20-8-32Z" fill="#d79aed" opacity=".82"/>
+  <g fill="#b76ed9" filter="url(#glow)">
+    <circle cx="207" cy="180" r="2.5"/><circle cx="306" cy="166" r="2"/><circle cx="330" cy="225" r="3"/><circle cx="179" cy="236" r="2"/><circle cx="281" cy="287" r="2.5"/><circle cx="225" cy="304" r="1.7"/>
+  </g>
+  <text x="256" y="392" fill="url(#letters)" stroke="#f0c3ff" stroke-width="1.7" paint-order="stroke" font-family="Georgia, 'Times New Roman', serif" font-size="96" font-weight="700" text-anchor="middle">AVOID</text>
+</svg>

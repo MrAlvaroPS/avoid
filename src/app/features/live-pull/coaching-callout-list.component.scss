@@ -84,17 +84,6 @@
   font-size: 11.5px;
 }
 
-// Lista de filas en grid — mismas columnas fijas siempre (§"fijando las
-// cosas siempre en las mismas posiciones"), pero SIN ser un <table>: cada
-// fila es un <button> (accesible por teclado gratis), no una <tr>. Overflow
-// horizontal contenido en el propio panel, nunca en la página (dataviz).
-.row-list {
-  // §mismo bug de CSS que las tablas del resto de la app: overflow-x:auto
-  // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
-  overflow-x: auto;
-  overflow-y: visible;
-}
-
 .row-head,
 .row {
   display: grid;

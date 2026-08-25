@@ -88,8 +88,15 @@ interface MechanicRow {
   description: string | null;
   category: string | null;
   inferred_category: string | null;
+  observed_as_interrupt: boolean;
   avoidable: boolean | null;
   severity_threshold: number | null;
+}
+
+function effectiveMechanicCategory(mechanic: MechanicRow, observedInCurrentReport = false): string | null {
+  const category = mechanic.category ?? mechanic.inferred_category;
+  if (category === 'interrupt' && !mechanic.observed_as_interrupt && !observedInCurrentReport) return null;
+  return category;
 }
 interface InterruptEvent {
   timestamp?: number;
@@ -340,7 +347,7 @@ Deno.serve(async (req: Request) => {
         // directamente de lo que se haya sincronizado/revisado en la sección de mecánicas.
         const { data: mechanics } = await supabase
           .from('boss_mechanics_candidates')
-          .select('ability_id,name,description,category,inferred_category,avoidable,severity_threshold')
+          .select('ability_id,name,description,category,inferred_category,observed_as_interrupt,avoidable,severity_threshold')
           .eq('boss_id', bossId)
           .eq('difficulty', difficulty)
           .returns<MechanicRow[]>();
@@ -561,7 +568,7 @@ Deno.serve(async (req: Request) => {
           deathTimestamp: number,
         ): { damageProfile: 'burst' | 'sustained' | 'unknown'; killingBlowAmount: number | null; damageWindowTotal: number; damageWindowHits: number; damageWindowEvents: DamageWindowHit[] } {
           const events = (damageEventsByTarget.get(targetId) ?? []).filter(
-            (e) => (e.timestamp ?? 0) <= deathTimestamp && (e.timestamp ?? 0) >= deathTimestamp - DEATH_BURST_WINDOW_MS,
+            (e) => (e.amount ?? 0) > 0 && (e.timestamp ?? 0) <= deathTimestamp && (e.timestamp ?? 0) >= deathTimestamp - DEATH_BURST_WINDOW_MS,
           );
           if (!events.length) return { damageProfile: 'unknown', killingBlowAmount: null, damageWindowTotal: 0, damageWindowHits: 0, damageWindowEvents: [] };
           const windowTotal = events.reduce((sum, e) => sum + (e.amount ?? 0), 0);
@@ -793,7 +800,7 @@ Deno.serve(async (req: Request) => {
           // Se calculan una vez aquí (antes solo vivían inline dentro del
           // spread de death_cause) porque §10/rootCause también los necesita
           // — mismo dato, dos consumidores, sin recalcular category dos veces.
-          const deathEffectiveCategory = mechanic ? (mechanic.category ?? mechanic.inferred_category ?? null) : null;
+          const deathEffectiveCategory = mechanic ? effectiveMechanicCategory(mechanic) : null;
           const deathDamageProfile = death ? computeDeathDamageProfile(actorId, death.timestamp) : null;
           const deathHealingReceived = death ? computeHealingReceived(actorId, death.timestamp) : null;
           const buffsSnapshot = death ? lastBuffsSnapshotByTarget.get(actorId) : undefined;
@@ -883,7 +890,7 @@ Deno.serve(async (req: Request) => {
                   // — categoryIsInferred dice cuál de las dos es, para que el
                   // front pueda pintarla distinto (confirmada vs. sugerida).
                   category: deathEffectiveCategory,
-                  categoryIsInferred: mechanic ? mechanic.category == null && mechanic.inferred_category != null : false,
+                  categoryIsInferred: mechanic ? mechanic.category == null && deathEffectiveCategory != null : false,
                   avoidable: mechanic?.avoidable ?? null,
                   preventableWithDefensive: buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
                   // §10: "no es lo mismo un oneshot que una muerte por daño
@@ -1042,19 +1049,18 @@ Deno.serve(async (req: Request) => {
           const t0 = cast.timestamp ?? 0;
           const windowEnd = t0 + MECHANIC_REACTION_WINDOW_MS;
 
-          // Mecánicas de categoría 'interrupt' (curada a mano, o sugerida por
-          // observed_as_interrupt de un log público — §sync-boss-mechanics):
+          // Mecánicas de categoría 'interrupt' respaldadas por un evento
+          // Interrupt real, en un log público de referencia o en este report:
           // el outcome no se decide por daño, se decide por si hubo un
           // evento Interrupts real con extraAbilityGameID = este cast dentro
           // de la ventana de reacción. Sin partial_fail en esta v1 (saber
           // "llegó tarde" exigiría el timestamp de INICIO del cast, no solo
           // el de finalización que da el evento Casts — simplificación conocida).
-          // Categoría EFECTIVA: la confirmada a mano si existe, si no la
-          // sugerida por sync-boss-mechanics — así una mecánica de interrupt
-          // detectada con evidencia real (observed_as_interrupt) ya se trata
-          // como interrupt desde el primer sync, sin esperar a que alguien
-          // confirme category a mano en el manifiesto.
-          const effectiveCategory = mech.category ?? mech.inferred_category;
+          // Ni una inferencia textual ni una etiqueta editorial bastan por sí
+          // solas: un cast detenido por un objeto especial del encuentro no
+          // acepta necesariamente un kick estándar.
+          const observedInCurrentReport = interruptEvents.some((raw) => (raw as InterruptEvent).extraAbilityGameID === abilityId);
+          const effectiveCategory = effectiveMechanicCategory(mech, observedInCurrentReport);
           if (effectiveCategory === 'interrupt') {
             const wasInterrupted = interruptEvents.some((raw) => {
               const e = raw as InterruptEvent;
@@ -1141,7 +1147,7 @@ Deno.serve(async (req: Request) => {
         const INSTANCE_GAP_MS = 3000;
         for (const [abilityId, mech] of mechanicById) {
           if (abilityIdsWithCastRow.has(abilityId)) continue;
-          const effectiveCategory = mech.category ?? mech.inferred_category;
+          const effectiveCategory = effectiveMechanicCategory(mech);
           if (effectiveCategory === 'interrupt') continue; // sin daño que agrupar, no aplica este mecanismo
 
           const events = (damageEvents as DamageEvent[])

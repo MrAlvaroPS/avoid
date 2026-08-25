@@ -1,0 +1,318 @@
+<div class="iris-infographic-overlay" role="dialog" aria-modal="true" aria-labelledby="iris-infographic-title">
+  <header class="iris-infographic-toolbar">
+    <div>
+      <span class="iris-infographic-toolbar-kicker">Vista previa exportable</span>
+      <strong id="iris-infographic-title">Infografía de combate de IRIS</strong>
+    </div>
+    <div class="iris-infographic-toolbar-actions">
+      <span class="iris-infographic-status" aria-live="polite">
+        @switch (exportStatus()) {
+          @case ('rendering') { Preparando PNG… }
+          @case ('copied') { ✓ Imagen copiada }
+          @case ('downloaded') { ✓ PNG descargado }
+          @case ('error') { No se pudo generar }
+          @default { PNG · {{ exportWidth }} × {{ exportHeight() }} px }
+        }
+      </span>
+      <button type="button" class="iris-infographic-tool-button" (click)="toggleZoom()">
+        @if (fitToScreen()) {
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+          Ver al 100%
+        } @else {
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg>
+          Ajustar
+        }
+      </button>
+      <button type="button" class="iris-infographic-tool-button" [disabled]="exportStatus() === 'rendering'" (click)="copyPng()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+        Copiar imagen
+      </button>
+      <button type="button" class="iris-infographic-tool-button primary" [disabled]="exportStatus() === 'rendering'" (click)="downloadPng()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 19h16"/></svg>
+        Descargar PNG
+      </button>
+      <button #closeButton type="button" class="iris-infographic-close" aria-label="Cerrar infografía" (click)="closed.emit()">×</button>
+    </div>
+  </header>
+
+  <div class="iris-infographic-viewport">
+    <div class="iris-infographic-stage" [style.width.px]="sheetWidth * previewScale()" [style.height.px]="sheetHeight() * previewScale()">
+      <div class="iris-infographic-scaler" [style.height.px]="sheetHeight()" [style.transform]="'scale(' + previewScale() + ')'">
+        <main #sheet class="iris-infographic-sheet">
+          <div class="iris-bg-orb iris-bg-orb-a"></div>
+          <div class="iris-bg-orb iris-bg-orb-b"></div>
+          <div class="iris-grid-texture"></div>
+
+          <header class="iris-sheet-header">
+            <div class="iris-brand">
+              <div class="iris-brand-mark">
+                <img src="/assets/avoid-guild-logo.svg" alt="Logo de la hermandad Avoid" />
+              </div>
+              <div>
+                <span>AVOID · IRIS RAID INTELLIGENCE</span>
+                <h1>Informe de combate</h1>
+              </div>
+            </div>
+            <div class="iris-date-block">
+              <strong>{{ report().reportDate ? (report().reportDate | date: "d 'de' MMMM 'de' y") : report().reportTitle }}</strong>
+              <span>{{ report().reportTitle }} · {{ report().reportCode }}</span>
+            </div>
+          </header>
+
+          <section class="iris-hero">
+            <div class="iris-boss-visual" aria-hidden="true">
+              @if (bossArtworkUrl() && !bossArtworkFailed()) {
+                <img class="iris-boss-artwork" [src]="bossArtworkUrl()" crossorigin="anonymous" alt="" (error)="onBossArtworkError()" />
+              } @else {
+                <svg viewBox="0 0 520 380" preserveAspectRatio="xMidYMid slice">
+                <defs>
+                  <radialGradient id="boss-aura"><stop stop-color="#e7b76c" stop-opacity=".72"/><stop offset=".35" stop-color="#9b60cb" stop-opacity=".32"/><stop offset="1" stop-color="#100c1b" stop-opacity="0"/></radialGradient>
+                  <linearGradient id="boss-body" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d5b7e5"/><stop offset="1" stop-color="#433153"/></linearGradient>
+                  <filter id="boss-blur"><feGaussianBlur stdDeviation="16"/></filter>
+                </defs>
+                <circle cx="310" cy="155" r="170" fill="url(#boss-aura)" filter="url(#boss-blur)"/>
+                <path d="M318 74c-24 18-35 48-31 83-45 21-74 70-79 145h210c-7-80-36-128-82-147 5-36-1-62-18-81Z" fill="url(#boss-body)" opacity=".34"/>
+                <path d="m286 105-45-55 64 27M340 103l46-54-63 28" fill="none" stroke="#d9b2eb" stroke-width="8" stroke-linecap="round" opacity=".55"/>
+                <circle cx="300" cy="132" r="5" fill="#f0d49b"/><circle cx="333" cy="132" r="5" fill="#f0d49b"/>
+                <path d="M0 323c82-30 150-26 216 0 76 30 158 29 304-18v75H0Z" fill="#080711" opacity=".86"/>
+                </svg>
+              }
+              <div class="iris-boss-label">
+                <span>PROGRESS ACTUAL · {{ report().summary.progressBoss?.difficulty || 'COMPLETADO' }}</span>
+                <strong>{{ progressBossName() }}</strong>
+              </div>
+            </div>
+            <div class="iris-progress-panel">
+              <div class="iris-progress-ring" [style.--progress]="progressPercent() + '%'">
+                <div>
+                  <strong>{{ report().summary.progressBoss ? formatPct(report().summary.progressBoss?.bestWipePct ?? null) : report().summary.totalKills }}</strong>
+                  <span>{{ report().summary.progressBoss ? 'mejor intento' : 'kills' }}</span>
+                </div>
+              </div>
+              @if (report().summary.progressBoss; as progress) {
+                <div class="iris-progress-copy">
+                  <span>AVANCE EN {{ progress.pulls }} PULLS</span>
+                  <strong>{{ formatPct(progress.firstWipePct) }} <i>→</i> {{ formatPct(progress.lastWipePct) }}</strong>
+                  <div class="iris-progress-track"><i [style.width.%]="progressPercent()"></i></div>
+                  <small>{{ statValue(progressPercent()) }}% del encuentro superado en el mejor pull</small>
+                </div>
+              } @else {
+                <div class="iris-progress-copy">
+                  <span>NOCHE COMPLETADA</span>
+                  <strong>{{ report().summary.totalKills }} KILLS</strong>
+                  <small>No queda un boss de progress abierto en este informe.</small>
+                </div>
+              }
+            </div>
+          </section>
+
+          <section class="iris-stat-strip" aria-label="Resumen de la noche">
+            <div><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10l2 4-7 12L5 8l2-4Z"/><path d="m5 8 7 3 7-3"/></svg><strong>{{ report().summary.totalPulls }}</strong><span>pulls</span></div>
+            <div class="success"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><strong>{{ report().summary.totalKills }}</strong><span>kills</span></div>
+            <div class="danger"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 20h18L12 3Z"/><path d="M12 9v5m0 3v.1"/></svg><strong>{{ report().summary.totalWipes }}</strong><span>wipes</span></div>
+            <div><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg><strong>{{ formatDuration(report().summary.totalCombatTimeMs) }}</strong><span>en combate</span></div>
+            <div><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7"/></svg><strong>{{ formatDuration(report().summary.avgPullDurationMs) }}</strong><span>media / pull</span></div>
+          </section>
+
+          <section class="iris-sheet-section iris-route-section">
+            <div class="iris-section-title">
+              <span>01 · RECORRIDO</span>
+              <h2>La noche boss a boss</h2>
+            </div>
+            <div class="iris-boss-route">
+              @for (boss of report().summary.bosses; track boss.bossName + boss.difficulty; let last = $last) {
+                <article [class.cleared]="boss.kills > 0" [class.current]="report().summary.progressBoss?.bossName === boss.bossName && report().summary.progressBoss?.difficulty === boss.difficulty">
+                  <div class="iris-route-icon">
+                    @if (boss.kills > 0) {
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+                    } @else {
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+                    }
+                  </div>
+                  <span>{{ boss.difficulty }} · {{ boss.pulls }} pulls</span>
+                  <strong>{{ bilingualName(boss.bossName, boss.bossNameEs) }}</strong>
+                  <b>{{ bossProgressLabel(boss) }}</b>
+                </article>
+                @if (!last) { <i class="iris-route-line" aria-hidden="true"></i> }
+              }
+            </div>
+          </section>
+
+          <section class="iris-sheet-section iris-focus-section">
+            <div class="iris-section-title inline">
+              <div><span>02 · DECISIÓN</span><h2>Foco para la próxima raid</h2></div>
+              <p>Acciones priorizadas para el boss de progress</p>
+            </div>
+            <div class="iris-priority-grid">
+              @for (priority of priorityCards(); track priority.title; let index = $index) {
+                <article class="iris-priority-card">
+                  <span class="iris-priority-number">0{{ index + 1 }}</span>
+                  <div class="iris-spell-icon" [attr.data-category]="priority.category || 'mechanic'">
+                    @if (iconUrl(priority.spellId); as url) {
+                      <img [src]="url" crossorigin="anonymous" alt="" (error)="onIconError($event)" />
+                    } @else {
+                      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 5 8 13v11c0 9.5 6.8 16.3 16 19 9.2-2.7 16-9.5 16-19V13L24 5Z"/><path d="m17 25 5 5 10-12"/></svg>
+                    }
+                  </div>
+                  <div class="iris-priority-text">
+                    <strong>{{ priority.title }}</strong>
+                    <p>{{ priority.detail }}</p>
+                    @if (priority.note) { <small><b>Qué hace:</b> {{ priority.note }}</small> }
+                  </div>
+                </article>
+              } @empty {
+                <article class="iris-priority-empty">No hay una prioridad sólida con la muestra disponible.</article>
+              }
+            </div>
+          </section>
+
+          <section class="iris-sheet-section iris-mechanics-section">
+            <div class="iris-section-title inline">
+              <div><span>03 · EJECUCIÓN</span><h2>Mecánicas que están decidiendo los pulls</h2></div>
+              <p>Progress primero · impacto colectivo después</p>
+            </div>
+            <div class="iris-mechanic-list">
+              @for (mechanic of featuredMechanics(); track mechanic.bossName + mechanic.difficulty + mechanic.mechanicName; let index = $index) {
+                <article [class.progress]="mechanic.isProgressBoss">
+                  <span class="iris-mechanic-rank">0{{ index + 1 }}</span>
+                  <div class="iris-spell-icon compact">
+                    @if (iconUrl(mechanic.wowheadSpellId); as url) {
+                      <img [src]="url" crossorigin="anonymous" alt="" (error)="onIconError($event)" />
+                    } @else {
+                      <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 5 8 13v11c0 9.5 6.8 16.3 16 19 9.2-2.7 16-9.5 16-19V13L24 5Z"/><path d="m17 25 5 5 10-12"/></svg>
+                    }
+                  </div>
+                  <div class="iris-mechanic-name">
+                    <strong>{{ bilingualName(mechanic.mechanicName, mechanic.mechanicNameEs) }}</strong>
+                    <span>{{ bilingualName(mechanic.bossName, mechanic.bossNameEs) }} · {{ mechanic.categoryLabel || 'mecánica' }}</span>
+                    @if (mechanic.note) { <small>{{ mechanic.note }}</small> }
+                  </div>
+                  <div class="iris-mechanic-stat"><b>{{ mechanic.pullsAffected }}/{{ mechanic.totalPulls }}</b><span>pulls</span></div>
+                  <div class="iris-mechanic-stat"><b>{{ mechanic.totalFails }}</b><span>fallos</span></div>
+                  <div class="iris-mechanic-stat lethal"><b>{{ mechanic.lethalFinalBlows }}</b><span>golpes letales</span></div>
+                  <div class="iris-mechanic-stat"><b>{{ compactNumber(mechanic.avoidableDamageTotal) }}</b><span>daño evitable</span></div>
+                  <span class="iris-mechanic-trend" [class]="'iris-mechanic-trend ' + mechanic.trend">{{ trendLabel(mechanic.trend) }}</span>
+                </article>
+              } @empty {
+                <div class="iris-priority-empty">No hay fallos mecánicos registrados para esta noche.</div>
+              }
+            </div>
+          </section>
+
+          <div class="iris-lower-grid">
+            <section class="iris-sheet-section iris-roles-section">
+              <div class="iris-section-title"><span>04 · RESPONSABILIDADES</span><h2>Claves por función</h2></div>
+              <div class="iris-role-grid">
+                <article class="tank">
+                  <div class="iris-role-heading">
+                    <span class="iris-role-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 4 7 11v12c0 10.2 7.2 17.7 17 21 9.8-3.3 17-10.8 17-21V11L24 4Z"/><path d="M24 11v25M13 17h22"/></svg></span>
+                    <div><span>TANKS</span><strong>{{ report().roleInsights.tanks.players }} jugadores</strong></div>
+                  </div>
+                  <b>{{ report().roleInsights.tanks.deathsPerPull }} <small>muertes / pull</small></b>
+                  <p>{{ report().roleInsights.tanks.tankbusterDeaths }} muertes por tankbuster</p>
+                  <p>Defensivo: {{ report().roleInsights.tanks.playersUsingDefensive }}/{{ report().roleInsights.tanks.players }}</p>
+                </article>
+                <article class="healer">
+                  <div class="iris-role-heading">
+                    <span class="iris-role-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="19"/><path d="M24 13v22M13 24h22"/></svg></span>
+                    <div><span>HEALERS</span><strong>{{ report().roleInsights.healers.players }} jugadores</strong></div>
+                  </div>
+                  <b>{{ report().roleInsights.healers.deathsPerPull }} <small>muertes / pull</small></b>
+                  <p>{{ report().roleInsights.healers.raidDeathsWithSustainedNoHealingSignal }} señales de daño sostenido</p>
+                  <p>Defensivo: {{ report().roleInsights.healers.playersUsingDefensive }}/{{ report().roleInsights.healers.players }}</p>
+                </article>
+                <article class="dps">
+                  <div class="iris-role-heading">
+                    <span class="iris-role-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="m9 39 13-13M18 8l22 22-10 10L8 18l10-10Z"/><path d="m27 13 8-8M34 20l8-8"/></svg></span>
+                    <div><span>DPS</span><strong>{{ report().roleInsights.dps.players }} jugadores</strong></div>
+                  </div>
+                  <b>{{ report().roleInsights.dps.deathsPerPull }} <small>muertes / pull</small></b>
+                  <p>{{ report().roleInsights.dps.personalMechanicDeaths }} muertes de posición / soak</p>
+                  <p>Defensivo: {{ report().roleInsights.dps.playersUsingDefensive }}/{{ report().roleInsights.dps.players }}</p>
+                </article>
+              </div>
+            </section>
+
+            <section class="iris-sheet-section iris-wins-section">
+              <div class="iris-section-title"><span>05 · IMPULSO</span><h2>Lo que funcionó</h2></div>
+              <ul>
+                @for (point of report().goodPoints.slice(0, 4); track point) {
+                  <li><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></span><p>{{ point }}</p></li>
+                } @empty {
+                  <li><span>·</span><p>La muestra aún no permite destacar una mejora colectiva concreta.</p></li>
+                }
+              </ul>
+              <div class="iris-resource-row">
+                <div><strong>{{ report().defensives.playersEverUsed }}/{{ report().defensives.totalPlayersTracked }}</strong><span>usaron defensivo</span></div>
+                <div><strong>{{ report().survival.either.playersEverUsed }}/{{ report().survival.either.totalPlayersTracked }}</strong><span>HS o poción</span></div>
+              </div>
+            </section>
+          </div>
+
+          <section class="iris-sheet-section iris-signals-section">
+            <div class="iris-section-title inline">
+              <div><span>06 · SEÑALES COLECTIVAS</span><h2>Supervivencia y control</h2></div>
+              <p>Indicadores agregados · no asignan culpables</p>
+            </div>
+            <div class="iris-signal-grid">
+              <article class="interrupts">
+                <span class="iris-signal-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="m8 39 32-30M10 10l28 28"/><path d="M8 8h13v13M40 40H27V27"/></svg></span>
+                <div><span>INTERRUPCIONES</span><strong>{{ formatPct(report().interrupts.pctSuccess) }}</strong><small>{{ report().interrupts.interrupted }}/{{ report().interrupts.totalCasts }} casts válidos</small></div>
+              </article>
+              <article class="defensives">
+                <span class="iris-signal-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 4 7 11v12c0 10 7 18 17 21 10-3 17-11 17-21V11L24 4Z"/><path d="m16 24 5 5 11-12"/></svg></span>
+                <div><span>DEFENSIVOS</span><strong>{{ report().defensives.playersEverUsed }}/{{ report().defensives.totalPlayersTracked }}</strong><small>{{ report().defensives.totalCasts }} usos durante la noche</small></div>
+              </article>
+              <article class="consumables">
+                <span class="iris-signal-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M18 5h12v8l8 15a10 10 0 0 1-9 15H19a10 10 0 0 1-9-15l8-15V5Z"/><path d="M15 29h18"/></svg></span>
+                <div><span>HS O POCIÓN</span><strong>{{ report().survival.either.playersEverUsed }}/{{ report().survival.either.totalPlayersTracked }}</strong><small>uso observado al menos una vez</small></div>
+              </article>
+              <article class="cascade">
+                <span class="iris-signal-icon"><svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="12" cy="12" r="5"/><circle cx="25" cy="25" r="5"/><circle cx="38" cy="38" r="5"/><path d="m16 16 5 5m8 8 5 5"/></svg></span>
+                <div><span>CAÍDAS EN CADENA</span><strong>{{ report().wipeRecovery.wipesWithCascade }}/{{ report().wipeRecovery.wipesEvaluable }}</strong><small>wipes con cascada en {{ formatDuration(report().wipeRecovery.windowMs) }}</small></div>
+              </article>
+            </div>
+            <div class="iris-diagnostics-grid">
+              <div class="iris-patterns">
+                <strong>Patrones de wipe</strong>
+                @for (pattern of report().wipePatterns.slice(0, 4); track pattern.category) {
+                  <div><span>{{ pattern.label }}</span><i><em [style.width.%]="pattern.pct"></em></i><b>{{ pattern.count }} · {{ formatPct(pattern.pct) }}</b></div>
+                } @empty { <p>Sin patrón de wipe clasificable.</p> }
+              </div>
+              <div class="iris-comparison">
+                <strong>Segunda mitad vs primera</strong>
+                @if (report().progressionComparison; as comparison) {
+                  <div><span>Muertes / pull</span><b [class.positive]="(comparison.deathsDeltaPct ?? 0) < 0">{{ deltaLabel(comparison.deathsDeltaPct) }}</b></div>
+                  <div><span>Daño evitable / pull</span><b [class.positive]="(comparison.avoidableDamageDeltaPct ?? 0) < 0">{{ deltaLabel(comparison.avoidableDamageDeltaPct) }}</b></div>
+                  <div><span>Cobertura defensivos</span><b [class.positive]="(comparison.defensiveCoverageDeltaPct ?? 0) > 0">{{ deltaLabel(comparison.defensiveCoverageDeltaPct) }}</b></div>
+                  <small>{{ comparison.sampleSize }} pulls comparables del mismo boss y dificultad</small>
+                } @else {
+                  <p>No hay dos mitades comparables con muestra suficiente.</p>
+                }
+              </div>
+            </div>
+          </section>
+
+          @if (topLethal(); as lethal) {
+            <section class="iris-lethal-banner">
+              <div class="iris-spell-icon lethal">
+                @if (iconUrl(lethal.wowheadSpellId); as url) {
+                  <img [src]="url" crossorigin="anonymous" alt="" (error)="onIconError($event)" />
+                } @else {
+                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="m25 3-15 24h12l-2 18 18-27H26l-1-15Z"/></svg>
+                }
+              </div>
+              <div><span>GOLPE FINAL MÁS REPETIDO DE LA NOCHE</span><strong>{{ bilingualName(lethal.mechanicName, lethal.mechanicNameEs) }}</strong><small>{{ bilingualName(lethal.bossName, lethal.bossNameEs) }}</small></div>
+              <b>{{ lethal.count }}<small>muertes</small></b>
+            </section>
+          }
+
+          <footer class="iris-sheet-footer">
+            <div><img src="/assets/avoid-guild-logo.svg" alt="" /><span>AVOID · IRIS</span><strong>MAKE EVERY PULL COUNT</strong></div>
+            <p>Informe agregado a partir de los registros de combate · Las asociaciones no demuestran causalidad · Generado {{ generatedAt() | date: 'd MMM y, HH:mm' }}</p>
+          </footer>
+        </main>
+      </div>
+    </div>
+  </div>
+</div>

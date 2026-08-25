@@ -4,6 +4,7 @@
 // lectura pública; las escrituras las hacen las funciones con service_role).
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
+import type { GenerateNightFullReportResult } from '../shared/models/night-full-report';
 
 export interface AnalyzeReportResult {
   ok: true;
@@ -118,6 +119,11 @@ export class EdgeFunctionsService {
   /** Genera (o devuelve cacheado) el brief LLM de TODA una noche de raid. Idempotente por report_code salvo force:true. */
   async generateNightBrief(reportCode: string, force = false): Promise<{ ok: true; cached: boolean; brief: NightBriefRow }> {
     return this.invoke('generate-night-brief', { reportCode, force });
+  }
+
+  /** Genera o recalcula el informe determinista completo de una noche. No llama a ningún LLM. */
+  async generateNightFullReport(reportCode: string, force = false): Promise<GenerateNightFullReportResult> {
+    return this.invoke<GenerateNightFullReportResult>('generate-night-full-report', { reportCode, force });
   }
   async getManualNightBriefPrompt(reportCode: string): Promise<{ ok: true; systemPrompt: string; userMessage: string }> {
     return this.invoke('manual-night-brief', { reportCode, action: 'prompt' });

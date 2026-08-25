@@ -31,7 +31,7 @@ const CATEGORY_GLOSSARY = `- tankbuster: golpe grande dirigido específicamente 
 - raid-damage: daño repartido a toda la raid, no exige moverte ni reaccionar de forma especial.
 - avoidable-ground: crea una zona en el suelo que hay que evitar o abandonar.
 - debuff-stack: aplica un debuff acumulativo (stacks) que hay que gestionar (dispersar, purgar, limitar).
-- interrupt: un cast que se debe interrumpir.
+- interrupt: un cast que admite una interrupción/kick estándar, confirmado por el Journal o por un evento Interrupt real. NO usar para casts que se detienen con objetos o mecánicas del encuentro (peces, orbes, botones especiales), ni para un hard enrage.
 - soak: exige que varios jugadores se agrupen para repartir/absorber el golpe entre todos.
 - spread: exige que los jugadores se separen entre sí.
 - healing-absorb: aplica un escudo que absorbe la curación entrante sobre el objetivo.
@@ -39,7 +39,7 @@ const CATEGORY_GLOSSARY = `- tankbuster: golpe grande dirigido específicamente 
 - enrage: el boss (o un add) se enfurece — golpea más fuerte, castea más rápido, o entra en fase de berserk tras un tiempo límite o una condición (ej. "add sin morir a tiempo").`;
 
 function buildSystemPrompt(bossName: string, difficulty: string): string {
-  return `Eres un investigador experto en encuentros de raid de World of Warcraft. Tu tarea es clasificar habilidades del boss "${bossName}" en dificultad ${difficulty} en una de 9 categorías, investigando en TODAS las fuentes reales que tengas disponibles (Wowhead —tooltip, comentarios y Dungeon Journal—, Icy Veins, guías de Method/Wowhead, Warcraft Logs, vídeos de guía si puedes acceder a su contenido, foros, etc.). Busca por el NOMBRE de la habilidad (en español o en inglés, lo que te dé mejores resultados) — el ability_id solo sirve para identificarla en tu respuesta, no suele ser buscable.
+  return `Eres un investigador experto en encuentros de raid de World of Warcraft. Tu tarea es clasificar habilidades del boss "${bossName}" en dificultad ${difficulty} en una de 10 categorías, investigando en TODAS las fuentes reales que tengas disponibles (Wowhead —tooltip, comentarios y Dungeon Journal—, Icy Veins, guías de Method/Wowhead, Warcraft Logs, vídeos de guía si puedes acceder a su contenido, foros, etc.). Busca por el NOMBRE de la habilidad (en español o en inglés, lo que te dé mejores resultados) — el ability_id solo sirve para identificarla en tu respuesta, no suele ser buscable.
 
 Para CADA habilidad, contrasta la información en AL MENOS DOS fuentes distintas antes de decidir. Si no consigues confirmarlo en más de una fuente, o las fuentes se contradicen entre sí, es mejor marcar confidence:"low" (o category:null si de verdad no tienes ninguna pista) que arriesgarte a un falso positivo — un RL humano revisará a mano cualquier respuesta con confidence "low".
 
@@ -52,7 +52,7 @@ Responde ÚNICAMENTE con JSON válido (sin texto, sin markdown, sin backticks): 
 [
   {
     "abilityId": number,
-    "category": "tankbuster" | "raid-damage" | "avoidable-ground" | "debuff-stack" | "interrupt" | "soak" | "spread" | "healing-absorb" | "personal-target" | null,
+    "category": "tankbuster" | "raid-damage" | "avoidable-ground" | "debuff-stack" | "interrupt" | "soak" | "spread" | "healing-absorb" | "personal-target" | "enrage" | null,
     "confidence": "high" | "medium" | "low",
     "sources": string[],
     "notes": string

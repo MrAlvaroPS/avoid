@@ -15,6 +15,7 @@ import type { DeathCause, MechanicCategory, PullRow } from '../shared/models/dom
 import type { TrendBar } from '../shared/charts/trend-bars.component';
 import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { LlmPullAnalysis } from '../shared/models/ui';
+import type { NightFullReport, StoredNightFullReport } from '../shared/models/night-full-report';
 
 export interface NightBossSummary {
   bossId: string;
@@ -78,6 +79,19 @@ export interface NightReport {
 export class NightReportService {
   private supabase = inject(SupabaseService);
   private wowauditRoster = inject(WowauditRosterService);
+
+  async loadFullReport(reportCode: string): Promise<StoredNightFullReport | null> {
+    const { data, error } = await this.supabase.client
+      .from('night_full_reports')
+      .select('report, generated_at')
+      .eq('report_code', reportCode)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    const report = data.report as unknown as NightFullReport;
+    if (report.schemaVersion !== 6) return null;
+    return { report, generatedAt: data.generated_at as string };
+  }
 
   async load(reportCode: string): Promise<NightReport> {
     const client = this.supabase.client;
