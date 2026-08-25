@@ -32,7 +32,7 @@ Deno.serve(async (req: Request) => {
   try {
     if (!body.force) {
       const { data: existing } = await supabase.from('night_full_reports').select('*').eq('report_code', body.reportCode).maybeSingle();
-      if (existing?.report?.schemaVersion === 6) {
+      if (existing?.report?.schemaVersion === 7) {
         return jsonResponse({ ok: true, cached: true, report: existing.report, generatedAt: existing.generated_at });
       }
     }

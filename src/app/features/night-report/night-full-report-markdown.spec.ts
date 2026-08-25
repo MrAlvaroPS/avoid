@@ -2,7 +2,7 @@ import type { NightFullReport } from '../../shared/models/night-full-report';
 import { bilingualName, buildNightDiscordSummary, buildNightFullReportMarkdown } from './night-full-report-markdown';
 
 const report: NightFullReport = {
-  schemaVersion: 6,
+  schemaVersion: 7,
   reportCode: 'ABC123',
   reportTitle: 'Raid test',
   reportDate: '2026-08-24T18:00:00.000Z',
@@ -39,6 +39,7 @@ const report: NightFullReport = {
     avoidableDamageTotal: null,
     trend: 'improving',
   }],
+  timelinePatterns: null,
   avoidableDamage: null,
   deaths: {
     totalRealDeaths: 10,

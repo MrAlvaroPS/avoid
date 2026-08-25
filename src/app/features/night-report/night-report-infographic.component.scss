@@ -141,7 +141,7 @@ app-night-report-infographic {
   .iris-brand h1 { margin: 4px 0 0; font-family: Georgia, 'Times New Roman', serif; font-size: 36px; font-weight: 500; letter-spacing: -.035em; }
   .iris-date-block { text-align: right; }
   .iris-date-block strong { display: block; font-family: Georgia, 'Times New Roman', serif; color: #ead6b0; font-size: 19px; font-weight: 500; text-transform: capitalize; }
-  .iris-date-block span { display: block; margin-top: 7px; color: #776f80; font-size: 9px; }
+  .iris-date-block span { display: block; margin-top: 7px; color: #a99faf; font-size: 10px; }
 
   .iris-hero {
     position: relative;
@@ -176,13 +176,13 @@ app-night-report-infographic {
     &::before { content: ''; grid-area: 1 / 1; width: 136px; height: 136px; background: #110d19; border: 1px solid rgb(255 255 255 / 7%); border-radius: 50%; }
     > div { z-index: 1; grid-area: 1 / 1; text-align: center; }
     strong { display: block; color: #f0d49b; font-family: Georgia, 'Times New Roman', serif; font-size: 31px; font-weight: 500; }
-    span { display: block; margin-top: 3px; color: #82778a; font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    span { display: block; margin-top: 3px; color: #aaa0b0; font-size: 9.5px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
   }
   .iris-progress-copy { width: 100%; margin-top: 18px; text-align: center; }
-  .iris-progress-copy > span { color: #7c7284; font-size: 9px; font-weight: 900; letter-spacing: .13em; }
+  .iris-progress-copy > span { color: #aca2b2; font-size: 9.5px; font-weight: 900; letter-spacing: .13em; }
   .iris-progress-copy > strong { display: block; margin-top: 5px; font-size: 17px; }
   .iris-progress-copy > strong i { padding: 0 8px; color: #a77ac0; font-style: normal; }
-  .iris-progress-copy small { display: block; margin-top: 7px; color: #706777; font-size: 9px; }
+  .iris-progress-copy small { display: block; margin-top: 7px; color: #aaa1af; font-size: 10px; }
   .iris-progress-track { height: 5px; overflow: hidden; margin-top: 10px; background: #302638; border-radius: 20px; }
   .iris-progress-track i { display: block; height: 100%; background: linear-gradient(90deg, #8d62ac, #d7b66f); border-radius: inherit; }
 
@@ -199,7 +199,7 @@ app-night-report-infographic {
   .iris-stat-strip > div { min-height: 92px; display: grid; grid-template-columns: 25px auto; align-content: center; column-gap: 9px; padding: 16px 20px; background: #100d17; }
   .iris-stat-strip svg { grid-row: 1 / 3; align-self: center; width: 23px; height: 23px; fill: none; stroke: #b58acc; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .iris-stat-strip strong { align-self: end; font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: 500; white-space: nowrap; }
-  .iris-stat-strip span { color: #746c7c; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+  .iris-stat-strip span { color: #a59baa; font-size: 9.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
   .iris-stat-strip .success { strong, svg { color: #6fc88f; stroke: #6fc88f; } }
   .iris-stat-strip .danger { strong, svg { color: #eb6c7f; stroke: #eb6c7f; } }
 
@@ -207,15 +207,15 @@ app-night-report-infographic {
   .iris-section-title { margin-bottom: 17px; }
   .iris-section-title h2 { margin: 4px 0 0; font-family: Georgia, 'Times New Roman', serif; font-size: 24px; font-weight: 500; letter-spacing: -.02em; }
   .iris-section-title.inline { display: flex; align-items: end; justify-content: space-between; gap: 30px; }
-  .iris-section-title.inline p { margin: 0 0 3px; color: #756c7d; font-size: 10px; }
+  .iris-section-title.inline p { margin: 0 0 3px; color: #a99faf; font-size: 10.5px; }
 
   .iris-boss-route { display: flex; align-items: center; }
   .iris-boss-route article { position: relative; min-width: 0; flex: 1; padding: 15px 16px 14px 58px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 15px; }
   .iris-route-icon { position: absolute; top: 15px; left: 15px; width: 31px; height: 31px; display: grid; place-items: center; color: #e56b7e; background: rgb(229 107 126 / 11%); border: 1px solid rgb(229 107 126 / 28%); border-radius: 10px; }
   .iris-route-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-boss-route article > span { display: block; color: #756c7c; font-size: 8px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
-  .iris-boss-route article > strong { display: block; min-height: 32px; margin-top: 5px; font-size: 12px; line-height: 1.25; }
-  .iris-boss-route article > b { display: block; margin-top: 7px; color: #e56b7e; font-size: 10px; }
+  .iris-boss-route article > span { display: block; color: #a39aaa; font-size: 9px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+  .iris-boss-route article > strong { display: block; min-height: 34px; margin-top: 5px; font-size: 13px; line-height: 1.3; }
+  .iris-boss-route article > b { display: block; margin-top: 7px; color: #ee7d8d; font-size: 10.5px; }
   .iris-boss-route article.cleared .iris-route-icon { color: #67c689; background: rgb(103 198 137 / 11%); border-color: rgb(103 198 137 / 28%); }
   .iris-boss-route article.cleared > b { color: #67c689; }
   .iris-boss-route article.current { background: linear-gradient(135deg, rgb(139 93 174 / 16%), rgb(255 255 255 / 3%)); border-color: rgb(196 155 217 / 35%); }
@@ -240,10 +240,221 @@ app-night-report-infographic {
   .iris-spell-icon > svg { width: 100%; height: 100%; padding: 11px; fill: none; stroke: #ead3f4; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; background: #392647; border-radius: 12px; }
   .iris-priority-text { margin-top: 17px; }
   .iris-priority-text > strong { display: block; padding-right: 30px; color: #f2e8f6; font-family: Georgia, 'Times New Roman', serif; font-size: 17px; font-weight: 500; line-height: 1.22; }
-  .iris-priority-text p { margin: 9px 0 0; color: #aaa0b0; font-size: 10.5px; line-height: 1.48; }
-  .iris-priority-text small { display: block; margin-top: 9px; color: #7f7485; font-size: 8.8px; line-height: 1.45; }
-  .iris-priority-text small b { color: #b997ca; }
+  .iris-priority-text p { margin: 10px 0 0; color: #c3bbc8; font-size: 11.5px; line-height: 1.55; }
+  .iris-priority-text small { display: block; margin-top: 10px; color: #aaa0af; font-size: 10.2px; line-height: 1.55; }
+  .iris-priority-text small b { color: #d0a8e2; }
   .iris-priority-empty { grid-column: 1 / -1; padding: 32px; color: #8f8596; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 18px; }
+
+  .iris-timelines-section {
+    padding: 25px 25px 21px;
+    background:
+      radial-gradient(circle at 50% 0, rgb(176 112 205 / 12%), transparent 43%),
+      linear-gradient(145deg, rgb(28 20 39 / 92%), rgb(12 9 19 / 96%));
+    border: 1px solid rgb(204 161 224 / 22%);
+    border-radius: 23px;
+    box-shadow: inset 0 1px rgb(255 255 255 / 8%);
+  }
+  .iris-timeline-intro {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: -2px 0 14px;
+    padding: 11px 14px;
+    color: #d5cbd9;
+    background: rgb(162 112 191 / 8%);
+    border: 1px solid rgb(194 151 215 / 14%);
+    border-radius: 13px;
+  }
+  .iris-timeline-intro-icon {
+    width: 34px;
+    height: 34px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    color: #d2a7e5;
+    background: rgb(178 121 205 / 14%);
+    border-radius: 10px;
+  }
+  .iris-timeline-intro-icon svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .iris-timeline-intro p { margin: 0; font-size: 11px; line-height: 1.52; }
+  .iris-timeline-intro strong { color: #f0e5f4; }
+  .iris-timeline-stack { display: flex; flex-direction: column; gap: 13px; }
+  .iris-timeline-card {
+    overflow: hidden;
+    background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 2%));
+    border: 1px solid rgb(255 255 255 / 9%);
+    border-radius: 18px;
+  }
+  .iris-timeline-card-header {
+    min-height: 82px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 22px;
+    padding: 14px 18px;
+    background: linear-gradient(90deg, rgb(138 87 168 / 13%), transparent 62%);
+    border-bottom: 1px solid rgb(255 255 255 / 7%);
+  }
+  .iris-timeline-anchor-heading { min-width: 0; display: flex; align-items: center; gap: 12px; }
+  .iris-timeline-window-number { color: rgb(229 205 239 / 26%); font-family: Georgia, 'Times New Roman', serif; font-size: 25px; }
+  .iris-spell-icon.timeline-anchor-icon { width: 48px; height: 48px; flex: 0 0 auto; padding: 2px; border-radius: 12px; }
+  .iris-spell-icon.timeline-anchor-icon img,
+  .iris-spell-icon.timeline-anchor-icon > svg { border-radius: 9px; }
+  .iris-timeline-anchor-heading > div:last-child { min-width: 0; }
+  .iris-timeline-anchor-heading > div:last-child > span { display: block; color: #d3a9e5; font-size: 9px; font-weight: 900; letter-spacing: .1em; }
+  .iris-timeline-anchor-heading > div:last-child > strong { display: block; margin-top: 5px; color: #f5edf7; font-family: Georgia, 'Times New Roman', serif; font-size: 17px; font-weight: 500; line-height: 1.22; }
+  .iris-timeline-evidence { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 420px; }
+  .iris-timeline-evidence > span { padding: 6px 8px; color: #c7becb; background: rgb(255 255 255 / 5%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 8px; font-size: 9px; white-space: nowrap; }
+  .iris-timeline-evidence b { color: #eee5f2; font-size: 11px; }
+  .iris-timeline-evidence .warning { color: #e2c47d; background: rgb(218 179 95 / 8%); border-color: rgb(218 179 95 / 14%); }
+  .iris-timeline-evidence .warning b { color: #f0d08a; }
+  .iris-timeline-evidence .danger { color: #ef91a0; background: rgb(226 89 111 / 9%); border-color: rgb(226 89 111 / 17%); }
+  .iris-timeline-evidence .danger b { color: #f39aaa; }
+
+  .iris-timeline-track { position: relative; height: 96px; margin: 8px 25px 0; }
+  .iris-timeline-axis {
+    position: absolute;
+    top: 47px;
+    right: 13px;
+    left: 13px;
+    height: 2px;
+    background: linear-gradient(90deg, #4f4358, #b286c5 43%, #ead19c 50%, #b286c5 57%, #4f4358);
+    box-shadow: 0 0 14px rgb(192 142 215 / 20%);
+  }
+  .iris-timeline-axis::before,
+  .iris-timeline-axis::after { content: ''; position: absolute; top: -4px; width: 9px; height: 9px; border-top: 2px solid #80688c; border-right: 2px solid #80688c; }
+  .iris-timeline-axis::before { left: -1px; transform: rotate(-135deg); }
+  .iris-timeline-axis::after { right: -1px; transform: rotate(45deg); }
+  .iris-timeline-axis i { position: absolute; top: -8px; left: 50%; width: 2px; height: 18px; background: #ead19c; box-shadow: 0 0 16px #d5ad67; }
+  .iris-timeline-axis-label { position: absolute; top: 62px; color: #aaa0af; font-size: 8px; font-weight: 900; letter-spacing: .08em; }
+  .iris-timeline-axis-label.start { left: 10px; }
+  .iris-timeline-axis-label.center { left: 50%; color: #d9bd83; transform: translateX(-50%); }
+  .iris-timeline-axis-label.end { right: 10px; }
+  .iris-timeline-marker { position: absolute; top: 0; bottom: 0; width: 0; z-index: 2; }
+  .iris-timeline-marker::before { content: ''; position: absolute; top: 34px; left: -1px; width: 1px; height: 14px; background: rgb(200 164 217 / 50%); }
+  .iris-timeline-marker-node {
+    position: absolute;
+    top: 34px;
+    left: 0;
+    width: 29px;
+    height: 29px;
+    display: grid;
+    place-items: center;
+    overflow: visible;
+    color: #d8b8e6;
+    background: #2d2038;
+    border: 2px solid #b889cc;
+    border-radius: 50%;
+    box-shadow: 0 0 0 4px #100c18, 0 0 18px rgb(181 125 205 / 34%);
+    transform: translate(-50%, -50%);
+  }
+  .iris-timeline-marker.below::before { top: 47px; height: 15px; }
+  .iris-timeline-marker.below .iris-timeline-marker-node { top: 62px; }
+  .iris-timeline-marker.lane-two::before { top: 47px; height: 1px; }
+  .iris-timeline-marker.lane-two .iris-timeline-marker-node { top: 48px; }
+  .iris-timeline-marker-node img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+  .iris-timeline-marker-node svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .iris-timeline-marker-node > b { position: absolute; top: -6px; right: -6px; min-width: 15px; height: 15px; display: grid; place-items: center; padding: 0 3px; color: #120d18; background: #d5aee6; border: 2px solid #120d18; border-radius: 50%; font-size: 7px; line-height: 1; }
+  .iris-timeline-marker.anchor { z-index: 4; }
+  .iris-timeline-marker.anchor::before { background: #dfbd79; box-shadow: 0 0 11px rgb(223 189 121 / 55%); }
+  .iris-timeline-marker.anchor .iris-timeline-marker-node { width: 37px; height: 37px; border-color: #efcf8e; box-shadow: 0 0 0 5px #100c18, 0 0 24px rgb(224 181 103 / 58%); }
+  .iris-timeline-marker.anchor .iris-timeline-marker-node > b { background: #efd497; }
+  .iris-timeline-marker.death .iris-timeline-marker-node { color: #f4a0ad; background: #4b202b; border-color: #ed7789; box-shadow: 0 0 0 4px #100c18, 0 0 20px rgb(226 89 111 / 45%); }
+  .iris-timeline-marker.death .iris-timeline-marker-node > b { background: #ee8798; }
+  .iris-timeline-event-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 0 17px 12px; }
+  .iris-timeline-event-list > div { min-width: 0; display: grid; grid-template-columns: 27px 1fr; gap: 9px; align-items: start; padding: 9px 10px; background: rgb(9 7 14 / 64%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 10px; }
+  .iris-timeline-event-index { width: 27px; height: 27px; display: grid; place-items: center; color: #d8b4e7; background: rgb(181 132 202 / 12%); border: 1px solid rgb(197 152 216 / 18%); border-radius: 8px; font-family: Georgia, 'Times New Roman', serif; font-size: 10px; }
+  .iris-timeline-event-list > div > div { min-width: 0; }
+  .iris-timeline-event-list > div > div > span { display: block; color: #c49bd9; font-size: 8px; font-weight: 900; letter-spacing: .08em; }
+  .iris-timeline-event-list > div > div > strong { display: block; margin-top: 3px; color: #f0e9f3; font-size: 9.7px; line-height: 1.32; }
+  .iris-timeline-event-list > div > div > small { display: block; margin-top: 4px; color: #b9b0be; font-size: 8px; line-height: 1.3; text-transform: uppercase; }
+  .iris-timeline-event-list > div.anchor { background: linear-gradient(145deg, rgb(68 47 72 / 68%), rgb(15 11 20 / 72%)); border-color: rgb(231 199 139 / 25%); }
+  .iris-timeline-event-list > div.anchor .iris-timeline-event-index { color: #251a0c; background: #e1c481; border-color: #eed79f; }
+  .iris-timeline-event-list > div.anchor > div > span { color: #e9cb8a; }
+  .iris-timeline-event-list > div.death { border-color: rgb(230 102 123 / 20%); }
+  .iris-timeline-event-list > div.death .iris-timeline-event-index,
+  .iris-timeline-event-list > div.death > div > span { color: #f092a1; }
+  .iris-timeline-prep { display: flex; align-items: center; gap: 11px; margin: 0 17px 15px; padding: 10px 12px; color: #d7cfdc; background: linear-gradient(90deg, rgb(211 173 103 / 9%), rgb(152 100 181 / 7%)); border: 1px solid rgb(220 187 126 / 15%); border-radius: 11px; }
+  .iris-timeline-prep > span { width: 29px; height: 29px; flex: 0 0 auto; display: grid; place-items: center; color: #e1c27f; background: rgb(211 173 103 / 11%); border-radius: 9px; }
+  .iris-timeline-prep svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .iris-timeline-prep p { margin: 0; font-size: 10.5px; line-height: 1.5; }
+  .iris-timeline-prep b { color: #f0ddba; }
+  .iris-timeline-disclaimer { margin: 13px 2px 0; color: #afa5b4; font-size: 9px; line-height: 1.45; text-align: center; }
+
+  // Variante compacta: una sola banda visual, sin tarjetas anidadas ni
+  // grandes zonas vacías. La secuencia sigue siendo reconocible por icono,
+  // posición y número, pero no compite con las prioridades del informe.
+  .iris-timelines-section { padding: 0; background: none; border: 0; border-radius: 0; box-shadow: none; }
+  .iris-timelines-section .iris-section-title { margin-bottom: 10px; }
+  .iris-timeline-intro { display: none; }
+  .iris-timeline-stack { gap: 0; overflow: hidden; background: rgb(255 255 255 / 2.5%); border: 1px solid rgb(255 255 255 / 8%); border-radius: 15px; }
+  .iris-timeline-card {
+    min-height: 104px;
+    display: grid;
+    grid-template-columns: 265px minmax(0, 1fr) 265px;
+    grid-template-rows: 65px auto;
+    column-gap: 15px;
+    align-items: center;
+    padding: 9px 14px 8px;
+    overflow: visible;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid rgb(255 255 255 / 7%);
+    border-radius: 0;
+  }
+  .iris-timeline-card:last-child { border-bottom: 0; }
+  .iris-timeline-card-header { grid-column: 1; grid-row: 1 / 3; min-height: 0; display: block; padding: 0; background: none; border: 0; }
+  .iris-timeline-anchor-heading { gap: 9px; }
+  .iris-timeline-window-number { display: none; }
+  .iris-spell-icon.timeline-anchor-icon { width: 38px; height: 38px; border-radius: 9px; }
+  .iris-spell-icon.timeline-anchor-icon img,
+  .iris-spell-icon.timeline-anchor-icon > svg { border-radius: 7px; }
+  .iris-timeline-anchor-heading > div:last-child > span { font-size: 7.5px; letter-spacing: .08em; }
+  .iris-timeline-anchor-heading > div:last-child > strong { margin-top: 3px; font-size: 12px; line-height: 1.2; }
+  .iris-timeline-evidence { max-width: none; justify-content: flex-start; gap: 0; margin: 6px 0 0 47px; }
+  .iris-timeline-evidence > span { padding: 0; color: #aaa1af; background: none; border: 0; border-radius: 0; font-size: 7.6px; }
+  .iris-timeline-evidence > span + span::before { content: ' · '; padding: 0 3px; color: #655e6b; }
+  .iris-timeline-evidence b { font-size: 8px; }
+  .iris-timeline-evidence .warning,
+  .iris-timeline-evidence .danger { color: #c4b9c8; background: none; border: 0; }
+  .iris-timeline-evidence .danger b { color: #ed8393; }
+
+  .iris-timeline-track { grid-column: 2; grid-row: 1; height: 60px; margin: 0 6px; }
+  .iris-timeline-axis { top: 28px; right: 4px; left: 4px; height: 1px; box-shadow: none; }
+  .iris-timeline-axis::before,
+  .iris-timeline-axis::after { top: -3px; width: 6px; height: 6px; }
+  .iris-timeline-axis i { top: -5px; height: 11px; }
+  .iris-timeline-axis-label { top: 38px; font-size: 6.5px; }
+  .iris-timeline-axis-label.start { left: 2px; }
+  .iris-timeline-axis-label.end { right: 2px; }
+  .iris-timeline-marker::before { top: 18px; height: 11px; }
+  .iris-timeline-marker-node { top: 18px; width: 22px; height: 22px; border-width: 1px; box-shadow: 0 0 0 3px #100c18; }
+  .iris-timeline-marker.below::before { top: 28px; height: 11px; }
+  .iris-timeline-marker.below .iris-timeline-marker-node { top: 39px; }
+  .iris-timeline-marker.lane-two::before { top: 28px; height: 1px; }
+  .iris-timeline-marker.lane-two .iris-timeline-marker-node { top: 29px; }
+  .iris-timeline-marker-node svg { width: 13px; height: 13px; }
+  .iris-timeline-marker-node > b { top: -5px; right: -5px; min-width: 12px; height: 12px; padding: 0 2px; border-width: 1px; font-size: 6px; }
+  .iris-timeline-marker.anchor .iris-timeline-marker-node { width: 27px; height: 27px; box-shadow: 0 0 0 3px #100c18, 0 0 13px rgb(224 181 103 / 42%); }
+  .iris-timeline-marker.death .iris-timeline-marker-node { box-shadow: 0 0 0 3px #100c18, 0 0 11px rgb(226 89 111 / 35%); }
+
+  .iris-timeline-event-list { grid-column: 2; grid-row: 2; display: flex; align-items: flex-start; gap: 0; margin: -1px 4px 0; }
+  .iris-timeline-event-list > div { position: relative; min-width: 0; flex: 1; display: block; padding: 0 8px 0 0; background: none; border: 0; border-radius: 0; }
+  .iris-timeline-event-list > div:not(:last-child)::after { content: '→'; position: absolute; top: 10px; right: 1px; color: #675d6d; font-size: 9px; }
+  .iris-timeline-event-index { display: none; }
+  .iris-timeline-event-list > div > div > span { font-size: 6.5px; }
+  .iris-timeline-event-list > div > div > strong { margin-top: 1px; color: #d8cfdc; font-size: 7.5px; line-height: 1.18; }
+  .iris-timeline-event-list > div > div > small { display: none; }
+  .iris-timeline-event-list > div.anchor,
+  .iris-timeline-event-list > div.death { background: none; border: 0; }
+  .iris-timeline-event-list > div.anchor > div > strong { color: #ead09a; }
+  .iris-timeline-event-list > div.death > div > strong { color: #ed8494; }
+
+  .iris-timeline-prep { grid-column: 3; grid-row: 1 / 3; display: block; margin: 0; padding: 2px 0 2px 14px; color: #c8becd; background: none; border: 0; border-left: 2px solid rgb(194 151 215 / 25%); border-radius: 0; }
+  .iris-timeline-prep > span { display: none; }
+  .iris-timeline-prep p { margin: 0; font-size: 8.8px; line-height: 1.42; }
+  .iris-timeline-prep b { display: block; margin-bottom: 3px; color: #cda8de; font-size: 7px; letter-spacing: .1em; text-transform: uppercase; }
+  .iris-timeline-disclaimer { margin: 6px 0 0; color: #8f8595; font-size: 7.5px; text-align: right; }
 
   .iris-mechanic-list { display: flex; flex-direction: column; gap: 8px; }
   .iris-mechanic-list article {
@@ -263,14 +474,14 @@ app-night-report-infographic {
   .iris-spell-icon.compact img,
   .iris-spell-icon.compact > svg { border-radius: 9px; }
   .iris-mechanic-name { min-width: 0; }
-  .iris-mechanic-name strong { display: block; color: #e7ddeb; font-family: Georgia, 'Times New Roman', serif; font-size: 13px; font-weight: 500; }
-  .iris-mechanic-name > span { display: block; margin-top: 3px; color: #877c8d; font-size: 8px; text-transform: uppercase; }
-  .iris-mechanic-name small { display: block; margin-top: 5px; overflow: hidden; color: #706777; font-size: 7.6px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+  .iris-mechanic-name strong { display: block; color: #eee6f1; font-family: Georgia, 'Times New Roman', serif; font-size: 14px; font-weight: 500; }
+  .iris-mechanic-name > span { display: block; margin-top: 3px; color: #aaa0af; font-size: 9.5px; text-transform: uppercase; }
+  .iris-mechanic-name small { display: block; margin-top: 6px; color: #b4abb9; font-size: 9.2px; line-height: 1.48; }
   .iris-mechanic-stat { text-align: center; }
   .iris-mechanic-stat b { display: block; color: #d8c8df; font-size: 13px; }
-  .iris-mechanic-stat span { display: block; margin-top: 3px; color: #6c6473; font-size: 7px; text-transform: uppercase; }
+  .iris-mechanic-stat span { display: block; margin-top: 3px; color: #9d93a2; font-size: 8.3px; text-transform: uppercase; }
   .iris-mechanic-stat.lethal b { color: #eb7889; }
-  .iris-mechanic-trend { padding: 5px 6px; color: #8d8492; background: rgb(255 255 255 / 5%); border-radius: 7px; font-size: 7px; font-weight: 900; text-align: center; }
+  .iris-mechanic-trend { padding: 6px; color: #aaa0af; background: rgb(255 255 255 / 7%); border-radius: 7px; font-size: 8.1px; font-weight: 900; text-align: center; }
   .iris-mechanic-trend.improving { color: #68c78a; background: rgb(95 191 130 / 11%); }
   .iris-mechanic-trend.worsening { color: #e97183; background: rgb(226 89 111 / 11%); }
 
@@ -280,11 +491,11 @@ app-night-report-infographic {
   .iris-role-heading { display: flex; align-items: center; gap: 10px; }
   .iris-role-icon { width: 38px; height: 38px; flex: 0 0 auto; display: grid; place-items: center; color: #7fbbdf; background: rgb(74 145 187 / 14%); border-radius: 11px; }
   .iris-role-icon svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-role-heading > div > span { display: block; color: #8dbbd7; font-size: 8px; font-weight: 900; letter-spacing: .12em; }
-  .iris-role-heading > div > strong { display: block; margin-top: 3px; font-size: 10px; }
+  .iris-role-heading > div > span { display: block; color: #9bcae4; font-size: 9px; font-weight: 900; letter-spacing: .12em; }
+  .iris-role-heading > div > strong { display: block; margin-top: 3px; font-size: 11.5px; }
   .iris-role-grid article > b { display: block; margin-top: 17px; color: #d8c4e2; font-family: Georgia, 'Times New Roman', serif; font-size: 23px; font-weight: 500; }
-  .iris-role-grid article > b small { color: #766d7c; font-family: Arial, Helvetica, sans-serif; font-size: 8px; font-weight: 800; text-transform: uppercase; }
-  .iris-role-grid article > p { margin: 6px 0 0; color: #867c8c; font-size: 8.5px; line-height: 1.35; }
+  .iris-role-grid article > b small { color: #9e94a3; font-family: Arial, Helvetica, sans-serif; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+  .iris-role-grid article > p { margin: 7px 0 0; color: #b2a9b7; font-size: 10px; line-height: 1.42; }
   .iris-role-grid article.healer .iris-role-icon { color: #69c990; background: rgb(75 175 113 / 13%); }
   .iris-role-grid article.healer .iris-role-heading span { color: #79c797; }
   .iris-role-grid article.dps .iris-role-icon { color: #dd826e; background: rgb(208 91 72 / 13%); }
@@ -295,19 +506,19 @@ app-night-report-infographic {
   .iris-wins-section li { display: flex; gap: 10px; padding: 10px 12px; background: rgb(85 177 117 / 7%); border: 1px solid rgb(95 191 130 / 16%); border-radius: 12px; }
   .iris-wins-section li > span { width: 22px; height: 22px; flex: 0 0 auto; display: grid; place-items: center; color: #6cca8e; background: rgb(95 191 130 / 13%); border-radius: 50%; }
   .iris-wins-section li svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-wins-section li p { margin: 2px 0 0; color: #a8a0ac; font-size: 9px; line-height: 1.4; }
+  .iris-wins-section li p { margin: 2px 0 0; color: #c4bcc8; font-size: 10.4px; line-height: 1.48; }
   .iris-resource-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
   .iris-resource-row > div { padding: 10px; background: rgb(255 255 255 / 3%); border-radius: 11px; }
   .iris-resource-row strong { display: block; color: #d8c4e2; font-size: 15px; }
-  .iris-resource-row span { display: block; margin-top: 2px; color: #726a78; font-size: 7.5px; text-transform: uppercase; }
+  .iris-resource-row span { display: block; margin-top: 3px; color: #9e94a3; font-size: 8.8px; text-transform: uppercase; }
 
   .iris-signal-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
   .iris-signal-grid article { min-width: 0; display: flex; align-items: center; gap: 14px; padding: 16px; background: linear-gradient(145deg, rgb(255 255 255 / 4.5%), rgb(255 255 255 / 2%)); border: 1px solid rgb(255 255 255 / 8%); border-radius: 16px; }
   .iris-signal-icon { width: 48px; height: 48px; flex: 0 0 auto; display: grid; place-items: center; color: #b78bcd; background: rgb(167 112 192 / 12%); border-radius: 14px; }
   .iris-signal-icon svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-signal-grid article > div > span { display: block; color: #7c7284; font-size: 7.5px; font-weight: 900; letter-spacing: .09em; }
+  .iris-signal-grid article > div > span { display: block; color: #aaa0b0; font-size: 8.5px; font-weight: 900; letter-spacing: .09em; }
   .iris-signal-grid article > div > strong { display: block; margin-top: 3px; color: #e5d9e9; font-family: Georgia, 'Times New Roman', serif; font-size: 20px; font-weight: 500; }
-  .iris-signal-grid article > div > small { display: block; margin-top: 3px; color: #6e6674; font-size: 7.5px; }
+  .iris-signal-grid article > div > small { display: block; margin-top: 4px; color: #a49aa9; font-size: 9px; line-height: 1.35; }
   .iris-signal-grid .defensives .iris-signal-icon { color: #71c88f; background: rgb(95 191 130 / 11%); }
   .iris-signal-grid .consumables .iris-signal-icon { color: #d8b46e; background: rgb(201 169 107 / 11%); }
   .iris-signal-grid .cascade .iris-signal-icon { color: #e26b7d; background: rgb(226 89 111 / 11%); }
@@ -317,16 +528,16 @@ app-night-report-infographic {
   .iris-patterns > strong,
   .iris-comparison > strong { display: block; margin-bottom: 10px; color: #cfc0d5; font-size: 10px; }
   .iris-patterns > div { display: grid; grid-template-columns: 140px 1fr 82px; align-items: center; gap: 10px; padding: 5px 0; }
-  .iris-patterns > div span { color: #8c828f; font-size: 8px; }
+  .iris-patterns > div span { color: #b0a7b4; font-size: 9.5px; }
   .iris-patterns > div i { height: 4px; overflow: hidden; background: #2a222f; border-radius: 9px; }
   .iris-patterns > div em { display: block; height: 100%; background: linear-gradient(90deg, #875ca5, #d4a967); border-radius: inherit; }
-  .iris-patterns > div b { color: #aaa0af; font-size: 8px; text-align: right; }
-  .iris-comparison > div { display: flex; justify-content: space-between; gap: 14px; padding: 5px 0; border-bottom: 1px solid rgb(255 255 255 / 5%); color: #8d8392; font-size: 8.5px; }
+  .iris-patterns > div b { color: #c0b7c4; font-size: 9px; text-align: right; }
+  .iris-comparison > div { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; border-bottom: 1px solid rgb(255 255 255 / 7%); color: #b0a6b4; font-size: 9.5px; }
   .iris-comparison > div b { color: #e07080; }
   .iris-comparison > div b.positive { color: #69c789; }
-  .iris-comparison > small { display: block; margin-top: 8px; color: #645d69; font-size: 7px; }
+  .iris-comparison > small { display: block; margin-top: 9px; color: #988e9d; font-size: 8.5px; }
   .iris-patterns > p,
-  .iris-comparison > p { margin: 0; color: #746c7a; font-size: 8.5px; }
+  .iris-comparison > p { margin: 0; color: #a69cab; font-size: 9.5px; }
 
   .iris-lethal-banner {
     min-height: 92px;
@@ -341,18 +552,18 @@ app-night-report-infographic {
     border-radius: 17px;
   }
   .iris-spell-icon.lethal { width: 58px; height: 58px; background: linear-gradient(145deg, #ed7788, #783747 60%, #dca54a); }
-  .iris-lethal-banner > div:nth-child(2) > span { display: block; color: #d96a7b; font-size: 8px; font-weight: 900; letter-spacing: .14em; }
+  .iris-lethal-banner > div:nth-child(2) > span { display: block; color: #ed7d8d; font-size: 9px; font-weight: 900; letter-spacing: .14em; }
   .iris-lethal-banner > div:nth-child(2) > strong { display: block; margin-top: 4px; font-family: Georgia, 'Times New Roman', serif; font-size: 18px; font-weight: 500; }
-  .iris-lethal-banner > div:nth-child(2) > small { display: block; margin-top: 3px; color: #7e7483; font-size: 8.5px; }
+  .iris-lethal-banner > div:nth-child(2) > small { display: block; margin-top: 4px; color: #aaa0ae; font-size: 9.5px; }
   .iris-lethal-banner > b { color: #ec7586; font-family: Georgia, 'Times New Roman', serif; font-size: 30px; font-weight: 500; text-align: right; }
-  .iris-lethal-banner > b small { display: block; color: #947079; font-family: Arial, Helvetica, sans-serif; font-size: 8px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+  .iris-lethal-banner > b small { display: block; color: #bd8e99; font-family: Arial, Helvetica, sans-serif; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
 
   .iris-sheet-footer { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-top: 28px; padding-top: 17px; border-top: 1px solid rgb(255 255 255 / 9%); }
   .iris-sheet-footer > div { display: flex; align-items: baseline; gap: 10px; }
   .iris-sheet-footer > div img { width: 31px; height: 31px; align-self: center; object-fit: contain; }
   .iris-sheet-footer > div span { color: #d3ae72; font-family: Georgia, 'Times New Roman', serif; font-size: 18px; }
-  .iris-sheet-footer > div strong { color: #786f7e; font-size: 8px; letter-spacing: .13em; }
-  .iris-sheet-footer p { max-width: 520px; margin: 0; color: #625b68; font-size: 7.5px; line-height: 1.35; text-align: right; }
+  .iris-sheet-footer > div strong { color: #a49aa8; font-size: 8.8px; letter-spacing: .13em; }
+  .iris-sheet-footer p { max-width: 520px; margin: 0; color: #918697; font-size: 8.5px; line-height: 1.45; text-align: right; }
 
   button:focus-visible { outline: 2px solid #c59cdb; outline-offset: 2px; }
 }

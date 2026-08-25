@@ -1,7 +1,7 @@
 export type NightReportTrend = 'improving' | 'worsening' | 'flat' | 'insufficient_data';
 
 export interface NightFullReport {
-  schemaVersion: 6;
+  schemaVersion: 7;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -67,6 +67,38 @@ export interface NightFullReport {
     avoidableDamageTotal: number | null;
     trend: NightReportTrend;
   }[];
+  timelinePatterns: {
+    bossName: string;
+    bossNameEs: string | null;
+    difficulty: string;
+    windowBeforeMs: number;
+    windowAfterMs: number;
+    timelines: {
+      anchorMechanicName: string;
+      anchorMechanicNameEs: string | null;
+      anchorWowheadSpellId: number | null;
+      anchorCategory: string | null;
+      anchorCategoryLabel: string | null;
+      medianTimeMs: number;
+      occurrences: number;
+      failures: number;
+      lethalFinalBlows: number;
+      pulls: number[];
+      prepNote: string;
+      markers: {
+        kind: 'ability' | 'deaths';
+        offsetMs: number;
+        mechanicName: string;
+        mechanicNameEs: string | null;
+        wowheadSpellId: number | null;
+        outcome: 'clean' | 'partial_fail' | 'fail' | null;
+        occurrences: number;
+        playersHit: number;
+        deaths: number;
+        isAnchor: boolean;
+      }[];
+    }[];
+  } | null;
   avoidableDamage: {
     total: number;
     perMinute: number;

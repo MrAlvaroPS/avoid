@@ -96,8 +96,45 @@ async function fetchAllByValues<T>(
   return all;
 }
 
+export interface NightTimelineMarker {
+  kind: 'ability' | 'deaths';
+  offsetMs: number;
+  mechanicName: string;
+  mechanicNameEs: string | null;
+  wowheadSpellId: number | null;
+  outcome: 'clean' | 'partial_fail' | 'fail' | null;
+  occurrences: number;
+  playersHit: number;
+  deaths: number;
+  isAnchor: boolean;
+}
+
+export interface NightTimeline {
+  anchorMechanicName: string;
+  anchorMechanicNameEs: string | null;
+  anchorWowheadSpellId: number | null;
+  anchorCategory: string | null;
+  anchorCategoryLabel: string | null;
+  medianTimeMs: number;
+  occurrences: number;
+  failures: number;
+  lethalFinalBlows: number;
+  pulls: number[];
+  prepNote: string;
+  markers: NightTimelineMarker[];
+}
+
+export interface NightTimelinePatterns {
+  bossName: string;
+  bossNameEs: string | null;
+  difficulty: string;
+  windowBeforeMs: number;
+  windowAfterMs: number;
+  timelines: NightTimeline[];
+}
+
 export interface NightFullReport {
-  schemaVersion: 6;
+  schemaVersion: 7;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -142,6 +179,7 @@ export interface NightFullReport {
     avoidableDamageTotal: number | null;
     trend: 'improving' | 'worsening' | 'flat' | 'insufficient_data';
   }[];
+  timelinePatterns: NightTimelinePatterns | null;
   /** null = el manifiesto de esta noche no tiene NINGÚN "Evitable" confirmado todavía (Ajustes) — un 0 real sería engañoso ("night limpia") cuando en verdad es "sin medir". Ver notAvailable. */
   avoidableDamage: {
     total: number;
@@ -284,6 +322,7 @@ interface MechEventLite {
   pull_id: string;
   mechanic_name: string;
   ability_id: number;
+  trigger_time_ms: number;
   category: string | null;
   outcome: string;
   players_hit: number;
@@ -334,7 +373,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     fetchAllByValues<MechEventLite>(
       supabase,
       'pull_mechanic_events',
-      'id, pull_id, mechanic_name, ability_id, category, outcome, players_hit',
+      'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, outcome, players_hit',
       'pull_id',
       pullIds,
     ),
@@ -760,7 +799,435 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     defensiveEvaluableCount: defensiveEvaluable,
   };
 
-  // ---- 4. Supervivencia (healthstone/potion) ----
+  // ---- 4. Ventanas temporales del boss de progress ----
+  // Se alinean secuencias observadas alrededor de habilidades prioritarias.
+  // Es deliberadamente descriptivo: que dos eventos estén próximos no
+  // demuestra que uno haya causado el otro.
+  const TIMELINE_BEFORE_MS = 12_000;
+  const TIMELINE_AFTER_MS = 12_000;
+  const TIMELINE_CLUSTER_GAP_MS = 18_000;
+  const medianRounded = (values: number[]): number => {
+    const ordered = [...values].sort((a, b) => a - b);
+    if (!ordered.length) return 0;
+    const middle = Math.floor(ordered.length / 2);
+    return Math.round(ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2);
+  };
+  const canonicalOutcome = (outcome: string): 'clean' | 'partial_fail' | 'fail' =>
+    outcome === 'fail' ? 'fail' : outcome === 'partial_fail' ? 'partial_fail' : 'clean';
+  const outcomeRank = (outcome: 'clean' | 'partial_fail' | 'fail' | null): number =>
+    outcome === 'fail' ? 3 : outcome === 'partial_fail' ? 2 : outcome === 'clean' ? 1 : 0;
+  const actionForCategory = (category: string | null): string => ({
+    'raid-damage': 'Raid: entrad a vida alta y usad el defensivo personal asignado; healers, reservad un CD para el impacto.',
+    'avoidable-ground': 'Raid: priorizad salir por la ruta acordada aunque haya que cortar un casteo; no apuréis GCD dentro de la zona.',
+    soak: 'RL: fijad los grupos antes del pull; cada jugador debe comprobar su grupo y posición antes de esta señal.',
+    spread: 'Raid: preposicionad la separación y dejad una salida libre; no improviséis el movimiento al recibir el target.',
+    tankbuster: 'Tanks: anunciad mitigación y relevo; el resto, fuera del frontal para no añadir daño a la ventana.',
+    'debuff-stack': 'RL: fijad el umbral de relevo o limpieza; jugadores, anunciad si llegáis a la ventana por encima de él.',
+    interrupt: 'RL: confirmad orden y backup; el siguiente jugador debe cortar si el asignado no está disponible.',
+    'healing-absorb': 'Healers: preparad sanación para retirar el absorb; raid, evitad solapar daño y usad personal si llegáis bajos.',
+    'personal-target': 'Objetivos: salid por la ruta acordada; resto de la raid, no invadáis esa ruta ni persigáis al target.',
+    enrage: 'RL: tratadla como límite del intento y confirmad antes de la ventana quién resuelve la mecánica especial.',
+  } as Record<string, string>)[category ?? '']
+    ?? 'Raid: usad la señal previa para llegar colocados; anunciad antes del impacto si falta una asignación o un recurso clave.';
+
+  type ObservedTimelineEvent = {
+    pullId: string;
+    timeMs: number;
+    mechanicName: string;
+    normalizedName: string;
+    wowheadSpellId: number | null;
+    category: string | null;
+    outcome: 'clean' | 'partial_fail' | 'fail';
+    playersHit: number;
+  };
+  type ObservedDeathGroup = {
+    pullId: string;
+    timeMs: number;
+    mechanicName: string | null;
+    normalizedName: string | null;
+    wowheadSpellId: number | null;
+    category: string | null;
+    deaths: number;
+  };
+
+  const timelinePatterns: NightFullReport['timelinePatterns'] = (() => {
+    if (!progressBossGroup) return null;
+    const progressPullIds = new Set(progressBossGroup.pulls.map((pull) => pull.id));
+
+    // Varias filas pueden describir el mismo impacto/canalización. Se
+    // compactan por habilidad y por instante para que el gráfico represente
+    // momentos del combate, no filas internas del pipeline.
+    const eventBuckets = new Map<string, MechEventLite[]>();
+    for (const event of reportableMechEvents) {
+      if (!progressPullIds.has(event.pull_id) || !Number.isFinite(event.trigger_time_ms)) continue;
+      const bucket = Math.round(event.trigger_time_ms / 1_500);
+      const key = `${event.pull_id}|${normalizeAbilityName(event.mechanic_name)}|${bucket}`;
+      const entries = eventBuckets.get(key) ?? [];
+      entries.push(event);
+      eventBuckets.set(key, entries);
+    }
+    const observedEvents: ObservedTimelineEvent[] = [...eventBuckets.values()].map((entries) => {
+      const representative = entries[0];
+      const outcomes = entries.map((entry) => canonicalOutcome(entry.outcome));
+      return {
+        pullId: representative.pull_id,
+        timeMs: medianRounded(entries.map((entry) => entry.trigger_time_ms)),
+        mechanicName: representative.mechanic_name,
+        normalizedName: normalizeAbilityName(representative.mechanic_name),
+        wowheadSpellId: entries.find((entry) => entry.ability_id)?.ability_id ?? null,
+        category: entries.find((entry) => entry.category)?.category ?? null,
+        outcome: outcomes.sort((a, b) => outcomeRank(b) - outcomeRank(a))[0] ?? 'clean',
+        playersHit: Math.max(0, ...entries.map((entry) => entry.players_hit ?? 0)),
+      };
+    });
+
+    const deathRows = realDeaths
+      .filter((record) => progressPullIds.has(record.pull_id) && Number.isFinite(record.death_cause?.timeMs))
+      .map((record) => ({
+        pullId: record.pull_id,
+        timeMs: record.death_cause!.timeMs,
+        mechanicName: record.death_cause!.mechanicName?.trim() || null,
+        normalizedName: record.death_cause!.mechanicName ? normalizeAbilityName(record.death_cause!.mechanicName) : null,
+        wowheadSpellId: record.death_cause!.mechanicId || null,
+        category: record.death_cause!.category,
+      }))
+      .sort((a, b) => a.pullId.localeCompare(b.pullId) || a.timeMs - b.timeMs);
+
+    const groupDeaths = (sameAbility: boolean): ObservedDeathGroup[] => {
+      const grouped: ObservedDeathGroup[] = [];
+      for (const death of deathRows) {
+        const previous = grouped[grouped.length - 1];
+        const sameKey = previous
+          && previous.pullId === death.pullId
+          && (!sameAbility || previous.normalizedName === death.normalizedName)
+          && death.timeMs - previous.timeMs <= 2_000;
+        if (sameKey) {
+          previous.timeMs = medianRounded([previous.timeMs, death.timeMs]);
+          previous.deaths++;
+          if (!previous.mechanicName && death.mechanicName) {
+            previous.mechanicName = death.mechanicName;
+            previous.normalizedName = death.normalizedName;
+            previous.wowheadSpellId = death.wowheadSpellId;
+            previous.category = death.category;
+          }
+        } else {
+          grouped.push({ ...death, deaths: 1 });
+        }
+      }
+      return grouped;
+    };
+    const abilityDeathGroups = groupDeaths(true);
+    const deathWaves = groupDeaths(false);
+
+    type AnchorCandidate = {
+      normalizedName: string;
+      mechanicName: string;
+      mechanicNameEs: string | null;
+      wowheadSpellId: number | null;
+      category: string | null;
+      score: number;
+      lethalFinalBlows: number;
+    };
+    const candidateByName = new Map<string, AnchorCandidate>();
+    const upsertCandidate = (candidate: AnchorCandidate): void => {
+      const current = candidateByName.get(candidate.normalizedName);
+      if (!current) {
+        candidateByName.set(candidate.normalizedName, candidate);
+        return;
+      }
+      current.score += candidate.score;
+      current.lethalFinalBlows = Math.max(current.lethalFinalBlows, candidate.lethalFinalBlows);
+      current.mechanicNameEs ??= candidate.mechanicNameEs;
+      current.wowheadSpellId ??= candidate.wowheadSpellId;
+      current.category ??= candidate.category;
+    };
+    for (const lethal of finalBlowCounts.values()) {
+      if (!lethal.isProgressBoss) continue;
+      const normalizedName = normalizeAbilityName(lethal.mechanicName);
+      const relatedEvent = observedEvents.find((event) => event.normalizedName === normalizedName);
+      upsertCandidate({
+        normalizedName,
+        mechanicName: lethal.mechanicName,
+        mechanicNameEs: lethal.mechanicNameEs,
+        wowheadSpellId: lethal.wowheadSpellId ?? relatedEvent?.wowheadSpellId ?? null,
+        category: relatedEvent?.category ?? null,
+        score: lethal.count * 12,
+        lethalFinalBlows: lethal.count,
+      });
+    }
+    for (const mechanic of mechanics.filter((entry) => entry.isProgressBoss && entry.category !== 'interrupt')) {
+      const normalizedName = normalizeAbilityName(mechanic.mechanicName);
+      upsertCandidate({
+        normalizedName,
+        mechanicName: mechanic.mechanicName,
+        mechanicNameEs: mechanic.mechanicNameEs,
+        wowheadSpellId: mechanic.wowheadSpellId,
+        category: mechanic.category,
+        score: mechanic.totalFails * 3 + mechanic.pullsAffected * 2 + mechanic.lethalFinalBlows * 10,
+        lethalFinalBlows: mechanic.lethalFinalBlows,
+      });
+    }
+
+    type AnchorOccurrence = {
+      pullId: string;
+      timeMs: number;
+      event: ObservedTimelineEvent | null;
+      deaths: number;
+    };
+    type TimelineWithScore = NightTimeline & { score: number; normalizedName: string };
+    const timelineCandidates: TimelineWithScore[] = [];
+
+    for (const candidate of [...candidateByName.values()].sort((a, b) => b.score - a.score).slice(0, 5)) {
+      const matchingDeaths = abilityDeathGroups.filter((group) => group.normalizedName === candidate.normalizedName);
+      let occurrences: AnchorOccurrence[] = observedEvents
+        .filter((event) => event.normalizedName === candidate.normalizedName)
+        .filter((event) => candidate.lethalFinalBlows > 0 || event.outcome !== 'clean')
+        .map((event) => ({
+          pullId: event.pullId,
+          timeMs: event.timeMs,
+          event,
+          deaths: matchingDeaths
+            .filter((group) => group.pullId === event.pullId && Math.abs(group.timeMs - event.timeMs) <= 2_500)
+            .reduce((sum, group) => sum + group.deaths, 0),
+        }));
+      // Los canales y auras pueden emitir varios ticks con el mismo nombre.
+      // Dentro de un mismo pull se convierten en un solo momento si están a
+      // menos de 15 s, conservando el peor resultado observado. La ventana
+      // es suficientemente corta para no unir ciclos reales separados, pero
+      // absorbe los ticks de canales y auras que vimos en los logs.
+      const compactedOccurrences: AnchorOccurrence[] = [];
+      for (const occurrence of occurrences.sort((a, b) => a.pullId.localeCompare(b.pullId) || a.timeMs - b.timeMs)) {
+        const previous = compactedOccurrences[compactedOccurrences.length - 1];
+        if (previous && previous.pullId === occurrence.pullId && occurrence.timeMs - previous.timeMs <= 15_000) {
+          previous.timeMs = medianRounded([previous.timeMs, occurrence.timeMs]);
+          previous.deaths = Math.max(previous.deaths, occurrence.deaths);
+          if (outcomeRank(occurrence.event?.outcome ?? null) > outcomeRank(previous.event?.outcome ?? null)) previous.event = occurrence.event;
+        } else {
+          compactedOccurrences.push({ ...occurrence });
+        }
+      }
+      occurrences = compactedOccurrences;
+      for (const deathGroup of matchingDeaths) {
+        if (occurrences.some((occurrence) => occurrence.pullId === deathGroup.pullId && Math.abs(occurrence.timeMs - deathGroup.timeMs) <= 2_500)) continue;
+        occurrences.push({ pullId: deathGroup.pullId, timeMs: deathGroup.timeMs, event: null, deaths: deathGroup.deaths });
+      }
+      occurrences.sort((a, b) => a.timeMs - b.timeMs);
+      if (!occurrences.length) continue;
+
+      const clusters: AnchorOccurrence[][] = [];
+      for (const occurrence of occurrences) {
+        const current = clusters[clusters.length - 1];
+        if (current && Math.abs(occurrence.timeMs - medianRounded(current.map((entry) => entry.timeMs))) <= TIMELINE_CLUSTER_GAP_MS) {
+          current.push(occurrence);
+        } else {
+          clusters.push([occurrence]);
+        }
+      }
+
+      for (const cluster of clusters) {
+        // Una línea representa una ventana por pull. Si dentro de esa misma
+        // ventana hubo varios ticks o golpes letales de la habilidad, se
+        // agregan como evidencia del mismo momento, no como "momentos" extra.
+        const occurrencesByPull = new Map<string, AnchorOccurrence[]>();
+        for (const occurrence of cluster) {
+          const entries = occurrencesByPull.get(occurrence.pullId) ?? [];
+          entries.push(occurrence);
+          occurrencesByPull.set(occurrence.pullId, entries);
+        }
+        const windowOccurrences: AnchorOccurrence[] = [...occurrencesByPull.entries()].map(([pullId, entries]) => ({
+          pullId,
+          timeMs: medianRounded(entries.map((entry) => entry.timeMs)),
+          event: entries
+            .map((entry) => entry.event)
+            .filter((event): event is ObservedTimelineEvent => event != null)
+            .sort((a, b) => outcomeRank(b.outcome) - outcomeRank(a.outcome))[0] ?? null,
+          deaths: entries.reduce((sum, entry) => sum + entry.deaths, 0),
+        }));
+        const pullNumbers = [...new Set(windowOccurrences.map((occurrence) => pullById.get(occurrence.pullId)?.pull_number).filter((value): value is number => value != null))].sort((a, b) => a - b);
+        const failures = windowOccurrences.filter((occurrence) => occurrence.event?.outcome === 'fail' || occurrence.event?.outcome === 'partial_fail').length;
+        const lethalFinalBlows = windowOccurrences.reduce((sum, occurrence) => sum + occurrence.deaths, 0);
+        if (pullNumbers.length < 2 && failures < 2 && lethalFinalBlows < 2) continue;
+
+        type MarkerAccumulator = {
+          kind: 'ability' | 'deaths';
+          offsets: number[];
+          mechanicName: string;
+          mechanicNameEs: string | null;
+          wowheadSpellId: number | null;
+          outcome: 'clean' | 'partial_fail' | 'fail' | null;
+          occurrences: Set<number>;
+          playersHit: number;
+          deaths: number;
+          isAnchor: boolean;
+        };
+        const markerByKey = new Map<string, MarkerAccumulator>();
+        const addMarker = (key: string, marker: Omit<MarkerAccumulator, 'occurrences'>, occurrenceIndex: number): void => {
+          const current = markerByKey.get(key);
+          if (current) {
+            current.offsets.push(...marker.offsets);
+            current.occurrences.add(occurrenceIndex);
+            current.playersHit = Math.max(current.playersHit, marker.playersHit);
+            current.deaths += marker.deaths;
+            if (outcomeRank(marker.outcome) > outcomeRank(current.outcome)) current.outcome = marker.outcome;
+          } else {
+            markerByKey.set(key, { ...marker, occurrences: new Set([occurrenceIndex]) });
+          }
+        };
+
+        // Un evento o una oleada solo se asigna a la instancia central más
+        // cercana dentro del pull. Esto evita duplicar evidencia cuando un
+        // canal produce varios ticks próximos.
+        for (const event of observedEvents) {
+          if (event.normalizedName === candidate.normalizedName) continue;
+          const nearest = windowOccurrences
+            .map((anchor, index) => ({ anchor, index, distance: Math.abs(event.timeMs - anchor.timeMs) }))
+            .filter((entry) => entry.anchor.pullId === event.pullId && entry.distance <= Math.max(TIMELINE_BEFORE_MS, TIMELINE_AFTER_MS))
+            .sort((a, b) => a.distance - b.distance)[0];
+          if (!nearest) continue;
+          const offsetMs = event.timeMs - nearest.anchor.timeMs;
+          if (offsetMs < -TIMELINE_BEFORE_MS || offsetMs > TIMELINE_AFTER_MS) continue;
+          const offsetBucket = Math.round(offsetMs / 3_000);
+          addMarker(`ability|${event.normalizedName}|${offsetBucket}`, {
+            kind: 'ability',
+            offsets: [offsetMs],
+            mechanicName: event.mechanicName,
+            mechanicNameEs: mechanicNameEs(progressBossGroup.bossId, progressBossGroup.difficulty, event.mechanicName),
+            wowheadSpellId: event.wowheadSpellId,
+            outcome: event.outcome,
+            playersHit: event.playersHit,
+            deaths: 0,
+            isAnchor: false,
+          }, nearest.index);
+        }
+        for (const wave of deathWaves) {
+          const nearest = windowOccurrences
+            .map((anchor, index) => ({ anchor, index, distance: Math.abs(wave.timeMs - anchor.timeMs) }))
+            .filter((entry) => entry.anchor.pullId === wave.pullId && entry.distance <= Math.max(TIMELINE_BEFORE_MS, TIMELINE_AFTER_MS))
+            .sort((a, b) => a.distance - b.distance)[0];
+          if (!nearest) continue;
+          const offsetMs = wave.timeMs - nearest.anchor.timeMs;
+          if (offsetMs < -TIMELINE_BEFORE_MS || offsetMs > TIMELINE_AFTER_MS) continue;
+          const offsetBucket = Math.round(offsetMs / 3_000);
+          addMarker(`deaths|${offsetBucket}`, {
+            kind: 'deaths',
+            offsets: [offsetMs],
+            mechanicName: 'Caídas registradas',
+            mechanicNameEs: null,
+            wowheadSpellId: null,
+            outcome: null,
+            playersHit: 0,
+            deaths: wave.deaths,
+            isAnchor: false,
+          }, nearest.index);
+        }
+
+        const anchorEvents = windowOccurrences.map((occurrence) => occurrence.event).filter((event): event is ObservedTimelineEvent => event != null);
+        const anchorOutcome = anchorEvents.map((event) => event.outcome).sort((a, b) => outcomeRank(b) - outcomeRank(a))[0] ?? null;
+        const anchorMarker: NightTimelineMarker = {
+          kind: 'ability',
+          offsetMs: 0,
+          mechanicName: candidate.mechanicName,
+          mechanicNameEs: candidate.mechanicNameEs,
+          wowheadSpellId: candidate.wowheadSpellId,
+          outcome: anchorOutcome,
+          occurrences: windowOccurrences.length,
+          playersHit: Math.max(0, ...anchorEvents.map((event) => event.playersHit)),
+          deaths: lethalFinalBlows,
+          isAnchor: true,
+        };
+        const eligibleMarkers = [...markerByKey.values()]
+          .filter((marker) => marker.kind === 'deaths'
+            || marker.outcome === 'fail'
+            || marker.outcome === 'partial_fail'
+            || marker.occurrences.size >= Math.max(2, Math.ceil(windowOccurrences.length * 0.6)))
+          .map((marker) => ({
+            kind: marker.kind,
+            offsetMs: medianRounded(marker.offsets),
+            mechanicName: marker.mechanicName,
+            mechanicNameEs: marker.mechanicNameEs,
+            wowheadSpellId: marker.wowheadSpellId,
+            outcome: marker.outcome,
+            occurrences: marker.occurrences.size,
+            playersHit: marker.playersHit,
+            deaths: marker.deaths,
+            isAnchor: false,
+            score: (marker.kind === 'deaths' ? 100 + marker.deaths * 5 : 0)
+              + (marker.outcome === 'fail' ? 50 : marker.outcome === 'partial_fail' ? 30 : 0)
+              + marker.occurrences.size * 4,
+          }));
+        // La infografía necesita una secuencia legible de un vistazo, no
+        // todos los eventos de la ventana: hasta dos fallos-señal, la mayor
+        // oleada de muertes y, si queda hueco, un evento repetido.
+        const selectedContext = new Set<(typeof eligibleMarkers)[number]>();
+        for (const marker of eligibleMarkers
+          .filter((entry) => entry.kind === 'ability' && entry.outcome !== 'clean')
+          .sort((a, b) => Math.abs(a.offsetMs) - Math.abs(b.offsetMs))
+          .slice(0, 2)) selectedContext.add(marker);
+        const strongestDeathWave = eligibleMarkers
+          .filter((entry) => entry.kind === 'deaths')
+          .sort((a, b) => b.deaths - a.deaths || Math.abs(a.offsetMs) - Math.abs(b.offsetMs))[0];
+        if (strongestDeathWave) selectedContext.add(strongestDeathWave);
+        const repeatedEvent = eligibleMarkers
+          .filter((entry) => entry.kind === 'ability' && entry.outcome === 'clean')
+          .sort((a, b) => b.occurrences - a.occurrences || Math.abs(a.offsetMs) - Math.abs(b.offsetMs))[0];
+        if (selectedContext.size < 3 && repeatedEvent) selectedContext.add(repeatedEvent);
+        const contextualMarkers = [...selectedContext]
+          .sort((a, b) => a.offsetMs - b.offsetMs)
+          .slice(0, 3)
+          .map(({ score: _score, ...marker }) => marker);
+        const precedingFailures = contextualMarkers
+          .filter((marker) => marker.kind === 'ability' && marker.offsetMs < 0 && marker.outcome !== 'clean')
+          .sort((a, b) => Math.abs(a.offsetMs) - Math.abs(b.offsetMs));
+        const cue = precedingFailures.length
+          ? `Señal: ${precedingFailures.map((marker) => marker.mechanicName).join(' + ')} ≈${Math.max(1, Math.round(Math.max(...precedingFailures.map((marker) => Math.abs(marker.offsetMs))) / 1_000))} s antes. `
+          : '';
+        const action = candidate.normalizedName.includes('final ascension')
+          ? 'RL: asignad quién usa el siguiente Disgusting Fish y confirmad que está disponible; no es un kick estándar.'
+          : candidate.normalizedName.includes('elemental explosion')
+            ? 'Raid: terminad la interacción Fire/Frost, llegad estabilizados y usad el defensivo asignado en el impacto.'
+            : actionForCategory(candidate.category);
+
+        timelineCandidates.push({
+          anchorMechanicName: candidate.mechanicName,
+          anchorMechanicNameEs: candidate.mechanicNameEs,
+          anchorWowheadSpellId: candidate.wowheadSpellId,
+          anchorCategory: candidate.category,
+          anchorCategoryLabel: candidate.category ? (MECHANIC_CATEGORY_LABEL[candidate.category] ?? candidate.category) : null,
+          medianTimeMs: medianRounded(windowOccurrences.map((occurrence) => occurrence.timeMs)),
+          occurrences: windowOccurrences.length,
+          failures,
+          lethalFinalBlows,
+          pulls: pullNumbers,
+          prepNote: `${cue}${action}`,
+          markers: [...contextualMarkers, anchorMarker].sort((a, b) => a.offsetMs - b.offsetMs),
+          score: lethalFinalBlows * 20 + failures * 6 + pullNumbers.length * 4 + windowOccurrences.length,
+          normalizedName: candidate.normalizedName,
+        });
+      }
+    }
+
+    const selected: TimelineWithScore[] = [];
+    const selectedPerAbility = new Map<string, number>();
+    for (const timeline of timelineCandidates.sort((a, b) => b.score - a.score)) {
+      if ((selectedPerAbility.get(timeline.normalizedName) ?? 0) >= 2) continue;
+      selected.push(timeline);
+      selectedPerAbility.set(timeline.normalizedName, (selectedPerAbility.get(timeline.normalizedName) ?? 0) + 1);
+      if (selected.length >= 3) break;
+    }
+    if (!selected.length) return null;
+    return {
+      bossName: progressBossGroup.bossName,
+      bossNameEs: progressBossGroup.bossNameEs,
+      difficulty: progressBossGroup.difficulty,
+      windowBeforeMs: TIMELINE_BEFORE_MS,
+      windowAfterMs: TIMELINE_AFTER_MS,
+      timelines: selected
+        .sort((a, b) => a.medianTimeMs - b.medianTimeMs)
+        .map(({ score: _score, normalizedName: _normalizedName, ...timeline }) => timeline),
+    };
+  })();
+
+  // ---- 5. Supervivencia (healthstone/potion) ----
   const playersWithHealthstoneEver = new Set<string>();
   const playersWithObservedHealthstoneAccess = new Set<string>();
   const playersWithPotionEver = new Set<string>();
@@ -1114,7 +1581,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     .reduce((sum, p) => sum + (p.raid_damage_taken_series?.points ?? []).reduce((pointSum, point) => pointSum + point, 0), 0);
 
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     reportCode,
     reportTitle: (reportResult.data as { title: string } | null)?.title ?? reportCode,
     reportDate: (reportResult.data as { start_time: number } | null)?.start_time ? new Date((reportResult.data as { start_time: number }).start_time).toISOString() : '',
@@ -1141,6 +1608,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
         }
       : null,
     mechanics,
+    timelinePatterns,
     deaths,
     survival,
     defensives,

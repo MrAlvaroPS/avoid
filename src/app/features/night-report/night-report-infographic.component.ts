@@ -93,6 +93,7 @@ export class NightReportInfographicComponent implements OnInit, AfterViewInit, O
       : 'Noche completada';
   });
   readonly topLethal = computed(() => this.report().deaths.topFinalBlows[0] ?? null);
+  readonly timelinePatterns = computed(() => this.report().timelinePatterns);
   readonly featuredMechanics = computed(() =>
     [...this.report().mechanics]
       .sort((left, right) =>
@@ -221,6 +222,27 @@ export class NightReportInfographicComponent implements OnInit, AfterViewInit, O
     return new Intl.NumberFormat('es-ES', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
   }
 
+  timelinePosition(offsetMs: number): number {
+    const patterns = this.timelinePatterns();
+    const before = patterns?.windowBeforeMs ?? 12_000;
+    const after = patterns?.windowAfterMs ?? 12_000;
+    return Math.max(3, Math.min(97, ((offsetMs + before) / (before + after)) * 100));
+  }
+
+  timelineOffsetLabel(offsetMs: number): string {
+    if (offsetMs === 0) return 'EVENTO CENTRAL';
+    const seconds = Math.max(1, Math.round(Math.abs(offsetMs) / 1_000));
+    return `${offsetMs < 0 ? '−' : '+'}${seconds} s`;
+  }
+
+  timelineOutcomeLabel(outcome: 'clean' | 'partial_fail' | 'fail' | null): string {
+    return outcome === 'fail' ? 'FALLO' : outcome === 'partial_fail' ? 'FALLO PARCIAL' : 'OBSERVADO';
+  }
+
+  pullList(pulls: number[]): string {
+    return pulls.map((pull) => `#${pull}`).join(', ');
+  }
+
   private async renderPng(): Promise<Blob | null> {
     if (!this.sheet || this.exportStatus() === 'rendering') return null;
     this.exportStatus.set('rendering');
@@ -323,6 +345,12 @@ export class NightReportInfographicComponent implements OnInit, AfterViewInit, O
     if (lethalSpellId) spellIds.add(lethalSpellId);
     for (const mechanic of this.featuredMechanics()) {
       if (mechanic.wowheadSpellId) spellIds.add(mechanic.wowheadSpellId);
+    }
+    for (const timeline of this.timelinePatterns()?.timelines ?? []) {
+      if (timeline.anchorWowheadSpellId) spellIds.add(timeline.anchorWowheadSpellId);
+      for (const marker of timeline.markers) {
+        if (marker.wowheadSpellId) spellIds.add(marker.wowheadSpellId);
+      }
     }
 
     const entries = await Promise.all(

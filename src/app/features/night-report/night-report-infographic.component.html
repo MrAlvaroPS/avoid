@@ -166,9 +166,112 @@
             </div>
           </section>
 
+          @if (timelinePatterns(); as patterns) {
+            <section class="iris-sheet-section iris-timelines-section">
+              <div class="iris-section-title inline">
+                <div><span>03 · PATRÓN</span><h2>Ventanas de peligro observadas</h2></div>
+                <p>{{ bilingualName(patterns.bossName, patterns.bossNameEs) }} · secuencia real de los pulls</p>
+              </div>
+              <div class="iris-timeline-intro">
+                <span class="iris-timeline-intro-icon" aria-hidden="true">
+                  <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11"/><path d="M16 9v8l5 3M3 16h3m20 0h3"/></svg>
+                </span>
+                <p><strong>Objetivo:</strong> reconocer la señal anterior y llegar preparados al evento central. Cada línea alinea intentos parecidos en una ventana de {{ timelineOffsetLabel(-patterns.windowBeforeMs) }} a {{ timelineOffsetLabel(patterns.windowAfterMs) }}.</p>
+              </div>
+              <div class="iris-timeline-stack">
+                @for (timeline of patterns.timelines; track timeline.anchorMechanicName + timeline.medianTimeMs; let timelineIndex = $index) {
+                  <article class="iris-timeline-card">
+                    <header class="iris-timeline-card-header">
+                      <div class="iris-timeline-anchor-heading">
+                        <span class="iris-timeline-window-number">0{{ timelineIndex + 1 }}</span>
+                        <div class="iris-spell-icon timeline-anchor-icon">
+                          @if (iconUrl(timeline.anchorWowheadSpellId); as url) {
+                            <img [src]="url" crossorigin="anonymous" alt="" (error)="onIconError($event)" />
+                          } @else {
+                            <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="17"/><path d="M24 13v12l8 5"/></svg>
+                          }
+                        </div>
+                        <div>
+                          <span>VENTANA ~{{ formatDuration(timeline.medianTimeMs) }} · {{ timeline.anchorCategoryLabel || 'MECÁNICA' }}</span>
+                          <strong>{{ bilingualName(timeline.anchorMechanicName, timeline.anchorMechanicNameEs) }}</strong>
+                        </div>
+                      </div>
+                      <div class="iris-timeline-evidence">
+                        <span><b>{{ timeline.occurrences }}</b> momentos</span>
+                        @if (timeline.failures) { <span class="warning"><b>{{ timeline.failures }}</b> fallos</span> }
+                        @if (timeline.lethalFinalBlows) { <span class="danger"><b>{{ timeline.lethalFinalBlows }}</b> muertes</span> }
+                        <span>pulls {{ pullList(timeline.pulls) }}</span>
+                      </div>
+                    </header>
+
+                    <div class="iris-timeline-track" aria-label="Secuencia temporal alrededor de la mecánica">
+                      <span class="iris-timeline-axis-label start">{{ timelineOffsetLabel(-patterns.windowBeforeMs) }}</span>
+                      <span class="iris-timeline-axis-label center">EVENTO</span>
+                      <span class="iris-timeline-axis-label end">{{ timelineOffsetLabel(patterns.windowAfterMs) }}</span>
+                      <div class="iris-timeline-axis" aria-hidden="true"><i></i></div>
+                      @for (marker of timeline.markers; track marker.kind + marker.mechanicName + marker.offsetMs; let markerIndex = $index) {
+                        <div
+                          class="iris-timeline-marker"
+                          [class.anchor]="marker.isAnchor"
+                          [class.death]="marker.kind === 'deaths'"
+                          [class.below]="markerIndex % 2 === 1"
+                          [class.lane-two]="markerIndex % 3 === 2"
+                          [style.left.%]="timelinePosition(marker.offsetMs)"
+                        >
+                          <span class="iris-timeline-marker-node">
+                            @if (marker.kind === 'deaths') {
+                              <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 23v-5a8 8 0 1 1 16 0v5l-3 3H11l-3-3Z"/><circle cx="13" cy="17" r="1.5"/><circle cx="19" cy="17" r="1.5"/><path d="M14 22h4"/></svg>
+                            } @else if (iconUrl(marker.wowheadSpellId); as url) {
+                              <img [src]="url" crossorigin="anonymous" alt="" (error)="onIconError($event)" />
+                            } @else {
+                              <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4 5 10v8c0 6 4.5 10.5 11 12 6.5-1.5 11-6 11-12v-8L16 4Z"/></svg>
+                            }
+                            <b>{{ markerIndex + 1 }}</b>
+                          </span>
+                        </div>
+                      }
+                    </div>
+
+                    <div class="iris-timeline-event-list">
+                      @for (marker of timeline.markers; track marker.kind + marker.mechanicName + marker.offsetMs; let markerIndex = $index) {
+                        <div [class.anchor]="marker.isAnchor" [class.death]="marker.kind === 'deaths'">
+                          <span class="iris-timeline-event-index">0{{ markerIndex + 1 }}</span>
+                          <div>
+                            <span>{{ timelineOffsetLabel(marker.offsetMs) }}</span>
+                            <strong>
+                              @if (marker.kind === 'deaths') {
+                                {{ marker.deaths }} muertes registradas
+                              } @else {
+                                {{ bilingualName(marker.mechanicName, marker.mechanicNameEs) }}
+                              }
+                            </strong>
+                            <small>
+                              @if (marker.kind === 'deaths') {
+                                oleada en {{ marker.occurrences }} secuencia{{ marker.occurrences === 1 ? '' : 's' }}
+                              } @else {
+                                {{ timelineOutcomeLabel(marker.outcome) }}
+                                @if (marker.playersHit) { · {{ marker.playersHit }} alcanzados }
+                              }
+                            </small>
+                          </div>
+                        </div>
+                      }
+                    </div>
+
+                    <footer class="iris-timeline-prep">
+                      <span aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 16h19m-6-7 7 7-7 7"/><circle cx="8" cy="16" r="5"/></svg></span>
+                      <p><b>Cómo prepararlo:</b> {{ timeline.prepNote }}</p>
+                    </footer>
+                  </article>
+                }
+              </div>
+              <p class="iris-timeline-disclaimer">Secuencia observada en los registros; la proximidad temporal ayuda a reconocer el patrón, pero no implica causalidad por sí sola.</p>
+            </section>
+          }
+
           <section class="iris-sheet-section iris-mechanics-section">
             <div class="iris-section-title inline">
-              <div><span>03 · EJECUCIÓN</span><h2>Mecánicas que están decidiendo los pulls</h2></div>
+              <div><span>04 · EJECUCIÓN</span><h2>Mecánicas que están decidiendo los pulls</h2></div>
               <p>Progress primero · impacto colectivo después</p>
             </div>
             <div class="iris-mechanic-list">
@@ -201,7 +304,7 @@
 
           <div class="iris-lower-grid">
             <section class="iris-sheet-section iris-roles-section">
-              <div class="iris-section-title"><span>04 · RESPONSABILIDADES</span><h2>Claves por función</h2></div>
+              <div class="iris-section-title"><span>05 · RESPONSABILIDADES</span><h2>Claves por función</h2></div>
               <div class="iris-role-grid">
                 <article class="tank">
                   <div class="iris-role-heading">
@@ -234,7 +337,7 @@
             </section>
 
             <section class="iris-sheet-section iris-wins-section">
-              <div class="iris-section-title"><span>05 · IMPULSO</span><h2>Lo que funcionó</h2></div>
+              <div class="iris-section-title"><span>06 · IMPULSO</span><h2>Lo que funcionó</h2></div>
               <ul>
                 @for (point of report().goodPoints.slice(0, 4); track point) {
                   <li><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></span><p>{{ point }}</p></li>
@@ -251,7 +354,7 @@
 
           <section class="iris-sheet-section iris-signals-section">
             <div class="iris-section-title inline">
-              <div><span>06 · SEÑALES COLECTIVAS</span><h2>Supervivencia y control</h2></div>
+              <div><span>07 · SEÑALES COLECTIVAS</span><h2>Supervivencia y control</h2></div>
               <p>Indicadores agregados · no asignan culpables</p>
             </div>
             <div class="iris-signal-grid">
