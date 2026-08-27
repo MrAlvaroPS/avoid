@@ -34,6 +34,13 @@
     @if (result() === 'wipe') {
       <span class="result-hp tabular">· {{ bossHpRemainingPct() }}% HP</span>
     }
+    @if (phaseLabel(); as phase) {
+      <!-- §"fases de encuentro... en todos los sitios donde corresponda"
+           (feedback real): el % de HP puede no ser comparable entre fases en
+           bosses que reinician su barra — la fase alcanzada es un dato
+           adicional, no sustituye al %. -->
+      <span class="result-hp tabular" title="Fase del encuentro alcanzada en este intento">· {{ phase }}</span>
+    }
     <span class="sr-only">{{ result() === 'kill' ? '— boss derrotado' : '— el raid murió antes de matar al boss' }}</span>
   </div>
 

@@ -1,11 +1,12 @@
 import { Component, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { WowheadRefreshService } from './core/wowhead-refresh.service';
+import { SeasonProgressComponent } from './features/raid-session/season-progress.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, SeasonProgressComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss',
 })

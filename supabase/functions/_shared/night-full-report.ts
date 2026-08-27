@@ -18,7 +18,6 @@ import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './s
 // nombre de jugador, solo recuentos y porcentajes de raid.
 
 const EARLY_WIPE_MS = 90_000;
-const EMERGENCY_CONSUMABLE_LOOKBACK_MS = 15_000;
 const MECHANIC_CATEGORY_LABEL: Record<string, string> = {
   'raid-damage': 'Daño de raid',
   'avoidable-ground': 'Zona evitable',
@@ -42,6 +41,10 @@ const ROOT_CAUSE_LABEL: Record<string, string> = {
   self_positioning: 'Posicionamiento propio',
   unsoaked_mechanic: 'Mecánica sin resolver',
   no_healing_received: 'Daño sostenido sin sanación registrada en 6 s',
+  // §"Dispels — sin ingestión de eventos de dispel" (feedback real): solo
+  // con un evento Dispels real ausente para esa habilidad sobre ese
+  // jugador — ver computeRootCause en analyze-report.
+  undispelled_debuff: 'Debuff acumulativo sin dispel registrado',
   unclassified: 'Sin causa raíz demostrable',
 };
 type RaidRole = 'tank' | 'healer' | 'dps';
@@ -144,7 +147,7 @@ export interface NightTimelinePatterns {
 }
 
 export interface NightFullReport {
-  schemaVersion: 10;
+  schemaVersion: 11;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -253,11 +256,10 @@ export interface NightFullReport {
     }[];
   };
   survival: {
-    emergencyLookbackMs: number;
-    healthstone: { playersEverUsed: number; playersWithObservedAccess: number; pctUsedAtLeastOnce: number; deathsWithObservedAccessNoRecentUse: number; deathsEvaluable: number };
+    healthstone: { playersEverUsed: number; playersWithObservedAccess: number; pctUsedAtLeastOnce: number; deathsWithObservedAccessNoUseInPull: number; deathsEvaluable: number };
     healthPotion: { playersEverUsed: number; totalPlayersTracked: number; pctUsedAtLeastOnce: number };
     either: { playersEverUsed: number; totalPlayersTracked: number; pctUsedAtLeastOnce: number };
-    pctDeathsWithNoRecentEmergencyConsumable: number;
+    pctDeathsWithNoEmergencyConsumableInPull: number;
   };
   defensives: {
     playersEverUsed: number;
@@ -319,6 +321,7 @@ interface PullLite {
   raid_damage_taken_series: { pointIntervalMs: number; points: number[] } | null;
   wipe_call_excluded: boolean;
   wipe_call_signals: Record<string, unknown> | null;
+  ninja_pull_excluded: boolean;
   closed_at: string;
 }
 interface RecordLite {
@@ -383,21 +386,32 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   if (reportResult.error) throw reportResult.error;
   if (encountersResult.error) throw encountersResult.error;
 
-  const pulls = await fetchAllByValues<PullLite>(
+  const allPulls = await fetchAllByValues<PullLite>(
     supabase,
     'pulls',
-    'id, fight_id, boss_id, difficulty, pull_number, wipe_pct, duration_ms, raid_damage_taken_series, wipe_call_excluded, wipe_call_signals, closed_at',
+    'id, fight_id, boss_id, difficulty, pull_number, wipe_pct, duration_ms, raid_damage_taken_series, wipe_call_excluded, wipe_call_signals, ninja_pull_excluded, closed_at',
     'report_code',
     [reportCode],
     'closed_at',
   );
+  // §"un ninja pull... también cuenta en la estadística de wipes" (feedback
+  // real): `pulls` de aquí en adelante es solo el subconjunto de intentos
+  // reales -- todo lo que se agrega en este archivo (resumen, progresión,
+  // boss de progreso, timelines, roles, comparación de mitad de noche...)
+  // parte de esta variable, así que basta con filtrar aquí una vez. `allPulls`
+  // y los mapas de abajo (pullIds/pullById) SÍ se quedan sin filtrar: un
+  // player_pull_records o pull_mechanic_events de un ninja pull puede
+  // seguir existiendo (alguien murió en esos pocos segundos) y su pull_id
+  // tiene que resolver igualmente, aunque ese dato no entre en ningún
+  // agregado de la noche.
+  const pulls = allPulls.filter((p) => !p.ninja_pull_excluded);
   if (!pulls.length) return null;
-  const pullIds = pulls.map((p) => p.id);
+  const pullIds = allPulls.map((p) => p.id);
   const bossNameByFightId = new Map(((encountersResult.data ?? []) as { fight_id: number; boss_name: string }[]).map((e) => [e.fight_id, e.boss_name]));
-  const pullById = new Map(pulls.map((p) => [p.id, p]));
+  const pullById = new Map(allPulls.map((p) => [p.id, p]));
 
   const bossIds = [...new Set(pulls.map((p) => p.boss_id))];
-  const [records, mechEvents, manifest, knownBossResult] = await Promise.all([
+  const [rawRecords, rawMechEvents, manifest, knownBossResult] = await Promise.all([
     fetchAllByValues<RecordLite>(
       supabase,
       'player_pull_records',
@@ -407,7 +421,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     ),
     fetchAllByValues<MechEventLite>(
       supabase,
-      'pull_mechanic_events',
+      'applicable_pull_mechanic_events',
       'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, responsibility, outcome, players_hit, avoidable, player_hit_details',
       'pull_id',
       pullIds,
@@ -422,7 +436,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     // hubiera daño evitable real sin marcar — un 0 ahí sería engañoso).
     fetchAllByValues<MechanicManifestLite>(
       supabase,
-      'boss_mechanics_candidates',
+      'applicable_boss_mechanics_candidates',
       'id, boss_id, difficulty, name, name_es, category, responsibility, inferred_category, observed_as_interrupt, avoidable, ai_classification, resolution',
       'boss_id',
       bossIds,
@@ -430,6 +444,16 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     supabase.from('known_raid_bosses').select('encounter_id, journal_encounter_id').in('encounter_id', bossIds.map(Number)),
   ]);
   if (knownBossResult.error) throw knownBossResult.error;
+
+  // Un ninja pull puede seguir teniendo player_pull_records/eventos de
+  // mecánica (alguien murió en esos pocos segundos) porque se pidieron con
+  // pullIds sin filtrar (arriba) -- pero de aquí para abajo `records` y
+  // `mechEvents` son los nombres que usa el resto del archivo para "datos
+  // de un intento real", así que se filtran una única vez aquí, antes de
+  // que nada los agregue.
+  const isRealPull = (pullId: string) => !pullById.get(pullId)?.ninja_pull_excluded;
+  const records = rawRecords.filter((r) => isRealPull(r.pull_id));
+  const mechEvents = rawMechEvents.filter((e) => isRealPull(e.pull_id));
 
   // El nombre castellano del boss sale del Journal oficial de Blizzard. Es
   // best-effort: una caída de esa API no impide generar el informe ni se
@@ -529,6 +553,15 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     const pull = pullById.get(record.pull_id);
     return record.died && record.death_cause && pull != null && !isDeathExcludedFromStatistics(pull, record);
   });
+  const timestampIsEvaluable = (pullId: string, timestampMs: number): boolean => {
+    const pull = pullById.get(pullId);
+    return pull != null && !isMechanicExcludedByWipeCall(pull, timestampMs);
+  };
+  const defensiveCastCount = (record: RecordLite): number => (record.defensive_casts ?? [])
+    .reduce((sum, defensive) => sum + defensive.timestampsMs.filter((timestamp) => timestampIsEvaluable(record.pull_id, timestamp)).length, 0);
+  const consumableUsedInPull = (record: RecordLite, consumable: { used: boolean; timestampsMs: number[] } | undefined): boolean =>
+    (consumable?.timestampsMs?.some((timestamp) => timestampIsEvaluable(record.pull_id, timestamp)) ?? false)
+    || (consumable?.used === true && !consumable.timestampsMs?.length);
   // Versiones anteriores contaban impactos absorbidos/de importe 0 para
   // decidir que había daño sostenido. Eso podía producir una falsa señal de
   // “sin sanación” aun cuando el daño real de la ventana era exactamente 0.
@@ -1337,35 +1370,34 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   const playersWithEitherConsumableEver = new Set<string>();
   const allPlayersTracked = new Set<string>();
   let hsDeathsEvaluable = 0;
-  let hsDeathsWithObservedAccessNoRecentUse = 0;
-  let deathsNoRecentEmergencyConsumable = 0;
-  const usedRecentlyBeforeDeath = (timestampsMs: number[] | undefined, deathTimeMs: number): boolean =>
-    (timestampsMs ?? []).some((timestamp) => timestamp <= deathTimeMs && timestamp >= deathTimeMs - EMERGENCY_CONSUMABLE_LOOKBACK_MS);
+  let hsDeathsWithObservedAccessNoUseInPull = 0;
+  let deathsNoEmergencyConsumableInPull = 0;
   for (const r of records) {
     allPlayersTracked.add(r.player_name);
     if (r.consumables?.healthstone?.available) playersWithObservedHealthstoneAccess.add(r.player_name);
-    if (r.consumables?.healthstone?.used) playersWithHealthstoneEver.add(r.player_name);
-    if (r.consumables?.healthPotion?.used) playersWithPotionEver.add(r.player_name);
-    if (r.consumables?.healthstone?.used || r.consumables?.healthPotion?.used) playersWithEitherConsumableEver.add(r.player_name);
+    const usedHealthstone = consumableUsedInPull(r, r.consumables?.healthstone);
+    const usedPotion = consumableUsedInPull(r, r.consumables?.healthPotion);
+    if (usedHealthstone) playersWithHealthstoneEver.add(r.player_name);
+    if (usedPotion) playersWithPotionEver.add(r.player_name);
+    if (usedHealthstone || usedPotion) playersWithEitherConsumableEver.add(r.player_name);
   }
   for (const r of realDeaths) {
     const hs = r.consumables?.healthstone;
-    const deathTimeMs = r.death_cause!.timeMs;
-    const usedHsRecently = usedRecentlyBeforeDeath(hs?.timestampsMs, deathTimeMs);
-    const usedPotionRecently = usedRecentlyBeforeDeath(r.consumables?.healthPotion?.timestampsMs, deathTimeMs);
+    const usedHsInPull = consumableUsedInPull(r, hs);
+    const potion = r.consumables?.healthPotion;
+    const usedPotionInPull = consumableUsedInPull(r, potion);
     if (hs?.available) {
       hsDeathsEvaluable++;
-      if (!usedHsRecently) hsDeathsWithObservedAccessNoRecentUse++;
+      if (!usedHsInPull) hsDeathsWithObservedAccessNoUseInPull++;
     }
-    if (!usedHsRecently && !usedPotionRecently) deathsNoRecentEmergencyConsumable++;
+    if (!usedHsInPull && !usedPotionInPull) deathsNoEmergencyConsumableInPull++;
   }
   const survival: NightFullReport['survival'] = {
-    emergencyLookbackMs: EMERGENCY_CONSUMABLE_LOOKBACK_MS,
     healthstone: {
       playersEverUsed: playersWithHealthstoneEver.size,
       playersWithObservedAccess: playersWithObservedHealthstoneAccess.size,
       pctUsedAtLeastOnce: pct(playersWithHealthstoneEver.size, playersWithObservedHealthstoneAccess.size),
-      deathsWithObservedAccessNoRecentUse: hsDeathsWithObservedAccessNoRecentUse,
+      deathsWithObservedAccessNoUseInPull: hsDeathsWithObservedAccessNoUseInPull,
       deathsEvaluable: hsDeathsEvaluable,
     },
     healthPotion: {
@@ -1378,7 +1410,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       totalPlayersTracked: allPlayersTracked.size,
       pctUsedAtLeastOnce: pct(playersWithEitherConsumableEver.size, allPlayersTracked.size),
     },
-    pctDeathsWithNoRecentEmergencyConsumable: pct(deathsNoRecentEmergencyConsumable, realDeaths.length),
+    pctDeathsWithNoEmergencyConsumableInPull: pct(deathsNoEmergencyConsumableInPull, realDeaths.length),
   };
 
   // ---- 5. Defensivos personales, por categoría de mecánica ----
@@ -1396,7 +1428,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   const playersWithDefensiveEver = new Set<string>();
   let totalDefensiveCasts = 0;
   for (const r of records) {
-    const casts = (r.defensive_casts ?? []).reduce((sum, defensive) => sum + defensive.timestampsMs.length, 0);
+    const casts = defensiveCastCount(r);
     totalDefensiveCasts += casts;
     if (casts > 0) playersWithDefensiveEver.add(r.player_name);
   }
@@ -1529,7 +1561,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     if (!role) continue;
     classifiedRoleScopePlayers.add(record.player_name);
     rolePlayers[role].add(record.player_name);
-    if ((record.defensive_casts ?? []).some((defensive) => defensive.timestampsMs.length > 0)) defensiveUsersByRole[role].add(record.player_name);
+    if (defensiveCastCount(record) > 0) defensiveUsersByRole[role].add(record.player_name);
   }
   const deathsByRole: Record<RaidRole, number> = { tank: 0, healer: 0, dps: 0 };
   let tankbusterDeaths = 0;
@@ -1585,12 +1617,35 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     const half = Math.ceil(pulls.length / 2);
     const firstHalfIds = new Set(pulls.slice(0, half).map((p) => p.id));
     const secondHalfIds = new Set(pulls.slice(half).map((p) => p.id));
-    const sumAvoidable = (ids: Set<string>) => records.filter((r) => ids.has(r.pull_id)).reduce((s, r) => s + (r.avoidable_damage_taken ?? 0), 0);
+    const sumAvoidable = (ids: Set<string>) => reportableMechEvents
+      .filter((event) => ids.has(event.pull_id) && event.avoidable === true)
+      .reduce((sum, event) => sum + (event.player_hit_details ?? []).reduce((detailSum, detail) => detailSum + Math.max(0, Number(detail.damage_taken ?? 0)), 0), 0);
     const countDeaths = (ids: Set<string>) => realDeaths.filter((r) => ids.has(r.pull_id)).length;
     const defCoverage = (ids: Set<string>): number | null => {
-      const ds = realDeaths.filter((r) => ids.has(r.pull_id) && (r.death_cause!.defensiveOptions ?? []).length);
-      const used = ds.filter((r) => !r.death_cause!.defensiveOptions!.some((o) => o.status === 'available_unused'));
-      return ds.length ? pct(used.length, ds.length) : null;
+      const pressureKeys = new Set(
+        reportableMechEvents
+          .filter((event) => ids.has(event.pull_id) && event.avoidable === true)
+          .flatMap((event) => (event.player_hit_details ?? [])
+            .filter((detail) => detail.name && Number(detail.damage_taken ?? 0) > 0)
+            .map((detail) => `${event.pull_id}|${detail.name}`)),
+      );
+      let score = 0;
+      let weight = 0;
+      for (const record of records.filter((candidate) => ids.has(candidate.pull_id))) {
+        const usedInPull = defensiveCastCount(record) > 0;
+        const realDeath = realDeaths.includes(record);
+        const deathOptions = realDeath ? (record.death_cause?.defensiveOptions ?? []) : [];
+        const directDeathEvaluable = deathOptions.length > 0;
+        if (directDeathEvaluable) {
+          score += (deathOptions.some((option) => option.status === 'available_unused') ? 0 : 2);
+          weight += 2;
+        }
+        if (usedInPull || directDeathEvaluable || pressureKeys.has(`${record.pull_id}|${record.player_name}`)) {
+          score += usedInPull ? 1 : 0;
+          weight += 1;
+        }
+      }
+      return weight ? pct(score, weight) : null;
     };
     const firstAvoidPerPull = sumAvoidable(firstHalfIds) / firstHalfIds.size;
     const secondAvoidPerPull = sumAvoidable(secondHalfIds) / secondHalfIds.size;
@@ -1684,7 +1739,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     .reduce((sum, p) => sum + (p.raid_damage_taken_series?.points ?? []).reduce((pointSum, point) => pointSum + point, 0), 0);
 
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     reportCode,
     reportTitle: (reportResult.data as { title: string } | null)?.title ?? reportCode,
     reportDate: (reportResult.data as { start_time: number } | null)?.start_time ? new Date((reportResult.data as { start_time: number }).start_time).toISOString() : '',

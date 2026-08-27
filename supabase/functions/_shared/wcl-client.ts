@@ -51,9 +51,28 @@ export async function graphql<T>(query: string, variables: Record<string, unknow
     },
     GRAPHQL_TIMEOUT_MS,
   );
-  const json = await res.json();
+  // §bug real contrastado en real (2026-08-27, sync-boss-mechanics de 4
+  // dificultades a la vez): bajo WCL rate-limiting el body de respuesta no
+  // siempre trae `errors` (a veces es un cuerpo de gateway sin esa forma, o
+  // res.json() falla directamente sobre HTML) — json.errors?.length no
+  // saltaba, la función devolvía `json.data` (undefined) tal cual, y cada
+  // punto de la app que hacía `data.reportData`/`data.worldData` reventaba
+  // con "Cannot read properties of undefined", un mensaje que no dice nada
+  // de la causa real. Ahora se valida res.ok y la presencia de `data` antes
+  // de devolver, con el status/cuerpo real en el mensaje — mucho más
+  // diagnosticable, y sigue siendo un throw normal que los llamantes
+  // best-effort (referenceFetchError, etc.) ya capturan igual que antes.
+  let json: { data?: unknown; errors?: { message: string }[] };
+  try {
+    json = await res.json();
+  } catch {
+    throw new Error(`WCL GraphQL: respuesta no-JSON (HTTP ${res.status}) — probable rate limit o caída temporal de la API.`);
+  }
   if (json.errors?.length) {
-    throw new Error(`WCL GraphQL error: ${json.errors.map((e: { message: string }) => e.message).join('; ')}`);
+    throw new Error(`WCL GraphQL error: ${json.errors.map((e) => e.message).join('; ')}`);
+  }
+  if (!res.ok || json.data === undefined) {
+    throw new Error(`WCL GraphQL: HTTP ${res.status} sin datos (probable rate limit) — ${JSON.stringify(json).slice(0, 300)}`);
   }
   return json.data as T;
 }
@@ -135,6 +154,12 @@ export async function getGuildReportsSince(
 
 // --- reportData: fights de un report concreto ---
 
+/** Una transición de fase real observada EN ESTE fight — id referencia PhaseMetadata.id del mismo boss (ver WclEncounterPhases). */
+export interface WclPhaseTransition {
+  id: number;
+  startTime: number;
+}
+
 export interface WclFight {
   id: number;
   name: string;
@@ -147,6 +172,22 @@ export interface WclFight {
   encounterID: number | null;
   keystoneLevel: number | null; // presente => es Mítica+, no raid
   friendlyPlayers: number[]; // actorIDs de los jugadores que participaron EN ESTE fight concreto
+  // §"WCL tiene fases de encuentro, importarlas" (feedback real) — verificado
+  // por introspección real contra la API de WCL (2026-08-27): estos 4 campos
+  // existen en ReportFight tal cual. null en todos ellos = WCL no tiene
+  // fases definidas para este boss (encuentros de un solo golpe), no un
+  // fallo de red — no todos los bosses tienen fases.
+  phaseTransitions: WclPhaseTransition[] | null;
+  lastPhaseAsAbsoluteIndex: number | null; // 0-based, sube monótonamente contando fases normales + intermedios
+  lastPhaseIsIntermission: boolean | null;
+}
+
+/** Metadata ESTÁTICA de las fases de un boss (nombre, si es intermedio) — igual para todos los fights de ese encuentro, se trae una vez por report junto a los fights. */
+export interface WclEncounterPhases {
+  encounterID: number;
+  /** WCL: "si las fases pueden usarse para separar wipes en la UI del report" — señal de que bossPercentage/fightPercentage pueden no ser comparables directamente entre fases de este boss. */
+  separatesWipes: boolean | null;
+  phases: { id: number; name: string; isIntermission: boolean | null }[];
 }
 
 const REPORT_FIGHTS_QUERY = `
@@ -156,23 +197,30 @@ query ReportFights($code: String!) {
       title
       startTime
       zone { id name }
+      phases { encounterID separatesWipes phases { id name isIntermission } }
       fights {
         id name difficulty kill bossPercentage fightPercentage
         startTime endTime encounterID keystoneLevel friendlyPlayers
+        phaseTransitions { id startTime } lastPhaseAsAbsoluteIndex lastPhaseIsIntermission
       }
     }
   }
 }`;
 
-export async function getReportFights(
-  code: string,
-): Promise<{ title: string; startTime: number; zone: { id: number; name: string } | null; fights: WclFight[] }> {
+export async function getReportFights(code: string): Promise<{
+  title: string;
+  startTime: number;
+  zone: { id: number; name: string } | null;
+  phases: WclEncounterPhases[];
+  fights: WclFight[];
+}> {
   const data = await graphql<{
     reportData: {
       report: {
         title: string;
         startTime: number;
         zone: { id: number; name: string } | null;
+        phases: WclEncounterPhases[];
         fights: WclFight[];
       } | null;
     };
@@ -362,10 +410,10 @@ export interface WclEventsPage<T = Record<string, unknown>> {
 }
 
 const EVENTS_QUERY = `
-query ReportEvents($code: String!, $fightIDs: [Int]!, $dataType: EventDataType!, $startTime: Float!, $endTime: Float!, $limit: Int, $hostilityType: HostilityType) {
+query ReportEvents($code: String!, $fightIDs: [Int]!, $dataType: EventDataType!, $startTime: Float!, $endTime: Float!, $limit: Int, $hostilityType: HostilityType, $includeResources: Boolean) {
   reportData {
     report(code: $code) {
-      events(fightIDs: $fightIDs, dataType: $dataType, startTime: $startTime, endTime: $endTime, limit: $limit, hostilityType: $hostilityType) {
+      events(fightIDs: $fightIDs, dataType: $dataType, startTime: $startTime, endTime: $endTime, limit: $limit, hostilityType: $hostilityType, includeResources: $includeResources) {
         data
         nextPageTimestamp
       }
@@ -392,12 +440,14 @@ query ReportEvents($code: String!, $fightIDs: [Int]!, $dataType: EventDataType!,
 export async function getFightEvents(params: {
   code: string;
   fightId: number;
-  dataType: 'Deaths' | 'Casts' | 'Buffs' | 'Debuffs' | 'DamageTaken' | 'DamageDone' | 'Healing' | 'Interrupts' | 'CombatantInfo';
+  dataType: 'Deaths' | 'Casts' | 'Buffs' | 'Debuffs' | 'DamageTaken' | 'DamageDone' | 'Healing' | 'Interrupts' | 'CombatantInfo' | 'Dispels';
   startTime: number;
   endTime: number;
   maxPages?: number;
   limit?: number;
   hostilityType?: 'Friendlies' | 'Enemies';
+  /** Incluye hitPoints/maxHitPoints del actor de recursos. Activar solo cuando hagan falta: WCL avisa de que aumenta bastante el payload. */
+  includeResources?: boolean;
 }): Promise<Record<string, unknown>[]> {
   const events: Record<string, unknown>[] = [];
   let cursor = params.startTime;
@@ -414,6 +464,7 @@ export async function getFightEvents(params: {
       endTime: params.endTime,
       limit: params.limit ?? 1000,
       hostilityType: params.hostilityType ?? null,
+      includeResources: params.includeResources ?? false,
     });
     const page_ = data.reportData.report?.events;
     if (!page_) break;

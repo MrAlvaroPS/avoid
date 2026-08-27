@@ -17,6 +17,7 @@ import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { LlmPullAnalysis } from '../shared/models/ui';
 import type { NightFullReport, StoredNightFullReport } from '../shared/models/night-full-report';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
+import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
 
 export interface NightBossSummary {
   bossId: string;
@@ -90,7 +91,7 @@ export class NightReportService {
     if (error) throw error;
     if (!data) return null;
     const report = data.report as unknown as NightFullReport;
-    if (report.schemaVersion !== 10) return null;
+    if (report.schemaVersion !== 11) return null;
     return { report, generatedAt: data.generated_at as string };
   }
 
@@ -115,7 +116,11 @@ export class NightReportService {
         ? client.from('player_pull_records').select('pull_id, player_name, died, death_cause, wipe_call_cluster').in('pull_id', pullIds)
         : Promise.resolve({ data: [] as RecordLite[], error: null }),
       pullIds.length
-        ? client.from('pull_mechanic_events').select('pull_id, category, outcome, players_hit, trigger_time_ms').in('pull_id', pullIds)
+        ? withSupabaseRelationFallback(
+            'applicable_pull_mechanic_events',
+            () => client.from('applicable_pull_mechanic_events').select('pull_id, category, outcome, players_hit, trigger_time_ms').in('pull_id', pullIds),
+            () => client.from('pull_mechanic_events').select('pull_id, category, outcome, players_hit, trigger_time_ms').in('pull_id', pullIds),
+          )
         : Promise.resolve({ data: [] as MechEventLite[], error: null }),
       loadMechanicNotesByName(client, pulls.map((p) => p.boss_id)).catch(() => new Map<string, string>()),
       client.from('night_briefs').select('*').eq('report_code', reportCode).maybeSingle(),

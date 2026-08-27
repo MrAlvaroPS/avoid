@@ -10,16 +10,18 @@
 // (tabla en Supabase) queda reservada para cuando el propio backend necesite
 // saber qué report vigilar (un poller server-side, Fase D) — esto de aquí es
 // puramente "qué estaba mirando este navegador", un problema distinto.
-import { Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import { Component, DestroyRef, computed, effect, inject, signal } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
-import { ReportsService, type PullListItem } from '../../core/reports.service';
-import type { ReportRow } from '../../shared/models/domain';
+import { ReportsService, type NightPlayerListItem, type PullListItem } from '../../core/reports.service';
+import { BossPhaseService } from '../../core/boss-phase.service';
+import type { BossEncounterPhaseRow, ReportRow } from '../../shared/models/domain';
 import { extractReportCode } from '../../shared/wcl-code.util';
-import { formatDuration, formatPct } from '../../shared/format.util';
+import { formatDuration, formatPct, formatPhaseReached } from '../../shared/format.util';
 import { LivePullComponent } from '../live-pull/live-pull.component';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
-import { SeasonProgressComponent } from './season-progress.component';
+import { ClassIconComponent } from '../../shared/class-icon.component';
+import { errorMessage } from '../../shared/error-message.util';
 
 export interface PullGroup {
   key: string;
@@ -98,13 +100,14 @@ function writeStoredSession(session: StoredSession | null): void {
 @Component({
   selector: 'app-raid-session',
   standalone: true,
-  imports: [LivePullComponent, EmptyPanelComponent, SeasonProgressComponent, RouterLink],
+  imports: [LivePullComponent, EmptyPanelComponent, ClassIconComponent, RouterLink],
   templateUrl: './raid-session.component.html',
   styleUrl: './raid-session.component.scss',
 })
 export class RaidSessionComponent {
   private edgeFunctions = inject(EdgeFunctionsService);
   private reportsService = inject(ReportsService);
+  private bossPhase = inject(BossPhaseService);
   private destroyRef = inject(DestroyRef);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
@@ -121,10 +124,14 @@ export class RaidSessionComponent {
   // bloquea nada (podría ser una segunda sesión real el mismo día).
   duplicateWarning = signal<string | null>(null);
   pulls = signal<PullListItem[]>([]);
+  // §"WCL tiene fases de encuentro, implementarlas en todos los sitios
+  // donde corresponda" (feedback real): nombres de fase por boss, para
+  // resolver "Fase X/N — Nombre" en el picker sin una llamada por pull.
+  phasesByBoss = signal<Map<string, BossEncounterPhaseRow[]>>(new Map());
   // §"un dosier de personaje de una noche concreta... para dirigir a uno o
   // varios raiders" (feedback real): entrada al dosier por jugador desde
   // el resumen de la noche — quién participó en algún pull de este report.
-  nightPlayers = signal<string[]>([]);
+  nightPlayers = signal<NightPlayerListItem[]>([]);
   selectedPullId = signal<string | null>(null);
   autoRefresh = signal(false);
   lastCheckedAt = signal<string | null>(null);
@@ -177,6 +184,13 @@ export class RaidSessionComponent {
   // por boss+dificultad — el problema real es que la tira no lo enseñaba
   // agrupado). orden = primera aparición de cada boss+dificultad (Map
   // preserva orden de inserción), pulls dentro del grupo en su orden real.
+  //
+  // §"un ninja pull... también cuenta en la estadística de wipes" (feedback
+  // real): el pull sigue viviendo en group.pulls (contexto, pull_number,
+  // duración — nunca se oculta), pero no suma a attemptCount/killCount/
+  // bestWipePct porque nunca fue un intento real. Mismo criterio en todo
+  // este componente: is_ninja_pull nunca filtra listas, ninja_pull_excluded
+  // sí filtra conteos.
   pullGroups = computed<PullGroup[]>(() => {
     const groups = new Map<string, PullGroup>();
     for (const pull of this.pulls()) {
@@ -187,6 +201,7 @@ export class RaidSessionComponent {
         groups.set(key, group);
       }
       group.pulls.push(pull);
+      if (pull.ninja_pull_excluded) continue;
       group.attemptCount++;
       if (pull.kill) group.killCount++;
       const pct = pull.wipe_pct ?? 100;
@@ -196,11 +211,13 @@ export class RaidSessionComponent {
   });
 
   nightSummary = computed<NightSummary | null>(() => {
-    const pulls = this.pulls();
-    if (!pulls.length) return null;
+    const allPulls = this.pulls();
+    if (!allPulls.length) return null;
+    const pulls = allPulls.filter((p) => !p.ninja_pull_excluded);
+    if (!pulls.length) return null; // toda la noche fue ninja pulls — no hay intentos reales que resumir
     const totalKills = pulls.filter((p) => p.kill).length;
     const totalDurationMs = pulls.reduce((sum, p) => sum + (p.duration_ms ?? 0), 0);
-    const groups = this.pullGroups();
+    const groups = this.pullGroups().filter((g) => g.attemptCount > 0);
     const hardestGroup = groups.reduce<PullGroup | null>((worst, g) => {
       const wipes = g.attemptCount - g.killCount;
       const worstWipes = worst ? worst.attemptCount - worst.killCount : -1;
@@ -268,6 +285,18 @@ export class RaidSessionComponent {
       void this.router.navigate([], { queryParams: {}, replaceUrl: true });
     }
     this.destroyRef.onDestroy(() => this.stopAutoRefresh());
+    // §"fases de encuentro... en todos los sitios donde corresponda":
+    // recarga los nombres de fase cada vez que cambian los bosses presentes
+    // en pulls() — best-effort, un boss sin fases (o un fallo de red) no
+    // impide ver el picker, solo se queda sin la etiqueta de fase.
+    effect(() => {
+      const bossIds = [...new Set(this.pulls().map((p) => p.boss_id))];
+      if (!bossIds.length) return;
+      void this.bossPhase
+        .listPhasesForBosses(bossIds)
+        .then((map) => this.phasesByBoss.set(map))
+        .catch(() => {});
+    });
     this.reportsService
       .listAllReports()
       .then((rows) => this.recentReports.set(rows.slice(0, RECENT_REPORTS_LIMIT)))
@@ -366,7 +395,7 @@ export class RaidSessionComponent {
         this.selectedPullId.set(pulls.at(-1)?.id ?? null);
       }
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       if (isManual) {
         this.importing.set(false);
@@ -420,7 +449,16 @@ export class RaidSessionComponent {
   }
 
   pullSubLabel(pull: PullListItem): string {
-    return pull.kill ? `Kill · ${formatDuration(pull.duration_ms)}` : `Wipe ${formatPct(pull.wipe_pct)} · ${formatDuration(pull.duration_ms)}`;
+    if (pull.ninja_pull_excluded) return `Ninja pull · ${formatDuration(pull.duration_ms)} · no cuenta como intento`;
+    if (pull.kill) return `Kill · ${formatDuration(pull.duration_ms)}`;
+    // §"fases de encuentro... en todos los sitios donde corresponda"
+    // (feedback real): en un wipe, "45% restante" no dice si fue pronto o
+    // muy lejos en bosses con varias fases — se añade la fase alcanzada
+    // cuando WCL la trae, sin sustituir el % (sigue siendo la fuente para
+    // "mejor intento" hasta que se decida lo contrario, ver riesgos).
+    const phase = formatPhaseReached(pull.phase_transitions, pull.last_phase_is_intermission, this.phasesByBoss().get(pull.boss_id) ?? null);
+    const base = `Wipe ${formatPct(pull.wipe_pct)} · ${formatDuration(pull.duration_ms)}`;
+    return phase ? `${base} · ${phase}` : base;
   }
 
   groupSummary(group: PullGroup): string {

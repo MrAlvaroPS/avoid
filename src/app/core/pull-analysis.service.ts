@@ -10,12 +10,14 @@ import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { EdgeFunctionsService } from './edge-functions.service';
 import { WowauditRosterService } from './wowaudit-roster.service';
-import { formatDuration, formatPct, formatTimeLabel, mechanicCategoryMeta, mechanicDisplayName, normalizeDifficulty } from '../shared/format.util';
+import { BossPhaseService } from './boss-phase.service';
+import { formatDuration, formatPct, formatPhaseReached, formatTimeLabel, mechanicCategoryMeta, mechanicDisplayName, normalizeDifficulty } from '../shared/format.util';
 import type { BossReferenceStatsRow, DefensiveOption, PlayerPullRecordRow, PullBriefRow, PullMechanicEventRow, PullRow, ReportEncounterRow } from '../shared/models/domain';
 import type { CoachingCallout, LlmPullAnalysis, MechanicFailRow, MetricCardData, PullDifficulty, PullResult, ReferencePacing, TimelineChip } from '../shared/models/ui';
 import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { TrendBar } from '../shared/charts/trend-bars.component';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
+import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
 
 export interface PullHeaderData {
   encounterName: string;
@@ -28,6 +30,8 @@ export interface PullHeaderData {
   result: PullResult;
   /** Ritmo contra el mejor kill público (boss_reference_stats) — null si no hay benchmark todavía. */
   referencePacing: ReferencePacing | null;
+  /** §"fases de encuentro... en todos los sitios donde corresponda" (feedback real): "Fase X/N — Nombre", null si el boss no tiene fases o el pull no las trajo. */
+  phaseLabel: string | null;
 }
 
 export interface PlayerStatRow {
@@ -85,6 +89,8 @@ export interface PullDetail {
   progressTrend: TrendBar[];
   /** §"cuándo se determina un wipe global... vamos a wipear": null = sin cluster detectado en este pull (o fue kill). */
   wipeCall: { confidence: number; excluded: boolean; signals: Record<string, number | boolean | null> } | null;
+  /** §"un ninja pull... también cuenta en la estadística de wipes": null = la heurística no lo marcó (duración/enganche normales, o fue kill). */
+  ninjaPull: { excluded: boolean; signals: Record<string, number | boolean | null> } | null;
 }
 
 // §"los defensivos ganan peso si están pegados a la muerte": un cast dentro
@@ -107,6 +113,7 @@ export class PullAnalysisService {
   private supabase = inject(SupabaseService);
   private edgeFunctions = inject(EdgeFunctionsService);
   private wowauditRoster = inject(WowauditRosterService);
+  private bossPhase = inject(BossPhaseService);
 
   async loadPullDetail(pullId: string): Promise<PullDetail> {
     const client = this.supabase.client;
@@ -123,18 +130,30 @@ export class PullAnalysisService {
       .listRoster()
       .then((roster) => new Map(roster.map((r) => [r.name, r.role])))
       .catch(() => new Map<string, string>());
+    // §"fases de encuentro... en todos los sitios donde corresponda"
+    // (feedback real): lanzado ya, se espera justo antes de construir
+    // `header` — mismo patrón que rosterByNamePromise.
+    const bossPhasesPromise = this.bossPhase.listPhases(pull.boss_id).catch(() => []);
 
     const [encounterRes, recordsRes, mechEventsRes, briefRes, candidatesRes, priorPullsRes, referenceStatsRes] = await Promise.all([
       client.from('report_encounters').select('*').eq('report_code', pull.report_code).eq('fight_id', pull.fight_id).maybeSingle(),
       client.from('player_pull_records').select('*').eq('pull_id', pullId),
-      client.from('pull_mechanic_events').select('*').eq('pull_id', pullId).order('trigger_time_ms', { ascending: true }),
+      withSupabaseRelationFallback(
+        'applicable_pull_mechanic_events',
+        () => client.from('applicable_pull_mechanic_events').select('*').eq('pull_id', pullId).order('trigger_time_ms', { ascending: true }),
+        () => client.from('pull_mechanic_events').select('*').eq('pull_id', pullId).order('trigger_time_ms', { ascending: true }),
+      ),
       client.from('pull_briefs').select('*').eq('pull_id', pullId).maybeSingle(),
       // §"la 'i' que abra... las notas que trajimos con el prompt en
       // Ajustes" (feedback real): se trae name+ai_classification en la
       // misma consulta que ya existía solo para saber si había manifiesto
       // (antes head:true/count, sin filas) — mismo viaje de red, ahora con
       // lo necesario para cruzar por nombre en buildMechanicFails.
-      client.from('boss_mechanics_candidates').select('name, ai_classification').eq('boss_id', pull.boss_id).eq('difficulty', pull.difficulty),
+      withSupabaseRelationFallback(
+        'applicable_boss_mechanics_candidates',
+        () => client.from('applicable_boss_mechanics_candidates').select('name, ai_classification').eq('boss_id', pull.boss_id).eq('difficulty', pull.difficulty),
+        () => client.from('boss_mechanics_candidates').select('name, ai_classification').eq('boss_id', pull.boss_id).eq('difficulty', pull.difficulty),
+      ),
       client
         .from('pulls')
         .select('*')
@@ -181,7 +200,11 @@ export class PullAnalysisService {
       const priorPullIds = priorPulls.map((p) => p.id);
       const [priorRecordsRes, priorMechEventsRes] = await Promise.all([
         client.from('player_pull_records').select('*').in('pull_id', priorPullIds),
-        client.from('pull_mechanic_events').select('pull_id,ability_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
+        withSupabaseRelationFallback(
+          'applicable_pull_mechanic_events',
+          () => client.from('applicable_pull_mechanic_events').select('pull_id,ability_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
+          () => client.from('pull_mechanic_events').select('pull_id,ability_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
+        ),
       ]);
       for (const r of (priorRecordsRes.data ?? []) as PlayerPullRecordRow[]) {
         if (!priorRecordsByPullId.has(r.pull_id)) priorRecordsByPullId.set(r.pull_id, []);
@@ -211,6 +234,7 @@ export class PullAnalysisService {
       bossHpRemainingPct: pull.wipe_pct ?? 0,
       result: isKill ? 'kill' : 'wipe',
       referencePacing: buildReferencePacing(pull, referenceStats),
+      phaseLabel: formatPhaseReached(pull.phase_transitions, pull.last_phase_is_intermission, await bossPhasesPromise),
     };
 
     // §"mecánicas falladas no concuerda con muertes": una muerte cuya
@@ -291,12 +315,18 @@ export class PullAnalysisService {
       defensiveStatusBreakdown: buildDefensiveStatusBreakdown(records.filter((r) => !isExcludedStatisticalDeath(pull, r))),
       progressTrend: buildProgressTrend(pull, priorPulls),
       wipeCall: pull.wipe_call_signals ? { confidence: pull.wipe_call_confidence ?? 0, excluded: pull.wipe_call_excluded, signals: pull.wipe_call_signals } : null,
+      ninjaPull: pull.ninja_pull_signals ? { excluded: pull.ninja_pull_excluded, signals: pull.ninja_pull_signals } : null,
     };
   }
 
   /** §"que autoexcluya pero que permita también editarlo... para restaurar": el toggle de wipe call — recarga el pull entero porque el cambio afecta a demasiados cálculos derivados (deaths, mechFails, racha, defensivos) como para recomputarlos todos a mano en el cliente. */
   async setWipeCallStatus(pullId: string, excluded: boolean): Promise<void> {
     await this.edgeFunctions.setWipeCallStatus(pullId, excluded);
+  }
+
+  /** §"un ninja pull... habría que clasificarlo de otra manera": mismo patrón que setWipeCallStatus — recarga el pull entero porque la exclusión afecta a fiabilidad/histórico de boss/informe de noche, no solo a este pull. */
+  async setNinjaPullStatus(pullId: string, excluded: boolean): Promise<void> {
+    await this.edgeFunctions.setNinjaPullStatus(pullId, excluded);
   }
 
   async generateBrief(pullId: string, force = false): Promise<LlmPullAnalysis> {
@@ -413,12 +443,18 @@ function buildDeathDetail(deathCause: PlayerPullRecordRow['death_cause'], consum
     self_positioning: 'Se posicionó mal — la mecánica exigía evitar una zona o separarse, y no lo hizo.',
     unsoaked_mechanic: 'Falta de coordinación de grupo — mecánica de soak sin suficiente gente agrupada.',
     no_healing_received: 'Sin sanación real dirigida a este jugador en los 6s previos a morir, con daño sostenido (no un golpe único).',
-    unclassified: 'Causa raíz no determinada — la mecánica no está en una categoría con causa conocida, o haría falta rastrear dispels/amenaza (no disponible todavía) para saberlo con certeza.',
+    // §"Dispels — sin ingestión de eventos de dispel" (feedback real): solo
+    // se afirma con un evento Dispels real ausente para esta habilidad
+    // sobre este jugador — ver computeRootCause en analyze-report.
+    undispelled_debuff: 'Debuff acumulativo sin dispel — no hay ningún evento de dispel registrado sobre este jugador para esta habilidad antes de morir.',
+    unclassified: 'Causa raíz no determinada — la mecánica no está en una categoría con causa conocida, o haría falta rastrear amenaza/tank swap (no disponible todavía) para saberlo con certeza.',
   };
   if (deathCause.rootCause) lines.push(`Causa raíz: ${rootCauseLabel[deathCause.rootCause]}`);
 
   if (deathCause.damageProfile === 'burst') {
-    lines.push(`Daño: golpe único — ${(deathCause.killingBlowAmount ?? 0).toLocaleString('es-ES')} de ${deathCause.damageWindowHits} golpe(s) en los últimos 5s (${deathCause.damageWindowTotal.toLocaleString('es-ES')} en total esa ventana). No fue un desgaste, fue un golpe que se comió de una vez.`);
+    const burstDamage = deathCause.terminalBurstDamage ?? deathCause.killingBlowAmount ?? 0;
+    const healthPct = deathCause.burstHealthPct != null ? `, ${Math.round(deathCause.burstHealthPct)}% de su vida máxima` : '';
+    lines.push(`Daño: oneshot/burst — ${burstDamage.toLocaleString('es-ES')} concentrado en ${(deathCause.burstWindowMs ?? 1000) / 1000}s${healthPct}. El daño previo no se usa para diluir este pico: no hubo una ventana razonable para curarlo.`);
   } else if (deathCause.damageProfile === 'sustained') {
     lines.push(`Daño: sostenido — ${deathCause.damageWindowHits} golpes sumando ${deathCause.damageWindowTotal.toLocaleString('es-ES')} en los últimos 5s, ninguno dominante. Hubo ventana para curarlo o reaccionar.`);
   }

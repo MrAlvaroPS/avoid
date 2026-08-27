@@ -10,17 +10,23 @@
 // pantallas que abarcan VARIOS bosses a la vez (dosier de noche, informe de
 // noche), donde hace falta consultar boss_id in (...) en vez de uno solo.
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
 
 export async function loadMechanicNotesByName(client: SupabaseClient, bossIds: string[]): Promise<Map<string, string>> {
   const uniqueBossIds = [...new Set(bossIds)];
   const map = new Map<string, string>();
   if (!uniqueBossIds.length) return map;
 
-  const { data } = await client
-    .from('boss_mechanics_candidates')
+  const query = (relation: string) => client
+    .from(relation)
     .select('name, ai_classification')
     .in('boss_id', uniqueBossIds)
     .not('ai_classification', 'is', null);
+  const { data } = await withSupabaseRelationFallback(
+    'applicable_boss_mechanics_candidates',
+    () => query('applicable_boss_mechanics_candidates'),
+    () => query('boss_mechanics_candidates'),
+  );
 
   for (const row of (data ?? []) as { name: string; ai_classification: { notes?: string } | null }[]) {
     const notes = row.ai_classification?.notes;

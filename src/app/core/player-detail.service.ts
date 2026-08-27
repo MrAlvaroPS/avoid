@@ -9,7 +9,7 @@
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { WowauditRosterService } from './wowaudit-roster.service';
-import { computeOverall, type ReliabilityInputRow } from './reliability.service';
+import { computeReliabilityBreakdown, ReliabilityService, type ReliabilityInputRow } from './reliability.service';
 import { loadMechanicNotesByName } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
 import type { DeathCause, MechanicCategory } from '../shared/models/domain';
@@ -21,6 +21,7 @@ const RECENT_DEATHS_LIMIT = 15;
 export interface WeeklyScorePoint {
   weekStartLabel: string; // "12 jun"
   score: number | null; // null = sin pulls evaluables esa semana
+  consistencyScore: number | null;
   sampleSize: number;
   isCurrent: boolean;
 }
@@ -64,17 +65,14 @@ const RECENT_NIGHTS_LIMIT = 8;
 export class PlayerDetailService {
   private supabase = inject(SupabaseService);
   private wowauditRoster = inject(WowauditRosterService);
+  private reliabilityService = inject(ReliabilityService);
 
   async load(playerName: string): Promise<PlayerDetail> {
     const client = this.supabase.client;
     const since = new Date(Date.now() - HISTORY_WEEKS * 7 * 86_400_000).toISOString();
 
-    const [inputsRes, deathsRes, roster] = await Promise.all([
-      client
-        .from('player_pull_reliability_inputs')
-        .select('closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, enchanted_slot_count, enchantable_slot_count, gem_count')
-        .eq('player_name', playerName)
-        .gte('closed_at', since),
+    const [reliabilityInputs, deathsRes, roster] = await Promise.all([
+      this.reliabilityService.getPlayerReliabilityInputs(playerName, since),
       client
         .from('player_pull_records')
         .select('pull_id, death_cause, wipe_call_cluster, pulls!inner(boss_id, difficulty, closed_at, wipe_call_excluded)')
@@ -84,12 +82,11 @@ export class PlayerDetailService {
         .limit(RECENT_DEATHS_LIMIT),
       this.wowauditRoster.listRoster().catch(() => []),
     ]);
-    if (inputsRes.error) throw inputsRes.error;
     if (deathsRes.error) throw deathsRes.error;
 
     const rosterEntry = roster.find((r) => r.name === playerName) ?? null;
 
-    const weeklyScores = this.buildWeeklyScores((inputsRes.data ?? []) as (ReliabilityInputRow & { player_name?: string })[]);
+    const weeklyScores = this.buildWeeklyScores(reliabilityInputs);
 
     const bossIds = [...new Set((deathsRes.data ?? []).map((d) => (d as unknown as { pulls: { boss_id: string } }).pulls.boss_id))];
     const bossNames = bossIds.length
@@ -175,9 +172,11 @@ export class PlayerDetailService {
     for (let weekIndex = HISTORY_WEEKS - 1; weekIndex >= 0; weekIndex--) {
       const bucketRows = buckets[weekIndex];
       const weekStartMs = now - (weekIndex + 1) * 7 * 86_400_000;
+      const result = computeReliabilityBreakdown(bucketRows, now);
       points.push({
         weekStartLabel: new Date(weekStartMs).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
-        score: computeOverall(bucketRows, now),
+        score: result?.overall ?? null,
+        consistencyScore: result?.consistency?.score ?? null,
         sampleSize: bucketRows.length,
         isCurrent: weekIndex === 0,
       });

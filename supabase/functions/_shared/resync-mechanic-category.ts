@@ -21,7 +21,7 @@ import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 // esté. Re-marcar por ability_id (como hacía la primera versión de esta
 // función) fallaba en silencio para cualquier mecánica con IDs
 // distintos — exactamente el caso de Uncoiling. Se re-marca por NOMBRE.
-export async function resyncMechanicCategory(supabase: SupabaseClient, bossId: string, difficulty: string, mechanicName: string, category: string): Promise<void> {
+export async function resyncMechanicCategory(supabase: SupabaseClient, bossId: string, difficulty: string, mechanicName: string, category: string | null): Promise<void> {
   const { data: pullRows } = await supabase.from('pulls').select('id').eq('boss_id', bossId).eq('difficulty', difficulty);
   const pullIds = ((pullRows ?? []) as { id: string }[]).map((p) => p.id);
   if (!pullIds.length) return;
@@ -54,7 +54,7 @@ export async function resyncMechanicResponsibility(
   bossId: string,
   difficulty: string,
   mechanicName: string,
-  responsibility: string,
+  responsibility: string | null,
 ): Promise<void> {
   const { data: pullRows } = await supabase.from('pulls').select('id').eq('boss_id', bossId).eq('difficulty', difficulty);
   const pullIds = ((pullRows ?? []) as { id: string }[]).map((pull) => pull.id);
@@ -76,13 +76,23 @@ export async function resyncMechanicResponsibility(
   }
 }
 
+// §bug real encontrado (2026-08-27): los tres campos aceptan `null` a
+// propósito. `category`/`responsibility` vuelven a "sin decidir" al
+// corregir una clasificación equivocada, y `avoidable` es tri-estado de
+// verdad (true/false/null = mezcla no demostrable, §A.11.5) — antes los tres
+// llamadores solo invocaban esto cuando el valor nuevo era truthy/boolean,
+// así que "volver a poner en null" actualizaba el candidato en Ajustes pero
+// nunca llegaba a pull_mechanic_events/death_cause: la clasificación vieja
+// se quedaba viva ahí para siempre, exactamente el mismo cruce roto que el
+// comentario de arriba ya documentó una vez para category.
+
 /** Mantiene el indicador evitable de los históricos alineado con Ajustes. */
 export async function resyncMechanicAvoidable(
   supabase: SupabaseClient,
   bossId: string,
   difficulty: string,
   mechanicName: string,
-  avoidable: boolean,
+  avoidable: boolean | null,
 ): Promise<void> {
   const { data: pullRows } = await supabase.from('pulls').select('id').eq('boss_id', bossId).eq('difficulty', difficulty);
   const pullIds = ((pullRows ?? []) as { id: string }[]).map((pull) => pull.id);
@@ -102,4 +112,30 @@ export async function resyncMechanicAvoidable(
       .update({ death_cause: { ...row.death_cause, avoidable } })
       .eq('id', row.id);
   }
+}
+
+// §"Daño evitable de toda la noche — solo hay cobertura en 1 de 3
+// combinaciones boss/dificultad" (feedback real, investigado): el número no
+// estaba mal calculado — measuredBossScopes/totalBossScopes ya reflejaban
+// la cobertura real en el momento de generar el informe. El problema es que
+// generate-night-full-report solo recalcula cuando cambia schemaVersion o
+// se pide "Actualizar" a mano: clasificar más mecánicas en Ajustes DESPUÉS
+// de generar un informe (el caso normal, un boss se cura poco a poco) no
+// invalida el caché. Verificado en real: el informe cacheado de
+// W9AfGbRhmPkXMapx seguía en "2/3" con boss_mechanics_candidates ya en
+// "3/3" — quien lo abriera vería una cobertura peor de la real hasta pulsar
+// "Actualizar" a mano, sin saber que hacía falta.
+//
+// No se recalcula el informe aquí (sería lento y bloquearía el guardado en
+// Ajustes) — se borra la fila cacheada, igual que un cache-invalidate-on-write
+// normal: la próxima vez que alguien abra ese informe, generate-night-full-report
+// no encuentra caché y lo reconstruye ya con la clasificación al día.
+export async function invalidateNightFullReportsForBossDifficulty(supabase: SupabaseClient, bossId: string, difficulty: string): Promise<void> {
+  const { data: pullRows } = await supabase.from('pulls').select('report_code').eq('boss_id', bossId).eq('difficulty', difficulty);
+  const reportCodes = [...new Set(((pullRows ?? []) as { report_code: string }[]).map((p) => p.report_code))];
+  if (!reportCodes.length) return;
+  await supabase.from('night_full_reports').delete().in('report_code', reportCodes).then(
+    () => {},
+    (err) => console.error('No se pudo invalidar night_full_reports tras reclasificar (no bloqueante):', err),
+  );
 }

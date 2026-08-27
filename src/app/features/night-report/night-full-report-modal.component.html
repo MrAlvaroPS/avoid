@@ -325,11 +325,11 @@
             <div class="meter"><i [style.width.%]="report().survival.either.pctUsedAtLeastOnce"></i></div>
           </div>
           <p class="data-note">
-            {{ formatPct(report().survival.pctDeathsWithNoRecentEmergencyConsumable) }} de las muertes no registraron uso de healthstone ni health potion en los {{ report().survival.emergencyLookbackMs / 1000 }} s previos.
+            {{ formatPct(report().survival.pctDeathsWithNoEmergencyConsumableInPull) }} de las muertes no registraron uso de healthstone ni health potion durante el try.
           </p>
           @if (report().survival.healthstone.deathsEvaluable) {
             <p class="data-note">
-              En {{ report().survival.healthstone.deathsWithObservedAccessNoRecentUse }}/{{ report().survival.healthstone.deathsEvaluable }} muertes evaluables había acceso observable a healthstone y no se registró uso en los {{ report().survival.emergencyLookbackMs / 1000 }} s previos.
+              En {{ report().survival.healthstone.deathsWithObservedAccessNoUseInPull }}/{{ report().survival.healthstone.deathsEvaluable }} muertes evaluables había acceso observable a healthstone y no se registró uso durante el try.
             </p>
           }
         </section>

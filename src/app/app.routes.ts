@@ -6,6 +6,11 @@ export const routes: Routes = [
     loadComponent: () => import('./features/raid-session/raid-session.component').then((m) => m.RaidSessionComponent),
   },
   {
+    // §"vamos mejor a meterlo en ajustes... pestañas, una mecánicas de
+    // bosses... otra defensivos... así tenemos todos los ajustes
+    // centralizados" (feedback real): una sola ruta — ManifestComponent
+    // aloja las dos pestañas, DefensiveCatalogComponent vive dentro como
+    // hijo embebido, no como ruta propia.
     path: 'ajustes',
     loadComponent: () => import('./features/manifest/manifest.component').then((m) => m.ManifestComponent),
   },

@@ -40,25 +40,26 @@
   font-weight: 500;
 }
 
-// §bug real (feedback: "esto queda raro... puede ocupar todo el ancho del
-// card si no va a estar a varias columnas") — con CSS Grid + auto-fit, el
-// número de columnas se calcula UNA vez para todo el grid según el ancho
-// disponible, no según cuántos hijos hay realmente: con 3 bloques pero solo
-// sitio para 2 columnas, "Próximo intento" caía huérfano en una fila nueva
-// con el ancho de UNA columna, dejando el resto de esa fila vacío. Flexbox
-// con wrap resuelve esto solo: flex-grow reparte el espacio libre POR LÍNEA,
-// así que un bloque que cae solo en su propia línea crece para llenarla.
-.columns {
+// Bien / Mal / siguiente acción son pasos de lectura, no categorías que
+// haya que comparar lateralmente. Cada bloque ocupa una fila completa para
+// mantener líneas largas legibles también en el informe de noche y dosier.
+.analysis-rows {
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-.col {
-  flex: 1 1 200px;
-  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.col-title {
+.analysis-row {
+  padding-top: 10px;
+  border-top: 1px solid var(--card-border);
+
+  &:first-child {
+    padding-top: 0;
+    border-top: 0;
+  }
+}
+
+.row-title {
   display: block;
   font-size: 11px;
   font-weight: 600;

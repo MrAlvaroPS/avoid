@@ -38,7 +38,25 @@ export function normalizeDifficulty(raw: string): 'lfr' | 'normal' | 'heroic' | 
 // uno, cambia el otro.
 export const WCL_DIFFICULTY_NAME_BY_ID: Record<number, string> = { 1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic' };
 
-import type { MechanicCategory } from './models/domain';
+// Antes duplicada como STANDARD_DIFFICULTY_IDS solo dentro de
+// manifest.component.ts (§9.1) — se sube aquí para que reports.service.ts
+// (progreso de temporada por dificultad) use la misma fuente en vez de
+// teclear [3,4,5] una segunda vez.
+//
+// §"podemos quitar la dificultad LFR de ajustes, del prompt y de la
+// sincronización... no es relevante para nada y nos ahorrará unos tokens y
+// molestias" (feedback real, 2026-08-27): LFR (id 1) queda fuera a
+// propósito — ni un solo pull real de la guild en LFR hasta la fecha
+// (contrastado en real: pulls.difficulty solo trae Normal/Heroic), y era
+// además la dificultad estructuralmente más ambigua de mapear contra DB2
+// (ver difficulty-mapping.ts). Menos dificultades por sync/prompt también
+// reduce el volumen de llamadas a WCL, que es justo lo que hace saltar el
+// rate limit de la API (§bug real reportado el mismo día). WCL_DIFFICULTY_NAME_BY_ID
+// conserva la entrada 1:'LFR' por si algún pull histórico la necesita para
+// mostrarse, solo deja de OFRECERSE activamente en sync/Ajustes/prompt.
+export const STANDARD_DIFFICULTY_IDS = [3, 4, 5] as const;
+
+import type { DefensiveSurvivalType, MechanicCategory } from './models/domain';
 
 // Paleta categórica de 9 huecos — validada de verdad, no a ojo, contra la
 // superficie oscura real de la app:
@@ -81,6 +99,24 @@ export function mechanicCategoryMeta(category: MechanicCategory | null | undefin
   return category ? MECHANIC_CATEGORY_META[category] : null;
 }
 
+// §"pantalla nueva para clasificar defensivos... mitigation/absorption/
+// sustain/emergency" (feedback real, definiciones del propio usuario): eje
+// de "qué le hace un defensivo al daño entrante", distinto de category
+// (a quién protege). Reutiliza dos huecos ya validados de CATEGORY_PALETTE
+// en vez de inventar 4 colores nuevos sin pasar el validador de contraste.
+const SURVIVAL_TYPE_META: Record<DefensiveSurvivalType, { label: string; short: string; color: string; hint: string }> = {
+  mitigation: { label: 'Mitigación', short: 'MITIG', color: CATEGORY_PALETTE[0], hint: 'Reduce el daño antes de que llegue a tu vida — DR%, armadura, reducción física/mágica, avoidance, stagger.' },
+  absorption: { label: 'Absorción', short: 'ABSORB', color: CATEGORY_PALETTE[7], hint: 'Añade un pool de vida aparte que el daño consume antes de tocar tu HP — escudos, barriers, Ignore Pain.' },
+  sustain: { label: 'Sustain', short: 'SUSTAIN', color: CATEGORY_PALETTE[2], hint: 'Repara vida ya perdida o la mantiene estable con el tiempo — self-heals, HoTs, regen, leech.' },
+  emergency: { label: 'Emergencia', short: 'EMERG', color: CATEGORY_PALETTE[1], hint: 'Herramienta para sobrevivir a daño potencialmente letal — inmunidades, cheat death, curación instantánea enorme.' },
+};
+
+export function survivalTypeMeta(type: DefensiveSurvivalType | null | undefined) {
+  return type ? SURVIVAL_TYPE_META[type] : null;
+}
+
+export const SURVIVAL_TYPE_KEYS = Object.keys(SURVIVAL_TYPE_META) as DefensiveSurvivalType[];
+
 /** §"la I de información... y las categorías/causas que aparezcan en el análisis de la IA deben leerse bien, no como código" (feedback real): las 10 claves de categoría, para que app-brief-text pueda reconocer un token como "avoidable-ground" dentro de la prosa que devuelve el LLM (el propio contexto que se le manda SÍ lleva estos códigos literales — es razonable que a veces los cite tal cual). */
 export const CATEGORY_KEYS = Object.keys(MECHANIC_CATEGORY_META) as MechanicCategory[];
 
@@ -89,6 +125,11 @@ export const ROOT_CAUSE_META: Record<string, { label: string }> = {
   self_positioning: { label: 'Posicionamiento propio' },
   unsoaked_mechanic: { label: 'Mecánica sin resolver' },
   no_healing_received: { label: 'Sin sanación suficiente' },
+  // §"Dispels — sin ingestión de eventos de dispel" (feedback real): solo se
+  // asigna con un evento Dispels real ausente para esa habilidad sobre ese
+  // jugador (ver computeRootCause en analyze-report) — antes de tener esa
+  // ingesta, este caso quedaba en 'unclassified'.
+  undispelled_debuff: { label: 'Debuff sin dispel' },
   unclassified: { label: 'Sin clasificar' },
 };
 
@@ -119,6 +160,29 @@ export function classColor(wclClass: string | null | undefined): string | null {
   return wclClass ? (CLASS_COLORS[wclClass] ?? null) : null;
 }
 
+// §"pantalla nueva para clasificar defensivos... se clasifican por clase"
+// (feedback real): nombre legible para el selector — el WCL crudo
+// ("DeathKnight") vale para cruzar datos, no para un título de pantalla.
+export const CLASS_DISPLAY_NAME: Record<string, string> = {
+  DeathKnight: 'Death Knight',
+  DemonHunter: 'Demon Hunter',
+  Druid: 'Druid',
+  Evoker: 'Evoker',
+  Hunter: 'Hunter',
+  Mage: 'Mage',
+  Monk: 'Monk',
+  Paladin: 'Paladin',
+  Priest: 'Priest',
+  Rogue: 'Rogue',
+  Shaman: 'Shaman',
+  Warlock: 'Warlock',
+  Warrior: 'Warrior',
+};
+
+export function classDisplayName(wclClass: string): string {
+  return CLASS_DISPLAY_NAME[wclClass] ?? wclClass;
+}
+
 // §"los que sean unknown ability pon: unknown cause - WC porque quizá es un
 // wipe call y es saltar al vacío o algo así" (feedback real): "Unknown
 // Ability" es un literal interno (mechanicId=0, el fallback de
@@ -131,5 +195,23 @@ export function mechanicDisplayName(name: string | null | undefined): string {
   if (!name) return 'Sin identificar';
   if (name === 'Unknown Ability') return 'Causa desconocida (posible wipe call / entorno)';
   return name;
+}
+
+// §"WCL tiene fases de encuentro, importarlas e implementarlas en todos los
+// sitios donde corresponda" (feedback real): "Fase X/N" o "Fase X/N —
+// Nombre" cuando se conoce, con el sufijo de intermedio — un único sitio
+// para no repetir esta lógica en cada pantalla que enseña progreso.
+export function formatPhaseReached(
+  phaseTransitions: { id: number; startTime: number }[] | null | undefined,
+  lastPhaseIsIntermission: boolean | null | undefined,
+  bossPhases: { phase_id: number; name: string }[] | null | undefined,
+): string | null {
+  const lastId = phaseTransitions?.at(-1)?.id;
+  if (lastId == null) return null;
+  const total = bossPhases?.length ?? null;
+  const name = bossPhases?.find((p) => p.phase_id === lastId)?.name ?? null;
+  const base = total ? `Fase ${lastId}/${total}` : `Fase ${lastId}`;
+  const withName = name ? `${base} — ${name}` : base;
+  return lastPhaseIsIntermission ? `${withName} (intermedio)` : withName;
 }
 

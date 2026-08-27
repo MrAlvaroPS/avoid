@@ -14,6 +14,7 @@ import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { RoleIconComponent } from '../../shared/role-icon.component';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
+import { errorMessage } from '../../shared/error-message.util';
 
 @Component({
   selector: 'app-boss-history',
@@ -44,7 +45,11 @@ export class BossHistoryComponent {
       value: 100 - p.wipePct,
       isKill: p.kill,
       isCurrent: false,
-      tooltip: `Intento #${p.pullNumber} · ${p.kill ? 'Kill' : `${p.wipePct.toFixed(1)}% HP restante`}${p.durationMs != null ? ' · ' + formatDuration(p.durationMs) : ''}`,
+      // §"fases de encuentro... en todos los sitios donde corresponda"
+      // (feedback real): el % de HP restante puede no ser comparable entre
+      // fases en bosses que reinician su barra (ver pulls.last_phase_*) — se
+      // añade la fase alcanzada como dato adicional, sin sustituir el %.
+      tooltip: `Intento #${p.pullNumber} · ${p.kill ? 'Kill' : `${p.wipePct.toFixed(1)}% HP restante`}${p.durationMs != null ? ' · ' + formatDuration(p.durationMs) : ''}${p.phaseLabel ? ' · ' + p.phaseLabel : ''}`,
     }));
   });
 
@@ -68,7 +73,7 @@ export class BossHistoryComponent {
     try {
       this.data.set(await this.bossHistoryService.load(bossId, difficulty));
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loading.set(false);
     }

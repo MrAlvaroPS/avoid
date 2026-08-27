@@ -14,6 +14,9 @@ import { mechanicDisplayName } from '../shared/format.util';
 import type { BossReferenceStatsRow, MechanicCategory, PullMechanicEventRow, PullRow } from '../shared/models/domain';
 import type { ReferencePacing } from '../shared/models/ui';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
+import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
+import { BossPhaseService } from './boss-phase.service';
+import { formatPhaseReached } from '../shared/format.util';
 
 export interface ProgressionPoint {
   pullNumber: number;
@@ -21,6 +24,8 @@ export interface ProgressionPoint {
   wipePct: number;
   kill: boolean;
   durationMs: number | null;
+  /** §"fases de encuentro... en todos los sitios donde corresponda" (feedback real): "Fase X/N — Nombre", null si el boss no tiene fases o el pull no las trajo. */
+  phaseLabel: string | null;
 }
 
 export interface MechanicTrendRow {
@@ -72,6 +77,7 @@ const MIN_INSTANCES_PER_HALF = 3;
 export class BossHistoryService {
   private supabase = inject(SupabaseService);
   private reliability = inject(ReliabilityService);
+  private bossPhase = inject(BossPhaseService);
 
   async load(bossId: string, difficulty: string): Promise<BossHistoryData> {
     const client = this.supabase.client;
@@ -83,13 +89,24 @@ export class BossHistoryService {
       .eq('difficulty', difficulty)
       .order('closed_at', { ascending: true });
     if (pullsErr) throw pullsErr;
-    const pulls = (pullsData ?? []) as PullRow[];
-    const pullIds = pulls.map((p) => p.id);
+    const allPulls = (pullsData ?? []) as PullRow[];
+    // §"un ninja pull... también cuenta en la estadística de wipes"
+    // (feedback real): `pulls` de aquí en adelante es solo el subconjunto
+    // de intentos reales (kills/progresión/totales de este boss+dificultad).
+    // pullIds sigue sin filtrar para que un evento/muerte que exista de
+    // verdad en un ninja pull (alguien murió en esos pocos segundos)
+    // resuelva igual vía pullById más abajo — solo se descarta al agregar.
+    const pulls = allPulls.filter((p) => !p.ninja_pull_excluded);
+    const pullIds = allPulls.map((p) => p.id);
 
-    const [bossNameRes, mechEventsRes, deathsRes, referenceStatsRes, roster] = await Promise.all([
+    const [bossNameRes, mechEventsRes, deathsRes, referenceStatsRes, roster, bossPhases] = await Promise.all([
       client.from('known_raid_bosses').select('boss_name').eq('encounter_id', Number(bossId)).maybeSingle(),
       pullIds.length
-        ? client.from('pull_mechanic_events').select('ability_id, mechanic_name, category, outcome, pull_id, trigger_time_ms').in('pull_id', pullIds)
+        ? withSupabaseRelationFallback(
+            'applicable_pull_mechanic_events',
+            () => client.from('applicable_pull_mechanic_events').select('ability_id, mechanic_name, category, outcome, pull_id, trigger_time_ms').in('pull_id', pullIds),
+            () => client.from('pull_mechanic_events').select('ability_id, mechanic_name, category, outcome, pull_id, trigger_time_ms').in('pull_id', pullIds),
+          )
         : Promise.resolve({ data: [] as PullMechanicEventRow[], error: null }),
       pullIds.length
         ? client.from('player_pull_records').select('player_name, died, death_cause, pull_id, wipe_call_cluster').in('pull_id', pullIds).eq('died', true)
@@ -99,6 +116,7 @@ export class BossHistoryService {
           }),
       client.from('boss_reference_stats').select('*').eq('boss_id', bossId).eq('difficulty', difficulty).maybeSingle(),
       this.reliability.listPlayerReliability({ bossId, difficulty }),
+      this.bossPhase.listPhases(bossId).catch(() => []),
     ]);
     const notesByMechanicName = await loadMechanicNotesByName(client, [bossId]).catch(() => new Map<string, string>());
 
@@ -118,14 +136,17 @@ export class BossHistoryService {
       wipePct: p.wipe_pct ?? 100,
       kill: p.wipe_pct === 0,
       durationMs: p.duration_ms,
+      phaseLabel: formatPhaseReached(p.phase_transitions, p.last_phase_is_intermission, bossPhases),
     }));
 
-    const pullById = new Map(pulls.map((p) => [p.id, p]));
+    const pullById = new Map(allPulls.map((p) => [p.id, p]));
     const evaluatedMechanicEvents = ((mechEventsRes.data ?? []) as (PullMechanicEventRow & { pull_id: string })[]).filter((event) => {
       const eventPull = pullById.get(event.pull_id);
-      return eventPull != null && !isMechanicExcludedByWipeCall(eventPull, event);
+      return eventPull != null && !eventPull.ninja_pull_excluded && !isMechanicExcludedByWipeCall(eventPull, event);
     });
-    const mechanicTrends = this.buildMechanicTrends(evaluatedMechanicEvents, pullIds, notesByMechanicName);
+    // pulls.map(id), no pullIds -- la mitad cronológica para "mejorando/
+    // empeorando" no debe correrse por un ninja pull colado en el medio.
+    const mechanicTrends = this.buildMechanicTrends(evaluatedMechanicEvents, pulls.map((p) => p.id), notesByMechanicName);
     // §"no debería... contar como muerte, marcado como wipe call" (feedback
     // real): "causas de muerte más repetidas" es literalmente sobre
     // muertes, así que las de un cluster de wipe call confirmado/excluido
@@ -136,7 +157,7 @@ export class BossHistoryService {
     const topDeathCauses = this.buildTopDeathCauses(
       deathRows.filter((death) => {
         const deathPull = pullById.get(death.pull_id);
-        return deathPull != null && !isDeathExcludedFromStatistics(deathPull, death as import('../shared/models/domain').PlayerPullRecordRow);
+        return deathPull != null && !deathPull.ninja_pull_excluded && !isDeathExcludedFromStatistics(deathPull, death as import('../shared/models/domain').PlayerPullRecordRow);
       }),
       notesByMechanicName,
     );

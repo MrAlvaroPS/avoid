@@ -11,7 +11,25 @@
       <a routerLink="/ajustes" routerLinkActive="active">Ajustes</a>
     </div>
     <div class="nav-spacer"></div>
-    <span class="guild-tag">Sanguino · EU</span>
+    <!-- §"quita la card de progreso de temporada de portada y pon el
+         progreso en la cabecera a la derecha junto con Sanguino EU"
+         (feedback real): visible en toda la app ahora, no solo en la
+         portada — por dificultad, ver season-progress.component.ts. Un
+         gap más corto que el resto del nav para que se lea agrupado con
+         el guild-tag, no como un item de navegación más. -->
+    <div class="header-progress-group">
+      <!-- @defer: app-season-progress tira de ReportsService -> Supabase
+           client igual que cualquier ruta, pero esto vive en app-root
+           (fuera del lazy-loading por ruta) — sin @defer, todo ese cliente
+           se cuela en el bundle inicial ANTES de la primera pintura por un
+           simple badge de cabecera (contrastado en real: +48KB sobre el
+           budget). `on idle` lo trae justo después del primer render, no
+           bloquea nada. -->
+      @defer (on idle) {
+        <app-season-progress />
+      }
+      <span class="guild-tag">Sanguino · EU</span>
+    </div>
   </nav>
 
   <main>

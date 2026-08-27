@@ -1,5 +1,8 @@
 <div class="raid-session">
-  <app-season-progress class="area-season" />
+  <!-- §"quita la card de progreso de temporada de portada y pon el
+       progreso en la cabecera" (feedback real): app-season-progress se
+       mudó a app.html, junto a "Sanguino · EU" — visible en todas las
+       pantallas, no solo aquí. -->
 
   <form class="import-bar" (submit)="$event.preventDefault(); onImport()">
     <input
@@ -91,8 +94,11 @@
     <section class="night-players" aria-labelledby="night-players-heading">
       <span id="night-players-heading" class="night-players-label">Dosier de jugador esta noche</span>
       <div class="night-players-chips">
-        @for (player of nightPlayers(); track player) {
-          <a class="player-chip" [routerLink]="['/report', currentReportCode(), 'player', player]">{{ player }}</a>
+        @for (player of nightPlayers(); track player.name) {
+          <a class="player-chip" [routerLink]="['/report', currentReportCode(), 'player', player.name]">
+            <app-class-icon [wclClass]="player.className" />
+            {{ player.name }}
+          </a>
         }
       </div>
     </section>
@@ -124,6 +130,8 @@
                 class="pull-chip"
                 [class.selected]="pull.id === selectedPullId()"
                 [class.is-kill]="pull.kill"
+                [class.is-ninja-pull]="pull.ninja_pull_excluded"
+                [attr.title]="pull.ninja_pull_excluded ? 'Ninja pull: engancharon al boss pocos jugadores muy poco tiempo. No cuenta como intento en las estadísticas.' : null"
                 (click)="selectPull(pull)"
               >
                 <span class="pull-name">{{ pullLabel(pull) }}</span>

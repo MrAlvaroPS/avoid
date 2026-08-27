@@ -1,5 +1,25 @@
 <div class="manifest">
-  <h1>Manifiesto de mecánicas</h1>
+  <h1>Ajustes</h1>
+
+  <!-- §"vamos mejor a meterlo en ajustes... pestañas, una mecánicas de
+       bosses... otra defensivos... así tenemos todos los ajustes
+       centralizados" (feedback real): dos manifiestos independientes bajo
+       una sola cabecera de página — cada uno con su propia navegación
+       interna (bosses / clases), sin compartir estado entre sí. -->
+  <div class="ajustes-tabs" role="tablist" aria-label="Secciones de Ajustes">
+    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'mecanicas'" [class.selected]="activeTab() === 'mecanicas'" (click)="activeTab.set('mecanicas')">
+      Mecánicas de bosses
+    </button>
+    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'defensivos'" [class.selected]="activeTab() === 'defensivos'" (click)="activeTab.set('defensivos')">
+      Defensivos
+    </button>
+  </div>
+
+  @if (activeTab() === 'defensivos') {
+    <app-defensive-catalog />
+  }
+
+  @if (activeTab() === 'mecanicas') {
   <p class="intro">
     Tarea manual #1 (§5): el candidato sale solo de Blizzard Journal + Wago DB2 — lo único que
     decides tú es si es evitable, la categoría y el umbral. Se hace una vez por boss+dificultad,
@@ -41,6 +61,16 @@
 
     <section class="detail">
       @if (selectedBoss(); as boss) {
+        <!-- §"hay que darle una vuelta a la UX UI de todos esos botones y
+             dificultades... cuando cambio de dificultad las cosas se mueven
+             de un sitio a otro" (feedback real, con capturas): antes era un
+             único flex-wrap con h2+nota+pestañas+botones compitiendo por la
+             misma línea — la anchura variable de la nota (vacía / una frase
+             / otra frase más larga según la dificultad) cambiaba dónde
+             "rompía" el wrap y desplazaba pestañas y botones de sitio. Cada
+             fila vive ahora en su propio contenedor de ancho 100%, así que
+             la posición de las pestañas y los botones ya no depende de
+             cuánto texto tenga la nota de arriba. -->
         <div class="detail-header">
           <h2>{{ boss.bossName }}</h2>
           <p class="no-pulls-note">
@@ -50,34 +80,53 @@
               Solo tenéis pulls propios en {{ boss.difficulties.length }} de las 4 dificultades — puedes elegir cualquiera de las otras para sincronizarla igual desde Blizzard + logs públicos.
             }
           </p>
-          <!-- §"faltan las dificultades en los bosses que ya tienen pulls": antes
-               solo se ofrecían boss.difficulties (las vistas de verdad), así que
-               un boss con pulls SOLO en Normal no dejaba elegir Heroic/Mythic ni
-               para consultar ni para sincronizar — las 4 siempre están aquí, con
-               las vistas de verdad marcadas aparte. -->
-          <div class="difficulty-tabs">
-            @for (diffId of standardDifficultyIds; track diffId) {
-              <button type="button" [class.selected]="diffId === selectedDifficultyId()" (click)="selectDifficulty(diffId)">
-                {{ difficultyLabel(diffId) }}
-                @if (boss.difficulties.includes(diffId)) {
-                  <span class="has-pulls-dot" title="Tenéis pulls propios en esta dificultad">●</span>
-                }
+
+          <div class="detail-header-controls">
+            <!-- §"faltan las dificultades en los bosses que ya tienen pulls": antes
+                 solo se ofrecían boss.difficulties (las vistas de verdad), así que
+                 un boss con pulls SOLO en Normal no dejaba elegir Heroic/Mythic ni
+                 para consultar ni para sincronizar — las 4 siempre están aquí, con
+                 las vistas de verdad marcadas aparte. Esto sigue controlando solo
+                 qué dificultad se está CONSULTANDO/clasificando — sincronizar ya
+                 no depende de cuál esté seleccionada aquí (ver sync-actions). -->
+            <div class="difficulty-tabs">
+              @for (diffId of standardDifficultyIds; track diffId) {
+                <button type="button" [class.selected]="diffId === selectedDifficultyId()" (click)="selectDifficulty(diffId)">
+                  {{ difficultyLabel(diffId) }}
+                  @if (boss.difficulties.includes(diffId)) {
+                    <span class="has-pulls-dot" title="Tenéis pulls propios en esta dificultad">●</span>
+                  }
+                </button>
+              }
+            </div>
+
+            <!-- §"hay que hacer esto por cada dificultad en lugar de
+                 traernos todo de todas las dificultades" + "no sé para qué
+                 sirve el sync profundo, si aporta algo" (feedback real): un
+                 único botón sincroniza siempre las 4 dificultades del boss a
+                 la vez (ya no hace falta elegir dificultad antes), con sync
+                 profundo (20 logs de referencia por dificultad en vez de 3)
+                 como comportamiento por defecto — es lo que de verdad
+                 alimenta el contraste entre dificultades que decide qué
+                 mecánica excluir de cada una, así que aporta más cuantas más
+                 dificultades y logs cubra. El rápido queda como enlace
+                 secundario para cuando solo hace falta un refresco.
+            -->
+            <div class="sync-actions">
+              <!-- §bug real reportado y reproducido (2026-08-27, "Edge
+                   Function returned a non-2xx status code"): las 4
+                   dificultades ya no se piden en una sola llamada al
+                   servidor (reventaba por límite de recursos) — el frontend
+                   las pide una a una, secuencial, ver onSync en el .ts. Por
+                   eso tarda más en total (~4x) y el botón muestra en qué
+                   dificultad va en vez de un tiempo fijo. -->
+              <button type="button" class="sync-btn" [disabled]="syncing() || deepSyncing()" (click)="onSync(true)" title="Journal + DB2 + hasta 20 logs públicos de referencia por dificultad, para las 4 dificultades del boss una a una. Tarda ~2-3 min en total.">
+                {{ syncProgress() && deepSyncing() ? syncProgress() : '🔄 Sincronizar boss (4 dificultades)' }}
               </button>
-            }
-          </div>
-          <div class="sync-actions">
-            <button type="button" class="sync-btn" [disabled]="syncing() || deepSyncing()" (click)="onSync(false)">
-              {{ syncing() ? 'Sincronizando…' : 'Sincronizar desde Blizzard' }}
-            </button>
-            <button
-              type="button"
-              class="sync-btn deep"
-              [disabled]="syncing() || deepSyncing()"
-              (click)="onSync(true)"
-              title="Trae hasta 20 kills públicas de referencia (en vez de 3) para clasificar mecánicas con mucha más muestra — tarda ~30-40s."
-            >
-              {{ deepSyncing() ? 'Sync profundo… (~30-40s)' : 'Sync profundo (+logs públicos)' }}
-            </button>
+              <button type="button" class="sync-btn-quick" [disabled]="syncing() || deepSyncing()" (click)="onSync(false)" title="Igual, pero con solo 3 logs de referencia por dificultad en vez de 20 — más rápido, con menos muestra para contrastar entre dificultades.">
+                {{ syncProgress() && syncing() ? syncProgress() : 'sync rápido' }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -85,95 +134,100 @@
           <p class="sync-summary">{{ s }}</p>
         }
 
-        @if (candidates().length > 0) {
-          <!-- §"un prompt para pasar a la IA y que investigue... clasificar
-               todas las mecánicas de forma semi automática, con ayuda
-               manual" (feedback real): mismo patrón de dos pasos que el
-               análisis IA de un pull — copiar prompt / pegar respuesta —
-               acotado a este boss+dificultad exacto. -->
-          <div class="classify-bar">
-            @if (!classifyPanelOpen()) {
-              <button type="button" class="classify-toggle" (click)="openClassifyPanel()">🔎 Clasificar mecánicas con ayuda de una IA →</button>
+        <!-- §"el prompt de mecánicas de bosses no puede consultar las 4
+             dificultades a la vez... asegurando la calidad de datos
+             obviamente" (feedback real, 2026-08-27): vive a nivel de boss
+             ahora, no dentro de una dificultad concreta — "todas las
+             dificultades" es la acción principal, ya no depende de qué
+             pestaña esté abierta ni de si esa pestaña en concreto tiene
+             candidatas cargadas. -->
+        <div class="classify-bar">
+          @if (!classifyPanelOpen()) {
+            <button type="button" class="classify-toggle all" (click)="openClassifyPanel('all')">🔎 Clasificar TODAS las dificultades de este boss con una sola IA →</button>
+            @if (selectedDifficultyName(); as diff) {
+              <button type="button" class="classify-toggle" (click)="openClassifyPanel(diff)">…o clasificar solo {{ diff }} →</button>
+            }
+          }
+        </div>
+
+        @if (classifyPanelOpen()) {
+          <div class="classify-panel">
+            @if (loadingClassifyPrompt()) {
+              <p class="muted">Preparando el prompt…</p>
+            } @else if (classifyPromptError(); as pe) {
+              <p class="error" role="alert">{{ pe }}</p>
+            } @else {
+              <div class="classify-step">
+                <span class="step-label"
+                  >1. Prompt v{{ classifyPromptVersion() ?? '—' }} · Alcance: {{ classifyScope() === 'all' ? 'todas las dificultades' : classifyScope() }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyMechanicCount() }} filas — una habilidad puede aparecer varias veces, una por dificultad). Clasificará cada habilidad EN CADA dificultad, decidirá si es evitable, quién debe resolverla y cómo hacerlo, contrastándolo en dos fuentes por cada una.</span
+                >
+                <pre class="prompt-box">{{ classifyFullPrompt }}</pre>
+                <button type="button" class="copy-btn" (click)="copyClassifyPrompt()">{{ classifyCopied() ? '✓ Copiado' : 'Copiar prompt' }}</button>
+              </div>
+              <div class="classify-step">
+                <span class="step-label">2. Pega aquí el JSON que responda la IA</span>
+                <textarea
+                  class="paste-box"
+                  rows="6"
+                  placeholder="Pega aquí el array JSON de clasificaciones…"
+                  [value]="classifyPasteText()"
+                  (input)="classifyPasteText.set($any($event.target).value)"
+                ></textarea>
+                @if (classifySubmitError(); as se) {
+                  <p class="error" role="alert">{{ se }}</p>
+                }
+                <div class="classify-actions">
+                  <button type="button" class="sync-btn" [disabled]="classifySubmitting() || !classifyPasteText().trim()" (click)="submitClassification()">
+                    {{ classifySubmitting() ? 'Aplicando…' : 'Aplicar clasificación' }}
+                  </button>
+                  <button type="button" class="classify-toggle" (click)="closeClassifyPanel()">Cancelar</button>
+                </div>
+              </div>
+              @if (classifyResult(); as r) {
+                <div class="classify-result">
+                  @if (r.applied.length) {
+                    <p class="result-line result-ok">✓ {{ r.applied.length }} mecánica{{ r.applied.length === 1 ? '' : 's' }} clasificada{{ r.applied.length === 1 ? '' : 's' }}: {{ r.applied.map((a) => a.name + ' [' + a.difficulty + '] → ' + a.category).join(', ') }}</p>
+                  }
+                  @if (r.resolutionsApplied.length) {
+                    <p class="result-line result-ok">✓ {{ r.resolutionsApplied.length }} resolución{{ r.resolutionsApplied.length === 1 ? '' : 'es' }} contrastada{{ r.resolutionsApplied.length === 1 ? '' : 's' }} y guardada{{ r.resolutionsApplied.length === 1 ? '' : 's' }}.</p>
+                  }
+                  @if (r.resolutionContractMissing) {
+                    <p class="result-line result-error">✕ La respuesta de la IA no contiene <code>resolution</code>. Las categorías sí se han procesado, pero no se ha guardado ninguna resolución. Vuelve a copiar el prompt actualizado y repite la consulta.</p>
+                  } @else if (r.resolutionsSkipped.length) {
+                    <p class="result-line result-warn">⚠ {{ r.resolutionsSkipped.length }} resolución{{ r.resolutionsSkipped.length === 1 ? '' : 'es' }} sin guardar: {{ r.resolutionsSkipped.map((s) => s.name + ' [' + s.difficulty + '] (' + s.reason + ')').join(' · ') }}</p>
+                  }
+                  @if (r.responsibilitiesApplied.length) {
+                    <p class="result-line result-ok">✓ {{ r.responsibilitiesApplied.length }} responsable{{ r.responsibilitiesApplied.length === 1 ? '' : 's' }} guardado{{ r.responsibilitiesApplied.length === 1 ? '' : 's' }}.</p>
+                  }
+                  @if (r.responsibilityContractMissing) {
+                    <p class="result-line result-error">✕ La respuesta no contiene <code>responsibility</code>; no se ha asignado ningún responsable.</p>
+                  } @else if (r.responsibilitiesSkipped.length) {
+                    <p class="result-line result-warn">⚠ {{ r.responsibilitiesSkipped.length }} responsable{{ r.responsibilitiesSkipped.length === 1 ? '' : 's' }} sin guardar.</p>
+                  }
+                  @if (r.avoidablesApplied.length) {
+                    <p class="result-line result-ok">✓ “Evitable” actualizado en {{ r.avoidablesApplied.length }} mecánica{{ r.avoidablesApplied.length === 1 ? '' : 's' }}.</p>
+                  }
+                  @if (r.avoidableContractMissing) {
+                    <p class="result-line result-error">✕ La respuesta no contiene <code>avoidable</code>; la columna “Evitable” no se ha actualizado.</p>
+                  } @else if (r.avoidablesSkipped.length) {
+                    <p class="result-line result-warn">⚠ {{ r.avoidablesSkipped.length }} valor{{ r.avoidablesSkipped.length === 1 ? '' : 'es' }} de “Evitable” sin guardar por falta de decisión fiable.</p>
+                  }
+                  @if (r.skippedLowConfidence.length) {
+                    <p class="result-line result-warn">
+                      ⚠ {{ r.skippedLowConfidence.length }} con poca confianza, sin aplicar (revisa a mano):
+                      {{ r.skippedLowConfidence.map((s) => s.name + ' [' + s.difficulty + '] (sugerido ' + (s.category ?? 'ninguna') + ': ' + s.notes + ')').join(' · ') }}
+                    </p>
+                  }
+                  @if (r.skippedUndetermined.length) {
+                    <p class="result-line meta">— {{ r.skippedUndetermined.length }} sin determinar: {{ r.skippedUndetermined.map((s) => s.name + ' [' + s.difficulty + ']').join(', ') }}</p>
+                  }
+                  @if (r.invalid.length) {
+                    <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada.</p>
+                  }
+                </div>
+              }
             }
           </div>
-
-          @if (classifyPanelOpen()) {
-            <div class="classify-panel">
-              @if (loadingClassifyPrompt()) {
-                <p class="muted">Preparando el prompt…</p>
-              } @else if (classifyPromptError(); as pe) {
-                <p class="error" role="alert">{{ pe }}</p>
-              } @else {
-                <div class="classify-step">
-                  <span class="step-label">1. Prompt v{{ classifyPromptVersion() ?? '—' }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyMechanicCount() }} mecánicas). Clasificará cada habilidad, decidirá si es evitable, quién debe resolverla y cómo hacerlo, contrastándolo en dos fuentes.</span>
-                  <pre class="prompt-box">{{ classifyFullPrompt }}</pre>
-                  <button type="button" class="copy-btn" (click)="copyClassifyPrompt()">{{ classifyCopied() ? '✓ Copiado' : 'Copiar prompt' }}</button>
-                </div>
-                <div class="classify-step">
-                  <span class="step-label">2. Pega aquí el JSON que responda la IA</span>
-                  <textarea
-                    class="paste-box"
-                    rows="6"
-                    placeholder="Pega aquí el array JSON de clasificaciones…"
-                    [value]="classifyPasteText()"
-                    (input)="classifyPasteText.set($any($event.target).value)"
-                  ></textarea>
-                  @if (classifySubmitError(); as se) {
-                    <p class="error" role="alert">{{ se }}</p>
-                  }
-                  <div class="classify-actions">
-                    <button type="button" class="sync-btn" [disabled]="classifySubmitting() || !classifyPasteText().trim()" (click)="submitClassification()">
-                      {{ classifySubmitting() ? 'Aplicando…' : 'Aplicar clasificación' }}
-                    </button>
-                    <button type="button" class="classify-toggle" (click)="closeClassifyPanel()">Cancelar</button>
-                  </div>
-                </div>
-                @if (classifyResult(); as r) {
-                  <div class="classify-result">
-                    @if (r.applied.length) {
-                      <p class="result-line result-ok">✓ {{ r.applied.length }} mecánica{{ r.applied.length === 1 ? '' : 's' }} clasificada{{ r.applied.length === 1 ? '' : 's' }}: {{ r.applied.map((a) => a.name + ' → ' + a.category).join(', ') }}</p>
-                    }
-                    @if (r.resolutionsApplied.length) {
-                      <p class="result-line result-ok">✓ {{ r.resolutionsApplied.length }} resolución{{ r.resolutionsApplied.length === 1 ? '' : 'es' }} contrastada{{ r.resolutionsApplied.length === 1 ? '' : 's' }} y guardada{{ r.resolutionsApplied.length === 1 ? '' : 's' }}.</p>
-                    }
-                    @if (r.resolutionContractMissing) {
-                      <p class="result-line result-error">✕ La respuesta de la IA no contiene <code>resolution</code>. Las categorías sí se han procesado, pero no se ha guardado ninguna resolución. Vuelve a copiar el prompt actualizado y repite la consulta.</p>
-                    } @else if (r.resolutionsSkipped.length) {
-                      <p class="result-line result-warn">⚠ {{ r.resolutionsSkipped.length }} resolución{{ r.resolutionsSkipped.length === 1 ? '' : 'es' }} sin guardar: {{ r.resolutionsSkipped.map((s) => s.name + ' (' + s.reason + ')').join(' · ') }}</p>
-                    }
-                    @if (r.responsibilitiesApplied.length) {
-                      <p class="result-line result-ok">✓ {{ r.responsibilitiesApplied.length }} responsable{{ r.responsibilitiesApplied.length === 1 ? '' : 's' }} guardado{{ r.responsibilitiesApplied.length === 1 ? '' : 's' }}.</p>
-                    }
-                    @if (r.responsibilityContractMissing) {
-                      <p class="result-line result-error">✕ La respuesta no contiene <code>responsibility</code>; no se ha asignado ningún responsable.</p>
-                    } @else if (r.responsibilitiesSkipped.length) {
-                      <p class="result-line result-warn">⚠ {{ r.responsibilitiesSkipped.length }} responsable{{ r.responsibilitiesSkipped.length === 1 ? '' : 's' }} sin guardar.</p>
-                    }
-                    @if (r.avoidablesApplied.length) {
-                      <p class="result-line result-ok">✓ “Evitable” actualizado en {{ r.avoidablesApplied.length }} mecánica{{ r.avoidablesApplied.length === 1 ? '' : 's' }}.</p>
-                    }
-                    @if (r.avoidableContractMissing) {
-                      <p class="result-line result-error">✕ La respuesta no contiene <code>avoidable</code>; la columna “Evitable” no se ha actualizado.</p>
-                    } @else if (r.avoidablesSkipped.length) {
-                      <p class="result-line result-warn">⚠ {{ r.avoidablesSkipped.length }} valor{{ r.avoidablesSkipped.length === 1 ? '' : 'es' }} de “Evitable” sin guardar por falta de decisión fiable.</p>
-                    }
-                    @if (r.skippedLowConfidence.length) {
-                      <p class="result-line result-warn">
-                        ⚠ {{ r.skippedLowConfidence.length }} con poca confianza, sin aplicar (revisa a mano):
-                        {{ r.skippedLowConfidence.map((s) => s.name + ' (sugerido ' + (s.category ?? 'ninguna') + ': ' + s.notes + ')').join(' · ') }}
-                      </p>
-                    }
-                    @if (r.skippedUndetermined.length) {
-                      <p class="result-line meta">— {{ r.skippedUndetermined.length }} sin determinar: {{ r.skippedUndetermined.map((s) => s.name).join(', ') }}</p>
-                    }
-                    @if (r.invalid.length) {
-                      <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada.</p>
-                    }
-                  </div>
-                }
-              }
-            </div>
-          }
         }
 
         @if (loadingCandidates()) {
@@ -181,6 +235,9 @@
         } @else if (candidates().length === 0) {
           <p class="muted">Sin candidatas todavía — pulsa "Sincronizar desde Blizzard".</p>
         } @else {
+          @if (excludedByDifficultyCount()) {
+            <p class="cross-difficulty-note">✓ {{ excludedByDifficultyCount() }} mecánica{{ excludedByDifficultyCount() === 1 ? '' : 's' }} ocultada{{ excludedByDifficultyCount() === 1 ? '' : 's' }} para {{ selectedDifficultyName() }} por restricción oficial DB2 o por contraste positivo en otra dificultad.</p>
+          }
           <table class="candidates">
             <thead>
               <tr>
@@ -205,9 +262,9 @@
                     @if (c.name_es && c.name_es.toLowerCase() !== c.name.toLowerCase()) {
                       <span class="desc">{{ c.name_es }}</span>
                     }
-                    <span class="meta">#{{ c.ability_id }} · {{ c.observed_in_logs ? 'visto en vuestros logs' : 'no visto todavía' }} · {{ c.difficulty_mapping_status }}</span>
+                    <span class="meta">#{{ c.ability_id }} · {{ difficultyEvidenceLabel(c) }} · {{ c.difficulty_mapping_status }}</span>
                     @if (crossDifficultyNote(c); as note) {
-                      <p class="cross-difficulty-note">⚠ {{ note }}</p>
+                      <p class="cross-difficulty-note" [class.info]="note.kind === 'info'">{{ note.kind === 'warning' ? '⚠' : 'ℹ' }} {{ note.text }}</p>
                     }
                   </td>
                   <td>
@@ -314,4 +371,5 @@
       }
     </section>
   </div>
+  }
 </div>

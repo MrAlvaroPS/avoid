@@ -9,6 +9,7 @@
 // racha, defensivos, fiabilidad) como para recomputarlos en el cliente.
 import { Component, inject, input, output, signal } from '@angular/core';
 import { PullAnalysisService } from '../../core/pull-analysis.service';
+import { errorMessage } from '../../shared/error-message.util';
 
 @Component({
   selector: 'app-wipe-call-banner',
@@ -36,7 +37,7 @@ export class WipeCallBannerComponent {
       await this.pullAnalysis.setWipeCallStatus(this.pullId(), !this.excluded());
       this.statusChanged.emit();
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.toggling.set(false);
     }

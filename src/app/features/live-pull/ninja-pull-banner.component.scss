@@ -1,0 +1,82 @@
+// Igual que wipe-call-banner.component.scss: tono warning-soft en el
+// estado activo (excluido, es información útil que conviene ver), neutro
+// cuando el RL ya lo revisó y lo restauró como intento real.
+.ninja-banner {
+  padding: 10px 14px;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  &.is-restored {
+    background: var(--surface-2);
+    border-color: var(--card-border);
+  }
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.icon {
+  flex-shrink: 0;
+}
+
+.headline {
+  flex: 1;
+  min-width: 200px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.link-btn {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.toggle-btn {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-bright);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
+.signal-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.banner-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}

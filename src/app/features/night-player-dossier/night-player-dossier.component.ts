@@ -9,7 +9,7 @@ import { RouterLink } from '@angular/router';
 import { NightPlayerSummaryService, type NightPlayerSummary } from '../../core/night-player-summary.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { mapBrief } from '../../core/pull-analysis.service';
-import { formatDuration, formatPct, mechanicCategoryMeta, mechanicDisplayName } from '../../shared/format.util';
+import { formatDuration, formatPct, mechanicCategoryMeta, mechanicDisplayName, rootCauseMeta } from '../../shared/format.util';
 import { RoleIconComponent } from '../../shared/role-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
@@ -18,18 +18,12 @@ import { LlmAnalysisCardComponent } from '../live-pull/llm-analysis-card.compone
 import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-text.component';
 import type { DeathCause, MechanicCategory } from '../../shared/models/domain';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
+import { errorMessage } from '../../shared/error-message.util';
 
 function toneForScore(score: number | null): 'danger' | 'warning' | 'success' | null {
   if (score == null) return null;
   return score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
 }
-
-const ROOT_CAUSE_LABEL: Record<DeathCause['rootCause'], string> = {
-  self_positioning: 'Posicionamiento propio',
-  unsoaked_mechanic: 'Mecánica sin resolver',
-  no_healing_received: 'Sin sanación suficiente',
-  unclassified: 'Sin clasificar',
-};
 
 @Component({
   selector: 'app-night-player-dossier',
@@ -99,7 +93,7 @@ export class NightPlayerDossierComponent {
     try {
       this.data.set(await this.summaryService.load(reportCode, playerName));
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loading.set(false);
     }
@@ -116,8 +110,8 @@ export class NightPlayerDossierComponent {
   // sé" plano; el "Sin clasificar" real queda solo para cuando NINGUNO de
   // los dos ejes tiene dato.
   rootCauseLabel(cause: DeathCause['rootCause'], category: MechanicCategory | null): string {
-    if (cause !== 'unclassified') return ROOT_CAUSE_LABEL[cause];
-    return mechanicCategoryMeta(category)?.label ?? ROOT_CAUSE_LABEL.unclassified;
+    if (cause !== 'unclassified') return rootCauseMeta(cause)?.label ?? cause;
+    return mechanicCategoryMeta(category)?.label ?? rootCauseMeta('unclassified')!.label;
   }
 
   async onGenerateBrief(): Promise<void> {
@@ -129,7 +123,7 @@ export class NightPlayerDossierComponent {
       const res = await this.edgeFunctions.generateNightPlayerBrief(d.reportCode, d.playerName);
       this.data.set({ ...d, brief: mapBrief(res.brief) });
     } catch (err) {
-      this.briefError.set(err instanceof Error ? err.message : String(err));
+      this.briefError.set(errorMessage(err));
     } finally {
       this.generatingBrief.set(false);
     }

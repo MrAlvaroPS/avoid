@@ -1,9 +1,9 @@
 // Colocar en: src/app/features/roster/roster.component.ts
 // §12 de la hoja de ruta (auditoría v2): "un valor único de 1 a 100 junto al
 // nombre del jugador... con detalle al pasar el ratón o pulsar". 3 de los 4
-// ejes ya construidos (ver reliability.service.ts) — preparación sigue sin
-// dato fiable, no es un olvido. Icono de rol + Main/Trial vienen del roster
-// real de wowaudit (wowaudit-roster.service.ts vía reliability.service.ts).
+// ejes construidos en reliability.service.ts. Preparación usa exclusivamente
+// los slots elegibles de la season; icono de rol + Main/Trial vienen del
+// roster real de wowaudit (wowaudit-roster.service.ts vía reliability.service.ts).
 import { Component, computed, inject, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
@@ -12,6 +12,7 @@ import { OffendersService, type RepeatOffenderRow } from '../../core/offenders.s
 import { mechanicCategoryMeta } from '../../shared/format.util';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
 import { RoleIconComponent } from '../../shared/role-icon.component';
+import { errorMessage } from '../../shared/error-message.util';
 
 @Component({
   selector: 'app-roster',
@@ -50,7 +51,7 @@ export class RosterComponent {
     try {
       this.players.set(await this.reliabilityService.listPlayerReliability());
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loading.set(false);
     }

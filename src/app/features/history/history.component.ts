@@ -7,6 +7,7 @@ import { Router } from '@angular/router';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { ReportsService } from '../../core/reports.service';
 import type { ReportRow } from '../../shared/models/domain';
+import { errorMessage } from '../../shared/error-message.util';
 
 @Component({
   selector: 'app-history',
@@ -41,7 +42,7 @@ export class HistoryComponent {
     try {
       this.reports.set(await this.reportsService.listAllReports());
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loading.set(false);
     }
@@ -63,7 +64,7 @@ export class HistoryComponent {
       );
       await this.load();
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.syncing.set(false);
     }

@@ -16,6 +16,7 @@ import { getItemName, getSpecName, getCurrentBuildNamespace } from '../_shared/b
 import { buildFromBlizzardNamespace, fetchTalentSpellLookup } from '../_shared/wago-db2-client.ts';
 import { resolveConsumableAbilityIds, buildConsumableUsage } from '../_shared/consumables.ts';
 import { normalizeAbilityName, buildAbilityIdsByName } from '../_shared/ability-name-match.ts';
+import { computeDamageProfile } from '../_shared/damage-profile.ts';
 import { upsertReportEncounters } from '../_shared/report-encounters.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 
@@ -55,6 +56,9 @@ interface DamageEvent {
   amount?: number;
   absorbed?: number;
   buffs?: string;
+  hitPoints?: number;
+  maxHitPoints?: number;
+  resources?: { hitPoints?: number; maxHitPoints?: number } | null;
 }
 interface CastEvent {
   timestamp?: number;
@@ -104,6 +108,19 @@ function effectiveMechanicCategory(mechanic: MechanicRow, observedInCurrentRepor
 interface InterruptEvent {
   timestamp?: number;
   extraAbilityGameID?: number; // verificado en real el 2026-08-22 contra un log público: es la habilidad que SE interrumpió, no la que interrumpe
+}
+
+// §"Dispels — sin ingestión de eventos de dispel" (feedback real): mismo
+// contrato que InterruptEvent — extraAbilityGameID es la habilidad (debuff)
+// que se quitó, no la spell de dispel usada. isBuff=true = se robó/quitó un
+// BUFF del enemigo (dispel ofensivo), no un debuff de un aliado — no cuenta
+// para "¿se limpió el debuff-stack de la raid?".
+interface DispelEvent {
+  timestamp?: number;
+  sourceID?: number;
+  targetID?: number;
+  extraAbilityGameID?: number;
+  isBuff?: boolean;
 }
 
 type DefensiveStatus = 'active' | 'available_unused' | 'on_cooldown' | 'unknown';
@@ -213,6 +230,30 @@ Deno.serve(async (req: Request) => {
     // Un log en vivo pegado a mano nunca pasa por sync-reports — asegura que
     // esta tabla (de donde sale la lista de bosses del report) siempre esté al día.
     await upsertReportEncounters(supabase, reportCode, reportDetail.fights);
+
+    // §"WCL tiene fases de encuentro, importarlas" (feedback real): metadata
+    // ESTÁTICA por boss (nombre de cada fase, si es intermedio), igual para
+    // todos los pulls de este batch — se sincroniza una vez por invocación.
+    // Best-effort: nunca bloquea el análisis si falla, igual que
+    // talent_spell_lookup más abajo.
+    if (reportDetail.phases.length) {
+      const phaseRows = reportDetail.phases.flatMap((encounter) =>
+        encounter.phases.map((phase) => ({
+          boss_id: String(encounter.encounterID),
+          phase_id: phase.id,
+          name: phase.name,
+          is_intermission: phase.isIntermission,
+          separates_wipes: encounter.separatesWipes,
+          updated_at: new Date().toISOString(),
+        })),
+      );
+      if (phaseRows.length) {
+        await supabase.from('boss_encounter_phases').upsert(phaseRows, { onConflict: 'boss_id,phase_id' }).then(
+          () => {},
+          (err) => console.error('No se pudo sincronizar boss_encounter_phases (no bloqueante):', err),
+        );
+      }
+    }
 
     const allNewFights = reportDetail.fights.filter((f) => isEncounterFight(f) && f.id > lastProcessedFightId).sort((a, b) => a.id - b.id);
     const batch = allNewFights.slice(0, maxFights);
@@ -359,6 +400,12 @@ Deno.serve(async (req: Request) => {
             duration_ms: fight.endTime - fight.startTime,
             closed_at: new Date().toISOString(),
             raid_damage_taken_series: raidDamageTakenSeries,
+            // §"fases de encuentro": disponibles directamente en `fight`, sin
+            // fetch aparte — null en los tres si WCL no define fases para
+            // este boss (fight de una sola fase), no un fallo de ingesta.
+            phase_transitions: fight.phaseTransitions,
+            last_phase_absolute_index: fight.lastPhaseAsAbsoluteIndex,
+            last_phase_is_intermission: fight.lastPhaseIsIntermission,
           })
           .select('id')
           .single();
@@ -368,7 +415,7 @@ Deno.serve(async (req: Request) => {
         // Mecánicas curadas de este boss+dificultad — el matching depende
         // directamente de lo que se haya sincronizado/revisado en la sección de mecánicas.
         const { data: mechanics } = await supabase
-          .from('boss_mechanics_candidates')
+          .from('applicable_boss_mechanics_candidates')
           .select('ability_id,name,description,category,responsibility,inferred_category,observed_as_interrupt,avoidable,severity_threshold')
           .eq('boss_id', bossId)
           .eq('difficulty', difficulty)
@@ -395,15 +442,23 @@ Deno.serve(async (req: Request) => {
         // (siempre casts de jugadores); enemyCastEvents alimenta
         // pull_mechanic_events (siempre casts del boss) — cada uno con su
         // propio presupuesto de páginas en vez de competir por el mismo.
-        const [deathEvents, damageEvents, friendlyCastEvents, enemyCastEvents, damageDoneEvents, healingEvents, combatantInfoEvents, interruptEvents] = await Promise.all([
+        const [deathEvents, damageEvents, friendlyCastEvents, enemyCastEvents, damageDoneEvents, healingEvents, combatantInfoEvents, interruptEvents, dispelEvents] = await Promise.all([
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Deaths', startTime: fight.startTime, endTime: fight.endTime }),
-          getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'DamageTaken', startTime: fight.startTime, endTime: fight.endTime }),
+          // Los recursos del objetivo permiten distinguir un burst real de
+          // >=80% de vida máxima en 1s aunque hubiera daño anterior. Solo se
+          // activan aquí porque WCL avisa de que aumentan bastante el payload.
+          getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'DamageTaken', startTime: fight.startTime, endTime: fight.endTime, includeResources: true }),
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Casts', startTime: fight.startTime, endTime: fight.endTime, hostilityType: 'Friendlies' }),
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Casts', startTime: fight.startTime, endTime: fight.endTime, hostilityType: 'Enemies' }),
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'DamageDone', startTime: fight.startTime, endTime: fight.endTime }),
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Healing', startTime: fight.startTime, endTime: fight.endTime }),
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'CombatantInfo', startTime: fight.startTime, endTime: fight.endTime }),
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Interrupts', startTime: fight.startTime, endTime: fight.endTime }),
+          // §"Dispels — sin ingestión de eventos de dispel" (feedback real):
+          // extraAbilityGameID = la habilidad (debuff) que se quitó, mismo
+          // contrato que ya usa InterruptEvent para "qué se interrumpió" —
+          // verificado en real contra un pull propio.
+          getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Dispels', startTime: fight.startTime, endTime: fight.endTime }),
         ]);
 
         // §3/§7: dps/hps (simplificación: duración total del pull, no el
@@ -537,12 +592,10 @@ Deno.serve(async (req: Request) => {
         // (desconocido), no "false" disfrazado de "true".
         const lastBuffsSnapshotByTarget = new Map<number, { buffs: string; timestamp: number }>();
         const absorbedByTarget = new Map<number, number>();
-        // §"golpe único vs. daño sostenido": WCL no da un campo `overkill` en
-        // Deaths ni en DamageTaken (verificado en real contra un log real —
-        // ninguno de los dos trae ese campo), así que en vez de inventar un
-        // % de HP máxima (que tampoco tenemos), se guarda TODO el historial
-        // de daño por objetivo y se mira la ventana de los últimos segundos
-        // antes de morir: honesto con lo que el dato realmente permite decir.
+        // §"oneshot vs. daño sostenido": includeResources añade la vida
+        // máxima del objetivo a DamageTaken. Se conserva además TODO el
+        // historial de los 5s finales para medir cuánto se concentró en el
+        // último segundo y mantener un fallback para logs antiguos.
         const damageEventsByTarget = new Map<number, DamageEvent[]>();
 
         for (const raw of damageEvents) {
@@ -582,10 +635,9 @@ Deno.serve(async (req: Request) => {
         // pull a pull si hay bench/sustituciones).
         const warlockPresent = fight.friendlyPlayers.some((id) => actorById.get(id)?.subType === 'Warlock');
 
-        // Ventana de "los últimos segundos antes de morir" para distinguir
-        // golpe único de daño sostenido. 5s cubre con margen un burst típico
-        // (2-3 golpes casi simultáneos) sin colar toda una fase de daño lento.
-        const DEATH_BURST_WINDOW_MS = 5000;
+        // Ventana de los últimos segundos antes de morir. El clasificador
+        // separa el contexto (5s) del burst no curable (1s): el daño previo
+        // ya no diluye varios impactos simultáneos que resten >=80% de vida.
         interface DamageWindowHit {
           time_ms: number; // relativo al inicio del pull, como el resto de timestamps que se guardan
           amount: number;
@@ -595,23 +647,12 @@ Deno.serve(async (req: Request) => {
         function computeDeathDamageProfile(
           targetId: number,
           deathTimestamp: number,
-        ): { damageProfile: 'burst' | 'sustained' | 'unknown'; killingBlowAmount: number | null; damageWindowTotal: number; damageWindowHits: number; damageWindowEvents: DamageWindowHit[] } {
-          const events = (damageEventsByTarget.get(targetId) ?? []).filter(
-            (e) => (e.amount ?? 0) > 0 && (e.timestamp ?? 0) <= deathTimestamp && (e.timestamp ?? 0) >= deathTimestamp - DEATH_BURST_WINDOW_MS,
-          );
-          if (!events.length) return { damageProfile: 'unknown', killingBlowAmount: null, damageWindowTotal: 0, damageWindowHits: 0, damageWindowEvents: [] };
-          const windowTotal = events.reduce((sum, e) => sum + (e.amount ?? 0), 0);
-          const maxHit = events.reduce((max, e) => ((e.amount ?? 0) > (max.amount ?? 0) ? e : max), events[0]);
-          const killingBlowAmount = maxHit.amount ?? null;
-          // "Golpe único": pocos impactos en la ventana Y uno de ellos concentra
-          // la mayoría del daño — un burst de 2-3 golpes casi simultáneos se
-          // trata igual que un solo golpe (es lo que un jugador percibe como
-          // "me ha explotado"), no exige un ÚNICO evento literal.
-          const damageProfile: 'burst' | 'sustained' = events.length <= 3 && windowTotal > 0 && (killingBlowAmount ?? 0) / windowTotal >= 0.6 ? 'burst' : 'sustained';
+        ): { damageProfile: 'burst' | 'sustained' | 'unknown'; killingBlowAmount: number | null; damageWindowTotal: number; damageWindowHits: number; terminalBurstDamage: number; burstWindowMs: number; maxHitPoints: number | null; burstHealthPct: number | null; damageWindowEvents: DamageWindowHit[] } {
+          const profile = computeDamageProfile(damageEventsByTarget.get(targetId) ?? [], deathTimestamp);
           // §13.4 "la secuencia real de golpes antes de morir, no solo una
           // frase": hasta ahora solo se guardaba el agregado — el mini-timeline
           // del drawer de procedencia necesita cada golpe individual.
-          const damageWindowEvents: DamageWindowHit[] = events
+          const damageWindowEvents: DamageWindowHit[] = profile.windowEvents
             .map((e) => ({
               time_ms: (e.timestamp ?? 0) - fight.startTime,
               amount: e.amount ?? 0,
@@ -619,7 +660,17 @@ Deno.serve(async (req: Request) => {
               ability_name: typeof e.abilityGameID === 'number' ? (abilityNameById.get(e.abilityGameID) ?? null) : null,
             }))
             .sort((a, b) => a.time_ms - b.time_ms);
-          return { damageProfile, killingBlowAmount, damageWindowTotal: windowTotal, damageWindowHits: events.length, damageWindowEvents };
+          return {
+            damageProfile: profile.damageProfile,
+            killingBlowAmount: profile.killingBlowAmount,
+            damageWindowTotal: profile.damageWindowTotal,
+            damageWindowHits: profile.damageWindowHits,
+            terminalBurstDamage: profile.terminalBurstDamage,
+            burstWindowMs: profile.burstWindowMs,
+            maxHitPoints: profile.maxHitPoints,
+            burstHealthPct: profile.burstHealthPct,
+            damageWindowEvents,
+          };
         }
 
         // Un autoataque del boss sobre un no-tank significa que el boss ya no
@@ -664,14 +715,39 @@ Deno.serve(async (req: Request) => {
         //    segundos previos — ahora que healingEventsByTarget existe,
         //    sin necesitar ninguna llamada nueva a WCL.
         const NO_HEAL_LOOKBACK_MS = 6000;
+        // §"Dispels — sin ingestión de eventos de dispel" (feedback real):
+        // ventana generosa hacia atrás desde la muerte para buscar un dispel
+        // real de ESTA habilidad sobre ESTE jugador — un stack que se limpió
+        // hace un minuto y se volvió a aplicar sin que nadie lo repitiera
+        // sigue siendo "sin dispel" para la aplicación que mató.
+        const DISPEL_LOOKBACK_MS = 15_000;
         function computeRootCause(
           actorId: number,
           deathTimestamp: number,
           category: string | null,
           damageProfile: 'burst' | 'sustained' | 'unknown',
-        ): 'self_positioning' | 'unsoaked_mechanic' | 'no_healing_received' | 'unclassified' {
+          killingAbilityGameID: number,
+        ): 'self_positioning' | 'unsoaked_mechanic' | 'no_healing_received' | 'undispelled_debuff' | 'unclassified' {
           if (category === 'avoidable-ground' || category === 'spread') return 'self_positioning';
           if (category === 'soak') return 'unsoaked_mechanic';
+          // Antes deliberadamente sin implementar (ver nota histórica en el
+          // roadmap): hacía falta events(dataType: Dispels), que ahora sí se
+          // trae. Solo se afirma "sin dispel" con evidencia real de que a
+          // ESTE jugador nunca se le quitó ESTA habilidad concreta — no se
+          // asume por descarte.
+          if (category === 'debuff-stack') {
+            const wasDispelled = dispelEvents.some((raw) => {
+              const e = raw as DispelEvent;
+              return (
+                e.extraAbilityGameID === killingAbilityGameID &&
+                e.targetID === actorId &&
+                !e.isBuff &&
+                (e.timestamp ?? 0) <= deathTimestamp &&
+                (e.timestamp ?? 0) >= deathTimestamp - DISPEL_LOOKBACK_MS
+              );
+            });
+            if (!wasDispelled) return 'undispelled_debuff';
+          }
           if (damageProfile === 'sustained') {
             const heals = healingEventsByTarget.get(actorId) ?? [];
             const hadRecentHeal = heals.some((h) => h.timestamp <= deathTimestamp && h.timestamp >= deathTimestamp - NO_HEAL_LOOKBACK_MS);
@@ -842,7 +918,11 @@ Deno.serve(async (req: Request) => {
           const confidence = earlyMassDeath ? Math.max(85, calculatedConfidence) : calculatedConfidence;
 
           return {
-            clusterActorIds: new Set(pileOnDeaths.map((d) => d.actorId)),
+            // El cluster corto sirve para DETECTAR el call; una vez fijado el
+            // límite, cualquier muerte posterior pertenece al cierre del try.
+            // Así un rezagado que cae >8 s después no reaparece como fallo
+            // mecánico, mientras todo lo anterior al límite sigue evaluándose.
+            clusterActorIds: new Set(deaths.filter((d) => d.timestamp >= wipeCallStartTimestamp).map((d) => d.actorId)),
             confidence,
             signals: {
               simultaneityFraction: Math.round(simultaneityFraction * 100) / 100,
@@ -865,16 +945,65 @@ Deno.serve(async (req: Request) => {
           };
         }
 
+        // §"un ninja pull... también cuenta en la estadística de wipes...
+        // habría que clasificarlo de otra manera para saberlo" (feedback
+        // real): alguien engancha al boss sin que la raid lo haya decidido
+        // -- WCL igual crea una fight real, de unos pocos segundos, donde
+        // casi nadie de la raid llegó a entrar en combate. No es un intento
+        // fallido, es que no hubo intento. Se detecta con dos señales, las
+        // dos tienen que darse a la vez para minimizar falsos positivos
+        // (un wipe real, incluso uno malísimo donde muere todo el mundo casi
+        // a la vez a una mecánica de raid, sigue enganchando a la mayoría):
+        //  - duración muy corta: casi ningún wipe organizado se resuelve en
+        //    menos de esto;
+        //  - fracción de la raid que llegó a "engancharse" (murió o recibió
+        //    daño durante el pull) muy baja: en un intento de verdad el RL
+        //    lo cantó y la mayoría entra a la vez.
+        // Igual que el wipe call: nunca se borra la fila (conserva
+        // duración/pull_number/contexto), solo se excluye de las
+        // estadísticas que asumen que hubo un intento real. Un kill nunca
+        // es ninja pull -- si el boss murió, hubo intento.
+        const NINJA_PULL_MAX_DURATION_MS = 15_000;
+        const NINJA_PULL_MAX_ENGAGED_FRACTION = 0.3;
+
+        interface NinjaPullDetection {
+          excluded: boolean;
+          signals: { durationMs: number; raidSize: number; engagedPlayerCount: number; engagedFraction: number };
+        }
+
+        function detectNinjaPull(): NinjaPullDetection | null {
+          if (fight.kill) return null;
+          const durationMs = fight.endTime - fight.startTime;
+          if (durationMs >= NINJA_PULL_MAX_DURATION_MS) return null;
+
+          const raidSizeForNinjaCheck = fight.friendlyPlayers.length;
+          if (!raidSizeForNinjaCheck) return null;
+          const engagedPlayerCount = fight.friendlyPlayers.filter(
+            (actorId) => deathByTarget.has(actorId) || (damageEventsByTarget.get(actorId)?.length ?? 0) > 0,
+          ).length;
+          const engagedFraction = engagedPlayerCount / raidSizeForNinjaCheck;
+
+          return {
+            excluded: engagedFraction <= NINJA_PULL_MAX_ENGAGED_FRACTION,
+            signals: { durationMs, raidSize: raidSizeForNinjaCheck, engagedPlayerCount, engagedFraction: Math.round(engagedFraction * 100) / 100 },
+          };
+        }
+
         const wipeCallDetection = detectWipeCall();
+        const ninjaPullDetection = detectNinjaPull();
+        const pullUpdatePatch: Record<string, unknown> = {};
         if (wipeCallDetection) {
-          await supabase
-            .from('pulls')
-            .update({
-              wipe_call_confidence: wipeCallDetection.confidence,
-              wipe_call_signals: wipeCallDetection.signals,
-              wipe_call_excluded: wipeCallDetection.confidence >= WIPE_CALL_CONFIDENCE_THRESHOLD,
-            })
-            .eq('id', insertedPull.id);
+          pullUpdatePatch.wipe_call_confidence = wipeCallDetection.confidence;
+          pullUpdatePatch.wipe_call_signals = wipeCallDetection.signals;
+          pullUpdatePatch.wipe_call_excluded = wipeCallDetection.confidence >= WIPE_CALL_CONFIDENCE_THRESHOLD;
+        }
+        if (ninjaPullDetection) {
+          pullUpdatePatch.is_ninja_pull = true;
+          pullUpdatePatch.ninja_pull_signals = ninjaPullDetection.signals;
+          pullUpdatePatch.ninja_pull_excluded = ninjaPullDetection.excluded;
+        }
+        if (Object.keys(pullUpdatePatch).length) {
+          await supabase.from('pulls').update(pullUpdatePatch).eq('id', insertedPull.id);
         }
 
         const playerRecords = fight.friendlyPlayers.map((actorId) => {
@@ -985,7 +1114,7 @@ Deno.serve(async (req: Request) => {
                   // distinta" — ver computeRootCause para el alcance real
                   // (deliberadamente sin undispelled_debuff/tank_swap_missed
                   // todavía, sin datos reales para defenderlas).
-                  rootCause: computeRootCause(actorId, death.timestamp, deathEffectiveCategory, deathDamageProfile?.damageProfile ?? 'unknown'),
+                  rootCause: computeRootCause(actorId, death.timestamp, deathEffectiveCategory, deathDamageProfile?.damageProfile ?? 'unknown', death.killingAbilityGameID),
                   // §"a quién dirigir: healing sí/no y cuánto en los últimos
                   // segundos" — misma ventana de 6s que ya usa rootCause,
                   // pero con el número real en vez de solo sí/no.
@@ -1003,6 +1132,13 @@ Deno.serve(async (req: Request) => {
                   // el front puede alinear muertes y chips de mecánica en una
                   // única timeline sin dos unidades de tiempo distintas.
                   timeMs: death.timestamp - fight.startTime,
+                  // §"fases de encuentro... implementarlas en todos los
+                  // sitios donde corresponda": en qué fase murió — null si
+                  // el boss no tiene fases. El nombre legible se resuelve
+                  // en lectura desde boss_encounter_phases (misma fuente
+                  // única que pull_mechanic_events.phase_id), no se
+                  // duplica aquí.
+                  phaseId: resolvePhaseId(death.timestamp),
                   // §"golpe único vs. daño sostenido" — ver computeDeathDamageProfile.
                   ...(deathDamageProfile as NonNullable<typeof deathDamageProfile>),
                 }
@@ -1113,6 +1249,26 @@ Deno.serve(async (req: Request) => {
           return out;
         }
 
+        // §"fases de encuentro... implementarlas en todos los sitios donde
+        // corresponda" (feedback real): dado un timestamp absoluto de WCL
+        // (mismo espacio que fight.startTime/phaseTransitions[].startTime,
+        // ANTES de restar fight.startTime), resuelve qué fase estaba activa
+        // -- la última transición cuyo startTime sea <= ese instante.
+        // Verificado en real: la primera transición SIEMPRE llega con
+        // startTime === fight.startTime (WCL manda la fase inicial
+        // explícita, no hace falta asumir "fase 1 implícita"). null si el
+        // boss no tiene fases definidas en WCL.
+        function resolvePhaseId(timestampAbsolute: number): number | null {
+          const transitions = fight.phaseTransitions;
+          if (!transitions?.length) return null;
+          let current: number | null = null;
+          for (const t of transitions) {
+            if (t.startTime <= timestampAbsolute) current = t.id;
+            else break;
+          }
+          return current;
+        }
+
         const mechanicEventRows: {
           pull_id: string;
           ability_id: number;
@@ -1126,6 +1282,7 @@ Deno.serve(async (req: Request) => {
           players_hit_names: string[];
           avoidable: boolean | null;
           player_hit_details: PlayerHitDetail[];
+          phase_id: number | null;
         }[] = [];
 
         for (const raw of enemyCastEvents) {
@@ -1163,6 +1320,7 @@ Deno.serve(async (req: Request) => {
               category: effectiveCategory,
               responsibility: mech.responsibility,
               trigger_time_ms: t0 - fight.startTime,
+              phase_id: resolvePhaseId(t0),
               outcome: wasInterrupted ? 'clean' : 'fail',
               players_hit: wasInterrupted ? 1 : 0, // reutilizado como "¿se resolvió?" para esta categoría, no cuenta jugadores golpeados
               players_hit_names: [], // players_hit no cuenta golpes aquí, así que tampoco hay nombres que dar
@@ -1213,6 +1371,7 @@ Deno.serve(async (req: Request) => {
             category: effectiveCategory,
             responsibility: mech.responsibility,
             trigger_time_ms: t0 - fight.startTime,
+            phase_id: resolvePhaseId(t0),
             outcome,
             players_hit: hitTargets.size,
             players_hit_names: hitNames,
@@ -1289,6 +1448,7 @@ Deno.serve(async (req: Request) => {
               category: effectiveCategory,
               responsibility: mech.responsibility,
               trigger_time_ms: t0 - fight.startTime,
+              phase_id: resolvePhaseId(t0),
               outcome,
               players_hit: hitTargets.size,
               players_hit_names: hitNames,

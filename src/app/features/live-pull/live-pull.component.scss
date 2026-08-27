@@ -11,6 +11,7 @@
   grid-template-areas:
     'header'
     'wipecall'
+    'ninjapull'
     'metrics'
     'trend'
     'compare'
@@ -24,9 +25,10 @@
   @media (min-width: 1080px) {
     grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
     grid-template-areas:
-      'header   header'
-      'wipecall wipecall'
-      'metrics  trend'
+      'header    header'
+      'wipecall  wipecall'
+      'ninjapull ninjapull'
+      'metrics   trend'
       'callouts compare'
       'callouts catdonut'
       'callouts defdonut'
@@ -54,6 +56,9 @@
 }
 .area-wipecall {
   grid-area: wipecall;
+}
+.area-ninjapull {
+  grid-area: ninjapull;
 }
 .area-metrics {
   grid-area: metrics;

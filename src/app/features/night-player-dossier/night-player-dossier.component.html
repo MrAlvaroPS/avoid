@@ -59,8 +59,9 @@
             <div class="reliability-tooltip" role="tooltip">
               <p><strong>Fiabilidad — 60 días</strong></p>
               <p>Mecánica (40%): {{ rel.breakdown.mecanica != null ? rel.breakdown.mecanica.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p>Defensiva (30%): {{ rel.breakdown.defensiva != null ? rel.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p title="Uso durante el try; la respuesta en una muerte evaluable pesa el doble">Defensiva (30%): {{ rel.breakdown.defensiva != null ? rel.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
               <p>Preparación (20%): {{ rel.breakdown.preparacion != null ? rel.breakdown.preparacion.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p>Consistencia: {{ rel.consistency ? rel.consistency.score + '/100 (media ' + rel.consistency.averageExecution + ', variabilidad ' + rel.consistency.volatility + ')' : 'sin muestra suficiente' }}</p>
               <p>Asistencia (10%): {{ rel.breakdown.asistencia != null ? rel.breakdown.asistencia.toFixed(0) + '%' : 'sin dato' }}</p>
             </div>
           </span>
@@ -74,8 +75,9 @@
             <div class="reliability-tooltip" role="tooltip">
               <p><strong>Fiabilidad — esta noche</strong></p>
               <p>Mecánica: {{ nr.breakdown.mecanica != null ? nr.breakdown.mecanica.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p>Defensiva: {{ nr.breakdown.defensiva != null ? nr.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p title="Uso durante el try; la respuesta en una muerte evaluable pesa el doble">Defensiva: {{ nr.breakdown.defensiva != null ? nr.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
               <p>Preparación: {{ nr.breakdown.preparacion != null ? nr.breakdown.preparacion.toFixed(0) + '%' : 'sin dato' }}</p>
+              <p>Consistencia: {{ nr.consistency ? nr.consistency.score + '/100 (media ' + nr.consistency.averageExecution + ', variabilidad ' + nr.consistency.volatility + ')' : 'sin muestra suficiente' }}</p>
               <p class="meta">{{ nr.sampleSize }} pull{{ nr.sampleSize === 1 ? '' : 's' }} evaluados. Sin eje de asistencia (no aplica a una sola noche).</p>
             </div>
           </span>
@@ -174,7 +176,7 @@
                 <th>Mecánica</th>
                 <th>Causa</th>
                 <th>¿Defensivo disponible?</th>
-                <th title="¿Usó una piedra de brujo o poción de vida en los 15s antes de morir?">¿Poción/piedra?</th>
+                <th title="¿Usó una piedra de brujo o poción de vida en algún momento del try?">¿Poción/piedra en el try?</th>
               </tr>
             </thead>
             <tbody>
@@ -214,10 +216,8 @@
                     }
                   </td>
                   <td>
-                    @if (death.statisticalExclusionReason || death.isWipeCall) {
-                      <span class="meta">No evaluable</span>
-                    } @else if (death.usedHealthstoneBeforeDeath || death.usedHealthPotionBeforeDeath) {
-                      {{ death.usedHealthstoneBeforeDeath && death.usedHealthPotionBeforeDeath ? 'Piedra + poción' : death.usedHealthstoneBeforeDeath ? 'Piedra de brujo' : 'Poción de vida' }}
+                    @if (death.usedHealthstoneInPull || death.usedHealthPotionInPull) {
+                      {{ death.usedHealthstoneInPull && death.usedHealthPotionInPull ? 'Piedra + poción' : death.usedHealthstoneInPull ? 'Piedra de brujo' : 'Poción de vida' }}
                     } @else {
                       <span class="meta">No</span>
                     }
@@ -272,7 +272,7 @@
       <section class="widget" aria-labelledby="gear-heading">
         <h2 id="gear-heading" class="widget-heading">Equipo — al terminar {{ g.bossName }} (#{{ g.fromPullNumber }})</h2>
         <p class="gear-sub">
-          {{ g.spec ? g.spec + ' ' : '' }}{{ g.class ?? '—' }} · {{ g.enchantedSlotCount }}/{{ g.enchantableSlotCount }} slots encantables con encantamiento · {{ g.gemCount }} gema{{ g.gemCount === 1 ? '' : 's' }} engarzada{{ g.gemCount === 1 ? '' : 's' }}
+          {{ g.spec ? g.spec + ' ' : '' }}{{ g.class ?? '—' }} · {{ g.enchantedSlotCount }}/{{ g.enchantableSlotCount }} enchants · {{ g.gemmedSlotCount }}/{{ g.gemmableSlotCount }} slots con gema ({{ g.gemCount }} gema{{ g.gemCount === 1 ? '' : 's' }} total{{ g.gemCount === 1 ? '' : 'es' }})
         </p>
         <div class="gear-columns">
           <div class="detail-block">

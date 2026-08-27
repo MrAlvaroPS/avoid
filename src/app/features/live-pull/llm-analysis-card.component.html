@@ -10,36 +10,36 @@
 
   @if (analysis(); as a) {
     <p class="headline"><app-brief-text [text]="a.headline" [entities]="entities()" /></p>
-    <div class="columns">
+    <div class="analysis-rows">
       @if (a.improved.length) {
-        <div class="col">
-          <span class="col-title tone-success">Bien</span>
+        <section class="analysis-row">
+          <span class="row-title tone-success">Bien</span>
           <ul>
             @for (item of a.improved; track item) {
               <li><app-brief-text [text]="item" [entities]="entities()" /></li>
             }
           </ul>
-        </div>
+        </section>
       }
       @if (a.regressed.length) {
-        <div class="col">
-          <span class="col-title tone-danger">Mal</span>
+        <section class="analysis-row">
+          <span class="row-title tone-danger">Mal</span>
           <ul>
             @for (item of a.regressed; track item) {
               <li><app-brief-text [text]="item" [entities]="entities()" /></li>
             }
           </ul>
-        </div>
+        </section>
       }
       @if (a.nextPullActions.length) {
-        <div class="col">
-          <span class="col-title tone-accent">{{ nextActionsLabel() }}</span>
+        <section class="analysis-row">
+          <span class="row-title tone-accent">{{ nextActionsLabel() }}</span>
           <ul>
             @for (item of a.nextPullActions; track item) {
               <li><app-brief-text [text]="item" [entities]="entities()" /></li>
             }
           </ul>
-        </div>
+        </section>
       }
     </div>
     <div class="action-row">

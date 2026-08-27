@@ -284,7 +284,6 @@ export function buildNightFullReportMarkdown(report: NightFullReport, generatedA
     '- La señal de healing describe lo registrado en la ventana; no identifica responsable ni demuestra que la muerte fuese salvable.',
   );
 
-  const lookbackSeconds = Math.round(report.survival.emergencyLookbackMs / 1_000);
   lines.push(
     '',
     '## Recursos personales',
@@ -295,10 +294,10 @@ export function buildNightFullReportMarkdown(report: NightFullReport, generatedA
     `- **Healthstone:** ${report.survival.healthstone.playersEverUsed}/${report.survival.healthstone.playersWithObservedAccess} jugadores con acceso observable registraron uso (${formatNumber(report.survival.healthstone.pctUsedAtLeastOnce)}%)`,
     `- **Health potion:** ${report.survival.healthPotion.playersEverUsed}/${report.survival.healthPotion.totalPlayersTracked} jugadores registraron uso (${formatNumber(report.survival.healthPotion.pctUsedAtLeastOnce)}%)`,
     `- **Algún recurso de emergencia:** ${report.survival.either.playersEverUsed}/${report.survival.either.totalPlayersTracked} jugadores registraron healthstone o health potion (${formatNumber(report.survival.either.pctUsedAtLeastOnce)}%)`,
-    `- **Muertes sin uso registrado de esos recursos en los ${lookbackSeconds} s previos:** ${formatNumber(report.survival.pctDeathsWithNoRecentEmergencyConsumable)}%`,
+    `- **Muertes sin uso registrado de esos recursos durante el try:** ${formatNumber(report.survival.pctDeathsWithNoEmergencyConsumableInPull)}%`,
   );
   if (report.survival.healthstone.deathsEvaluable) {
-    lines.push(`- **Acceso observable a healthstone y sin uso en los ${lookbackSeconds} s previos:** ${report.survival.healthstone.deathsWithObservedAccessNoRecentUse}/${report.survival.healthstone.deathsEvaluable} muertes evaluables`);
+    lines.push(`- **Acceso observable a healthstone y sin uso durante el try:** ${report.survival.healthstone.deathsWithObservedAccessNoUseInPull}/${report.survival.healthstone.deathsEvaluable} muertes evaluables`);
   }
 
   lines.push('', '## Interrupciones verificables');

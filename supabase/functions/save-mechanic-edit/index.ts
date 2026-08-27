@@ -1,6 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
-import { resyncMechanicAvoidable, resyncMechanicCategory, resyncMechanicResponsibility } from '../_shared/resync-mechanic-category.ts';
+import { invalidateNightFullReportsForBossDifficulty, resyncMechanicAvoidable, resyncMechanicCategory, resyncMechanicResponsibility } from '../_shared/resync-mechanic-category.ts';
 
 interface EditRequest {
   bossId: string;
@@ -86,14 +86,35 @@ Deno.serve(async (req: Request) => {
   // resync-mechanic-category.ts. Se re-marca por NOMBRE, no por
   // ability_id — el ability_id del manifiesto (Journal) casi nunca
   // coincide con el que WCL guardó de verdad en los eventos.
-  if (body.category && updated?.name) {
-    await resyncMechanicCategory(supabase, body.bossId, body.difficulty, updated.name, body.category);
+  //
+  // §bug real encontrado (2026-08-27): el guard era `if (body.category && ...)`
+  // / `typeof body.avoidable === 'boolean'` — comprobaba el VALOR, no si el
+  // campo venía en la petición. La fila de boss_mechanics_candidates de
+  // arriba (línea ~64) SIEMPRE se escribe con `body.x ?? null` sin importar
+  // esto, así que volver a poner una mecánica en "sin decidir" (null) desde
+  // Ajustes actualizaba el candidato pero el resync se saltaba entero — el
+  // histórico se quedaba con la clasificación vieja para siempre. El
+  // frontend (manifest.component.ts) ya manda los tres campos en cada
+  // guardado (con `'x' in patch ? patch.x : candidate.x`), así que "¿vino
+  // el campo en el body?" es la misma pregunta que "¿lo estoy tocando en
+  // este guardado?" — se comprueba presencia, no verdad del valor.
+  if ('category' in body && updated?.name) {
+    await resyncMechanicCategory(supabase, body.bossId, body.difficulty, updated.name, body.category ?? null);
   }
-  if (body.responsibility && updated?.name) {
-    await resyncMechanicResponsibility(supabase, body.bossId, body.difficulty, updated.name, body.responsibility);
+  if ('responsibility' in body && updated?.name) {
+    await resyncMechanicResponsibility(supabase, body.bossId, body.difficulty, updated.name, body.responsibility ?? null);
   }
-  if (typeof body.avoidable === 'boolean' && updated?.name) {
-    await resyncMechanicAvoidable(supabase, body.bossId, body.difficulty, updated.name, body.avoidable);
+  if ('avoidable' in body && updated?.name) {
+    await resyncMechanicAvoidable(supabase, body.bossId, body.difficulty, updated.name, body.avoidable ?? null);
+  }
+
+  // §"Daño evitable de toda la noche — solo hay cobertura en 1 de 3
+  // combinaciones boss/dificultad" (feedback real): un informe de noche ya
+  // generado se queda con la cobertura de cuando se generó — invalida el
+  // caché para que la próxima apertura lo reconstruya con esta edición ya
+  // aplicada, en vez de esperar a que alguien pulse "Actualizar" a mano.
+  if (('category' in body || 'responsibility' in body || 'avoidable' in body) && updated?.name) {
+    await invalidateNightFullReportsForBossDifficulty(supabase, body.bossId, body.difficulty);
   }
 
   return jsonResponse({ ok: true });

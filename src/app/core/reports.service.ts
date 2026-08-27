@@ -5,6 +5,7 @@
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import type { PullRow, ReportEncounterRow, ReportRow } from '../shared/models/domain';
+import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../shared/format.util';
 
 export interface PullListItem extends PullRow {
   bossName: string;
@@ -19,6 +20,11 @@ export interface KnownBoss {
   hasRealPulls: boolean;
   /** Orden real de la instancia (Blizzard) — null para bosses vistos solo en report_encounters sin catálogo de season sincronizado todavía. */
   orderIndex: number | null;
+}
+
+export interface NightPlayerListItem {
+  name: string;
+  className: string | null;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -56,14 +62,20 @@ export class ReportsService {
   }
 
   /** §"un dosier de personaje de una noche concreta": quién participó en algún pull de este report — la lista de entrada al dosier por jugador desde el resumen de la noche. */
-  async listNightPlayers(code: string): Promise<string[]> {
+  async listNightPlayers(code: string): Promise<NightPlayerListItem[]> {
     const { data: pulls, error: pullsErr } = await this.supabase.client.from('pulls').select('id').eq('report_code', code);
     if (pullsErr) throw pullsErr;
     const pullIds = (pulls ?? []).map((p) => (p as { id: string }).id);
     if (!pullIds.length) return [];
-    const { data, error } = await this.supabase.client.from('player_pull_records').select('player_name').in('pull_id', pullIds);
+    const { data, error } = await this.supabase.client.from('player_pull_records').select('player_name,class').in('pull_id', pullIds);
     if (error) throw error;
-    return [...new Set((data ?? []).map((r) => (r as { player_name: string }).player_name))].sort((a, b) => a.localeCompare(b));
+    const byName = new Map<string, string | null>();
+    for (const row of (data ?? []) as { player_name: string; class: string | null }[]) {
+      if (!byName.has(row.player_name) || (!byName.get(row.player_name) && row.class)) byName.set(row.player_name, row.class);
+    }
+    return [...byName.entries()]
+      .map(([name, className]) => ({ name, className }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Catálogo de reports para el navegador de histórico (§16: "history/ -- navegador de raids/pulls pasados"). */
@@ -118,16 +130,39 @@ export class ReportsService {
     return [...byEncounter.values()].sort((a, b) => (a.orderIndex ?? 99) - (b.orderIndex ?? 99) || a.bossName.localeCompare(b.bossName));
   }
 
-  /** §7.3: bosses matados / totales de la temporada — antes bloqueado por no tener "todos los bosses" en ningún sitio, known_raid_bosses (§9.1) ya lo da. "Matado" = algún pull con wipe_pct=0 en CUALQUIER dificultad (pulls.kill no existe como columna — mismo fallback que ya usa listPulls cuando report_encounters.kill no está disponible), no distingue dificultad (el desglose por dificultad ya vive en el picker de pulls). */
-  async getSeasonProgress(): Promise<{ killed: number; total: number }> {
-    const [bossesRes, killsRes] = await Promise.all([
+  // §"quitar la card de progreso de temporada de portada y ponerlo en la
+  // cabecera... recuerda que el progreso va por dificultad" (feedback
+  // real): la versión anterior colapsaba "matado" a CUALQUIER dificultad —
+  // contrastado en real que eso miente (Normal 8/8 y Heroic 3/8 a la vez se
+  // habrían mostrado como un solo "8/8" engañoso, dando el clear por hecho
+  // en Heroic). "Matado" sigue siendo wipe_pct=0 (pulls.kill no existe como
+  // columna, mismo fallback de siempre), pero agrupado por pulls.difficulty
+  // — el total de bosses es el mismo para las 4 dificultades (misma
+  // instancia), solo cambia cuántos están matados en cada una. Solo se
+  // devuelven las dificultades con AL MENOS un pull real (ni LFR ni Mythic
+  // tenían ninguno en real todavía) — así el hueco aparece solo se cuando
+  // de verdad se empieza a intentar, no como un "0/8" permanente sin dato.
+  async getSeasonProgress(): Promise<{ total: number; byDifficulty: { difficulty: string; killed: number }[] }> {
+    const [bossesRes, pullsRes] = await Promise.all([
       this.supabase.client.from('known_raid_bosses').select('encounter_id'),
-      this.supabase.client.from('pulls').select('boss_id').eq('wipe_pct', 0),
+      this.supabase.client.from('pulls').select('boss_id,difficulty,wipe_pct'),
     ]);
     if (bossesRes.error) throw bossesRes.error;
-    if (killsRes.error) throw killsRes.error;
+    if (pullsRes.error) throw pullsRes.error;
     const total = new Set((bossesRes.data ?? []).map((r) => String((r as { encounter_id: number }).encounter_id))).size;
-    const killed = new Set((killsRes.data ?? []).map((r) => String((r as { boss_id: string }).boss_id))).size;
-    return { killed, total };
+    const pulls = (pullsRes.data ?? []) as { boss_id: string; difficulty: string; wipe_pct: number | null }[];
+    const seenDifficulties = new Set<string>();
+    const killedByDifficulty = new Map<string, Set<string>>();
+    for (const p of pulls) {
+      seenDifficulties.add(p.difficulty);
+      if (p.wipe_pct === 0) {
+        if (!killedByDifficulty.has(p.difficulty)) killedByDifficulty.set(p.difficulty, new Set());
+        killedByDifficulty.get(p.difficulty)!.add(p.boss_id);
+      }
+    }
+    const byDifficulty = STANDARD_DIFFICULTY_IDS.map((id) => WCL_DIFFICULTY_NAME_BY_ID[id])
+      .filter((difficulty) => seenDifficulties.has(difficulty))
+      .map((difficulty) => ({ difficulty, killed: killedByDifficulty.get(difficulty)?.size ?? 0 }));
+    return { total, byDifficulty };
   }
 }

@@ -17,6 +17,36 @@ h1 {
   margin: 0 0 20px;
 }
 
+// §"pestañas, una mecánicas de bosses... otra defensivos" (feedback real):
+// mismo tratamiento visual que .difficulty-tabs (más abajo), a propósito —
+// es el mismo patrón de pestaña en toda la pantalla de Ajustes, solo que
+// este nivel decide QUÉ manifiesto se ve, no la dificultad dentro de uno.
+.ajustes-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--card-border);
+
+  button {
+    padding: 8px 16px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--text);
+    }
+    &.selected {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+  }
+}
+
 .error {
   color: var(--danger);
 }
@@ -109,17 +139,25 @@ h1 {
   padding: 16px;
 }
 
+// §bug real reportado con capturas (2026-08-27, "cuando cambio de
+// dificultad las cosas se mueven de un sitio a otro"): ya no es un único
+// flex-wrap — cada fila (título, nota, controles) ocupa su 100% de ancho
+// propio, así que la anchura variable de la nota nunca cambia dónde caen
+// las pestañas de dificultad ni los botones de sincronizar.
 .detail-header {
+  margin-bottom: 8px;
+
+  h2 {
+    margin: 0 0 2px;
+    font-size: 15px;
+  }
+}
+
+.detail-header-controls {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 8px;
-
-  h2 {
-    margin: 0;
-    font-size: 15px;
-  }
 }
 
 .difficulty-tabs {
@@ -161,12 +199,22 @@ h1 {
   margin: 3px 0 0;
   font-size: 11px;
   color: var(--warning);
+
+  // §"es raro que en mítico no haya mecánicas... por lo que es raro que
+  // haya algunas ocultas" (feedback real): el caso "vista en una dificultad
+  // más fácil, no confirmada aquí" ya NO es un aviso de posible exclusión
+  // (ver crossDifficultyNote) — con el mismo ⚠ ámbar de antes sonaba a
+  // problema aunque el texto dijera lo contrario.
+  &.info {
+    color: var(--text-faint);
+  }
 }
 
 .sync-actions {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
 }
 
 .sync-btn {
@@ -183,11 +231,28 @@ h1 {
   &:disabled {
     opacity: 0.6;
   }
+}
 
-  &.deep {
-    background: var(--surface-2);
+// Sync profundo (4 dificultades a la vez) es ahora la acción principal —
+// §"no sé para qué sirve el sync profundo, si aporta algo": sí aporta (más
+// muestra para contrastar dificultades, ver comentario en manifest.component.ts
+// onSync), así que pasa a ser LA forma de sincronizar, no una opción "extra"
+// dudosa junto a otras tres parecidas.
+.sync-btn-quick {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-decoration: underline;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 4px 0;
+
+  &:hover {
     color: var(--accent);
-    border: 1px solid var(--border-bright);
+  }
+  &:disabled {
+    opacity: 0.5;
   }
 }
 
@@ -203,6 +268,10 @@ h1 {
 // respuesta", debe leerse como la misma familia de UI en toda la app.
 .classify-bar {
   margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
 }
 .classify-toggle {
   background: transparent;
@@ -214,6 +283,22 @@ h1 {
 
   &:hover {
     text-decoration: underline;
+  }
+
+  // "Clasificar TODAS las dificultades" es la acción principal ahora
+  // (feedback real: "no puede consultar las 4 dificultades a la vez?") —
+  // mismo tratamiento que .classify-toggle.all en defensive-catalog.
+  &.all {
+    padding: 8px 14px;
+    background: var(--accent-solid);
+    color: #fff;
+    border-radius: 8px;
+    font-weight: 600;
+
+    &:hover {
+      text-decoration: none;
+      filter: brightness(1.08);
+    }
   }
 }
 .classify-panel {

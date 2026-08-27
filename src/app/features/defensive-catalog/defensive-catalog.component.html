@@ -1,0 +1,225 @@
+<div class="defensive-catalog">
+  <p class="intro">
+    El catálogo (nombre, spec, cooldown, duración) llega solo desde el extractor real de
+    WoWAnalyzer — aquí solo confirmas <b>qué le hace cada uno al daño entrante</b>
+    (Mitigación / Absorción / Sustain / Emergencia). Que un defensivo aparezca listado en una
+    clase <b>no significa que todas sus specs lo tengan</b>: si la fila indica una spec concreta
+    solo aplica a esa spec, y aunque sea "toda la clase" puede seguir siendo un nodo de talento
+    que un jugador en concreto no tenga elegido — la disponibilidad real por jugador se calcula
+    aparte, cruzando spec + árbol de talentos.
+  </p>
+
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  <!-- §"la cantidad de habilidades defensivas no es desorbitante, ¿no
+       podemos hacer un único prompt que clasifique todas las specs a la vez
+       y rellene toda la tabla de golpe?" (feedback real, contrastado: 60
+       filas en total en las 13 clases — cabe de sobra en un solo prompt).
+       Vive a nivel de página, no dentro de una clase concreta: clasificar
+       "todo" no depende de cuál esté seleccionada. -->
+  <div class="classify-bar">
+    @if (!classifyPanelOpen()) {
+      <button type="button" class="classify-toggle all" (click)="openClassifyPanel('all')">🔎 Clasificar TODOS los defensivos (todas las clases) con una sola IA →</button>
+    }
+  </div>
+
+  @if (classifyPanelOpen()) {
+    <div class="classify-panel">
+      @if (loadingClassifyPrompt()) {
+        <p class="muted">Preparando el prompt…</p>
+      } @else if (classifyPromptError(); as pe) {
+        <p class="error" role="alert">{{ pe }}</p>
+      } @else {
+        <div class="classify-step">
+          <span class="step-label"
+            >1. Prompt v{{ classifyPromptVersion() ?? '—' }} · Alcance: {{ classifyScope() === 'all' ? 'todas las clases' : classDisplayName(classifyScope()!) }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyDefensiveCount() }} defensivos). Clasificará
+            cada habilidad según qué le hace al daño entrante, contrastándolo contra su tooltip real.</span
+          >
+          <pre class="prompt-box">{{ classifyFullPrompt }}</pre>
+          <button type="button" class="copy-btn" (click)="copyClassifyPrompt()">{{ classifyCopied() ? '✓ Copiado' : 'Copiar prompt' }}</button>
+        </div>
+        <div class="classify-step">
+          <span class="step-label">2. Pega aquí el JSON que responda la IA</span>
+          <textarea
+            class="paste-box"
+            rows="6"
+            placeholder="Pega aquí el array JSON de clasificaciones…"
+            [value]="classifyPasteText()"
+            (input)="classifyPasteText.set($any($event.target).value)"
+          ></textarea>
+          @if (classifySubmitError(); as se) {
+            <p class="error" role="alert">{{ se }}</p>
+          }
+          <div class="classify-actions">
+            <button type="button" class="sync-btn" [disabled]="classifySubmitting() || !classifyPasteText().trim()" (click)="submitClassification()">
+              {{ classifySubmitting() ? 'Aplicando…' : 'Aplicar clasificación' }}
+            </button>
+            <button type="button" class="classify-toggle" (click)="closeClassifyPanel()">Cancelar</button>
+          </div>
+        </div>
+        @if (classifyResult(); as r) {
+          <div class="classify-result">
+            @if (r.applied.length) {
+              <p class="result-line result-ok">
+                ✓ {{ r.applied.length }} defensivo{{ r.applied.length === 1 ? '' : 's' }} clasificado{{ r.applied.length === 1 ? '' : 's' }} (sugerido, revisa y confirma en la
+                tabla): {{ r.applied.map((a) => a.name + ' → ' + a.survivalType).join(', ') }}
+              </p>
+            }
+            @if (r.skippedLowConfidence.length) {
+              <p class="result-line result-warn">
+                ⚠ {{ r.skippedLowConfidence.length }} con poca confianza, sin aplicar (revisa a mano):
+                {{ r.skippedLowConfidence.map((s) => s.name + ' (sugerido ' + (s.survivalType ?? 'ninguno') + ': ' + s.notes + ')').join(' · ') }}
+              </p>
+            }
+            @if (r.skippedUndetermined.length) {
+              <p class="result-line meta">— {{ r.skippedUndetermined.length }} sin determinar: {{ r.skippedUndetermined.map((s) => s.name).join(', ') }}</p>
+            }
+            @if (r.invalid.length) {
+              <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada.</p>
+            }
+          </div>
+        }
+      }
+    </div>
+  }
+
+  <div class="layout">
+    <nav class="boss-list" aria-label="Clases">
+      <ul>
+        @for (className of classes; track className) {
+          <li>
+            <button type="button" class="boss-btn class-btn" [class.selected]="className === selectedClass()" (click)="selectClass(className)">
+              <app-class-icon [wclClass]="className" />
+              {{ classDisplayName(className) }}
+            </button>
+          </li>
+        }
+      </ul>
+    </nav>
+
+    <section class="detail">
+      @if (selectedClass(); as className) {
+        <div class="detail-header">
+          <app-class-icon [wclClass]="className" />
+          <h2>{{ classDisplayName(className) }}</h2>
+          @if (classCounts().total > 0) {
+            <span class="no-pulls-badge" [class.all-classified]="classCounts().unclassified === 0">
+              {{ classCounts().total - classCounts().unclassified }}/{{ classCounts().total }} clasificados
+            </span>
+          }
+        </div>
+
+        @if (loadingDefensives()) {
+          <p class="muted">Cargando defensivos…</p>
+        } @else if (defensives().length === 0) {
+          <p class="muted">
+            {{ classDisplayName(className) }} todavía no tiene ningún defensivo en cooldown_catalog — hace falta
+            sincronizar el extractor de WoWAnalyzer para esta clase (fuera de esta pantalla, ver
+            supabase/wowanalyzer-extractor).
+          </p>
+        } @else {
+          <!-- El panel de prompt/paste vive arriba, a nivel de página (mismo
+               para 'all' y para una clase concreta) — aquí solo queda el
+               disparador, con menos peso visual, para reclasificar SOLO esta
+               clase (ej. tras añadir una habilidad nueva sin reclasificar
+               las otras 12 clases otra vez). -->
+          <div class="classify-bar">
+            <button type="button" class="classify-toggle" (click)="openClassifyPanel(className)">🔎 …o clasificar solo {{ classDisplayName(className) }} con IA →</button>
+          </div>
+
+          <table class="candidates">
+            <thead>
+              <tr>
+                <th>Defensivo</th>
+                <th title="Razonamiento de la IA al clasificarlo, si vino de ese flujo">IA</th>
+                <th title="Spec concreta, o toda la clase si está vacío">Spec</th>
+                <th title="A quién protege — personal/semi/external/utility, ya venía del catálogo">Categoría</th>
+                <th title="Qué le hace al daño entrante: mitigation/absorption/sustain/emergency">Tipo de supervivencia</th>
+                <th title="Cooldown y duración base, si el extractor pudo resolverlos">CD / Duración</th>
+                <th>Revisado</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (d of defensives(); track d.spell_id) {
+                <tr [class.saving]="savingSpellId() === d.spell_id" [class.reviewed]="d.reviewed">
+                  <td>
+                    <!-- Sin columna de descripción propia (cooldown_catalog no la tiene) — el tooltip de Wowhead del enlace de arriba ya trae el texto real del hechizo al pasar el ratón. -->
+                    <app-wowhead-link type="spell" [id]="d.spell_id" class="name"><span class="name">{{ d.name }}</span></app-wowhead-link>
+                    <span class="meta">#{{ d.spell_id }} @if (d.synced_from_commit) { · sincronizado de WoWAnalyzer } @else { · semilla manual }</span>
+                  </td>
+                  <td>
+                    @if (d.ai_classification; as ai) {
+                      <app-mechanic-info-icon [note]="ai.notes" [label]="'IA (' + (ai.confidence === 'high' ? 'alta' : 'media') + ' confianza)'" />
+                    } @else {
+                      <span class="meta">—</span>
+                    }
+                  </td>
+                  <td>
+                    @if (d.spec) {
+                      <span class="spec-badge">{{ d.spec }}</span>
+                    } @else {
+                      <span class="meta">toda la clase*</span>
+                    }
+                  </td>
+                  <td><span class="meta">{{ d.category }}</span></td>
+                  <td>
+                    <select (change)="onEdit(d, { survival_type: $any($event.target).value || null })">
+                      <option value="" [selected]="!d.survival_type">Sin decidir</option>
+                      @for (type of survivalTypes; track type) {
+                        <option [value]="type" [selected]="type === d.survival_type">{{ survivalTypeMeta(type)?.label }}</option>
+                      }
+                    </select>
+                    @if (d.survival_type && d.reviewed) {
+                      <span class="confirmed-note">✓ revisado</span>
+                    } @else if (d.survival_type) {
+                      <!-- La IA ya escribe el valor directamente en survival_type (no
+                           hace falta un segundo clic de "confirmar") — reviewed sigue
+                           marcando aparte si un humano lo ha mirado de verdad. -->
+                      <span class="meta">🤖 rellenado por IA, marca "Revisada" cuando lo compruebes</span>
+                    } @else if (d.inferred_survival_type; as inferred) {
+                      <button type="button" class="suggestion-btn" [title]="survivalTypeMeta(inferred)?.hint ?? ''" (click)="confirmInferredSurvivalType(d)">
+                        💡 Sugerido: {{ survivalTypeMeta(inferred)?.label }} — aplicar
+                      </button>
+                    } @else {
+                      <span class="meta">sin clasificar todavía</span>
+                    }
+                  </td>
+                  <td>
+                    <!-- §bug real reportado (2026-08-27, "el CD/duración sale
+                         raro"): con solo uno de los dos resuelto, "CD sin
+                         resolver · 5s dur." se lee como contradictorio a
+                         primera vista. No es un dato inventado — el
+                         extractor de WoWAnalyzer solo saca un número plano
+                         cuando el código fuente lo tiene literal (una CD que
+                         depende de talentos/haste, o una habilidad sin CD de
+                         verdad como Death Strike, se queda en null a
+                         propósito) — pero la redacción anterior sonaba a
+                         fallo del sistema en vez de "esto varía". -->
+                    @if (d.base_cooldown_ms == null && d.base_duration_ms == null) {
+                      <span class="meta" title="El extractor no encontró un número fijo en el código fuente — puede ser una CD/duración que depende de talentos o haste, o que de verdad no tenga (ej. una habilidad sin cooldown propio).">sin CD/duración fija resuelta</span>
+                    } @else {
+                      <span class="meta">
+                        {{ d.base_cooldown_ms != null ? (d.base_cooldown_ms / 1000) + 's CD' : 'CD variable' }}
+                        @if (d.base_duration_ms != null) {
+                          · {{ d.base_duration_ms / 1000 }}s dur.
+                        }
+                      </span>
+                    }
+                  </td>
+                  <td>
+                    <input type="checkbox" [checked]="d.reviewed" (change)="onEdit(d, { reviewed: $any($event.target).checked })" />
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+          <p class="reasons">* "toda la clase" es lo que dice el catálogo — sigue sin garantizar que un jugador concreto la tenga si es un nodo de talento que no eligió.</p>
+        }
+      } @else {
+        <p class="muted">Elige una clase de la lista.</p>
+      }
+    </section>
+  </div>
+</div>

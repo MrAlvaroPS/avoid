@@ -46,14 +46,18 @@ matización explícita, nunca como si fuera una mecánica fallada de la misma fo
 // listar hechos sueltos más largos por alargar.
 export const SYSTEM_PROMPT = `Eres el asistente de un Raid Leader de World of Warcraft en progresión Mythic.
 Recibirás un JSON con datos ya calculados de un pull:
-- deaths: quién murió, a qué mecánica, a qué hora (timeLabel), la causa raíz (rootCause) y si tenía un
-  defensivo disponible SIN usar (hadDefensiveAvailableUnused).
+- deaths: quién murió, a qué mecánica, a qué hora (timeLabel), la causa raíz (rootCause), si fue
+  oneshot y si tenía un defensivo disponible SIN usar (hadDefensiveAvailableUnused).
 - mechanicFails: mecánicas falladas (partial_fail/fail) que NO mataron a nadie, con cuánta gente golpearon.
 - repeatedIssues: mecánicas que llevan >=2 de los últimos pulls fallando — no solo este intento aislado.
 - avoidableDamageTotal, previousPulls: comparación contra intentos anteriores propios.
 NUNCA inventes datos que no estén en el JSON de entrada.
 
 ${UNKNOWN_CAUSE_CAVEAT}
+
+Cuando oneshot=true, el daño letal se concentró en un segundo sin ventana razonable para recibir
+sanación. No lo presentes como un fallo reactivo de los healers; sí puedes mencionar una prevención
+anterior a la mecánica si los datos muestran un defensivo disponible o una ejecución evitable.
 
 Sé detallado y concreto, no telegráfico. Cada item debe explicar el QUÉ y el PORQUÉ (usa rootCause/
 category para razonar la causa, no solo repetir el nombre de la mecánica), y nombrar a la persona y el
@@ -94,27 +98,31 @@ export const NIGHT_PLAYER_SYSTEM_PROMPT = `Eres el asistente de un Raid Leader d
 Recibirás un JSON con TODO lo que le pasó a UN jugador concreto a lo largo de una noche entera de raid
 (varios pulls, varios bosses):
 - pulls: cada intento en el que participó (boss, kill/wipe, wipePct).
-- deaths: cada muerte de la noche — mecánica, boss, minuto, causa raíz, y si tenía un defensivo
-  disponible SIN usar. usedEmergencyConsumable indica si usó piedra de brujo/poción justo antes de morir.
+- deaths: cada muerte de la noche — mecánica, boss, minuto, causa raíz, oneshot sí/no, y si tenía un defensivo
+  disponible SIN usar. usedEmergencyConsumableInPull indica si usó piedra de brujo/poción en algún momento de ese try.
 - mechanicFails: mecánicas de su responsabilidad individual que falló SIN morir.
 - repeatedPatterns: mecánicas que le fallaron/mataron más de una vez esta noche, en cuántos bosses distintos.
-- gear: clase/spec y estado de encantamientos/gemas al final de la noche.
-- reliabilitySignal: cuántos de sus pulls tuvieron daño evitable o usaron su defensivo al morir.
+- gear: clase/spec y cobertura de enchants (cabeza/hombros/pecho/piernas/botas/anillos) y gemas (cuello/anillos) al final de la noche.
+- reliabilitySignal: cuántos pulls tuvieron daño evitable, uso defensivo durante el try y uso defensivo al morir.
 NUNCA inventes datos que no estén en el JSON de entrada.
 
 ${UNKNOWN_CAUSE_CAVEAT}
+
+Cuando oneshot=true, no culpes a una falta de sanación reactiva: el daño se concentró en un segundo.
+Separa esa imposibilidad de curarlo de la posible prevención previa (mecánica evitable o defensivo disponible).
 
 Este es un informe DETALLADO Y NORMALIZADO para dirigir a ESTE jugador en concreto — más profundo que el
 análisis de un solo pull, y debe ser ÚTIL DE VERDAD, no un resumen genérico. Cubre CADA muerte real del
 JSON, no solo las 2-3 más repetidas — agrupa por mecánica/causa raíz cuando varias instancias comparten
 la misma (eso sí ahorra espacio sin perder información), pero no omitas una muerte real solo por
 acortar. Para cada grupo, cita boss+pull+minuto y si tenía defensivo disponible sin usar o no usó
-piedra/poción — esos son los datos que hacen el informe accionable. repeatedPatterns es la señal más
+piedra/poción durante el try — esos son los datos que hacen el informe accionable. repeatedPatterns es la señal más
 importante para nextPullActions (un problema que se repite en varios bosses de la misma noche es un
 patrón de juego, no mala suerte puntual). Cubre también el gear: si faltan encantamientos o gemas,
 dilo como acción concreta con el número exacto de slots. Si reliabilitySignal muestra varios pulls con
-daño evitable o sin usar el defensivo al morir, interprétalo explícitamente como un patrón de
-disciplina, no solo cites el número.
+daño evitable, pocas oportunidades con defensivo durante el try o sin usarlo al morir, interprétalo
+explícitamente como un patrón de disciplina, no solo cites el número. El uso al morir es la señal más
+directa, pero no ignores el uso general durante la pelea.
 
 Responde ÚNICAMENTE con JSON válido (sin texto, sin markdown, sin backticks), con esta forma exacta:
 {

@@ -19,6 +19,12 @@
       <app-trend-bars [bars]="weeklyBars()" />
     </section>
 
+    <section class="widget">
+      <h2 class="widget-heading">Consistencia — últimas {{ d.weeklyScores.length }} semanas</h2>
+      <p class="meta">Ejecución media menos penalización por variabilidad; requiere al menos 5 pulls por semana.</p>
+      <app-trend-bars [bars]="weeklyConsistencyBars()" />
+    </section>
+
     @if (d.recentNights.length) {
       <!-- §"un dosier de personaje de una noche concreta" (feedback real):
            entrada al dosier por noche, no solo al agregado de 60 días. -->

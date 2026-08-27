@@ -18,6 +18,7 @@ import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { mapBrief } from '../../core/pull-analysis.service';
 import { BriefTextComponent, EMPTY_BRIEF_ENTITIES, annotateBriefTextForCopy, collectBriefNotes, type BriefEntities } from '../../shared/brief-text.component';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
+import { errorMessage } from '../../shared/error-message.util';
 
 export type LlmAnalysisScope = 'pull' | 'night-player' | 'night';
 
@@ -163,7 +164,7 @@ export class LlmAnalysisCardComponent {
       this.systemPrompt.set(res.systemPrompt);
       this.userMessage.set(res.userMessage);
     } catch (err) {
-      this.promptError.set(err instanceof Error ? err.message : String(err));
+      this.promptError.set(errorMessage(err));
     } finally {
       this.loadingPrompt.set(false);
     }
@@ -185,7 +186,7 @@ export class LlmAnalysisCardComponent {
       this.copied.set(true);
       setTimeout(() => this.copied.set(false), 2000);
     } catch (err) {
-      this.promptError.set('No se pudo copiar automáticamente — selecciona el texto a mano. (' + (err instanceof Error ? err.message : String(err)) + ')');
+      this.promptError.set('No se pudo copiar automáticamente — selecciona el texto a mano. (' + errorMessage(err) + ')');
     }
   }
 
@@ -214,7 +215,7 @@ export class LlmAnalysisCardComponent {
       this.manualBriefSaved.emit(brief);
       this.closeManualPanel();
     } catch (err) {
-      this.submitError.set(err instanceof Error ? err.message : String(err));
+      this.submitError.set(errorMessage(err));
     } finally {
       this.submitting.set(false);
     }

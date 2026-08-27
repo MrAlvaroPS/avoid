@@ -20,6 +20,23 @@ where p.id = boundary.pull_id
   and p.wipe_call_signals is not null
   and not (p.wipe_call_signals ? 'wipeCallStartMs');
 
+-- En datos históricos el detector solo marcaba el grupo compacto que había
+-- permitido reconocer el wipe. El límite reconstruido es la fuente de verdad:
+-- todas las muertes desde ese instante son cierre del try, aunque llegasen
+-- varios segundos después del grupo inicial.
+update player_pull_records r
+set wipe_call_cluster = true
+from pulls p
+where p.id = r.pull_id
+  and p.wipe_call_excluded
+  and p.wipe_call_signals is not null
+  and jsonb_typeof(p.wipe_call_signals->'wipeCallStartMs') = 'number'
+  and r.died
+  and r.death_cause is not null
+  and jsonb_typeof(r.death_cause->'timeMs') = 'number'
+  and (r.death_cause->>'timeMs')::numeric >= (p.wipe_call_signals->>'wipeCallStartMs')::numeric
+  and not r.wipe_call_cluster;
+
 -- Backfill conservador: Melee sobre un no-tank después de que al menos un
 -- tank haya muerto en ese wipe. Los análisis nuevos además verifican que la
 -- fuente del daño sea el actor del boss y que no haya otro daño mezclado.
@@ -98,6 +115,58 @@ select
     )
     else null
   end as used_defensive_when_died,
+  exists (
+    select 1
+    from jsonb_array_elements(coalesce(r.defensive_casts, '[]'::jsonb)) defensive
+    cross join lateral jsonb_array_elements(coalesce(defensive->'timestampsMs', '[]'::jsonb)) cast_time
+    where jsonb_typeof(cast_time) = 'number'
+      and not (
+        p.wipe_call_excluded
+        and p.wipe_call_signals is not null
+        and jsonb_typeof(p.wipe_call_signals->'wipeCallStartMs') = 'number'
+        and (cast_time #>> '{}')::numeric >= (p.wipe_call_signals->>'wipeCallStartMs')::numeric
+      )
+  ) as used_defensive_in_pull,
+  (
+    -- Un uso observado crea una muestra positiva aunque el pull fuese limpio.
+    -- La ausencia solo se puntúa si hubo una oportunidad verificable: muerte
+    -- con catálogo defensivo o daño evitable antes del límite del wipe call.
+    exists (
+      select 1
+      from jsonb_array_elements(coalesce(r.defensive_casts, '[]'::jsonb)) defensive
+      cross join lateral jsonb_array_elements(coalesce(defensive->'timestampsMs', '[]'::jsonb)) cast_time
+      where jsonb_typeof(cast_time) = 'number'
+        and not (
+          p.wipe_call_excluded
+          and p.wipe_call_signals is not null
+          and jsonb_typeof(p.wipe_call_signals->'wipeCallStartMs') = 'number'
+          and (cast_time #>> '{}')::numeric >= (p.wipe_call_signals->>'wipeCallStartMs')::numeric
+        )
+    )
+    or (
+      r.died
+      and not (
+        (r.wipe_call_cluster and p.wipe_call_excluded)
+        or coalesce(r.death_cause->>'statisticalExclusionReason', '') = 'boss_melee_on_non_tank'
+      )
+      and jsonb_array_length(coalesce(r.death_cause->'defensiveOptions', '[]'::jsonb)) > 0
+    )
+    or exists (
+      select 1
+      from pull_mechanic_events e
+      cross join lateral jsonb_array_elements(coalesce(e.player_hit_details, '[]'::jsonb)) detail
+      where e.pull_id = p.id
+        and e.avoidable is true
+        and detail->>'name' = r.player_name
+        and coalesce((detail->>'damage_taken')::numeric, 0) > 0
+        and not (
+          p.wipe_call_excluded
+          and p.wipe_call_signals is not null
+          and jsonb_typeof(p.wipe_call_signals->'wipeCallStartMs') = 'number'
+          and e.trigger_time_ms >= (p.wipe_call_signals->>'wipeCallStartMs')::numeric
+        )
+    )
+  ) as defensive_use_opportunity,
   (
     select count(*) filter (where (item->>'permanentEnchant') is not null and (item->>'id')::bigint > 0)
     from jsonb_array_elements(coalesce(r.equipped_items, '[]'::jsonb)) with ordinality as t(item, slot)
@@ -116,7 +185,7 @@ from player_pull_records r
 join pulls p on p.id = r.pull_id;
 
 comment on view player_pull_reliability_inputs is
-  'Una fila por jugador+pull. Un wipe call o Melee del boss sobre no-tank neutraliza solo la muerte/defensivos; conserva preparación y mecánicas anteriores a wipeCallStartMs.';
+  'Una fila por jugador+pull. La disciplina defensiva combina uso durante el try con respuesta al morir; un wipe call o Melee del boss sobre no-tank neutraliza solo señales posteriores/no accionables.';
 
 -- Los patrones cross-boss tampoco deben incorporar eventos posteriores al
 -- límite. Un evento anterior del mismo pull permanece y sigue contando.

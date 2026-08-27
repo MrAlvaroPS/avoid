@@ -26,6 +26,8 @@ export class PullHeaderComponent {
   progressDeltaPct = input<number | null>(null);
   /** Ritmo vs. el mejor kill público — null si no hay benchmark todavía o el pull no fue kill. */
   referencePacing = input<ReferencePacing | null>(null);
+  /** §"fases de encuentro... en todos los sitios donde corresponda": "Fase X/N — Nombre", null si el boss no tiene fases. */
+  phaseLabel = input<string | null>(null);
 
   difficultyLabel = computed(() => DIFFICULTY_LABEL[this.difficulty()]);
   resultLabel = computed(() => (this.result() === 'kill' ? 'Kill' : 'Wipe'));

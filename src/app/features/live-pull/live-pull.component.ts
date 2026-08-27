@@ -8,6 +8,7 @@ import { MechanicSwimlaneComponent } from '../../shared/charts/mechanic-swimlane
 import { CoachingCalloutListComponent } from './coaching-callout-list.component';
 import { LlmAnalysisCardComponent } from './llm-analysis-card.component';
 import { WipeCallBannerComponent } from './wipe-call-banner.component';
+import { NinjaPullBannerComponent } from './ninja-pull-banner.component';
 import { PlayerStatsTableComponent } from './player-stats-table.component';
 import { ProvenanceDrawerComponent } from './provenance-drawer.component';
 import { DonutChartComponent, type DonutSegment } from '../../shared/charts/donut-chart.component';
@@ -15,6 +16,7 @@ import { TrendBarsComponent } from '../../shared/charts/trend-bars.component';
 import { CompareBarRowComponent } from './compare-bar-row.component';
 import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-text.component';
 import type { LlmPullAnalysis, ProvenanceEntry, TimelineChip } from '../../shared/models/ui';
+import { errorMessage } from '../../shared/error-message.util';
 
 @Component({
   selector: 'app-live-pull',
@@ -26,6 +28,7 @@ import type { LlmPullAnalysis, ProvenanceEntry, TimelineChip } from '../../share
     CoachingCalloutListComponent,
     LlmAnalysisCardComponent,
     WipeCallBannerComponent,
+    NinjaPullBannerComponent,
     PlayerStatsTableComponent,
     ProvenanceDrawerComponent,
     DonutChartComponent,
@@ -98,7 +101,7 @@ export class LivePullComponent {
       this.detail.set(detail);
     } catch (err) {
       if (this.latestRequestedPullId !== id) return;
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       if (this.latestRequestedPullId === id) this.loading.set(false);
     }
@@ -113,7 +116,7 @@ export class LivePullComponent {
       const brief = await this.pullAnalysis.generateBrief(current.pullId);
       this.detail.set({ ...current, brief });
     } catch (err) {
-      this.briefError.set(err instanceof Error ? err.message : String(err));
+      this.briefError.set(errorMessage(err));
     } finally {
       this.generatingBrief.set(false);
     }
@@ -132,6 +135,11 @@ export class LivePullComponent {
 
   /** §"que autoexcluya pero que permita también editarlo... para restaurar": el toggle de wipe call cambia demasiados cálculos derivados (deaths, mechFails, racha, defensivos) como para parchearlos a mano — recarga el pull entero desde la BD, ya recalculado. */
   onWipeCallStatusChanged(): void {
+    void this.load(this.pullId());
+  }
+
+  /** §"un ninja pull... habría que clasificarlo de otra manera": mismo motivo que onWipeCallStatusChanged — la exclusión afecta a fiabilidad/histórico de boss/informe de noche, recarga el pull entero ya recalculado. */
+  onNinjaPullStatusChanged(): void {
     void this.load(this.pullId());
   }
 

@@ -57,7 +57,18 @@ export interface SyncBossMechanicsResult {
   journalEncounterId: number;
   candidates: number;
   upserts: number;
-  difficulties: { difficulty: string; mappingStatus: string; db2DifficultyId: number | null; abilities: number }[];
+  difficulties: {
+    difficulty: string;
+    mappingStatus: string;
+    db2DifficultyId: number | null;
+    abilities: number;
+    /** Nº de logs públicos de referencia contrastados de verdad — 0 no siempre es "sin muestra pública", puede ser referenceFetchError (ver ese campo). */
+    referenceBundleCount?: number;
+    /** Non-null si el contraste de referencia falló para esta dificultad (best-effort — el resto del sync sigue igual) — normalmente rate limit de WCL bajo carga (varias dificultades seguidas). */
+    referenceFetchError?: string | null;
+    /** Non-null si Wago DB2 (mapeo oficial de dificultad) falló para este boss — mappingStatus cae a "difficulty-metadata-unavailable" sin más explicación si no se muestra este campo. */
+    snapshotFetchError?: string | null;
+  }[];
 }
 
 export interface SyncReportsResult {
@@ -137,32 +148,44 @@ export class EdgeFunctionsService {
     return this.invoke('set-wipe-call-status', { pullId, excluded });
   }
 
+  /** §"un ninja pull... habría que clasificarlo de otra manera" — confirma o revierte la exclusión de un ninja pull detectado. Mismo patrón que setWipeCallStatus. */
+  async setNinjaPullStatus(pullId: string, excluded: boolean): Promise<{ ok: true; pullId: string; excluded: boolean }> {
+    return this.invoke('set-ninja-pull-status', { pullId, excluded });
+  }
+
   /** §"un prompt para pasar a la IA y que investigue... clasificar todas las mecánicas" — mismo patrón que manual-pull-brief, sin gastar la API propia. */
-  async getMechanicClassificationPrompt(bossId: string, difficulty: string): Promise<{ ok: true; promptVersion: number; systemPrompt: string; userMessage: string; mechanicCount: number }> {
-    return this.invoke('classify-mechanics', { bossId, difficulty, action: 'prompt' });
+  // difficulties=undefined/[] => todas las dificultades que tengan
+  // candidatas para este boss en un único prompt (feedback real,
+  // 2026-08-27: "el prompt de mecánicas de bosses no puede consultar las 4
+  // dificultades a la vez... asegurando la calidad de datos obviamente") —
+  // mismo criterio que getDefensiveClassificationPrompt(null), pero aquí
+  // cada fila de la lista sigue llevando su propia difficulty (a diferencia
+  // de defensivos, el mismo abilityId SÍ se repite una vez por dificultad).
+  async getMechanicClassificationPrompt(bossId: string, difficulties?: string[]): Promise<{ ok: true; promptVersion: number; systemPrompt: string; userMessage: string; mechanicCount: number }> {
+    return this.invoke('classify-mechanics', { bossId, difficulties, action: 'prompt' });
   }
 
   async submitMechanicClassification(
     bossId: string,
-    difficulty: string,
+    difficulties: string[] | undefined,
     rawResponseText: string,
   ): Promise<{
     ok: true;
-    applied: { abilityId: number; name: string; category: string }[];
-    skippedLowConfidence: { abilityId: number; name: string; category: string | null; notes: string }[];
-    skippedUndetermined: { abilityId: number; name: string }[];
-    invalid: { abilityId: unknown; reason: string }[];
-    resolutionsApplied: { abilityId: number; name: string; resolution: string }[];
-    resolutionsSkipped: { abilityId: number; name: string; reason: string }[];
+    applied: { abilityId: number; difficulty: string; name: string; category: string }[];
+    skippedLowConfidence: { abilityId: number; difficulty: string; name: string; category: string | null; notes: string }[];
+    skippedUndetermined: { abilityId: number; difficulty: string; name: string }[];
+    invalid: { abilityId: unknown; difficulty: unknown; reason: string }[];
+    resolutionsApplied: { abilityId: number; difficulty: string; name: string; resolution: string }[];
+    resolutionsSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     resolutionContractMissing: boolean;
-    responsibilitiesApplied: { abilityId: number; name: string; responsibility: string }[];
-    responsibilitiesSkipped: { abilityId: number; name: string; reason: string }[];
+    responsibilitiesApplied: { abilityId: number; difficulty: string; name: string; responsibility: string }[];
+    responsibilitiesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     responsibilityContractMissing: boolean;
-    avoidablesApplied: { abilityId: number; name: string; avoidable: boolean }[];
-    avoidablesSkipped: { abilityId: number; name: string; reason: string }[];
+    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean }[];
+    avoidablesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     avoidableContractMissing: boolean;
   }> {
-    return this.invoke('classify-mechanics', { bossId, difficulty, action: 'submit', rawResponseText });
+    return this.invoke('classify-mechanics', { bossId, difficulties, action: 'submit', rawResponseText });
   }
 
   /**
@@ -189,6 +212,32 @@ export class EdgeFunctionsService {
     reviewed?: boolean;
   }): Promise<{ ok: true }> {
     return this.invoke('save-mechanic-edit', edit);
+  }
+
+  /** §"pantalla nueva para clasificar defensivos... parecida a la de mecánicas" — mismo patrón de prompt/pegar-respuesta que classify-mechanics, acotado a una clase. */
+  // className=null => catálogo entero (todas las clases en un único prompt,
+  // feedback real: "la cantidad de habilidades defensivas no es
+  // desorbitante... un único prompt que clasifique todas las specs a la vez").
+  async getDefensiveClassificationPrompt(className: string | null): Promise<{ ok: true; promptVersion: number; systemPrompt: string; userMessage: string; defensiveCount: number }> {
+    return this.invoke('classify-defensives', { class: className, action: 'prompt' });
+  }
+
+  async submitDefensiveClassification(
+    className: string | null,
+    rawResponseText: string,
+  ): Promise<{
+    ok: true;
+    applied: { spellId: number; name: string; survivalType: string }[];
+    skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
+    skippedUndetermined: { spellId: number; name: string }[];
+    invalid: { spellId: unknown; reason: string }[];
+  }> {
+    return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
+  }
+
+  /** Persiste una edición humana de un defensivo del catálogo (survival_type, revisado). */
+  async saveDefensiveEdit(edit: { class: string; spellId: number; survivalType?: string | null; reviewed?: boolean }): Promise<{ ok: true }> {
+    return this.invoke('save-defensive-edit', edit);
   }
 
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */

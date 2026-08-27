@@ -11,11 +11,6 @@
   overflow-y: auto;
 }
 
-.area-season {
-  align-self: flex-start;
-  min-width: 220px;
-}
-
 .import-bar {
   display: flex;
   align-items: center;
@@ -240,6 +235,9 @@
   gap: 6px;
 }
 .player-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 10px;
   background: var(--surface-2);
   border: 1px solid var(--card-border);
@@ -426,6 +424,15 @@
   }
   &.is-kill {
     border-bottom-color: var(--chart-positive);
+  }
+  // §"un ninja pull... habría que clasificarlo de otra manera para
+  // saberlo" (feedback real): ni rojo (no fue un intento fallido) ni verde
+  // (no fue un kill) — discontinuo y atenuado, "esto no cuenta", mismo
+  // --text-muted que ya usa el resto del picker para lo secundario.
+  &.is-ninja-pull {
+    border-bottom-style: dashed;
+    border-bottom-color: var(--text-muted);
+    opacity: 0.65;
   }
   &.selected {
     background: var(--surface-hover);

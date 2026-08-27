@@ -15,8 +15,6 @@ import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './s
 // ese módulo. Si cambia uno, cambia el otro.
 const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set(['avoidable-ground', 'spread', 'soak', 'personal-target']);
 
-const EMERGENCY_CONSUMABLE_LOOKBACK_MS = 15000; // mismo valor que night-player-summary.service.ts
-
 export interface NightPlayerBriefDeath {
   bossName: string;
   pullNumber: number;
@@ -24,8 +22,10 @@ export interface NightPlayerBriefDeath {
   mechanic: string;
   category: string | null;
   rootCause: string;
+  oneshot: boolean | null;
+  burstHealthPct: number | null;
   hadDefensiveAvailableUnused: boolean;
-  usedEmergencyConsumable: boolean;
+  usedEmergencyConsumableInPull: boolean;
 }
 
 export interface NightPlayerBriefMechanicFail {
@@ -49,9 +49,15 @@ export interface NightPlayerBriefContext {
   deaths: NightPlayerBriefDeath[];
   mechanicFails: NightPlayerBriefMechanicFail[];
   repeatedPatterns: NightPlayerBriefRepeatedPattern[];
-  gear: { class: string | null; spec: string | null; enchantedSlotCount: number; enchantableSlotCount: number; gemCount: number } | null;
+  gear: { class: string | null; spec: string | null; enchantedSlotCount: number; enchantableSlotCount: number; gemmedSlotCount: number; gemmableSlotCount: number; gemCount: number } | null;
   /** Tallies crudos de player_pull_reliability_inputs para ESTA noche — no la fórmula de fiabilidad completa (eso vive en reliability.service.ts, solo en Angular), pero da al LLM una señal real sin duplicar esa lógica de puntuación en Deno. */
-  reliabilitySignal: { pullsWithAvoidableDamage: number; pullsWithDefensiveUsedOnDeath: number; totalPullsEvaluated: number } | null;
+  reliabilitySignal: {
+    pullsWithAvoidableDamage: number;
+    pullsWithDefensiveUsedOnDeath: number;
+    pullsWithDefensiveUsedInPull: number;
+    defensiveUseOpportunities: number;
+    totalPullsEvaluated: number;
+  } | null;
 }
 
 function formatTimeLabel(ms: number): string {
@@ -86,20 +92,20 @@ export async function buildNightPlayerBriefContext(
   const [{ data: recordsData }, { data: mechEventsData }, { data: reliabilityRows }] = await Promise.all([
     supabase.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName),
     supabase
-      .from('pull_mechanic_events')
+      .from('applicable_pull_mechanic_events')
       .select('pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms')
       .in('pull_id', pullIds)
       .neq('outcome', 'clean')
       .contains('players_hit_names', [playerName]),
-    supabase.from('player_pull_reliability_inputs').select('had_avoidable_damage, used_defensive_when_died').in('pull_id', pullIds).eq('player_name', playerName),
+    supabase.from('player_pull_reliability_inputs').select('had_avoidable_damage, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity').in('pull_id', pullIds).eq('player_name', playerName),
   ]);
 
   type RecordRow = {
     pull_id: string;
     died: boolean;
-    death_cause: { mechanicId: number; mechanicName: string | null; category: string | null; rootCause: string; timeMs: number; defensiveOptions?: { status: string }[]; statisticalExclusionReason?: string | null } | null;
+    death_cause: { mechanicId: number; mechanicName: string | null; category: string | null; rootCause: string; timeMs: number; damageProfile?: 'burst' | 'sustained' | 'unknown'; burstHealthPct?: number | null; defensiveOptions?: { status: string }[]; statisticalExclusionReason?: string | null } | null;
     wipe_call_cluster: boolean;
-    consumables?: { healthstone?: { timestampsMs: number[] }; healthPotion?: { timestampsMs: number[] } };
+    consumables?: { healthstone?: { used?: boolean; timestampsMs: number[] }; healthPotion?: { used?: boolean; timestampsMs: number[] } };
     class: string | null;
     spec: string | null;
     equipped_items?: ({ id: number; permanentEnchant?: number; gems?: unknown[] } | null)[];
@@ -118,11 +124,8 @@ export async function buildNightPlayerBriefContext(
     wipePct: p.wipe_pct,
   }));
 
-  const ENCHANTABLE_SLOT_INDICES = new Set([4, 6, 7, 8, 10, 11, 14]);
-
-  function usedConsumableBeforeDeath(timestampsMs: number[] | undefined, deathTimeMs: number): boolean {
-    return (timestampsMs ?? []).some((t) => t <= deathTimeMs && t >= deathTimeMs - EMERGENCY_CONSUMABLE_LOOKBACK_MS);
-  }
+  const ENCHANTABLE_SLOT_INDICES = new Set([0, 2, 4, 6, 7, 10, 11]);
+  const GEMMABLE_SLOT_INDICES = new Set([1, 10, 11]);
 
   const evaluatedDeathRecords = records.filter((record) => {
     const pull = pullById.get(record.pull_id);
@@ -133,8 +136,8 @@ export async function buildNightPlayerBriefContext(
       const pull = pullById.get(r.pull_id)!;
       const dc = r.death_cause!;
       const hadDefensiveAvailableUnused = (dc.defensiveOptions ?? []).some((o) => o.status === 'available_unused');
-      const usedHealthstone = usedConsumableBeforeDeath(r.consumables?.healthstone?.timestampsMs, dc.timeMs);
-      const usedPotion = usedConsumableBeforeDeath(r.consumables?.healthPotion?.timestampsMs, dc.timeMs);
+      const usedHealthstone = r.consumables?.healthstone?.used === true || (r.consumables?.healthstone?.timestampsMs?.length ?? 0) > 0;
+      const usedPotion = r.consumables?.healthPotion?.used === true || (r.consumables?.healthPotion?.timestampsMs?.length ?? 0) > 0;
       return {
         bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
         pullNumber: pull.pull_number,
@@ -142,8 +145,10 @@ export async function buildNightPlayerBriefContext(
         mechanic: dc.mechanicName ? mechanicDisplayName(dc.mechanicName) : `Hechizo #${dc.mechanicId} (sin clasificar)`,
         category: dc.category ?? null,
         rootCause: dc.rootCause,
+        oneshot: dc.damageProfile === 'unknown' || dc.damageProfile == null ? null : dc.damageProfile === 'burst',
+        burstHealthPct: dc.burstHealthPct ?? null,
         hadDefensiveAvailableUnused,
-        usedEmergencyConsumable: usedHealthstone || usedPotion,
+        usedEmergencyConsumableInPull: usedHealthstone || usedPotion,
       };
     })
     .sort((a, b) => a.pullNumber - b.pullNumber);
@@ -186,23 +191,36 @@ export async function buildNightPlayerBriefContext(
     const items = (lastRecord.equipped_items ?? []) as ({ id: number; permanentEnchant?: number; gems?: unknown[] } | null)[];
     let enchantedSlotCount = 0;
     let enchantableSlotCount = 0;
+    let gemmedSlotCount = 0;
+    let gemmableSlotCount = 0;
     let gemCount = 0;
     items.forEach((item, index) => {
       if (!item || !item.id) return;
       gemCount += (item.gems ?? []).length;
       if (ENCHANTABLE_SLOT_INDICES.has(index)) {
         enchantableSlotCount++;
-        if (item.permanentEnchant != null) enchantedSlotCount++;
+        if (item.permanentEnchant != null && item.permanentEnchant > 0) enchantedSlotCount++;
+      }
+      if (GEMMABLE_SLOT_INDICES.has(index)) {
+        gemmableSlotCount++;
+        if ((item.gems ?? []).length > 0) gemmedSlotCount++;
       }
     });
-    gear = { class: lastRecord.class, spec: lastRecord.spec, enchantedSlotCount, enchantableSlotCount, gemCount };
+    gear = { class: lastRecord.class, spec: lastRecord.spec, enchantedSlotCount, enchantableSlotCount, gemmedSlotCount, gemmableSlotCount, gemCount };
   }
 
-  const reliabilityInputRows = (reliabilityRows ?? []) as { had_avoidable_damage: boolean; used_defensive_when_died: boolean | null }[];
+  const reliabilityInputRows = (reliabilityRows ?? []) as {
+    had_avoidable_damage: boolean;
+    used_defensive_when_died: boolean | null;
+    used_defensive_in_pull: boolean;
+    defensive_use_opportunity: boolean;
+  }[];
   const reliabilitySignal = reliabilityInputRows.length
     ? {
         pullsWithAvoidableDamage: reliabilityInputRows.filter((r) => r.had_avoidable_damage).length,
         pullsWithDefensiveUsedOnDeath: reliabilityInputRows.filter((r) => r.used_defensive_when_died === true).length,
+        pullsWithDefensiveUsedInPull: reliabilityInputRows.filter((r) => r.used_defensive_in_pull).length,
+        defensiveUseOpportunities: reliabilityInputRows.filter((r) => r.defensive_use_opportunity).length,
         totalPullsEvaluated: reliabilityInputRows.length,
       }
     : null;

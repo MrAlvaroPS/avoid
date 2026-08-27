@@ -19,6 +19,7 @@ import { NightFullReportModalComponent } from './night-full-report-modal.compone
 import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-text.component';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
 import type { StoredNightFullReport } from '../../shared/models/night-full-report';
+import { errorMessage } from '../../shared/error-message.util';
 
 @Component({
   selector: 'app-night-report',
@@ -76,10 +77,10 @@ export class NightReportComponent {
       try {
         this.fullReport.set(await this.nightReportService.loadFullReport(code));
       } catch (err) {
-        this.fullReportError.set(err instanceof Error ? err.message : String(err));
+        this.fullReportError.set(errorMessage(err));
       }
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loading.set(false);
     }
@@ -94,7 +95,7 @@ export class NightReportComponent {
       const res = await this.edgeFunctions.generateNightBrief(d.reportCode);
       this.data.set({ ...d, brief: mapBrief(res.brief) });
     } catch (err) {
-      this.briefError.set(err instanceof Error ? err.message : String(err));
+      this.briefError.set(errorMessage(err));
     } finally {
       this.generatingBrief.set(false);
     }
@@ -124,13 +125,13 @@ export class NightReportComponent {
     this.fullReportError.set(null);
     try {
       const result = await this.edgeFunctions.generateNightFullReport(this.reportCode(), force);
-      if (result.report.schemaVersion !== 10) {
+      if (result.report.schemaVersion !== 11) {
         throw new Error('La función generate-night-full-report desplegada está desactualizada. Hay que desplegar la versión local antes de generar el informe.');
       }
       this.fullReport.set({ report: result.report, generatedAt: result.generatedAt });
       this.fullReportOpen.set(true);
     } catch (err) {
-      this.fullReportError.set(err instanceof Error ? err.message : String(err));
+      this.fullReportError.set(errorMessage(err));
     } finally {
       this.generatingFullReport.set(false);
     }

@@ -53,6 +53,31 @@ const QUICK_SYNC_REFERENCE_COUNT = 3;
 
 const WCL_DIFFICULTY_NAME_BY_ID: Record<number, string> = { 1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic' };
 
+// §bug real contrastado (2026-08-27, feedback: "en la pestaña de normal se
+// están poniendo [mecánicas] de otras dificultades" + investigación propia):
+// resolveDb2Difficulty recibía siempre sizes:[] aquí, así que el desempate
+// por tamaño de raid (pensado justo para esto) nunca se ejecutaba. Se
+// contrastó en real contra la tabla Difficulty.db2 (build 12.1.0.68914,
+// https://wago.tools/db2/Difficulty/csv?build=12.1.0.68914): el nombre
+// "Normal" por sí solo NO es único — hay 4 filas exactas ("Normal" de
+// mazmorra minPlayers=5/maxPlayers=5, dos variantes de escenario 1-3 y 5-5,
+// y la de raid real 10-30) y ninguna tiene restricción de Journal (eso es
+// justo lo normal en contenido base, no exclusivo de ninguna dificultad) —
+// las 4 empatan a la misma puntuación exacta y todo el boss queda
+// 'difficulty-mapping-ambiguous', sin ningún desempate posible. "Heroic" SÍ
+// suele resolverse solo porque casi siempre hay alguna sección exclusiva de
+// Heroic+ en el Journal que rompe el empate vía encounterRestrictions/
+// sectionRestrictionIds — Normal casi nunca tiene ese lujo.
+// Con el tamaño real de raid (diseño de juego estable: Mítica siempre fija
+// a 20, LFR/Normal/Heroico flexibles 10-30 desde Legion) la fila de raid de
+// verdad (10-30, o 20 en Mítica) puntúa muy por encima de las de mazmorra/
+// escenario (que no solapan ese rango) — desempate limpio, sin ambigüedad.
+// No hace falta el tamaño exacto de un pull concreto: candidateScore solo
+// necesita QUE alguno de los valores pasados caiga dentro del [min,max] de
+// la fila de raid real y fuera del de las demás, y estos dos extremos ya
+// bastan para eso en cualquier tier de raid actual.
+const WCL_DIFFICULTY_RAID_SIZES: Record<number, number[]> = { 1: [10, 30], 3: [10, 30], 4: [10, 30], 5: [20] };
+
 interface SeenFight {
   boss_name: string;
   wcl_difficulty_id: number | null;
@@ -138,11 +163,20 @@ Deno.serve(async (req: Request) => {
 
     // --- 2. Wago DB2: qué mecánicas son de una dificultad concreta (best-effort, nunca bloquea el sync) ---
     let snapshot: JournalDifficultySnapshot | null = null;
+    let snapshotFetchError: string | null = null;
     if (namespace) {
       try {
         snapshot = await fetchJournalDifficultySnapshot(buildFromBlizzardNamespace(namespace));
-      } catch {
+      } catch (err) {
         snapshot = null; // sin cruce de dificultad -> se sincroniza todo como "compartido", igual que antes
+        // §"esto que me ha saltado al sincronizar... es normal?" (feedback
+        // real, 2026-08-27): antes este fallo era mudo del todo — se veía
+        // "difficulty-metadata-unavailable" sin ninguna pista de por qué
+        // (a diferencia de referenceFetchError, que sí explica su propio
+        // fallo). Wago (wago.tools) es un servicio público sin más límite
+        // documentado que "no lo satures" — bajo la misma ráfaga de sync
+        // que agota el presupuesto de WCL, también puede devolver error.
+        snapshotFetchError = err instanceof Error ? err.message : String(err);
       }
     }
 
@@ -155,12 +189,27 @@ Deno.serve(async (req: Request) => {
       abilities: number;
       referenceBundleCount: number;
       referenceFetchError: string | null;
+      snapshotFetchError: string | null;
     }[] = [];
 
     for (const wclDifficultyId of difficultyIds) {
       const difficultyName = WCL_DIFFICULTY_NAME_BY_ID[wclDifficultyId] ?? `Dificultad ${wclDifficultyId}`;
-      const mapping = resolveDb2Difficulty(snapshot, journalEncounterId, { name: difficultyName, sizes: [] }, abilities);
+      const mapping = resolveDb2Difficulty(snapshot, journalEncounterId, { name: difficultyName, sizes: WCL_DIFFICULTY_RAID_SIZES[wclDifficultyId] ?? [] }, abilities);
       const abilitiesForDifficulty = filterAbilitiesForDifficulty(abilities, snapshot, mapping);
+      // Si DB2 restringe explícitamente una sección y excluye esta dificultad,
+      // se marca la fila antigua como no aplicable en vez de borrarla: así
+      // sobreviven la clasificación y las notas manuales para auditoría.
+      const includedAbilityIds = new Set(abilitiesForDifficulty.map((ability) => ability.abilityId));
+      const officiallyExcludedAbilityIds = abilities.filter((ability) => !includedAbilityIds.has(ability.abilityId)).map((ability) => ability.abilityId);
+      if (officiallyExcludedAbilityIds.length) {
+        const { error: applicabilityError } = await supabase
+          .from('boss_mechanics_candidates')
+          .update({ official_difficulty_applicable: false, updated_at: new Date().toISOString() })
+          .eq('boss_id', body.bossId)
+          .eq('difficulty', difficultyName)
+          .in('ability_id', officiallyExcludedAbilityIds);
+        if (applicabilityError) throw applicabilityError;
+      }
 
       // Cross-check best-effort: el fight más reciente que tengáis de este boss
       // en esta dificultad exacta. Cruce por NOMBRE (ver _shared/ability-name-match.ts):
@@ -418,6 +467,7 @@ Deno.serve(async (req: Request) => {
         // golpeada — señal mucho más nítida que se estaba descartando sin usar.
         const aggregateBehavior = buildAggregateBehaviorSample(candidate.name);
         const wasInterruptedInReference = interruptedNames.has(normalizeAbilityName(candidate.name));
+        const observedInReferenceLogs = behavior != null || aggregateBehavior != null || wasInterruptedInReference;
         let inference = inferMechanicCategory(candidate.name, candidate.description || null, behavior, aggregateBehavior);
         if (wasInterruptedInReference && inference?.category !== 'interrupt') {
           // Evidencia real (evento Interrupts observado) por encima de cualquier heurística de texto/comportamiento.
@@ -451,17 +501,38 @@ Deno.serve(async (req: Request) => {
               name_es: abilityNamesEs.get(candidate.abilityId) ?? null,
               description: candidate.description || null,
               icon_url: null,
-              sources: ['blizzard-journal'],
+              sources: ['blizzard-journal', ...(observedInReferenceLogs ? ['wcl-reference'] : []), ...(observedNames.has(normalizeAbilityName(candidate.name)) ? ['guild-log'] : [])],
               observed_in_logs: observedNames.has(normalizeAbilityName(candidate.name)),
-              observed_as_interrupt: wasInterruptedInReference,
               inferred_category: inference?.category ?? null,
               inferred_category_reasons: inference?.reasons ?? [],
-              reference_avg_players_hit: referenceAvgPlayersHit,
-              reference_occurrences: behavior?.occurrences ?? null,
-              reference_source_report: referenceReportCode,
               journal_encounter_id: journalEncounterId,
-              db2_difficulty_id: mapping.db2DifficultyId,
-              difficulty_mapping_status: mapping.status,
+              // §bug real reportado y contrastado en real (2026-08-27, boss
+              // 3445 "Entombed Sentinels"): cuando Wago DB2 o WCL fallan
+              // (rate limit, caída temporal — ver snapshotFetchError/
+              // referenceFetchError), sus valores de ESTA pasada quedan a
+              // null/vacíos — eso significa "hoy no lo sabemos", no
+              // "confirmado que no aplica". Escribirlos incondicionalmente
+              // BORRABA datos buenos de un sync anterior con éxito
+              // (contrastado en real: las 4 exclusiones válidas de Normal
+              // volvieron a "aplicable", y observed_in_reference_logs/
+              // reference_occurrences de varias mecánicas volvieron a
+              // vacío, justo tras un sync con Wago/WCL caídos). upsert()
+              // solo toca las claves que le pasas (ver nota de más abajo) —
+              // omitir la clave del todo cuando esta pasada no tiene un
+              // dato fiable deja el valor previo intacto en vez de
+              // sobrescribirlo a ciegas con "no hay nada".
+              ...(mapping.db2DifficultyId != null
+                ? { official_difficulty_applicable: true, db2_difficulty_id: mapping.db2DifficultyId, difficulty_mapping_status: mapping.status }
+                : {}),
+              ...(!referenceFetchError
+                ? {
+                    observed_in_reference_logs: observedInReferenceLogs,
+                    observed_as_interrupt: wasInterruptedInReference,
+                    reference_avg_players_hit: referenceAvgPlayersHit,
+                    reference_occurrences: behavior?.occurrences ?? null,
+                    reference_source_report: referenceReportCode,
+                  }
+                : {}),
               updated_at: new Date().toISOString(),
             },
             // OJO: el payload de arriba nunca incluye category/avoidable/expected_response/
@@ -479,6 +550,7 @@ Deno.serve(async (req: Request) => {
         abilities: abilitiesForDifficulty.length,
         referenceBundleCount: referenceBundles.length,
         referenceFetchError,
+        snapshotFetchError,
       });
     }
 

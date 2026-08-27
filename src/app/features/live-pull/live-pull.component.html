@@ -14,6 +14,7 @@
       [result]="d.header.result"
       [progressDeltaPct]="d.progressDeltaPct"
       [referencePacing]="d.header.referencePacing"
+      [phaseLabel]="d.header.phaseLabel"
     />
 
     @if (d.wipeCall; as wc) {
@@ -25,6 +26,10 @@
         [signals]="wc.signals"
         (statusChanged)="onWipeCallStatusChanged()"
       />
+    }
+
+    @if (d.ninjaPull; as np) {
+      <app-ninja-pull-banner class="area-ninjapull" [pullId]="d.pullId" [excluded]="np.excluded" [signals]="np.signals" (statusChanged)="onNinjaPullStatusChanged()" />
     }
 
     <app-metrics-row class="area-metrics" [metrics]="d.metrics" [loading]="loading()" (provenanceRequested)="activeProvenance.set($event)" />

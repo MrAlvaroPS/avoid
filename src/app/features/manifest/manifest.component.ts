@@ -7,24 +7,38 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { ManifestService, type ObservedHitStat } from '../../core/manifest.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
-import { WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
+import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
 import { MechanicResolutionIconComponent } from '../../shared/mechanic-resolution-icon.component';
 import type { BossMechanicCandidateRow } from '../../shared/models/domain';
+import { difficultyRank, hasExactDifficultyEvidence, isContradictedByOtherDifficulty, type OtherDifficultyEvidence } from '../../shared/difficulty-evidence.util';
+import { errorMessage } from '../../shared/error-message.util';
+import { DefensiveCatalogComponent } from '../defensive-catalog/defensive-catalog.component';
 
 const CATEGORIES = ['tankbuster', 'raid-damage', 'avoidable-ground', 'debuff-stack', 'interrupt', 'soak', 'spread', 'healing-absorb', 'personal-target', 'enrage'] as const;
 const RESPONSIBILITIES = ['tank', 'dps', 'healer', 'raid', 'personal'] as const;
 
+// §"vamos mejor a meterlo en ajustes... pestañas, una mecánicas de bosses...
+// otra defensivos... así tenemos todos los ajustes centralizados" (feedback
+// real): Ajustes pasa de ser una sola pantalla a un contenedor con
+// pestañas. DefensiveCatalogComponent se queda intacto como hijo embebido
+// (ya tenía su propia URL antes de este cambio; ahora en vez de eso vive
+// aquí dentro) — mismo criterio que difficulty-tabs ya usaba: signal, no
+// una ruta nueva, para no complicar el deep-linking de algo que es un modo
+// de vista, no una entidad con URL propia.
+type AjustesTab = 'mecanicas' | 'defensivos';
+
 // §9.1: un boss sembrado por sync-season-bosses pero nunca pulleado no tiene
 // dificultades "vistas" que ofrecer (difficulties queda vacío) — se ofrecen
 // las 4 estándar del juego para que se pueda elegir a mano cuál sincronizar.
-const STANDARD_DIFFICULTY_IDS = [1, 3, 4, 5] as const;
+// (STANDARD_DIFFICULTY_IDS ahora vive en shared/format.util.ts, compartida
+// con reports.service.ts — ver import de arriba.)
 
 @Component({
   selector: 'app-manifest',
   standalone: true,
-  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent],
+  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent, DefensiveCatalogComponent],
   templateUrl: './manifest.component.html',
   styleUrl: './manifest.component.scss',
 })
@@ -32,6 +46,8 @@ export class ManifestComponent {
   private edgeFunctions = inject(EdgeFunctionsService);
   private manifestService = inject(ManifestService);
   private reportsService = inject(ReportsService);
+
+  activeTab = signal<AjustesTab>('mecanicas');
 
   readonly categories = CATEGORIES;
   readonly responsibilities = RESPONSIBILITIES;
@@ -41,11 +57,14 @@ export class ManifestComponent {
   selectedDifficultyId = signal<number | null>(null);
   candidates = signal<BossMechanicCandidateRow[]>([]);
   hitStats = signal<Map<number, ObservedHitStat>>(new Map());
-  otherDifficultyEvidence = signal<Map<number, { difficulty: string; hasEvidence: boolean }[]>>(new Map());
+  otherDifficultyEvidence = signal<Map<number, OtherDifficultyEvidence[]>>(new Map());
+  excludedByDifficultyCount = signal(0);
 
   loadingBosses = signal(true);
   syncing = signal(false);
   deepSyncing = signal(false);
+  /** "Sincronizando Heroic… (2/4)" mientras onSync recorre las 4 dificultades una a una — ver comentario en onSync. */
+  syncProgress = signal<string | null>(null);
   syncingSeason = signal(false);
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
   loadingCandidates = signal(false);
@@ -69,18 +88,18 @@ export class ManifestComponent {
   classifySubmitting = signal(false);
   classifySubmitError = signal<string | null>(null);
   classifyResult = signal<{
-    applied: { abilityId: number; name: string; category: string }[];
-    skippedLowConfidence: { abilityId: number; name: string; category: string | null; notes: string }[];
-    skippedUndetermined: { abilityId: number; name: string }[];
-    invalid: { abilityId: unknown; reason: string }[];
-    resolutionsApplied: { abilityId: number; name: string; resolution: string }[];
-    resolutionsSkipped: { abilityId: number; name: string; reason: string }[];
+    applied: { abilityId: number; difficulty: string; name: string; category: string }[];
+    skippedLowConfidence: { abilityId: number; difficulty: string; name: string; category: string | null; notes: string }[];
+    skippedUndetermined: { abilityId: number; difficulty: string; name: string }[];
+    invalid: { abilityId: unknown; difficulty: unknown; reason: string }[];
+    resolutionsApplied: { abilityId: number; difficulty: string; name: string; resolution: string }[];
+    resolutionsSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     resolutionContractMissing: boolean;
-    responsibilitiesApplied: { abilityId: number; name: string; responsibility: string }[];
-    responsibilitiesSkipped: { abilityId: number; name: string; reason: string }[];
+    responsibilitiesApplied: { abilityId: number; difficulty: string; name: string; responsibility: string }[];
+    responsibilitiesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     responsibilityContractMissing: boolean;
-    avoidablesApplied: { abilityId: number; name: string; avoidable: boolean }[];
-    avoidablesSkipped: { abilityId: number; name: string; reason: string }[];
+    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean }[];
+    avoidablesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     avoidableContractMissing: boolean;
   } | null>(null);
 
@@ -96,7 +115,7 @@ export class ManifestComponent {
     try {
       this.bosses.set(await this.reportsService.listKnownBosses());
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loadingBosses.set(false);
     }
@@ -110,6 +129,7 @@ export class ManifestComponent {
     // preselecciona nada — las 4 siguen ahí para elegir a mano.
     this.selectedDifficultyId.set(boss?.difficulties[0] ?? null);
     this.candidates.set([]);
+    this.excludedByDifficultyCount.set(0);
     this.closeClassifyPanel();
     if (boss?.difficulties.length) void this.loadCandidates();
   }
@@ -132,48 +152,107 @@ export class ManifestComponent {
         this.manifestService.listObservedHitStats(String(bossId), difficulty),
         this.manifestService.listOtherDifficultyEvidence(String(bossId), difficulty),
       ]);
-      this.candidates.set(candidates);
+      const visibleCandidates = candidates.filter((candidate) => !isContradictedByOtherDifficulty(candidate, otherDifficultyEvidence.get(candidate.ability_id) ?? []));
+      this.candidates.set(visibleCandidates);
+      this.excludedByDifficultyCount.set(candidates.length - visibleCandidates.length);
       this.hitStats.set(hitStats);
       this.otherDifficultyEvidence.set(otherDifficultyEvidence);
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loadingCandidates.set(false);
     }
   }
 
-  async onSync(deepSync = false): Promise<void> {
+  // §"hay que hacer esto por cada dificultad en lugar de traernos todo de
+  // todas las dificultades" (feedback real): sync-boss-mechanics acepta
+  // `difficulties: number[]` y las recorre todas en un solo Deno.serve —
+  // pero mandar las 4 en UNA sola llamada (con deep sync, hasta 20 logs de
+  // referencia POR dificultad, cada uno con ~6-7 queries WCL) resultó ser
+  // demasiado para una sola invocación de Edge Function: §bug real
+  // reportado y reproducido en real (2026-08-27, boss 3445): "Edge Function
+  // returned a non-2xx status code" — HTTP 546 WORKER_RESOURCE_LIMIT
+  // ("not having enough compute resources"), y en otro intento varias
+  // dificultades fallaban con errores de rate-limit de WCL a mitad de
+  // función. La sincronización en sí (una dificultad, deep sync) YA
+  // funcionaba bien antes de este cambio — el problema es agrupar 4 en una
+  // sola invocación, no el volumen total de trabajo en sí. Solución: el
+  // FRONTEND sigue ofreciendo "sincronizar las 4 a la vez" como una sola
+  // acción, pero por debajo hace 4 llamadas secuenciales (una por
+  // dificultad) en vez de una. Un fallo en una dificultad ya no aborta las
+  // demás, sigue con la siguiente.
+  // Contrastado además en real: encadenar las 4 llamadas SIN pausa seguía
+  // reventando la 3ª/4ª igual (mismo WORKER_RESOURCE_LIMIT) y de paso hacía
+  // fallar el fetch de Wago DB2 (mappingStatus caía a
+  // difficulty-metadata-unavailable) — la MISMA dificultad, aislada y sin
+  // llamadas justo antes, sincronizaba perfecta en <25s. No es "4
+  // dificultades" lo que revienta, es encadenar invocaciones pesadas sin
+  // aire entre medias — de ahí la pausa de 5s entre cada una, dentro del
+  // bucle de abajo.
+  //
+  // §"no sé muy bien para qué sirve el sync profundo... si aporta algo"
+  // (feedback real): sí aporta — hasta 20 logs públicos de referencia por
+  // dificultad en vez de 3, así que la contrastación entre dificultades
+  // (§9.2, de la que depende directamente que no se mezclen mecánicas) es
+  // más fiable con más muestra. Por eso sigue siendo el comportamiento POR
+  // DEFECTO al sincronizar un boss entero — queda un enlace secundario para
+  // cuando de verdad solo hace falta un refresco rápido.
+  async onSync(deepSync = true): Promise<void> {
     const bossId = this.selectedEncounterId();
     if (bossId == null) return;
-    // Siempre se manda la dificultad elegida a mano en las pestañas, nunca
-    // se deja que el servidor la infiera de report_encounters — bug real
-    // corregido aquí: con inferencia automática, elegir "Heroic" en un boss
-    // que solo tiene pulls propios en Normal sincronizaba Normal en
-    // silencio (la única dificultad que el servidor podía deducir),
-    // ignorando la pestaña que de verdad estaba seleccionada.
-    if (this.selectedDifficultyId() == null) {
-      this.error.set('Elige una dificultad primero.');
-      return;
-    }
-    const explicitDifficulties = [this.selectedDifficultyId()!];
     if (deepSync) this.deepSyncing.set(true);
     else this.syncing.set(true);
     this.error.set(null);
     this.lastSyncSummary.set(null);
+    let totalUpserts = 0;
+    let totalCandidates = 0;
+    const perDifficulty: string[] = [];
+    const failures: string[] = [];
     try {
-      const result = await this.edgeFunctions.syncBossMechanics(String(bossId), explicitDifficulties, deepSync);
+      for (const [i, diffId] of this.standardDifficultyIds.entries()) {
+        const label = this.difficultyLabel(diffId);
+        // §contrastado en real (2026-08-27): partir en 4 llamadas
+        // secuenciales quita el crash de "4 a la vez" (§comentario de
+        // arriba), pero encadenarlas SIN pausa seguía reventando la 3ª/4ª
+        // (WORKER_RESOURCE_LIMIT) y además hacía fallar el fetch de Wago
+        // DB2 (mappingStatus caía a difficulty-metadata-unavailable) —
+        // aislada, esa misma dificultad sincronizaba perfecta en <25s. Una
+        // pausa corta entre dificultades le da tiempo al runtime/Wago a
+        // recuperarse antes de la siguiente invocación pesada.
+        if (i > 0) {
+          this.syncProgress.set(`Esperando antes de ${label}… (${i + 1}/${this.standardDifficultyIds.length})`);
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+        }
+        this.syncProgress.set(`Sincronizando ${label}… (${i + 1}/${this.standardDifficultyIds.length})`);
+        try {
+          const result = await this.edgeFunctions.syncBossMechanics(String(bossId), [diffId], deepSync);
+          totalCandidates = result.candidates; // mismo Journal para las 4 — no se suma, solo se refresca
+          totalUpserts += result.upserts;
+          for (const d of result.difficulties) {
+            perDifficulty.push(
+              `${d.difficulty}: ${d.mappingStatus}` +
+                (d.snapshotFetchError ? ` (⚠ sin mapeo oficial Wago: ${d.snapshotFetchError})` : '') +
+                (d.referenceFetchError ? ` (⚠ sin logs de referencia: ${d.referenceFetchError})` : ''),
+            );
+          }
+        } catch (err) {
+          failures.push(`${label}: ${errorMessage(err)}`);
+        }
+      }
       this.lastSyncSummary.set(
-        `${result.candidates} candidatas del Journal, ${result.upserts} sincronizadas` +
-          (deepSync ? ' (sync profundo, hasta 20 logs de referencia por dificultad)' : '') +
+        `${totalCandidates} candidatas del Journal, ${totalUpserts} sincronizadas en total` +
+          (deepSync ? ' (sync profundo, hasta 20 logs de referencia por dificultad)' : ' (sync rápido, hasta 3 logs de referencia por dificultad)') +
           `. ` +
-          result.difficulties.map((d) => `${d.difficulty}: ${d.mappingStatus}`).join(' · '),
+          perDifficulty.join(' · ') +
+          (failures.length ? ` · ✕ FALLÓ: ${failures.join(' · ')}` : ''),
       );
       await this.loadCandidates();
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.syncing.set(false);
       this.deepSyncing.set(false);
+      this.syncProgress.set(null);
     }
   }
 
@@ -189,7 +268,7 @@ export class ManifestComponent {
       );
       await this.loadBosses();
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.syncingSeason.set(false);
     }
@@ -218,7 +297,7 @@ export class ManifestComponent {
       });
       this.candidates.update((list) => list.map((c) => (c.ability_id === candidate.ability_id ? { ...c, ...patch, reviewed: patch.reviewed ?? true } : c)));
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.savingAbilityId.set(null);
     }
@@ -228,14 +307,56 @@ export class ManifestComponent {
   // parecen pisarse entre sí": si ESTA dificultad no tiene ninguna
   // evidencia real (ni casts emparejados ni logs de referencia) pero OTRA
   // dificultad del mismo boss sí la tiene, es una pista real de que puede
-  // ser exclusiva de esa otra — nunca se oculta la candidata, solo se avisa.
-  crossDifficultyNote(candidate: BossMechanicCandidateRow): string | null {
-    const hasEvidenceHere = (candidate.reference_occurrences ?? 0) > 0 || candidate.observed_in_logs;
+  // ser exclusiva de esa otra. Las filas contradichas ya se excluyen en
+  // loadCandidates; esta nota explica las visibles aún no concluyentes.
+  crossDifficultyNote(candidate: BossMechanicCandidateRow): { text: string; kind: 'warning' | 'info' } | null {
+    const hasEvidenceHere = hasExactDifficultyEvidence(candidate);
     if (hasEvidenceHere) return null;
     const others = this.otherDifficultyEvidence().get(candidate.ability_id) ?? [];
-    const withEvidence = others.filter((o) => o.hasEvidence).map((o) => o.difficulty);
-    if (!withEvidence.length) return null;
-    return `Sin evidencia aquí, pero sí en ${withEvidence.join('/')} — puede ser exclusiva de esa dificultad`;
+    const withEvidence = others.filter((o) => o.hasEvidence);
+    const ownRank = difficultyRank(candidate.difficulty);
+    // §bug real reportado (2026-08-27, boss 3445 "Entombed Sentinels", "es
+    // raro que en mítico no haya mecánicas que sí hay en normal o hc"):
+    // igual que isContradictedByOtherDifficulty, solo cuenta como pista de
+    // exclusividad la evidencia vista en una dificultad MÁS DURA — los
+    // tiers duros casi nunca quitan mecánicas que ya existían en los
+    // fáciles. Evidencia en una dificultad más fácil (o igual, no debería
+    // pasar) se sigue avisando, pero como 'info' tranquilizador en vez de
+    // 'warning' — antes ambos casos compartían el mismo ⚠, que sonaba a
+    // problema incluso cuando el mensaje explicaba que no lo era.
+    const harder = withEvidence.filter((o) => difficultyRank(o.difficulty) > ownRank).map((o) => o.difficulty);
+    const easierOrEqual = withEvidence.filter((o) => difficultyRank(o.difficulty) <= ownRank).map((o) => o.difficulty);
+    if (harder.length) return { kind: 'warning', text: `Sin evidencia aquí, pero sí en ${harder.join('/')} — puede ser exclusiva de esa dificultad` };
+    if (easierOrEqual.length) {
+      return {
+        kind: 'info',
+        text: `Vista en ${easierOrEqual.join('/')}, sin confirmar aquí todavía — no se oculta solo por eso (las dificultades más duras no suelen perder mecánicas de las más fáciles), probablemente solo falta muestra`,
+      };
+    }
+    // §"filtrar bien por dificultad... ver un método fiable y que se pueda
+    // contrastar" (feedback real): isContradictedByOtherDifficulty solo
+    // puede excluir una candidata cuando hay evidencia POSITIVA en otra
+    // dificultad que la contradiga — una candidata sin evidencia en NINGUNA
+    // dificultad (solo del Journal/DB2, nunca vista en un log real ni
+    // propio ni de referencia) no tiene nada que la contradiga y por tanto
+    // nunca se excluye, pero tampoco se distinguía visualmente de una fila
+    // confirmada de verdad. Se avisa igual que el caso de arriba, mismo
+    // estilo, para que quede claro cuál de las dos cosas es.
+    if (candidate.reference_source_report) {
+      return { kind: 'info', text: 'Todavía sin ninguna evidencia observada (ni en vuestros logs ni en los de referencia) — candidata solo del Journal, sin confirmar' };
+    }
+    return null;
+  }
+
+  difficultyEvidenceLabel(candidate: BossMechanicCandidateRow): string {
+    const sources: string[] = [];
+    if (candidate.observed_in_logs) sources.push('log de la guild');
+    if (candidate.observed_in_reference_logs || (candidate.reference_occurrences ?? 0) > 0) sources.push('logs públicos de referencia');
+    if (candidate.observed_as_interrupt) sources.push('interrupt observado');
+    if (sources.length) return `verificada en ${candidate.difficulty}: ${sources.join(' + ')}`;
+    return candidate.reference_source_report
+      ? `no observada en la referencia de ${candidate.difficulty}; conservada por falta de contradicción concluyente`
+      : `Journal compartido; ${candidate.difficulty} todavía sin contraste suficiente`;
   }
 
   difficultyLabel(id: number): string {
@@ -277,28 +398,37 @@ export class ManifestComponent {
     return Number(value);
   }
 
-  // §"un prompt para pasar a la IA y que investigue... clasificar todas las
-  // mecánicas de forma semi automática aunque con ayuda manual": el prompt
-  // se genera SIEMPRE para el boss+dificultad seleccionados en pantalla —
-  // nunca mezcla dificultades, así que "la misma habilidad se comporta
-  // ligeramente distinto entre dificultades" queda cubierto de raíz.
-  async openClassifyPanel(): Promise<void> {
+  // §"el prompt de mecánicas de bosses no puede consultar las 4
+  // dificultades a la vez... asegurando la calidad de datos obviamente"
+  // (feedback real, 2026-08-27): antes se generaba SIEMPRE para el
+  // boss+dificultad seleccionados en pantalla, nunca mezclaba dificultades
+  // — eso seguía siendo cierto EN LA MISMA LLAMADA, pero obligaba a repetir
+  // la investigación una vez por dificultad. Ahora scope='all' cubre TODAS
+  // las dificultades del boss con candidatas en un único prompt — la
+  // "calidad de datos" se mantiene porque cada fila del prompt lleva su
+  // propia difficulty y la IA investiga cada (habilidad, dificultad) por
+  // separado (ver classify-mechanics/index.ts), no porque se sigan pidiendo
+  // de una en una. scope=<difficulty> sigue disponible como opción más
+  // estrecha (ej. tras añadir una mecánica nueva solo en una dificultad).
+  classifyScope = signal<string | 'all' | null>(null);
+
+  async openClassifyPanel(scope: string | 'all'): Promise<void> {
     this.classifyPanelOpen.set(true);
     this.classifyResult.set(null);
-    if (this.classifySystemPrompt() != null) return; // ya traído para este boss+dificultad, no repetir la llamada
+    if (this.classifySystemPrompt() != null && this.classifyScope() === scope) return; // ya traído para este alcance, no repetir la llamada
+    this.classifyScope.set(scope);
     const bossId = this.selectedEncounterId();
-    const difficulty = this.selectedDifficultyName();
-    if (bossId == null || !difficulty) return;
+    if (bossId == null) return;
     this.loadingClassifyPrompt.set(true);
     this.classifyPromptError.set(null);
     try {
-      const res = await this.edgeFunctions.getMechanicClassificationPrompt(String(bossId), difficulty);
+      const res = await this.edgeFunctions.getMechanicClassificationPrompt(String(bossId), scope === 'all' ? undefined : [scope]);
       this.classifySystemPrompt.set(res.systemPrompt);
       this.classifyUserMessage.set(res.userMessage);
       this.classifyMechanicCount.set(res.mechanicCount);
       this.classifyPromptVersion.set(res.promptVersion);
     } catch (err) {
-      this.classifyPromptError.set(err instanceof Error ? err.message : String(err));
+      this.classifyPromptError.set(errorMessage(err));
     } finally {
       this.loadingClassifyPrompt.set(false);
     }
@@ -306,6 +436,7 @@ export class ManifestComponent {
 
   closeClassifyPanel(): void {
     this.classifyPanelOpen.set(false);
+    this.classifyScope.set(null);
     this.classifySystemPrompt.set(null);
     this.classifyUserMessage.set(null);
     this.classifyPromptVersion.set(null);
@@ -324,18 +455,18 @@ export class ManifestComponent {
       this.classifyCopied.set(true);
       setTimeout(() => this.classifyCopied.set(false), 2000);
     } catch (err) {
-      this.classifyPromptError.set('No se pudo copiar automáticamente — selecciona el texto a mano. (' + (err instanceof Error ? err.message : String(err)) + ')');
+      this.classifyPromptError.set('No se pudo copiar automáticamente — selecciona el texto a mano. (' + errorMessage(err) + ')');
     }
   }
 
   async submitClassification(): Promise<void> {
     const bossId = this.selectedEncounterId();
-    const difficulty = this.selectedDifficultyName();
-    if (bossId == null || !difficulty || !this.classifyPasteText().trim()) return;
+    const scope = this.classifyScope();
+    if (bossId == null || !scope || !this.classifyPasteText().trim()) return;
     this.classifySubmitting.set(true);
     this.classifySubmitError.set(null);
     try {
-      const res = await this.edgeFunctions.submitMechanicClassification(String(bossId), difficulty, this.classifyPasteText());
+      const res = await this.edgeFunctions.submitMechanicClassification(String(bossId), scope === 'all' ? undefined : [scope], this.classifyPasteText());
       this.classifyPasteText.set('');
       // §bug real encontrado (2026-08-23, feedback real: "el desplegable
       // 'sin clasificar' no cambia aunque haya sido clasificado"): esto
@@ -361,7 +492,7 @@ export class ManifestComponent {
         avoidableContractMissing: res.avoidableContractMissing,
       });
     } catch (err) {
-      this.classifySubmitError.set(err instanceof Error ? err.message : String(err));
+      this.classifySubmitError.set(errorMessage(err));
     } finally {
       this.classifySubmitting.set(false);
     }

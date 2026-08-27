@@ -1,7 +1,7 @@
 export type NightReportTrend = 'improving' | 'worsening' | 'flat' | 'insufficient_data';
 
 export interface NightFullReport {
-  schemaVersion: 10;
+  schemaVersion: 11;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -163,17 +163,16 @@ export interface NightFullReport {
     }[];
   };
   survival: {
-    emergencyLookbackMs: number;
     healthstone: {
       playersEverUsed: number;
       playersWithObservedAccess: number;
       pctUsedAtLeastOnce: number;
-      deathsWithObservedAccessNoRecentUse: number;
+      deathsWithObservedAccessNoUseInPull: number;
       deathsEvaluable: number;
     };
     healthPotion: { playersEverUsed: number; totalPlayersTracked: number; pctUsedAtLeastOnce: number };
     either: { playersEverUsed: number; totalPlayersTracked: number; pctUsedAtLeastOnce: number };
-    pctDeathsWithNoRecentEmergencyConsumable: number;
+    pctDeathsWithNoEmergencyConsumableInPull: number;
   };
   defensives: {
     playersEverUsed: number;

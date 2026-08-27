@@ -30,6 +30,8 @@ create table if not exists boss_mechanics_candidates (
   icon_url text,
   sources jsonb not null default '[]'::jsonb, -- ej. ["blizzard-journal"]
   observed_in_logs boolean not null default false,
+  observed_in_reference_logs boolean not null default false,
+  official_difficulty_applicable boolean,
   journal_encounter_id bigint, -- id del encounter en el Journal de Blizzard, para trazabilidad
   db2_difficulty_id integer, -- id de la tabla Difficulty de Blizzard DB2 (¡no coincide con el id de WCL!) resuelto para esta fila
   difficulty_mapping_status text, -- ver difficulty-mapping.ts: 'mapped-by-*' | 'difficulty-mapping-unresolved' | 'difficulty-mapping-ambiguous' | 'difficulty-metadata-unavailable'

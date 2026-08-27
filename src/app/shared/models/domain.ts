@@ -48,6 +48,27 @@ export interface PullRow {
   wipe_call_signals: Record<string, number | boolean | null> | null;
   /** La decisión real que consumen fiabilidad/métricas/tendencias — auto-inicializada por analyze-report, editable por el RL vía set-wipe-call-status. */
   wipe_call_excluded: boolean;
+  /** §"un ninja pull... también cuenta en la estadística de wipes" (feedback real): heurística de analyze-report — pull muy corto donde casi nadie de la raid llegó a entrar en combate. Ver detectNinjaPull en analyze-report. */
+  is_ninja_pull: boolean;
+  /** La puerta real que consumen intentos/wipes/fiabilidad — auto-inicializada igual que is_ninja_pull, editable por el RL vía set-ninja-pull-status. */
+  ninja_pull_excluded: boolean;
+  /** Señales del veredicto: durationMs, raidSize, engagedPlayerCount, engagedFraction. */
+  ninja_pull_signals: Record<string, number | boolean | null> | null;
+  /** §"fases de encuentro": transiciones cronológicas [{id, startTime}] EN ESTE pull, mismo espacio temporal absoluto que trigger_time_ms + fight.startTime. Null = boss sin fases definidas en WCL. */
+  phase_transitions: { id: number; startTime: number }[] | null;
+  /** Índice absoluto (0-based) de la fase en la que terminó el pull — mejor proxy de progreso que wipe_pct cuando boss_encounter_phases.separates_wipes es true. */
+  last_phase_absolute_index: number | null;
+  /** true = el pull terminó durante un intermedio, no una fase de daño normal. */
+  last_phase_is_intermission: boolean | null;
+}
+
+/** Nombre legible + metadata de cada fase de un boss — sincronizado desde WCL en analyze-report, referencia de solo lectura. */
+export interface BossEncounterPhaseRow {
+  boss_id: string;
+  phase_id: number;
+  name: string;
+  is_intermission: boolean | null;
+  separates_wipes: boolean | null;
 }
 
 export type DefensiveStatus = 'active' | 'available_unused' | 'on_cooldown' | 'unknown';
@@ -75,17 +96,25 @@ export interface DeathCause {
   preventableWithDefensive: boolean | null;
   /** Se muestra como contexto, pero no cuenta como muerte/error/uso defensivo del jugador. */
   statisticalExclusionReason?: 'boss_melee_on_non_tank' | null;
-  /** §10: por qué murió, en términos accionables — no solo "qué le mató". Se decide en analyze-report a partir de la categoría de la mecánica + el perfil de daño + si recibió sanación reciente. 'unclassified' es honesto a propósito: undispelled_debuff/tank_swap_missed (hoja de ruta) todavía no se pueden distinguir con los datos que se traen hoy (haría falta events(dataType: Debuffs) y datos de amenaza) — mejor "no lo sé" que una causa inventada. */
-  rootCause: 'self_positioning' | 'unsoaked_mechanic' | 'no_healing_received' | 'unclassified';
+  /** §10: por qué murió, en términos accionables — no solo "qué le mató". Se decide en analyze-report a partir de la categoría de la mecánica + el perfil de daño + si recibió sanación reciente. 'undispelled_debuff' (§"Dispels — sin ingestión de eventos de dispel", feedback real) se afirma solo con un evento Dispels real ausente para esa habilidad sobre ese jugador — antes quedaba en 'unclassified' a falta de esa evidencia. tank_swap_missed (hoja de ruta) sigue sin poder distinguirse: haría falta amenaza/stacks, que hoy no se traen — mejor "no lo sé" que una causa inventada. */
+  rootCause: 'self_positioning' | 'unsoaked_mechanic' | 'no_healing_received' | 'undispelled_debuff' | 'unclassified';
   timeMs: number;
+  /** §"fases de encuentro": fase activa en el momento de morir — ver boss_encounter_phases para el nombre legible. Null si el boss no tiene fases. */
+  phaseId?: number | null;
   /** Estado de CADA defensivo de su clase en el momento exacto de morir — activo / en cooldown (+ cuánto faltaba) / disponible y sin usar / sin dato. */
   defensiveOptions?: DefensiveOption[];
-  /** 'burst' = pocos golpes (<=3) en los últimos 5s y uno concentra >=60% del daño de la ventana ("le explotó"); 'sustained' = daño repartido en más golpes/tiempo; 'unknown' = sin eventos de daño en la ventana. WCL no da `overkill`, así que esto es lo más honesto que se puede afirmar con los datos reales. */
+  /** 'burst' = un golpe o varios impactos del último segundo suman >=80% de la vida máxima (o fallback temporal en logs antiguos); 'sustained' = hubo una ventana real para sanar/reaccionar; 'unknown' = sin eventos de daño. */
   damageProfile: 'burst' | 'sustained' | 'unknown';
   /** Daño del golpe más grande en los últimos 5s antes de morir (post-mitigación/absorción, tal cual `amount` de WCL). */
   killingBlowAmount: number | null;
   damageWindowTotal: number;
   damageWindowHits: number;
+  /** Daño agregado dentro del último segundo antes de morir. */
+  terminalBurstDamage?: number;
+  burstWindowMs?: number;
+  /** Recursos WCL; null/ausente en pulls analizados antes de pedir includeResources. */
+  maxHitPoints?: number | null;
+  burstHealthPct?: number | null;
   /** §13.4: la secuencia real de golpes en los 5s antes de morir, no solo el agregado — orden cronológico. */
   damageWindowEvents?: { time_ms: number; amount: number; ability_id: number | null; ability_name: string | null }[];
   /** Sanación real recibida en los 6s previos a morir (0 = de verdad nadie le curó nada; puede ser >0 y aun así insuficiente, historia de coaching distinta). */
@@ -153,6 +182,7 @@ export interface WclGearItem {
   icon?: string;
   bonusIDs?: number[];
   permanentEnchant?: number;
+  gems?: unknown[];
   /** Solo presente en los slots de trinket (12/13) — resuelto vía Blizzard Item API en analyze-report. */
   name?: string | null;
 }
@@ -173,6 +203,8 @@ export interface PullMechanicEventRow {
   avoidable: boolean | null;
   /** Uno por nombre en players_hit_names — vacío en category='interrupt'. */
   player_hit_details: PlayerMechanicHitDetail[];
+  /** §"fases de encuentro": fase activa en trigger_time_ms — ver boss_encounter_phases para el nombre legible. Null si el boss no tiene fases. */
+  phase_id: number | null;
 }
 
 export interface PlayerMechanicHitDetail {
@@ -222,6 +254,10 @@ export interface BossMechanicCandidateRow {
   icon_url: string | null;
   sources: string[];
   observed_in_logs: boolean;
+  /** Evidencia en logs públicos de referencia de esta dificultad exacta. */
+  observed_in_reference_logs: boolean;
+  /** Resultado oficial DB2 para esta dificultad; null si no pudo resolverse. */
+  official_difficulty_applicable: boolean | null;
   /** true si esta habilidad aparece como interrumpida (extraAbilityGameID) en un log público de referencia — evidencia real, no heurística. Ver sync-boss-mechanics. */
   observed_as_interrupt: boolean;
   journal_encounter_id: number | null;
@@ -248,4 +284,39 @@ export interface BossMechanicCandidateRow {
   /** Instrucción práctica para ejecutar esta mecánica en este boss+dificultad. Independiente de la categoría y de la nota descriptiva. */
   resolution: string | null;
   resolution_verified_at: string | null;
+}
+
+/** §"pantalla nueva para clasificar defensivos... qué le hace al daño entrante durante una mecánica de raid" (feedback real): mitigation = lo reduce antes de que llegue, absorption = lo intercepta con un pool aparte, sustain = repara HP ya perdido, emergency = evita la muerte / dispara el margen de supervivencia. */
+export type DefensiveSurvivalType = 'mitigation' | 'absorption' | 'sustain' | 'emergency';
+
+/**
+ * Fila de cooldown_catalog (§12.1) — catálogo de defensivos sincronizado
+ * desde el repo real de WoWAnalyzer, no tecleado a mano. Que una fila
+ * exista para una `class` no significa que TODAS sus specs la tengan: si
+ * `spec` no es null, solo aplica a esa spec (o combo "Feral/Guardian" — ver
+ * defensive-cooldowns.ts), y aunque sea null (toda la clase) puede seguir
+ * siendo un nodo de talento que el jugador no tenga elegido — la
+ * disponibilidad real por jugador la decide defensivesForClass() en
+ * analyze-report cruzando spec + árbol de talentos, esta tabla es solo el
+ * catálogo de lo que PUEDE llegar a existir.
+ */
+export interface CooldownCatalogRow {
+  id: string;
+  class: string;
+  spec: string | null;
+  spell_id: number;
+  name: string;
+  /** A quién protege: personal (uno mismo), semi (uno mismo con matices), external (se lanza sobre otro) o utility. Eje distinto de survival_type. */
+  category: 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
+  base_cooldown_ms: number | null;
+  base_duration_ms: number | null;
+  synced_from_commit: string | null;
+  synced_at: string | null;
+  created_at: string;
+  /** Confirmado a mano o aplicado desde una clasificación IA. */
+  survival_type: DefensiveSurvivalType | null;
+  /** Sugerencia IA sin confirmar — nunca pisa survival_type una vez fijado a mano. */
+  inferred_survival_type: DefensiveSurvivalType | null;
+  ai_classification: { confidence: 'high' | 'medium'; sources: string[]; notes: string; classifiedAt: string } | null;
+  reviewed: boolean;
 }

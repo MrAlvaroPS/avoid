@@ -1,0 +1,51 @@
+import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+
+// §"un ninja pull... también cuenta en la estadística de wipes... habría
+// que clasificarlo de otra manera para saberlo" (feedback real): mismo
+// patrón que set-wipe-call-status — analyze-report ya deja
+// pulls.ninja_pull_excluded en su valor por defecto (la heurística de
+// detectNinjaPull) al analizar el pull; esta función es el único sitio que
+// lo cambia después, siempre a mano y siempre explícito. Hace falta para
+// los dos sentidos del error: un ninja pull real que la heurística no cazó
+// (duración/enganche justo por encima del umbral), y un wipe corto de
+// verdad que la heurística marcó por error (ej. una mecánica de raid que
+// mata a casi todos casi a la vez en los primeros segundos).
+
+interface Body {
+  pullId: string;
+  excluded: boolean;
+}
+
+Deno.serve(async (req: Request) => {
+  const preflight = handlePreflight(req);
+  if (preflight) return preflight;
+
+  let body: Body;
+  try {
+    body = await req.json();
+  } catch {
+    return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
+  }
+  if (!body.pullId || typeof body.excluded !== 'boolean') {
+    return jsonResponse({ ok: false, error: 'pullId y excluded (boolean) son obligatorios' }, 400);
+  }
+
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  );
+
+  // Solo tiene sentido tocar pulls donde de verdad se evaluó la heurística
+  // — evita activar ninja_pull_excluded en un pull sin ninja_pull_signals
+  // (no habría evidencia detrás de la exclusión).
+  const { data: pull, error: fetchError } = await supabase.from('pulls').select('id,ninja_pull_signals').eq('id', body.pullId).maybeSingle();
+  if (fetchError) return jsonResponse({ ok: false, error: fetchError.message }, 500);
+  if (!pull) return jsonResponse({ ok: false, error: `Pull ${body.pullId} no encontrado` }, 404);
+  if (!pull.ninja_pull_signals) return jsonResponse({ ok: false, error: 'Este pull no tiene una evaluación de ninja pull — nada que marcar/restaurar.' }, 400);
+
+  const { error } = await supabase.from('pulls').update({ ninja_pull_excluded: body.excluded }).eq('id', body.pullId);
+  if (error) return jsonResponse({ ok: false, error: error.message }, 500);
+
+  return jsonResponse({ ok: true, pullId: body.pullId, excluded: body.excluded });
+});

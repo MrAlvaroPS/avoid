@@ -2,7 +2,7 @@ import type { NightFullReport } from '../../shared/models/night-full-report';
 import { bilingualName, buildNightDiscordSummary, buildNightFullReportMarkdown } from './night-full-report-markdown';
 
 const report: NightFullReport = {
-    schemaVersion: 10,
+  schemaVersion: 11,
   reportCode: 'ABC123',
   reportTitle: 'Raid test',
   reportDate: '2026-08-24T18:00:00.000Z',
@@ -66,11 +66,10 @@ const report: NightFullReport = {
     byResponsibility: [{ responsibility: 'personal', label: 'Personal', mechanics: 1, failedEvents: 5, pullsAffected: 4, deaths: 3, playersHit: 8, damageTaken: 500_000 }],
   },
   survival: {
-    emergencyLookbackMs: 15_000,
-    healthstone: { playersEverUsed: 8, playersWithObservedAccess: 20, pctUsedAtLeastOnce: 40, deathsWithObservedAccessNoRecentUse: 2, deathsEvaluable: 6 },
+    healthstone: { playersEverUsed: 8, playersWithObservedAccess: 20, pctUsedAtLeastOnce: 40, deathsWithObservedAccessNoUseInPull: 2, deathsEvaluable: 6 },
     healthPotion: { playersEverUsed: 5, totalPlayersTracked: 20, pctUsedAtLeastOnce: 25 },
     either: { playersEverUsed: 10, totalPlayersTracked: 20, pctUsedAtLeastOnce: 50 },
-    pctDeathsWithNoRecentEmergencyConsumable: 60,
+    pctDeathsWithNoEmergencyConsumableInPull: 60,
   },
   defensives: { playersEverUsed: 18, totalPlayersTracked: 20, pctPlayersUsedAtLeastOnce: 90, totalCasts: 90, castsPerCombatMinute: 5.6, globalAvailableUnusedPct: 25, availableUnusedCount: 2, totalEvaluated: 8, byCategory: [] },
   interrupts: {

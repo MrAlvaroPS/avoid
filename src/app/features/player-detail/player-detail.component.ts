@@ -7,20 +7,14 @@ import { Component, computed, effect, inject, input, signal } from '@angular/cor
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { PlayerDetailService, type PlayerDetail } from '../../core/player-detail.service';
-import { mechanicCategoryMeta } from '../../shared/format.util';
+import { mechanicCategoryMeta, rootCauseMeta } from '../../shared/format.util';
 import { TrendBarsComponent, type TrendBar } from '../../shared/charts/trend-bars.component';
 import { RoleIconComponent } from '../../shared/role-icon.component';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
 import type { DeathCause, MechanicCategory } from '../../shared/models/domain';
-
-const ROOT_CAUSE_LABEL: Record<DeathCause['rootCause'], string> = {
-  self_positioning: 'Posicionamiento propio',
-  unsoaked_mechanic: 'Mecánica sin resolver',
-  no_healing_received: 'Sin sanación suficiente',
-  unclassified: 'Sin clasificar',
-};
+import { errorMessage } from '../../shared/error-message.util';
 
 @Component({
   selector: 'app-player-detail',
@@ -55,6 +49,20 @@ export class PlayerDetailComponent {
     }));
   });
 
+  weeklyConsistencyBars = computed<TrendBar[]>(() => {
+    const d = this.data();
+    if (!d) return [];
+    return d.weeklyScores.map((week) => ({
+      label: week.weekStartLabel,
+      value: week.consistencyScore ?? 0,
+      isKill: week.consistencyScore != null && week.consistencyScore >= 75,
+      isCurrent: week.isCurrent,
+      tooltip: week.consistencyScore == null
+        ? `Semana del ${week.weekStartLabel}: hacen falta al menos 5 pulls para medir consistencia`
+        : `Semana del ${week.weekStartLabel}: consistencia ${week.consistencyScore}/100 (${week.sampleSize} pulls)`,
+    }));
+  });
+
   constructor() {
     effect(() => {
       const name = this.name();
@@ -68,7 +76,7 @@ export class PlayerDetailComponent {
     try {
       this.data.set(await this.playerDetailService.load(name));
     } catch (err) {
-      this.error.set(err instanceof Error ? err.message : String(err));
+      this.error.set(errorMessage(err));
     } finally {
       this.loading.set(false);
     }
@@ -79,8 +87,8 @@ export class PlayerDetailComponent {
   // rootCause 'unclassified' es honesto sobre no saber el MECANISMO exacto,
   // no significa que la mecánica no tenga categoría — si la tiene, se enseña.
   rootCauseLabel(cause: DeathCause['rootCause'], category: MechanicCategory | null): string {
-    if (cause !== 'unclassified') return ROOT_CAUSE_LABEL[cause];
-    return mechanicCategoryMeta(category)?.label ?? ROOT_CAUSE_LABEL.unclassified;
+    if (cause !== 'unclassified') return rootCauseMeta(cause)?.label ?? cause;
+    return mechanicCategoryMeta(category)?.label ?? rootCauseMeta('unclassified')!.label;
   }
 
   defensiveLabel(preventable: boolean | null): string {

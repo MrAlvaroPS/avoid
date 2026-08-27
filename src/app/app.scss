@@ -77,6 +77,12 @@
   flex: 1;
 }
 
+.header-progress-group {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .guild-tag {
   font-size: 11px;
   font-family: var(--font-mono);

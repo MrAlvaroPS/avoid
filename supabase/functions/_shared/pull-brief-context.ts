@@ -23,6 +23,8 @@ export interface PullBriefDeath {
   mechanic: string;
   category: string | null;
   rootCause: string;
+  oneshot: boolean | null;
+  burstHealthPct: number | null;
   /** true = tenía un defensivo disponible y sin usar en el momento de morir — la señal más accionable para "nextPullActions". null = sin catálogo/dato para juzgarlo. */
   hadDefensiveAvailableUnused: boolean | null;
 }
@@ -58,6 +60,8 @@ interface DeathCauseRow {
   mechanicName: string | null;
   category: string | null;
   rootCause: string;
+  damageProfile?: 'burst' | 'sustained' | 'unknown';
+  burstHealthPct?: number | null;
   timeMs: number;
   defensiveOptions?: { status: string }[];
   statisticalExclusionReason?: string | null;
@@ -94,8 +98,8 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
   if (!pull) return null;
 
   const [{ data: records }, { data: mechEvents }, { data: priorPulls }] = await Promise.all([
-    supabase.from('player_pull_records').select('player_name,died,death_cause,avoidable_damage_taken,wipe_call_cluster').eq('pull_id', pullId),
-    supabase.from('pull_mechanic_events').select('mechanic_name,category,outcome,players_hit,trigger_time_ms').eq('pull_id', pullId).neq('outcome', 'clean'),
+    supabase.from('player_pull_records').select('player_name,died,death_cause,wipe_call_cluster').eq('pull_id', pullId),
+    supabase.from('applicable_pull_mechanic_events').select('mechanic_name,category,outcome,players_hit,trigger_time_ms,avoidable,player_hit_details').eq('pull_id', pullId).neq('outcome', 'clean'),
     supabase
       .from('pulls')
       .select('id,pull_number,wipe_pct,duration_ms,wipe_call_excluded,wipe_call_signals')
@@ -106,8 +110,7 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
       .limit(REPEATED_ISSUE_LOOKBACK_PULLS),
   ]);
 
-  const recordRows = (records ?? []) as { player_name: string; died: boolean; death_cause: DeathCauseRow | null; avoidable_damage_taken: number | null; wipe_call_cluster: boolean }[];
-  const avoidableDamageTotal = recordRows.reduce((sum, r) => sum + Number(r.avoidable_damage_taken ?? 0), 0);
+  const recordRows = (records ?? []) as { player_name: string; died: boolean; death_cause: DeathCauseRow | null; wipe_call_cluster: boolean }[];
 
   // §"esa gente no debería... contar como muerte, marcado como wipe call":
   // el LLM no debe leer estas muertes como fallos individuales reales.
@@ -122,12 +125,25 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
         mechanic: dc.mechanicName ? mechanicDisplayName(dc.mechanicName) : `Hechizo #${dc.mechanicId} (sin clasificar)`,
         category: dc.category ?? null,
         rootCause: dc.rootCause,
+        oneshot: dc.damageProfile === 'unknown' || dc.damageProfile == null ? null : dc.damageProfile === 'burst',
+        burstHealthPct: dc.burstHealthPct ?? null,
         hadDefensiveAvailableUnused: options.length ? options.some((o) => o.status === 'available_unused') : null,
       };
     });
 
-  const evaluatedMechEvents = ((mechEvents ?? []) as { mechanic_name: string; category: string | null; outcome: 'partial_fail' | 'fail'; players_hit: number; trigger_time_ms: number }[])
+  const evaluatedMechEvents = ((mechEvents ?? []) as {
+    mechanic_name: string;
+    category: string | null;
+    outcome: 'partial_fail' | 'fail';
+    players_hit: number;
+    trigger_time_ms: number;
+    avoidable: boolean | null;
+    player_hit_details: { damage_taken?: number }[];
+  }[])
     .filter((event) => !isMechanicExcludedByWipeCall(pull, event.trigger_time_ms));
+  const avoidableDamageTotal = evaluatedMechEvents
+    .filter((event) => event.avoidable === true)
+    .reduce((sum, event) => sum + (event.player_hit_details ?? []).reduce((detailSum, detail) => detailSum + Math.max(0, Number(detail.damage_taken ?? 0)), 0), 0);
   const mechanicFails: PullBriefMechanicFail[] = evaluatedMechEvents
     .map((ev) => ({ mechanic: ev.mechanic_name, category: ev.category, outcome: ev.outcome, playersHit: ev.players_hit }))
     .sort((a, b) => b.playersHit - a.playersHit)
@@ -140,7 +156,7 @@ export async function buildPullBriefContext(supabase: SupabaseClient, pullId: st
     const priorPullIds = priorPullRows.map((p) => p.id);
     const [{ data: priorDeathRows }, { data: priorMechEvents }] = await Promise.all([
       supabase.from('player_pull_records').select('pull_id,died,death_cause,wipe_call_cluster').in('pull_id', priorPullIds),
-      supabase.from('pull_mechanic_events').select('pull_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
+      supabase.from('applicable_pull_mechanic_events').select('pull_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
     ]);
     const priorPullById = new Map(priorPullRows.map((priorPull) => [priorPull.id, priorPull]));
     const deathsByPullId = new Map<string, number>();
