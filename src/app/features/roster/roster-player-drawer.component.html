@@ -65,14 +65,241 @@
           <div class="drawer-signal-list">
             @for (signal of view.signals; track signal.kind + signal.title) {
               <article [class]="'drawer-signal signal-' + signal.severity">
-                <span aria-hidden="true"></span>
-                <div>
-                  <strong>{{ signal.title }}</strong>
-                  <p>{{ signal.detail }}</p>
+                <div class="signal-heading">
+                  <span aria-hidden="true"></span>
+                  <div>
+                    <strong>{{ signal.title }}</strong>
+                    <p>{{ signal.detail }}</p>
+                  </div>
                   @if (signal.lastOccurredAt) {
-                    <small>Última evidencia {{ signal.lastOccurredAt | date: 'd MMM' }}</small>
+                    <small>Última evidencia {{ signal.lastOccurredAt | date: 'd MMM y' }}</small>
                   }
                 </div>
+
+                @if (signal.kind === 'mechanic' && signal.pattern) {
+                  <div class="mechanic-evidence-list">
+                    @for (
+                      mechanic of signal.pattern.mechanics;
+                      track mechanic.bossId + mechanic.difficulty + mechanic.abilityId
+                    ) {
+                      <section class="mechanic-evidence">
+                        <header>
+                          <div>
+                            <app-wowhead-link type="spell" [id]="mechanic.abilityId">
+                              <strong>{{
+                                mechanic.mechanicNameEs ?? mechanic.mechanicName
+                              }}</strong>
+                            </app-wowhead-link>
+                            @if (
+                              mechanic.mechanicNameEs &&
+                              mechanic.mechanicNameEs !== mechanic.mechanicName
+                            ) {
+                              <small>{{ mechanic.mechanicName }}</small>
+                            }
+                          </div>
+                          <span
+                            >{{ mechanic.occurrenceCount }} impacto{{
+                              mechanic.occurrenceCount === 1 ? '' : 's'
+                            }}</span
+                          >
+                        </header>
+                        <p class="boss-line">
+                          <a [routerLink]="['/boss', mechanic.bossId, mechanic.difficulty]">
+                            {{ mechanic.bossName }} · {{ mechanic.difficulty }}
+                          </a>
+                          <span>#{{ mechanic.abilityId }}</span>
+                        </p>
+                        @if (mechanic.description) {
+                          <div class="coaching-block">
+                            <span>Qué hace</span>
+                            <p>{{ mechanic.description }}</p>
+                          </div>
+                        }
+                        <div
+                          class="coaching-block resolution-block"
+                          [class.missing]="!mechanic.resolution"
+                        >
+                          <span>Cómo resolverla</span>
+                          <p>
+                            {{
+                              mechanic.resolution ??
+                                'Aún no hay una resolución contrastada guardada para esta dificultad. Revísala en Ajustes antes de trasladarla al raider.'
+                            }}
+                          </p>
+                        </div>
+                        @if (mechanic.coachingNote) {
+                          <details class="stored-note">
+                            <summary>Información almacenada de la clasificación</summary>
+                            <p>{{ mechanic.coachingNote }}</p>
+                          </details>
+                        }
+                        <div class="occurrence-list">
+                          <span class="detail-label">Evidencia del patrón</span>
+                          @for (evidence of mechanic.evidence.slice(0, 5); track evidence.pullId) {
+                            <div>
+                              <span>
+                                Pull {{ evidence.pullNumber ?? '—' }} ·
+                                {{ evidence.occurredAt | date: 'd MMM y, HH:mm' }}
+                                @if (evidence.occurrenceCount > 1) {
+                                  · {{ evidence.occurrenceCount }} impactos
+                                }
+                              </span>
+                              @if (evidence.wclUrl) {
+                                <a [href]="evidence.wclUrl" target="_blank" rel="noopener"
+                                  >Ver en WCL ↗</a
+                                >
+                              }
+                            </div>
+                          }
+                        </div>
+                        @if (mechanic.sources.length) {
+                          <div class="source-links">
+                            <span>Resolución contrastada:</span>
+                            @for (source of mechanic.sources; track source; let index = $index) {
+                              <a [href]="source" target="_blank" rel="noopener"
+                                >Fuente {{ index + 1 }} ↗</a
+                              >
+                            }
+                          </div>
+                        }
+                      </section>
+                    }
+                  </div>
+                }
+
+                @if (signal.kind === 'defensive') {
+                  <div class="defensive-detail">
+                    <p class="score-explanation">
+                      <strong>{{ view.player.breakdown.defensiva | number: '1.0-0' }}/100</strong>
+                      es la puntuación del eje, no una cantidad de defensivos ni una fracción sobre
+                      los pulls.
+                    </p>
+                    <div class="defensive-samples">
+                      <div>
+                        <span>Durante el pull</span>
+                        <strong
+                          >{{ view.player.defensiveUseCount }}/{{
+                            view.player.defensiveOpportunityCount
+                          }}</strong
+                        >
+                        <small>pulls evaluables con algún defensivo registrado</small>
+                      </div>
+                      <div>
+                        <span>Antes de morir</span>
+                        <strong
+                          >{{ view.player.defensiveDeathUseCount }}/{{
+                            view.player.defensiveDeathOpportunityCount
+                          }}</strong
+                        >
+                        <small>muertes evaluables con respuesta defensiva</small>
+                      </div>
+                    </div>
+                    @if (view.player.defensiveSpellUsage.length) {
+                      <div class="spell-usage">
+                        <span class="detail-label">Defensivos registrados en la muestra</span>
+                        <div>
+                          @for (
+                            spell of view.player.defensiveSpellUsage.slice(0, 6);
+                            track spell.spellId
+                          ) {
+                            <span class="spell-chip">
+                              <app-wowhead-link type="spell" [id]="spell.spellId">{{
+                                spell.name
+                              }}</app-wowhead-link>
+                              <small
+                                >{{ spell.castCount }} usos · {{ spell.pullCount }} pulls</small
+                              >
+                            </span>
+                          }
+                        </div>
+                      </div>
+                    }
+                    @if (view.player.defensiveDeathEvidence.length) {
+                      <div class="death-evidence-list">
+                        <span class="detail-label">Muertes con defensivos comprobables</span>
+                        @for (
+                          death of view.player.defensiveDeathEvidence.slice(0, 6);
+                          track death.pullId
+                        ) {
+                          <article>
+                            <header>
+                              <strong>{{ death.bossName }} · Pull {{ death.pullNumber }}</strong>
+                              <span>{{ death.closedAt | date: 'd MMM, HH:mm' }}</span>
+                            </header>
+                            <p>{{ death.difficulty }} · {{ death.mechanicName }}</p>
+                            @if (death.availableUnused.length) {
+                              <div class="defensive-state missed">
+                                <span>Disponibles sin usar</span>
+                                <p>
+                                  @for (spell of death.availableUnused; track spell.spellId) {
+                                    <app-wowhead-link type="spell" [id]="spell.spellId">{{
+                                      spell.name
+                                    }}</app-wowhead-link>
+                                  }
+                                </p>
+                              </div>
+                            }
+                            @if (death.active.length) {
+                              <div class="defensive-state active">
+                                <span>Activos al morir</span>
+                                <p>
+                                  @for (spell of death.active; track spell.spellId) {
+                                    <app-wowhead-link type="spell" [id]="spell.spellId">{{
+                                      spell.name
+                                    }}</app-wowhead-link>
+                                  }
+                                </p>
+                              </div>
+                            }
+                            @if (death.onCooldown.length) {
+                              <div class="defensive-state cooldown">
+                                <span>En cooldown</span>
+                                <p>
+                                  @for (spell of death.onCooldown; track spell.spellId) {
+                                    <app-wowhead-link type="spell" [id]="spell.spellId">{{
+                                      spell.name
+                                    }}</app-wowhead-link>
+                                    <small
+                                      >({{ cooldownSeconds(spell.cooldownRemainingMs) }})</small
+                                    >
+                                  }
+                                </p>
+                              </div>
+                            }
+                            <a
+                              class="evidence-link"
+                              [href]="wclUrl(death)"
+                              target="_blank"
+                              rel="noopener"
+                              >Abrir muerte en WCL ↗</a
+                            >
+                          </article>
+                        }
+                      </div>
+                    }
+                  </div>
+                }
+
+                @if (signal.kind === 'preparation') {
+                  <div class="preparation-detail">
+                    @if (view.player.latestMissingEnchantSlots.length) {
+                      <div>
+                        <span>Faltan enchants</span>
+                        <p>{{ view.player.latestMissingEnchantSlots.join(' · ') }}</p>
+                      </div>
+                    }
+                    @if (view.player.latestMissingGemSlots.length) {
+                      <div>
+                        <span>Faltan gemas</span>
+                        <p>{{ view.player.latestMissingGemSlots.join(' · ') }}</p>
+                      </div>
+                    }
+                    <small
+                      >Snapshot del primer pull de la última noche; el loot equipado durante la raid
+                      no se penaliza.</small
+                    >
+                  </div>
+                }
               </article>
             }
           </div>
@@ -105,7 +332,15 @@
                   ? '—'
                   : (view.player.breakdown.defensiva | number: '1.0-0')
               }}</strong
-              ><small>{{ view.player.defensiveOpportunityCount }} oportunidades</small>
+              ><small>
+                {{ view.player.defensiveUseCount }}/{{
+                  view.player.defensiveOpportunityCount
+                }}
+                pulls · {{ view.player.defensiveDeathUseCount }}/{{
+                  view.player.defensiveDeathOpportunityCount
+                }}
+                muertes
+              </small>
             </article>
             <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.preparacion)">
               <span>Preparación</span
@@ -128,9 +363,7 @@
                   view.player.attendanceNightsAttended != null &&
                   view.player.attendanceNightsTotal != null
                 ) {
-                  {{ view.player.attendanceNightsAttended }}/{{
-                    view.player.attendanceNightsTotal
-                  }}
+                  {{ view.player.attendanceNightsAttended }}/{{ view.player.attendanceNightsTotal }}
                   noches
                 } @else {
                   sin cruce suficiente
@@ -163,6 +396,20 @@
               slots con gema</span
             >
           </div>
+          @if (
+            view.player.latestMissingEnchantSlots.length || view.player.latestMissingGemSlots.length
+          ) {
+            <div class="preparation-missing">
+              @if (view.player.latestMissingEnchantSlots.length) {
+                <span
+                  ><b>Sin enchant:</b> {{ view.player.latestMissingEnchantSlots.join(', ') }}</span
+                >
+              }
+              @if (view.player.latestMissingGemSlots.length) {
+                <span><b>Sin gema:</b> {{ view.player.latestMissingGemSlots.join(', ') }}</span>
+              }
+            </div>
+          }
         </section>
 
         <section class="drawer-section compact-metrics">

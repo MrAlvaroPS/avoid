@@ -247,25 +247,28 @@
 }
 
 .drawer-signal {
-  display: grid;
-  grid-template-columns: 7px 1fr;
-  gap: 10px;
   padding: 10px;
   border: 1px solid var(--card-border);
   border-radius: var(--radius-md);
   background: var(--surface);
 
-  > span {
+  .signal-heading {
+    display: grid;
+    grid-template-columns: 7px minmax(0, 1fr) auto;
+    gap: 9px;
+    align-items: start;
+  }
+  .signal-heading > span {
     width: 7px;
     height: 7px;
     margin-top: 4px;
     border-radius: 50%;
     background: var(--accent);
   }
-  &.signal-action > span {
+  &.signal-action .signal-heading > span {
     background: var(--warning);
   }
-  div {
+  .signal-heading > div {
     display: grid;
     gap: 3px;
   }
@@ -281,6 +284,248 @@
   }
   small {
     font-size: 8.5px;
+  }
+}
+
+.mechanic-evidence-list,
+.defensive-detail,
+.preparation-detail {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0 16px;
+}
+
+.mechanic-evidence {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+
+  > header,
+  .boss-line,
+  .occurrence-list > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  > header > div {
+    display: grid;
+    gap: 1px;
+  }
+  > header > span,
+  .boss-line span {
+    flex: 0 0 auto;
+    color: var(--text-faint);
+    font-size: 8.5px;
+  }
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .boss-line {
+    padding-bottom: 7px;
+    border-bottom: 1px solid var(--card-border);
+  }
+}
+
+.coaching-block {
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+  border-radius: 7px;
+  background: var(--surface);
+
+  > span,
+  .detail-label {
+    color: var(--text-faint);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  &.resolution-block {
+    border-left: 2px solid var(--success);
+  }
+  &.resolution-block.missing {
+    border-left-color: var(--warning);
+  }
+}
+
+.stored-note {
+  padding: 7px 9px;
+  border: 1px solid var(--card-border);
+  border-radius: 7px;
+
+  summary {
+    color: var(--text-muted);
+    font-size: 9px;
+    cursor: pointer;
+  }
+  p {
+    margin-top: 7px;
+  }
+}
+
+.detail-label {
+  color: var(--text-faint);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.occurrence-list {
+  display: grid;
+  gap: 5px;
+
+  > div {
+    padding-top: 5px;
+    border-top: 1px solid var(--card-border);
+    color: var(--text-faint);
+    font-size: 8.5px;
+  }
+}
+
+.source-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.score-explanation {
+  padding: 8px 9px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.defensive-samples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+
+  > div {
+    display: grid;
+    gap: 2px;
+    padding: 9px;
+    border: 1px solid var(--card-border);
+    border-radius: 7px;
+    background: var(--surface-2);
+  }
+  span,
+  small {
+    color: var(--text-faint);
+    font-size: 8px;
+  }
+  strong {
+    font: 700 16px var(--font-mono);
+  }
+}
+
+.spell-usage {
+  display: grid;
+  gap: 6px;
+
+  > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+}
+
+.spell-chip {
+  display: grid;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 1px solid var(--card-border);
+  border-radius: 7px;
+  background: var(--surface-2);
+
+  small {
+    color: var(--text-faint);
+  }
+}
+
+.death-evidence-list {
+  display: grid;
+  gap: 6px;
+
+  > article {
+    display: grid;
+    gap: 5px;
+    padding: 9px;
+    border: 1px solid var(--card-border);
+    border-radius: 7px;
+    background: var(--surface-2);
+  }
+  article > header {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  article > header span {
+    color: var(--text-faint);
+    font-size: 8px;
+  }
+}
+
+.defensive-state {
+  display: grid;
+  gap: 2px;
+  padding-left: 7px;
+  border-left: 2px solid var(--text-faint);
+
+  > span {
+    color: var(--text-faint);
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  p {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+  &.missed {
+    border-left-color: var(--danger);
+  }
+  &.active {
+    border-left-color: var(--success);
+  }
+  &.cooldown {
+    border-left-color: var(--warning);
+  }
+}
+
+.evidence-link {
+  justify-self: start;
+  color: var(--accent);
+  font-size: 8.5px;
+  text-decoration: none;
+}
+
+.preparation-detail {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+
+  > div {
+    padding: 8px;
+    border: 1px solid var(--card-border);
+    border-radius: 7px;
+    background: var(--surface-2);
+  }
+  > div > span {
+    color: var(--warning);
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  > small {
+    grid-column: 1 / -1;
+    color: var(--text-faint);
   }
 }
 
@@ -327,6 +572,7 @@
 
 .preparation-snapshot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -351,6 +597,21 @@
   strong {
     color: var(--text);
     font: 700 12px var(--font-mono);
+  }
+}
+
+.preparation-missing {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--card-border);
+  color: var(--text-faint);
+  font-size: 8.5px;
+
+  b {
+    color: var(--warning);
   }
 }
 
@@ -440,6 +701,24 @@
     justify-content: start;
     justify-items: start;
     gap: 7px;
+  }
+  .signal-heading {
+    grid-template-columns: 7px minmax(0, 1fr) !important;
+  }
+  .signal-heading > small {
+    grid-column: 2;
+  }
+  .mechanic-evidence-list,
+  .defensive-detail,
+  .preparation-detail {
+    margin-left: 0;
+  }
+  .defensive-samples,
+  .preparation-detail {
+    grid-template-columns: 1fr;
+  }
+  .preparation-detail > small {
+    grid-column: auto;
   }
   .compact-metrics {
     grid-template-columns: 1fr;

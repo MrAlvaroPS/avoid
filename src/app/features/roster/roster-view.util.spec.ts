@@ -13,10 +13,18 @@ function player(overrides: Partial<PlayerReliability> = {}): PlayerReliability {
     latestGemmableSlotCount: 3,
     latestEnchantedSlotCount: 7,
     latestEnchantableSlotCount: 7,
+    latestMissingEnchantSlots: [],
+    latestMissingGemSlots: [],
+    latestPreparationObservedAt: '2026-08-26T20:00:00.000Z',
     sampleSize: 24,
     sampleNightCount: 3,
     lastObservedAt: '2026-08-26T22:00:00.000Z',
     defensiveOpportunityCount: 5,
+    defensiveUseCount: 4,
+    defensiveDeathOpportunityCount: 2,
+    defensiveDeathUseCount: 1,
+    defensiveSpellUsage: [],
+    defensiveDeathEvidence: [],
     observedAxisCount: 4,
     attendanceNightsAttended: 3,
     attendanceNightsTotal: 3,
@@ -34,6 +42,32 @@ function pattern(overrides: Partial<RepeatOffenderRow> = {}): RepeatOffenderRow 
     instanceCount: 3,
     distinctBossCount: 2,
     lastOccurredAt: '2026-08-26T22:00:00.000Z',
+    mechanics: [
+      {
+        bossId: '3010',
+        bossName: 'Boss de prueba',
+        difficulty: 'Mythic',
+        abilityId: 12345,
+        mechanicName: 'Test Fire',
+        mechanicNameEs: 'Fuego de prueba',
+        description: 'Deja una zona de fuego.',
+        resolution: 'Sal de la zona antes del siguiente pulso.',
+        coachingNote: 'Daño personal evitable.',
+        sources: ['https://example.com/guide'],
+        occurrenceCount: 3,
+        evidence: [
+          {
+            pullId: 'pull-1',
+            occurrenceCount: 3,
+            reportCode: 'report',
+            fightId: 1,
+            pullNumber: 1,
+            occurredAt: '2026-08-26T22:00:00.000Z',
+            wclUrl: 'https://www.warcraftlogs.com/reports/report#fight=1',
+          },
+        ],
+      },
+    ],
     ...overrides,
   };
 }
@@ -82,8 +116,9 @@ describe('roster operativo', () => {
   it('presenta una repetición confirmada como revisión, con su evidencia', () => {
     const view = buildRosterPlayerView(player(), [pattern()]);
     expect(view.status).toBe('review');
-    expect(view.summaryTitle).toContain('Zona evitable');
+    expect(view.summaryTitle).toContain('Fuego de prueba');
     expect(view.summaryDetail).toContain('3 impactos');
+    expect(view.summaryDetail).toContain('Boss de prueba');
   });
 
   it('agrupa por rol y permite filtrar atención sin rankings', () => {

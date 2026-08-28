@@ -11,6 +11,7 @@ export interface RosterSignal {
   title: string;
   detail: string;
   lastOccurredAt: string | null;
+  pattern?: RepeatOffenderRow;
 }
 
 export interface RosterPlayerView {
@@ -70,15 +71,23 @@ function preparationSignal(player: PlayerReliability): RosterSignal | null {
   if (!missingEnchants && !missingGemSlots) return null;
 
   const pending = [
-    missingEnchants ? plural(missingEnchants, 'enchant') : null,
-    missingGemSlots ? plural(missingGemSlots, 'slot de gema', 'slots de gema') : null,
+    missingEnchants
+      ? player.latestMissingEnchantSlots?.length
+        ? `enchants: ${player.latestMissingEnchantSlots.join(', ')}`
+        : plural(missingEnchants, 'enchant')
+      : null,
+    missingGemSlots
+      ? player.latestMissingGemSlots?.length
+        ? `gemas: ${player.latestMissingGemSlots.join(', ')}`
+        : plural(missingGemSlots, 'slot de gema', 'slots de gema')
+      : null,
   ].filter((value): value is string => value != null);
   return {
     kind: 'preparation',
     severity: 'action',
     title: 'Preparación incompleta',
-    detail: `${pending.join(' y ')} pendientes al inicio de la última noche observada.`,
-    lastOccurredAt: player.lastObservedAt,
+    detail: `Faltan ${pending.join(' · ')} al inicio de la última noche observada.`,
+    lastOccurredAt: player.latestPreparationObservedAt ?? player.lastObservedAt,
   };
 }
 
@@ -89,19 +98,44 @@ function defensiveSignal(player: PlayerReliability): RosterSignal | null {
     kind: 'defensive',
     severity: 'review',
     title: 'Uso defensivo por revisar',
-    detail: `${Math.round(score)}/100 en ${plural(player.defensiveOpportunityCount, 'oportunidad evaluable')}.`,
+    detail: [
+      `Puntuación ${Math.round(score)}/100`,
+      `${player.defensiveUseCount}/${player.defensiveOpportunityCount} pulls con uso registrado`,
+      player.defensiveDeathOpportunityCount
+        ? `${player.defensiveDeathUseCount}/${player.defensiveDeathOpportunityCount} muertes con respuesta defensiva`
+        : null,
+    ]
+      .filter((part): part is string => part != null)
+      .join(' · '),
     lastOccurredAt: player.lastObservedAt,
   };
 }
 
 function mechanicSignals(patterns: RepeatOffenderRow[]): RosterSignal[] {
-  return patterns.map((pattern) => ({
-    kind: 'mechanic',
-    severity: 'review',
-    title: `Patrón repetido: ${mechanicCategoryMeta(pattern.category)?.label ?? pattern.category}`,
-    detail: `${plural(pattern.instanceCount, 'impacto')} en ${plural(pattern.distinctBossCount, 'boss', 'bosses')} distintos.`,
-    lastOccurredAt: pattern.lastOccurredAt,
-  }));
+  return patterns.map((pattern) => {
+    const mechanics = pattern.mechanics ?? [];
+    const primary = mechanics[0] ?? null;
+    const title = primary
+      ? mechanics.length === 1
+        ? `Patrón repetido: ${primary.mechanicNameEs ?? primary.mechanicName}`
+        : `Patrón repetido: ${primary.mechanicNameEs ?? primary.mechanicName} y ${mechanics.length - 1} más`
+      : `Patrón repetido: ${mechanicCategoryMeta(pattern.category)?.label ?? pattern.category}`;
+    const locations = mechanics
+      .slice(0, 3)
+      .map(
+        (mechanic) => `${mechanic.bossName} (${mechanic.mechanicNameEs ?? mechanic.mechanicName})`,
+      );
+    return {
+      kind: 'mechanic',
+      severity: 'review',
+      title,
+      detail: locations.length
+        ? `${plural(pattern.instanceCount, 'impacto')} confirmados: ${locations.join(' · ')}.`
+        : `${plural(pattern.instanceCount, 'impacto')} en ${plural(pattern.distinctBossCount, 'boss', 'bosses')} distintos.`,
+      lastOccurredAt: pattern.lastOccurredAt,
+      pattern,
+    };
+  });
 }
 
 export function buildRosterPlayerView(

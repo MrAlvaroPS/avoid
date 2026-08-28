@@ -15,6 +15,10 @@ import {
   type RosterPlayerView,
 } from './roster-view.util';
 import { RosterPlayerDrawerComponent } from './roster-player-drawer.component';
+import {
+  RosterSnapshotCacheService,
+  type RosterSnapshot,
+} from '../../core/roster-snapshot-cache.service';
 
 @Component({
   selector: 'app-roster',
@@ -26,6 +30,7 @@ import { RosterPlayerDrawerComponent } from './roster-player-drawer.component';
 export class RosterComponent {
   private reliabilityService = inject(ReliabilityService);
   private offendersService = inject(OffendersService);
+  private snapshotCache = inject(RosterSnapshotCacheService);
 
   players = signal<PlayerReliability[]>([]);
   offenders = signal<RepeatOffenderRow[]>([]);
@@ -88,32 +93,58 @@ export class RosterComponent {
   });
 
   constructor() {
-    void this.load();
-    void this.loadOffenders();
+    void this.initialize();
   }
 
-  async load(): Promise<void> {
-    this.loading.set(true);
-    this.error.set(null);
-    try {
-      this.players.set(await this.reliabilityService.listPlayerReliability());
-    } catch (err) {
-      this.error.set(errorMessage(err));
-    } finally {
+  private async initialize(): Promise<void> {
+    const cached = this.snapshotCache.read();
+    if (cached) {
+      this.applySnapshot(cached);
       this.loading.set(false);
-    }
-  }
-
-  async loadOffenders(): Promise<void> {
-    this.offendersLoading.set(true);
-    try {
-      this.offenders.set(await this.offendersService.listRepeatOffenders());
-    } catch {
-      // Best-effort: el roster sigue siendo útil aunque la vista histórica
-      // de patrones todavía no esté desplegada en un entorno concreto.
-    } finally {
       this.offendersLoading.set(false);
     }
+
+    try {
+      const fingerprint = await this.snapshotCache.fingerprint();
+      if (cached?.fingerprint === fingerprint) return;
+      await this.loadFresh(fingerprint, cached != null);
+    } catch {
+      if (!cached) {
+        // Si falla solo la comprobación ligera, el primer acceso todavía
+        // debe intentar la carga normal y cerrar el spinner al terminar.
+        await this.loadFresh('unverified:' + Date.now(), false);
+      }
+    }
+  }
+
+  private async loadFresh(fingerprint: string, keepVisible: boolean): Promise<void> {
+    if (!keepVisible) this.loading.set(true);
+    if (!keepVisible) this.offendersLoading.set(true);
+    this.error.set(null);
+    try {
+      const [players, offenders] = await Promise.all([
+        this.reliabilityService.listPlayerReliability(),
+        this.offendersService.listRepeatOffenders().catch(() => []),
+      ]);
+      const snapshot: RosterSnapshot = {
+        fingerprint,
+        savedAt: new Date().toISOString(),
+        players,
+        offenders,
+      };
+      this.applySnapshot(snapshot);
+      this.snapshotCache.write(snapshot);
+    } catch (err) {
+      if (!keepVisible) this.error.set(errorMessage(err));
+    } finally {
+      this.loading.set(false);
+      this.offendersLoading.set(false);
+    }
+  }
+
+  private applySnapshot(snapshot: RosterSnapshot): void {
+    this.players.set(snapshot.players);
+    this.offenders.set(snapshot.offenders);
   }
 
   setFilter(filter: RosterFilter): void {

@@ -4,6 +4,9 @@ const NOW = Date.parse('2026-08-26T12:00:00.000Z');
 
 function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow {
   return {
+    pull_id: 'pull-1',
+    boss_id: 'boss-1',
+    difficulty: 'Mythic',
     player_name: 'Raider',
     closed_at: new Date(NOW).toISOString(),
     had_avoidable_damage: false,
@@ -34,7 +37,10 @@ function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow 
 
 describe('computeReliabilityBreakdown defensiva', () => {
   it('valora un defensivo usado durante el try aunque no haya muerte', () => {
-    const result = computeReliabilityBreakdown([row({ used_defensive_in_pull: true, defensive_use_opportunity: true })], NOW);
+    const result = computeReliabilityBreakdown(
+      [row({ used_defensive_in_pull: true, defensive_use_opportunity: true })],
+      NOW,
+    );
     expect(result?.breakdown.defensiva).toBe(100);
   });
 
@@ -44,9 +50,16 @@ describe('computeReliabilityBreakdown defensiva', () => {
   });
 
   it('pondera la respuesta al morir el doble que el uso general del try', () => {
-    const result = computeReliabilityBreakdown([
-      row({ used_defensive_when_died: false, used_defensive_in_pull: true, defensive_use_opportunity: true }),
-    ], NOW);
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          used_defensive_when_died: false,
+          used_defensive_in_pull: true,
+          defensive_use_opportunity: true,
+        }),
+      ],
+      NOW,
+    );
     expect(result?.breakdown.defensiva).toBeCloseTo(100 / 3, 5);
   });
 
@@ -81,8 +94,14 @@ describe('computeReliabilityBreakdown mecánica graduada', () => {
   });
 
   it('sin la columna todavía (null), cae al binario had_avoidable_damage/self_positioning_death de siempre', () => {
-    const clean = computeReliabilityBreakdown([row({ personal_mechanic_fail_count: null, had_avoidable_damage: false })], NOW);
-    const dirty = computeReliabilityBreakdown([row({ personal_mechanic_fail_count: null, had_avoidable_damage: true })], NOW);
+    const clean = computeReliabilityBreakdown(
+      [row({ personal_mechanic_fail_count: null, had_avoidable_damage: false })],
+      NOW,
+    );
+    const dirty = computeReliabilityBreakdown(
+      [row({ personal_mechanic_fail_count: null, had_avoidable_damage: true })],
+      NOW,
+    );
     expect(clean?.breakdown.mecanica).toBe(100);
     expect(dirty?.breakdown.mecanica).toBe(0);
   });
@@ -94,37 +113,115 @@ describe('computeReliabilityBreakdown mecánica graduada', () => {
 // siguiente" (feedback real, 2026-08-27).
 describe('computeReliabilityBreakdown preparación — primer pull de la noche', () => {
   it('un loot sin encantar a mitad de noche no penaliza si el primer pull ya iba preparado', () => {
-    const result = computeReliabilityBreakdown([
-      row({ report_code: 'REPORT1', pull_number: 1, enchanted_slot_count: 7, enchantable_slot_count: 7, gemmed_slot_count: 3, gemmable_slot_count: 3 }),
-      // Pull #5: se equipó una pieza nueva a mitad de noche, todavía sin encantar/engemar — no debe contar.
-      row({ report_code: 'REPORT1', pull_number: 5, enchanted_slot_count: 6, enchantable_slot_count: 7, gemmed_slot_count: 2, gemmable_slot_count: 3 }),
-    ], NOW);
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          report_code: 'REPORT1',
+          pull_number: 1,
+          enchanted_slot_count: 7,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 3,
+          gemmable_slot_count: 3,
+        }),
+        // Pull #5: se equipó una pieza nueva a mitad de noche, todavía sin encantar/engemar — no debe contar.
+        row({
+          report_code: 'REPORT1',
+          pull_number: 5,
+          enchanted_slot_count: 6,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 2,
+          gemmable_slot_count: 3,
+        }),
+      ],
+      NOW,
+    );
     expect(result?.breakdown.preparacion).toBe(100);
   });
 
   it('sí penaliza si el PRIMER pull de la noche ya iba desencantado', () => {
-    const result = computeReliabilityBreakdown([
-      row({ report_code: 'REPORT1', pull_number: 1, enchanted_slot_count: 5, enchantable_slot_count: 7, gemmed_slot_count: 2, gemmable_slot_count: 3 }),
-      row({ report_code: 'REPORT1', pull_number: 5, enchanted_slot_count: 7, enchantable_slot_count: 7, gemmed_slot_count: 3, gemmable_slot_count: 3 }),
-    ], NOW);
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          report_code: 'REPORT1',
+          pull_number: 1,
+          enchanted_slot_count: 5,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 2,
+          gemmable_slot_count: 3,
+        }),
+        row({
+          report_code: 'REPORT1',
+          pull_number: 5,
+          enchanted_slot_count: 7,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 3,
+          gemmable_slot_count: 3,
+        }),
+      ],
+      NOW,
+    );
     expect(result?.breakdown.preparacion).toBeLessThan(100);
   });
 
   it('cada noche (report_code) cuenta su propio primer pull, no solo el de la ventana entera', () => {
-    const result = computeReliabilityBreakdown([
-      row({ report_code: 'NIGHT1', pull_number: 1, enchanted_slot_count: 7, enchantable_slot_count: 7, gemmed_slot_count: 3, gemmable_slot_count: 3 }),
-      row({ report_code: 'NIGHT1', pull_number: 2, enchanted_slot_count: 0, enchantable_slot_count: 7, gemmed_slot_count: 0, gemmable_slot_count: 3 }),
-      row({ report_code: 'NIGHT2', pull_number: 1, enchanted_slot_count: 7, enchantable_slot_count: 7, gemmed_slot_count: 3, gemmable_slot_count: 3 }),
-      row({ report_code: 'NIGHT2', pull_number: 2, enchanted_slot_count: 0, enchantable_slot_count: 7, gemmed_slot_count: 0, gemmable_slot_count: 3 }),
-    ], NOW);
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          report_code: 'NIGHT1',
+          pull_number: 1,
+          enchanted_slot_count: 7,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 3,
+          gemmable_slot_count: 3,
+        }),
+        row({
+          report_code: 'NIGHT1',
+          pull_number: 2,
+          enchanted_slot_count: 0,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 0,
+          gemmable_slot_count: 3,
+        }),
+        row({
+          report_code: 'NIGHT2',
+          pull_number: 1,
+          enchanted_slot_count: 7,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 3,
+          gemmable_slot_count: 3,
+        }),
+        row({
+          report_code: 'NIGHT2',
+          pull_number: 2,
+          enchanted_slot_count: 0,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 0,
+          gemmable_slot_count: 3,
+        }),
+      ],
+      NOW,
+    );
     expect(result?.breakdown.preparacion).toBe(100);
   });
 
   it('sin report_code/pull_number todavía (fallback), trata cualquier fila como la primera — comportamiento previo', () => {
-    const result = computeReliabilityBreakdown([
-      row({ enchanted_slot_count: 7, enchantable_slot_count: 7, gemmed_slot_count: 3, gemmable_slot_count: 3 }),
-      row({ enchanted_slot_count: 0, enchantable_slot_count: 7, gemmed_slot_count: 0, gemmable_slot_count: 3 }),
-    ], NOW);
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          enchanted_slot_count: 7,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 3,
+          gemmable_slot_count: 3,
+        }),
+        row({
+          enchanted_slot_count: 0,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 0,
+          gemmable_slot_count: 3,
+        }),
+      ],
+      NOW,
+    );
     expect(result?.breakdown.preparacion).toBeLessThan(100);
     expect(result?.breakdown.preparacion).toBeGreaterThan(0);
   });
@@ -132,20 +229,41 @@ describe('computeReliabilityBreakdown preparación — primer pull de la noche',
 
 describe('computeReliabilityBreakdown preparación y consistencia', () => {
   it('puntúa conjuntamente enchants y slots de gema elegibles', () => {
-    const result = computeReliabilityBreakdown([
-      row({ enchanted_slot_count: 7, enchantable_slot_count: 7, gemmed_slot_count: 3, gemmable_slot_count: 3 }),
-    ], NOW);
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          enchanted_slot_count: 7,
+          enchantable_slot_count: 7,
+          gemmed_slot_count: 3,
+          gemmable_slot_count: 3,
+        }),
+      ],
+      NOW,
+    );
     expect(result?.breakdown.preparacion).toBe(100);
   });
 
   it('penaliza los altibajos frente a una ejecución estable con la misma muestra', () => {
-    const stable = computeReliabilityBreakdown(Array.from({ length: 6 }, () => row()), NOW);
-    const alternating = computeReliabilityBreakdown(Array.from({ length: 6 }, (_, index) => row({ had_avoidable_damage: index % 2 === 0 })), NOW);
+    const stable = computeReliabilityBreakdown(
+      Array.from({ length: 6 }, () => row()),
+      NOW,
+    );
+    const alternating = computeReliabilityBreakdown(
+      Array.from({ length: 6 }, (_, index) => row({ had_avoidable_damage: index % 2 === 0 })),
+      NOW,
+    );
     expect(stable?.consistency?.score).toBe(100);
-    expect(alternating?.consistency?.score).toBeLessThan(alternating?.consistency?.averageExecution ?? 0);
+    expect(alternating?.consistency?.score).toBeLessThan(
+      alternating?.consistency?.averageExecution ?? 0,
+    );
   });
 
   it('no publica consistencia con menos de cinco pulls', () => {
-    expect(computeReliabilityBreakdown(Array.from({ length: 4 }, () => row()), NOW)?.consistency).toBeNull();
+    expect(
+      computeReliabilityBreakdown(
+        Array.from({ length: 4 }, () => row()),
+        NOW,
+      )?.consistency,
+    ).toBeNull();
   });
 });

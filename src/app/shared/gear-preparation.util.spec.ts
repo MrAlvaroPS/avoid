@@ -1,4 +1,4 @@
-import { gearPreparationCounts } from './gear-preparation.util';
+import { gearPreparationCounts, gearPreparationDetails } from './gear-preparation.util';
 import type { WclGearItem } from './models/domain';
 
 function item(permanentEnchant?: number, gems: unknown[] = []): WclGearItem {
@@ -30,5 +30,14 @@ describe('gearPreparationCounts', () => {
     items[8] = item(123);
     items[14] = item(123);
     expect(gearPreparationCounts(items).enchantedSlotCount).toBe(0);
+  });
+
+  it('conserva los nombres de los slots exactos que hay que corregir', () => {
+    const items = Array.from({ length: 17 }, () => item(123, [{ id: 1 }]));
+    items[4] = item();
+    items[10] = item(123);
+    const details = gearPreparationDetails(items);
+    expect(details.missingEnchantSlots).toContain('Pecho');
+    expect(details.missingGemSlots).toContain('Anillo 1');
   });
 });

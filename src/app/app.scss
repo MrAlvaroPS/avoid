@@ -93,3 +93,30 @@
 main {
   flex: 1;
 }
+
+@media (max-width: 700px) {
+  .top-nav {
+    gap: 8px;
+    height: 50px;
+    padding-inline: 10px;
+  }
+
+  .brand-name,
+  .header-progress-group {
+    display: none;
+  }
+
+  .nav-tabs {
+    flex: 1;
+    justify-content: space-between;
+
+    a {
+      padding: 6px 9px;
+      font-size: 11px;
+    }
+  }
+
+  .nav-spacer {
+    display: none;
+  }
+}
