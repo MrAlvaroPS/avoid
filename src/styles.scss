@@ -14,7 +14,15 @@
 
   --text: #f4f0f7;
   --text-muted: #aaa1b4;
-  --text-faint: #746c7d;
+  // §"quizá podemos contrastar un poco más la pantalla... para que se lea
+  // mejor" (feedback real, 2026-08-28): #746c7d (el tono anterior) daba
+  // 3.98:1 sobre --bg y solo 3.59:1 sobre --surface-2 — por debajo de las
+  // 4.5:1 que exige WCAG AA para texto pequeño (fórmula de luminancia
+  // relativa, calculado a mano; es el color de casi toda la metadata en
+  // letra diminuta: timestamps, sub-labels de pills, notas). Mismo matiz
+  // lavanda apagado, solo más claro — 5.41:1 sobre --bg, 4.88:1 sobre
+  // --surface-2, sigue quedando claramente por debajo de --text-muted.
+  --text-faint: #8a8293;
 
   --border: #ba91ce29; // "line"
   --border-bright: #ba91ce52; // "line-bright"
@@ -55,7 +63,11 @@
   // del todo). Sombra sutil + borde de 1px es lo que separa un "dashboard de
   // verdad" de cajas apiladas: casi todos los paneles de referencia que
   // pasó el usuario usan esta combinación (Geckoboard, Plecto, Bsinx...).
-  --card-border: rgba(186, 145, 206, 0.1);
+  // Subido de 0.1 a 0.16 (feedback real, 2026-08-28: "contrastar un poco
+  // más... para que se lea mejor") — mismo tono que --border, ya no un
+  // tercer nivel de opacidad casi invisible solo para bordes de card; los
+  // cantos de las tarjetas se distinguen del fondo sin cambiar el matiz.
+  --card-border: rgba(186, 145, 206, 0.16);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.55);
   --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.45), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
   --shadow-inset-top: inset 0 1px 0 rgba(255, 255, 255, 0.04);

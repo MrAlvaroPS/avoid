@@ -71,56 +71,33 @@
   font-weight: 600;
 }
 
+// §"la misma info repetida 3 veces" (feedback real, 2026-08-28): ahora es el
+// ÚNICO indicador de "vs. el intento anterior" en la cabecera (los deltas
+// numéricos crudos viven en las metric-cards) — pasa de texto de color suelto
+// (fácil de que se pierda el ojo) a una píldora, mismo lenguaje visual que
+// .result/.difficulty-badge.
 .comparison-verdict {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--neutral-soft);
+  color: var(--text-muted);
   font-size: 11px;
   font-weight: 700;
-  color: var(--text-faint);
 
   &.tone-improved {
+    background: var(--success-soft);
     color: var(--success);
   }
   &.tone-regressed {
+    background: var(--danger-soft);
     color: var(--danger);
   }
   &.tone-mixed {
+    background: var(--warning-soft);
     color: var(--warning);
   }
-}
-
-.comparison-deltas {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px 10px;
-  max-width: 460px;
-  color: var(--text-faint);
-  font-size: 10.5px;
-
-  .good {
-    color: var(--success);
-  }
-  .bad {
-    color: var(--danger);
-  }
-}
-
-.pacing {
-  display: block;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-faint);
-  cursor: help;
-
-  &.tone-success {
-    color: var(--success);
-  }
-  &.tone-warning {
-    color: var(--warning);
-  }
-}
-
-.pacing-median {
-  font-size: 10px;
-  opacity: 0.85;
 }
 
 .result {

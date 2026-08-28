@@ -6,16 +6,32 @@
        centralizados" (feedback real): dos manifiestos independientes bajo
        una sola cabecera de página — cada uno con su propia navegación
        interna (bosses / clases), sin compartir estado entre sí. -->
-  <div class="ajustes-tabs" role="tablist" aria-label="Secciones de Ajustes">
-    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'mecanicas'" [class.selected]="activeTab() === 'mecanicas'" (click)="activeTab.set('mecanicas')">
-      Mecánicas de bosses
-    </button>
-    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'defensivos'" [class.selected]="activeTab() === 'defensivos'" (click)="activeTab.set('defensivos')">
-      Defensivos
-    </button>
-    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'discord'" [class.selected]="activeTab() === 'discord'" (click)="activeTab.set('discord')">
-      Discord
-    </button>
+  <div class="ajustes-subheader">
+    <div class="ajustes-tabs" role="tablist" aria-label="Secciones de Ajustes">
+      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'mecanicas'" [class.selected]="activeTab() === 'mecanicas'" (click)="activeTab.set('mecanicas')">
+        Mecánicas de bosses
+      </button>
+      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'defensivos'" [class.selected]="activeTab() === 'defensivos'" (click)="activeTab.set('defensivos')">
+        Defensivos
+      </button>
+      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'discord'" [class.selected]="activeTab() === 'discord'" (click)="activeTab.set('discord')">
+        Discord
+      </button>
+    </div>
+
+    <!-- §"arriba del todo en la subcabecera un botón de sincronizar para
+         traer los datos de wowaudit actualizados" (feedback real,
+         2026-08-28): visible en las 3 pestañas a propósito — wowaudit_roster
+         no es solo de Discord (rol/rango de fiabilidad y Roster también lo
+         leen). Confirmado en real que no había NADA disparándolo automático
+         (ni botón, ni cron) desde que se sembró la tabla una vez a mano. -->
+    <div class="roster-sync-action">
+      <button type="button" class="sync-btn" [disabled]="syncingRoster()" (click)="onSyncRoster()" title="Trae rango (Main/Trial), rol y asistencia frescos de WoWAudit. No edita wowaudit — solo lee de ahí.">
+        {{ syncingRoster() ? 'Sincronizando…' : 'Sincronizar roster (WoWAudit)' }}
+      </button>
+      @if (rosterSyncResult(); as r) { <span class="roster-sync-ok">{{ r }}</span> }
+      @if (rosterSyncError(); as e) { <span class="roster-sync-error">{{ e }}</span> }
+    </div>
   </div>
 
   @if (activeTab() === 'defensivos') {

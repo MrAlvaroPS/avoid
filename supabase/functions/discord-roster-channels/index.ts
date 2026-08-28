@@ -306,6 +306,43 @@ async function handleRemoveLink(env: Env, supabase: any, params: { characterId?:
   return jsonResponse({ ok: true });
 }
 
+// §"junto a la creación de ese canal IRIS mande un mensaje..." (feedback
+// real, 2026-08-28): validado con el usuario turno a turno antes de tocar
+// código (contenido exacto + placeholders) — solo se manda al CREAR un
+// canal de verdad, nunca en un PATCH de uno ya existente (needsCreate=false
+// no pasa por aquí), para no reenviarlo en cada "Sincronizar".
+function welcomeMessageFor(characterName: string, discordUserId: string): string {
+  return [
+    `👋 <@${discordUserId}> — te damos la bienvenida a tu canal de coaching, **${characterName}**.`,
+    '',
+    'Este espacio es para hacer seguimiento cercano de tu progresión como raider:',
+    '',
+    '🧩 **Mejora de personaje** — talentos, gear, consumibles',
+    '🛡️ **Uso de defensivos**',
+    '🎯 **Ejecución de mecánicas**',
+    '',
+    'Para mantener el estatus de raider y aspirar al **CE**, el estudio y análisis constante de mecánicas y rotación no es un extra — es parte del oficio.',
+    '',
+    '🔒 Aquí solo estáis tú y los oficiales. Es un espacio privado para la mejora constante: cualquier cosa concreta sobre tu juego la hablaremos por aquí, para que todos estemos al tanto sin mezclarlo con el canal general.',
+    '',
+    '¡Vamos a por ello! 💪',
+  ].join('\n');
+}
+
+// Best-effort a propósito: el canal YA existe en Discord y YA se guardó en
+// BD en cuanto esta función se llama — que falle el mensaje de bienvenida
+// (network, rate limit puntual…) no debe tumbar el resto del sync ni dejar
+// el canal a medio crear. El fallo se reporta igual (ver skippedNoDiscordMember
+// en la llamada) para que no se pierda en silencio.
+async function sendWelcomeMessage(env: Env, channelId: string, characterName: string, discordUserId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const res = await discordFetch(env, `/channels/${channelId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content: welcomeMessageFor(characterName, discordUserId) }),
+  });
+  if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+  return { ok: true };
+}
+
 function permissionOverwrites(env: Env, officersRoleId: string, discordUserId: string) {
   return [
     { id: env.guildId, type: 0, deny: PERM_VIEW_CHANNEL.toString() }, // @everyone
@@ -485,6 +522,8 @@ async function handleSync(env: Env, supabase: any): Promise<Response> {
           }
           const createdChannel = (await createRes.json()) as DiscordChannel;
           created.push(ownerName);
+          const welcome = await sendWelcomeMessage(env, createdChannel.id, ownerName, discordUserId);
+          if (!welcome.ok) skippedNoDiscordMember.push(`${ownerName} (canal creado, pero falló el mensaje de bienvenida: ${welcome.error})`);
           upserts.push({
             character_id: link.character_id,
             character_name: currentName,

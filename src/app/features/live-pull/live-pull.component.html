@@ -13,7 +13,6 @@
       [bossHpRemainingPct]="d.header.bossHpRemainingPct"
       [result]="d.header.result"
       [attemptComparison]="d.attemptComparison"
-      [referencePacing]="d.header.referencePacing"
       [phaseLabel]="d.header.phaseLabel"
     />
 
@@ -50,6 +49,7 @@
       [callouts]="d.callouts"
       [mechanicFails]="d.mechanicFails"
       [incidentSummary]="d.incidentSummary"
+      [result]="d.header.result"
       (provenanceRequested)="activeProvenance.set($event)"
     />
 
@@ -59,7 +59,13 @@
           <span class="widget-kicker">Verificación</span>
           <h2 id="detail-heading">Diagnóstico detallado</h2>
         </div>
-        <span>Se mantiene cerrado para no competir con las decisiones del siguiente pull.</span>
+        <span>
+          @if (d.header.result === 'kill') {
+            Se mantiene cerrado para no distraer del resultado — el detalle sigue aquí cuando lo quieras.
+          } @else {
+            Se mantiene cerrado para no competir con las decisiones del siguiente pull.
+          }
+        </span>
       </div>
       <div class="detail-tabs" role="tablist" aria-label="Diagnóstico detallado del pull">
         <button type="button" [class.active]="detailPanel() === 'ai'" [attr.aria-expanded]="detailPanel() === 'ai'" (click)="toggleDetailPanel('ai')">Análisis IA</button>

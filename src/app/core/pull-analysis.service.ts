@@ -281,6 +281,7 @@ export class PullAnalysisService {
     const incidentSummary = summarizeExecutionIncidents(
       evaluatedMechEvents,
       deathAttribution.uncoveredFailedMechanicCount,
+      notesByMechanicName,
     );
     let previousIncidentSummary: ExecutionIncidentSummary | null = null;
     if (previousPull) {
@@ -303,6 +304,7 @@ export class PullAnalysisService {
       comparisonPriorPulls,
       priorRecordsByPullId,
       mechanicFailurePatterns,
+      referencePacing,
     );
     const { chips: timeline, background: backgroundMechanics } = buildTimeline(pull, records, mechEvents, hasManifest, deathAttribution.coveredRecordIds);
     const callouts = buildCallouts(pull, records, previousPull, previousRecords, comparisonPriorPulls, priorRecordsByPullId, notesByMechanicName);
@@ -688,24 +690,49 @@ function buildMetrics(
   priorPulls: PullRow[],
   priorRecordsByPullId: Map<string, PlayerPullRecordRow[]>,
   mechanicFailurePatterns: MechanicFailurePattern[],
+  referencePacing: ReferencePacing | null,
 ): MetricCardData[] {
   const deaths = records.filter((r) => r.died && !isExcludedStatisticalDeath(pull, r)).length;
 
-  const hpCard: MetricCardData = {
-    label: 'HP del boss restante',
-    value: formatPct(pull.wipe_pct ?? 0),
-    delta:
-      previousPull && previousPull.wipe_pct != null && pull.wipe_pct != null
-        ? lowerIsBetterDelta(pull.wipe_pct, previousPull.wipe_pct, 'pp', 1)
-        : null,
-    provenance: { source: 'pulls.wipe_pct', method: '% de vida del boss al morir el raid (0 si fue kill), directo de WCL.' },
-    icon: '🛡️',
-    iconTone: 'accent',
-    // El gauge lee "progreso", no "HP restante" — 0% de HP restante es el
-    // MEJOR resultado posible (kill), así que se invierte para que el
-    // círculo se llene de verdad cuando el intento va bien.
-    gaugeValue: 100 - (pull.wipe_pct ?? 100),
-  };
+  // §"la card de 'HP del boss restante' en un kill enseña 0%... mensaje
+  // contradictorio con el aro del gauge, que sí se llena en verde" (feedback
+  // real, 2026-08-28): 0% de HP restante es SIEMPRE el valor en un kill —
+  // no compara nada, no informa nada, y como número grande en cabecera lee
+  // como "vacío/mal" pese a ser el mejor resultado posible. En un kill la
+  // tarjeta pasa a confirmar el resultado y, si ya hay referencia pública
+  // (boss_reference_stats), el ritmo contra la mediana — dato que antes
+  // solo vivía 3 clics más adentro (pestaña "Datos y benchmarks") y aquí
+  // hace de verdadera comparación "a quién dirigir la próxima vez".
+  const isKill = pull.wipe_pct === 0;
+  const hpCard: MetricCardData = isKill
+    ? {
+        label: 'Resultado',
+        value: 'Kill',
+        delta: referencePacing ? { label: referencePacing.label, tone: referencePacing.tone } : null,
+        provenance: {
+          source: 'pulls.wipe_pct',
+          method: 'wipe_pct=0 → el boss murió antes que el raid.',
+          detail: referencePacing ? `Ritmo: ${referencePacing.label}.` : 'Sin referencia pública de ritmo todavía para este boss+dificultad.',
+        },
+        icon: '🏆',
+        iconTone: 'gold',
+        gaugeValue: 100,
+      }
+    : {
+        label: 'HP del boss restante',
+        value: formatPct(pull.wipe_pct ?? 0),
+        delta:
+          previousPull && previousPull.wipe_pct != null && pull.wipe_pct != null
+            ? lowerIsBetterDelta(pull.wipe_pct, previousPull.wipe_pct, 'pp', 1)
+            : null,
+        provenance: { source: 'pulls.wipe_pct', method: '% de vida del boss al morir el raid, directo de WCL.' },
+        icon: '🛡️',
+        iconTone: 'accent',
+        // El gauge lee "progreso", no "HP restante" — 0% de HP restante es el
+        // MEJOR resultado posible (kill), así que se invierte para que el
+        // círculo se llene de verdad cuando el intento va bien.
+        gaugeValue: 100 - (pull.wipe_pct ?? 100),
+      };
 
   const deathsCard: MetricCardData = {
     label: 'Muertes',

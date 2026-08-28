@@ -31,6 +31,22 @@ describe('pull consistency', () => {
     ).toBe(summary.totalEvents);
   });
 
+  it('propaga ability_id y nota al desglose, para el tooltip de "Llamada colectiva"', () => {
+    const summary = summarizeExecutionIncidents(
+      [
+        { mechanic_name: 'Raid Pulse', outcome: 'fail', category: 'raid-damage', ability_id: 12345 },
+        { mechanic_name: 'Sin manifiesto', outcome: 'fail', category: 'tankbuster' },
+      ],
+      0,
+      new Map([['Raid Pulse', 'Sal del área marcada en el suelo.']]),
+    );
+
+    expect(summary.groupBreakdown).toEqual([
+      { label: 'Raid Pulse', count: 1, wowheadSpellId: 12345, notes: 'Sal del área marcada en el suelo.' },
+      { label: 'Sin manifiesto', count: 1, wowheadSpellId: null, notes: null },
+    ]);
+  });
+
   it('numera solo intentos válidos y conserva el ninja pull como excluido', () => {
     const pulls = [
       { id: 'one', ninja_pull_excluded: false },

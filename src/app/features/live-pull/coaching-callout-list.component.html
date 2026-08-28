@@ -1,9 +1,15 @@
 <section class="callouts" aria-labelledby="callouts-heading">
   <div class="panel-head">
     <div>
-      <span class="eyebrow">Decisión</span>
-      <h2 id="callouts-heading" class="heading">Para el siguiente pull</h2>
-      <p class="heading-copy">Primero la acción; abre cualquier registro para comprobar el dato.</p>
+      @if (isKillPull()) {
+        <span class="eyebrow">Kill · aun así</span>
+        <h2 id="callouts-heading" class="heading">Qué no perder de vista</h2>
+        <p class="heading-copy">El boss cayó igual; esto es lo que casi cuesta caro — útil para Heroic/Mythic o si cambia el roster.</p>
+      } @else {
+        <span class="eyebrow">Decisión</span>
+        <h2 id="callouts-heading" class="heading">Para el siguiente pull</h2>
+        <p class="heading-copy">Primero la acción; abre cualquier registro para comprobar el dato.</p>
+      }
     </div>
     <div class="incident-total" title="Una instancia temporal cuenta una vez, aunque alcance a varios jugadores.">
       <strong class="tabular">{{ incidentSummary().totalEvents }}</strong>
@@ -21,9 +27,17 @@
   @if (incidentSummary().groupBreakdown.length) {
     <div class="collective-callout">
       <span class="collective-label">Llamada colectiva</span>
-      <span>
+      <span class="collective-items">
         @for (item of incidentSummary().groupBreakdown.slice(0, 3); track item.label; let last = $last) {
-          {{ item.label }} ×{{ item.count }}{{ last ? '' : ' · ' }}
+          <span class="collective-item">
+            @if (item.wowheadSpellId) {
+              <app-wowhead-link type="spell" [id]="item.wowheadSpellId">{{ item.label }}</app-wowhead-link>
+            } @else {
+              {{ item.label }}
+            }
+            <span class="tabular">×{{ item.count }}</span>
+            <app-mechanic-info-icon [note]="item.notes" />
+          </span>@if (!last) { <span class="collective-sep">·</span> }
         }
       </span>
     </div>

@@ -17,6 +17,37 @@ h1 {
   margin: 0 0 20px;
 }
 
+// §"arriba del todo en la subcabecera un botón de sincronizar" (feedback
+// real, 2026-08-28): fila superior de la página — pestañas a la izquierda,
+// acción de roster a la derecha, visible pase lo que pase la pestaña activa.
+.ajustes-subheader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.roster-sync-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding-bottom: 10px;
+}
+
+.roster-sync-ok {
+  font-size: 11.5px;
+  color: var(--success);
+}
+
+.roster-sync-error {
+  font-size: 11.5px;
+  color: var(--danger);
+}
+
 // §"pestañas, una mecánicas de bosses... otra defensivos" (feedback real):
 // mismo tratamiento visual que .difficulty-tabs (más abajo), a propósito —
 // es el mismo patrón de pestaña en toda la pantalla de Ajustes, solo que
@@ -24,8 +55,6 @@ h1 {
 .ajustes-tabs {
   display: flex;
   gap: 6px;
-  margin-bottom: 18px;
-  border-bottom: 1px solid var(--card-border);
 
   button {
     padding: 8px 16px;

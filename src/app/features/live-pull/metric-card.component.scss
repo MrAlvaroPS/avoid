@@ -13,6 +13,11 @@
 .metric-card {
   display: flex;
   flex-direction: column;
+  // space-between: cuando la card se estira más alta que su contenido
+  // natural (para igualar la fila con el widget de tendencia), el hueco
+  // extra se reparte entre la cabecera y el valor en vez de acumularse
+  // como espacio muerto debajo de todo.
+  justify-content: space-between;
   gap: 10px;
   width: 100%;
   height: 100%;

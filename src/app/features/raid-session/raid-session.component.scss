@@ -13,14 +13,29 @@
   z-index: 8;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 0;
   pointer-events: none;
 
   > * { pointer-events: auto; }
+
+  // §"cards descuadradas" (feedback real, 2026-08-28): report-context y
+  // pull-picker eran dos tarjetas flotantes separadas por un hueco — mismo
+  // fondo/borde/sombra cada una, así que se leían como "dos cajas" en vez de
+  // "un bloque de contexto". Ahora el fondo vive en el contenedor y las
+  // secciones de dentro son transparentes con un divisor fino entre ellas
+  // (ver .pull-picker más abajo) — un único bloque, no una pila de cajas.
+  // Guardado tras &.has-context: sin report cargado este div no envuelve
+  // nada (el import-panel vive fuera) — sin la guarda sería una caja
+  // fantasma con sombra y sin contenido.
+  &.has-context {
+    background: linear-gradient(180deg, rgba(25, 20, 36, 0.98) 0%, rgba(18, 16, 28, 0.98) 100%);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card), var(--shadow-inset-top);
+    backdrop-filter: blur(14px);
+  }
 }
 
-.report-context,
-.pull-picker,
 .import-panel,
 .recent-picker,
 .night-review {
@@ -73,10 +88,14 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  // §"el hash del report como subtítulo es puro ruido" (feedback real,
+  // 2026-08-28): el código de WCL ya no se lee en línea — sigue accesible
+  // al pasar el ratón (title) para copiarlo/depurar, sin competir por
+  // atención con el título en la primera lectura.
+  cursor: help;
 
   strong { overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
   span { overflow: hidden; color: var(--text-faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
-  code { font-size: inherit; }
 }
 
 .sync-status { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
@@ -186,21 +205,47 @@
   flex-direction: column;
   gap: 7px;
   padding: 8px 10px;
+  // Divisor entre report-context y pull-picker ahora que comparten un único
+  // fondo (ver .sticky-raid-context.has-context) — mismo patrón que ya usa
+  // .night-summary dentro de .night-review.
+  border-top: 1px solid var(--card-border);
 }
 
-.boss-pill-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.boss-pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+// §"la parte que lista los bosses es un poco confusa" (feedback real,
+// 2026-08-28): antes las 8 píldoras eran visualmente idénticas salvo por
+// texto diminuto ("1 kill" vs "mejor 45%") — había que LEER cada una para
+// saber en qué punto estaba. Dos cambios: (1) el canto inferior codifica
+// abatido/en curso en color, legible de un vistazo, mismo lenguaje que ya
+// usan los pull-chips de abajo (verde kill / ámbar en curso) en vez de un
+// código nuevo; (2) la píldora ACTIVA pasa de un tinte casi igual al resto
+// (--accent-soft al 16%, sobre un fondo ya violeta) a fondo sólido — "cuál
+// estoy mirando" ahora no requiere leer texto.
 .boss-pill {
   display: flex;
   align-items: baseline;
   gap: 5px;
   padding: 4px 8px;
-  border: 1px solid transparent;
+  border: 1px solid var(--card-border);
+  border-bottom: 2px solid var(--text-faint);
   border-radius: 999px;
   background: var(--surface-2);
   color: inherit;
   cursor: pointer;
+
   &:hover { background: var(--surface-hover); }
-  &.active { border-color: var(--border-bright); background: var(--accent-soft); }
+  &.pill-killed { border-bottom-color: var(--chart-positive); }
+  &.pill-pending { border-bottom-color: var(--warning); }
+
+  &.active {
+    border-color: var(--border-bright);
+    background: linear-gradient(135deg, var(--accent-solid), var(--accent-deep));
+
+    .boss-pill-name { color: #fff; }
+    .boss-pill-diff { background: rgba(255, 255, 255, 0.22); color: #fff; }
+    .boss-pill-summary { color: rgba(255, 255, 255, 0.78); }
+  }
 }
 .boss-pill-name { color: var(--text); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
 .boss-pill-diff { padding: 1px 4px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 8.5px; font-weight: 700; text-transform: uppercase; }

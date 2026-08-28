@@ -23,12 +23,12 @@
       <span class="attempt-number tabular">Técnico · raw #{{ rawPullNumber() }}</span>
     }
     @if (attemptComparison(); as comparison) {
+      <!-- §"la misma info repetida 3 veces antes de llegar a nada nuevo" (feedback
+           real, 2026-08-28): antes esta línea repetía en números crudos justo lo
+           que las metric-cards de abajo (HP/Muertes/Incidentes) ya enseñan con más
+           contexto (icono, color, "vs. el anterior") — el header se queda solo con
+           el veredicto en una palabra; el detalle vive una vez, no dos. -->
       <span class="comparison-verdict" [class]="'tone-' + comparison.verdict">{{ comparisonLabel() }}</span>
-      <span class="comparison-deltas tabular" title="Cada delta conserva su unidad; no es un score compuesto.">
-        <span [class.good]="comparison.progressDeltaPp > 0" [class.bad]="comparison.progressDeltaPp < 0">{{ signed(comparison.progressDeltaPp, ' pp progreso') }}</span>
-        <span [class.good]="comparison.deathsDelta < 0" [class.bad]="comparison.deathsDelta > 0">{{ signed(comparison.deathsDelta, comparison.deathsDelta === 1 || comparison.deathsDelta === -1 ? ' muerte' : ' muertes') }}</span>
-        <span [class.good]="comparison.incidentsDelta < 0" [class.bad]="comparison.incidentsDelta > 0">{{ signed(comparison.incidentsDelta, comparison.incidentsDelta === 1 || comparison.incidentsDelta === -1 ? ' incidente' : ' incidentes') }}</span>
-      </span>
     }
   </div>
 

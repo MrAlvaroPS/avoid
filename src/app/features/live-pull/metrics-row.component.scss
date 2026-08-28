@@ -1,5 +1,19 @@
+// §"las cards de HP del boss no tienen la misma altura que el progreso entre
+// intentos y queda un hueco raro" (feedback real, 2026-08-28): mismo bug que
+// ya se arregló una capa más abajo entre metric-card y su :host (ver el
+// comentario en metric-card.component.scss) — .overview-grid (live-pull)
+// estira este HOST a la altura de la fila (align-items:stretch contra el
+// widget de tendencia, normalmente más alto por su cabecera+gráfica), pero
+// sin height:100% aquí ese alto extra se quedaba vacío DEBAJO de las
+// cards en vez de repartirse entre ellas — de ahí el hueco.
+:host {
+  display: block;
+  height: 100%;
+}
+
 .metrics-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
   gap: 12px;
+  height: 100%;
 }

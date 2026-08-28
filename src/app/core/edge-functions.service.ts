@@ -286,6 +286,18 @@ export class EdgeFunctionsService {
     return this.invoke<SyncReportsResult>('sync-reports', params);
   }
 
+  // §"un botón de sincronizar para traer los datos de wowaudit actualizados"
+  // (feedback real, 2026-08-28): wowaudit_roster (rango Main/Trial, rol,
+  // asistencia — de donde sale la tabla de Ajustes→Discord y buena parte de
+  // fiabilidad) se pobló UNA vez a mano al construir la función y nunca más
+  // — comprobado empíricamente: las 30 filas compartían el mismo synced_at
+  // de hace 5 días. Sin botón, un ascenso Trial→Main hecho en wowaudit no
+  // llega a esta app hasta el próximo log importado (analyze-report no
+  // toca esta tabla) o hasta que alguien lo dispare a mano por API.
+  async syncWowauditRoster(): Promise<{ ok: true; charactersSynced: number }> {
+    return this.invoke('sync-wowaudit-roster', {});
+  }
+
   /** §9.1: siembra known_raid_bosses (+ boss_reference_stats) para TODA la instancia de una vez, aunque la guild no haya pulleado la mitad de los bosses todavía. Sin zoneId usa el del report más reciente. */
   async syncSeasonBosses(zoneId?: number): Promise<{
     ok: true;

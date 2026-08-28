@@ -10,6 +10,10 @@ export const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set<MechanicCategory>([
 export interface IncidentBreakdownItem {
   label: string;
   count: number;
+  /** §"cuando habla de 'Llamada colectiva', no sale ni tooltip ni información de la habilidad" (feedback real, 2026-08-28): mismo ability_id que ya lleva pull_mechanic_events, solo faltaba propagarlo hasta aquí — null en los tests que no lo traen (dato sintético) o si el evento no tenía ability_id resoluble. */
+  wowheadSpellId: number | null;
+  /** Misma nota de boss_mechanics_candidates.ai_classification que ya se enseña en Personales/Muertes vía app-mechanic-info-icon — null si esta mecánica no vino del flujo de clasificación por IA. */
+  notes: string | null;
 }
 
 /**
@@ -32,19 +36,27 @@ type IncidentEvent = {
   mechanic_name: string;
   outcome: string;
   category: MechanicCategory | null;
+  /** Opcional: los tests de este módulo pasan eventos sintéticos sin ability_id — pull_mechanic_events real siempre lo trae. */
+  ability_id?: number;
 };
 
-function breakdown(events: IncidentEvent[]): IncidentBreakdownItem[] {
-  const counts = new Map<string, number>();
-  for (const event of events) counts.set(event.mechanic_name, (counts.get(event.mechanic_name) ?? 0) + 1);
+function breakdown(events: IncidentEvent[], notesByName?: Map<string, string>): IncidentBreakdownItem[] {
+  const counts = new Map<string, { count: number; abilityId: number | null }>();
+  for (const event of events) {
+    const entry = counts.get(event.mechanic_name);
+    if (entry) entry.count++;
+    else counts.set(event.mechanic_name, { count: 1, abilityId: event.ability_id || null });
+  }
   return [...counts.entries()]
-    .map(([label, count]) => ({ label, count }))
+    .map(([label, { count, abilityId }]) => ({ label, count, wowheadSpellId: abilityId, notes: notesByName?.get(label) ?? null }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
 export function summarizeExecutionIncidents(
   events: IncidentEvent[],
   uncoveredDeathEvents = 0,
+  /** §mismo cruce por NOMBRE que ya usa buildCallouts/buildMechanicFails en pull-analysis.service.ts (el ability_id del manifiesto casi nunca coincide con el real de WCL) — solo hace falta para el desglose que de verdad se enseña con tooltip (groupBreakdown, "Llamada colectiva"), pero se aplica a los tres por si algún consumidor futuro los enseña igual. */
+  notesByMechanicName?: Map<string, string>,
 ): ExecutionIncidentSummary {
   const failed = events.filter((event) => event.outcome !== 'clean');
   const personal = failed.filter(
@@ -61,9 +73,9 @@ export function summarizeExecutionIncidents(
     groupEvents: group.length,
     unclassifiedEvents: unclassified.length,
     uncoveredDeathEvents,
-    personalBreakdown: breakdown(personal),
-    groupBreakdown: breakdown(group),
-    unclassifiedBreakdown: breakdown(unclassified),
+    personalBreakdown: breakdown(personal, notesByMechanicName),
+    groupBreakdown: breakdown(group, notesByMechanicName),
+    unclassifiedBreakdown: breakdown(unclassified, notesByMechanicName),
   };
 }
 

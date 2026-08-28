@@ -78,6 +78,26 @@
   white-space: nowrap;
 }
 
+// §"cuando habla de 'Llamada colectiva' no sale ni tooltip ni información
+// de la habilidad" (feedback real, 2026-08-28): cada mecánica ahora es un
+// app-wowhead-link (tooltip oficial de Wowhead) + app-mechanic-info-icon
+// (nuestra nota, si la hay) — mismo patrón que ya usan las filas de
+// Personales/Muertes más abajo, no un mecanismo nuevo.
+.collective-items {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.collective-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.collective-sep {
+  margin: 0 8px;
+  color: var(--text-faint);
+}
+
 .tabs {
   display: flex;
   gap: 3px;

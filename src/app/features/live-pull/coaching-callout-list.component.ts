@@ -8,7 +8,7 @@
 // bien alineado en columnas fijas (grid, no <table>).
 import { Component, computed, effect, input, output, signal } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
-import type { CoachingCallout, MechanicFailRow, ProvenanceEntry } from '../../shared/models/ui';
+import type { CoachingCallout, MechanicFailRow, ProvenanceEntry, PullResult } from '../../shared/models/ui';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { ClassIconComponent } from '../../shared/class-icon.component';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
@@ -26,7 +26,15 @@ export class CoachingCalloutListComponent {
   callouts = input.required<CoachingCallout[]>(); // pestaña Muertes
   mechanicFails = input.required<MechanicFailRow[]>(); // pestaña Mecánicas
   incidentSummary = input.required<ExecutionIncidentSummary>();
+  // §"la parte de 'para el siguiente pull' está bastante bien, pero..."
+  // (feedback real, 2026-08-28): el encabezado hablaba de planificar el
+  // PRÓXIMO intento a este boss incluso cuando este pull YA fue el kill —
+  // no hay "siguiente pull" de este boss que planificar. El copy pasa a
+  // depender del resultado real en vez de asumir siempre wipe.
+  result = input.required<PullResult>();
   provenanceRequested = output<ProvenanceEntry>();
+
+  isKillPull = computed(() => this.result() === 'kill');
 
   activeTab = signal<'mechanics' | 'deaths'>('mechanics');
   expanded = signal(false);

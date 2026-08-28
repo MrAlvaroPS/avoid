@@ -70,6 +70,14 @@ export class ManifestComponent {
   /** "Sincronizando Heroic… (2/4)" mientras onSync recorre las 4 dificultades una a una — ver comentario en onSync. */
   syncProgress = signal<string | null>(null);
   syncingSeason = signal(false);
+  // §"arriba del todo en la subcabecera un botón de sincronizar para traer
+  // los datos de wowaudit actualizados" (feedback real, 2026-08-28): visible
+  // en las 3 pestañas de Ajustes (no solo en Discord) porque wowaudit_roster
+  // alimenta más que los canales — rol/rango de fiabilidad y Roster también
+  // leen de aquí.
+  syncingRoster = signal(false);
+  rosterSyncResult = signal<string | null>(null);
+  rosterSyncError = signal<string | null>(null);
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
   loadingCandidates = signal(false);
   savingAbilityId = signal<number | null>(null);
@@ -275,6 +283,21 @@ export class ManifestComponent {
       this.error.set(errorMessage(err));
     } finally {
       this.syncingSeason.set(false);
+    }
+  }
+
+  /** §"un botón de sincronizar para traer los datos de wowaudit actualizados": trae rango/rol/asistencia frescos de wowaudit — no edita nada aquí (esta app solo espeja wowaudit, nunca al revés), así que un ascenso hecho EN wowaudit ya se refleja tras esto; uno que solo se acordó verbalmente no. */
+  async onSyncRoster(): Promise<void> {
+    this.syncingRoster.set(true);
+    this.rosterSyncError.set(null);
+    this.rosterSyncResult.set(null);
+    try {
+      const result = await this.edgeFunctions.syncWowauditRoster();
+      this.rosterSyncResult.set(`Roster actualizado ✓ (${result.charactersSynced} personajes) — ${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`);
+    } catch (err) {
+      this.rosterSyncError.set(errorMessage(err));
+    } finally {
+      this.syncingRoster.set(false);
     }
   }
 
