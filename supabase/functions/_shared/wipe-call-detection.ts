@@ -96,11 +96,52 @@ export function detectWipeCall(input: WipeCallDetectionInput): WipeCallDetection
   // final: un pico grande a mitad podía tapar un wipe call terminal algo
   // menor y hacer que no se detectara ninguno — ese criterio se conserva,
   // solo cambia cómo se agrupan las muertes candidatas.
+  // §"pone que ha empeorado esta noche cuando la otra está casi al 80%...
+  // parece una inconsistencia" (caso real investigado, 2026-08-28): el
+  // hueco de WIPE_CALL_MAX_DEATH_GAP_MS solo detecta un pile-on COMPACTO.
+  // Hay wipes que se alargan — la raid deja de sanar y el boss se va
+  // comiendo uno a uno cada 2-20s durante más de un minuto (caso real:
+  // 12 muertes seguidas 'no_healing_received', ninguna a la misma
+  // habilidad, repartidas en 84s) — el hueco entre dos muertes consecutivas
+  // puede superar los 4s aunque NADIE recibiera sanación de verdad durante
+  // todo ese hueco. Segundo criterio de fusión: si la sanación o el daño de
+  // la raid se mantuvieron desplomados TODO el hueco entre dos muertes, se
+  // encadenan igual — no importa cuántos segundos separen las muertes si
+  // nadie podía salvar a nadie durante ese tramo. baseline = ritmo normal
+  // ANTES de la primera muerte (antes de que nada fuera mal); un hueco
+  // temprano y sano entre dos muertes tempranas y no relacionadas (p.ej.
+  // dos fallos de mecánica real, cada uno en un momento distinto de un pull
+  // por lo demás normal) no cumple la condición y no se fusiona.
+  const firstDeathMs = deaths[0].timestamp;
+  const baselineSpanMs = Math.max(1, firstDeathMs - fight.startTime);
+  const baselineHealingPer10s =
+    (input.healingEvents.filter((h) => h.timestamp < firstDeathMs).reduce((s, h) => s + h.amount, 0) / baselineSpanMs) * 10_000;
+  const friendlyIdsForBridge = new Set(fight.friendlyPlayers);
+  const baselineDamagePer10s =
+    (input.damageDoneEvents
+      .filter((e) => typeof e.sourceID === 'number' && friendlyIdsForBridge.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp < firstDeathMs)
+      .reduce((s, e) => s + (e.amount ?? 0), 0) /
+      baselineSpanMs) *
+    10_000;
+  function gapStayedCollapsed(fromMs: number, toMs: number): boolean {
+    const spanMs = Math.max(1, toMs - fromMs);
+    const healingInGap = input.healingEvents.filter((h) => h.timestamp >= fromMs && h.timestamp < toMs).reduce((s, h) => s + h.amount, 0);
+    const healingRatio = baselineHealingPer10s > 0 ? ((healingInGap / spanMs) * 10_000) / baselineHealingPer10s : null;
+    const damageInGap = input.damageDoneEvents
+      .filter((e) => typeof e.sourceID === 'number' && friendlyIdsForBridge.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp >= fromMs && e.timestamp < toMs)
+      .reduce((s, e) => s + (e.amount ?? 0), 0);
+    const damageRatio = baselineDamagePer10s > 0 ? ((damageInGap / spanMs) * 10_000) / baselineDamagePer10s : null;
+    return (
+      (healingRatio != null && healingRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD) ||
+      (damageRatio != null && damageRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD)
+    );
+  }
+
   const chains: typeof deaths[] = [];
   for (const death of deaths) {
     const lastChain = chains.at(-1);
     const lastDeath = lastChain?.at(-1);
-    if (lastChain && lastDeath && death.timestamp - lastDeath.timestamp <= WIPE_CALL_MAX_DEATH_GAP_MS) {
+    if (lastChain && lastDeath && (death.timestamp - lastDeath.timestamp <= WIPE_CALL_MAX_DEATH_GAP_MS || gapStayedCollapsed(lastDeath.timestamp, death.timestamp))) {
       lastChain.push(death);
     } else {
       chains.push([death]);
