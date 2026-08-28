@@ -150,10 +150,24 @@ export class NightPlayerDossierComponent {
     const b = pull.scoreBreakdown;
     const durationMs = pull.durationMs;
     const lines: string[] = [];
+    // §"consistente... contemplar muchas posibilidades distintas"
+    // (feedback real, 2026-08-28): avoidable-ground/spread ahora puntúan
+    // por ratio real (instancias esquivadas/elegibles) — se explica aparte
+    // porque ya no es "N fallos = −25% cada uno", es una fracción. soak/
+    // personal-target siguen siendo conteo plano, se quedan en la línea de
+    // abajo tal cual estaba.
+    if (b.avoidableMechanicEligibleCount != null && b.avoidableMechanicEligibleCount > 0) {
+      const dodged = b.avoidableMechanicEligibleCount - (b.avoidableMechanicFailCount ?? 0);
+      lines.push(
+        `Esquivar zona/dispersarse: ${dodged}/${b.avoidableMechanicEligibleCount} instancias evitadas mientras seguía vivo.`,
+      );
+    }
+    const countCategoryFailCount =
+      b.avoidableMechanicFailCount != null ? Math.max(0, b.mechanicFailCount - b.avoidableMechanicFailCount) : b.mechanicFailCount;
     lines.push(
-      b.mechanicFailCount === 0
-        ? `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — sin fallos de responsabilidad individual.`
-        : `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — ${b.mechanicFailCount} fallo${b.mechanicFailCount === 1 ? '' : 's'} de responsabilidad individual (−${this.formatPct(PULL_SCORE_FAIL_PENALTY * 100)} cada uno):`,
+      countCategoryFailCount === 0
+        ? `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — sin fallos de soak/objetivo personal.`
+        : `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — ${countCategoryFailCount} fallo${countCategoryFailCount === 1 ? '' : 's'} de soak/objetivo personal (−${this.formatPct(PULL_SCORE_FAIL_PENALTY * 100)} cada uno):`,
     );
     if (!b.died) {
       lines.push('Consumibles: 100% — no murió, se aprueba automático (igual que con piedra/poción, solo importa si mueres).');

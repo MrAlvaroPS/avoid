@@ -977,6 +977,70 @@ export const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set(['avoidable-ground', '
 // pull-analysis.service.ts no depende de ninguno de los dos.
 export const PULL_SCORE_FAIL_PENALTY = 0.25;
 
+// §"quiero que la puntuación que traigas, parecida a wipefest, sea
+// consistente en realidad, más que intentar calcarlo... contemplar muchas
+// posibilidades distintas" (feedback real, 2026-08-28): de las 4 categorías
+// de PERSONAL_RESPONSIBILITY_CATEGORIES, solo estas dos tienen un
+// "elegible" sin ambigüedad (seguía vivo cuando se disparó la instancia) Y
+// un resultado binario sin ambigüedad (dentro de la zona/sin dispersar =
+// fallo, fuera = acierto) — soak/personal-target se quedan en conteo plano
+// a propósito, ver mechanicScoreFor.
+export const RATIO_MECHANIC_CATEGORIES = new Set(['avoidable-ground', 'spread']);
+
+export interface MechanicScoreInputs {
+  /** player_pull_reliability_inputs.personal_mechanic_fail_count — las 4 categorías juntas, conteo plano. null solo en el escalón de fallback más antiguo. */
+  personalMechanicFailCount: number | null;
+  /** player_pull_reliability_inputs.avoidable_mechanic_eligible_count — instancias avoidable-ground/spread donde seguía vivo. null si la columna todavía no existe en este despliegue (escalón de fallback). */
+  avoidableMechanicEligibleCount: number | null;
+  /** player_pull_reliability_inputs.avoidable_mechanic_fail_count — subconjunto de las de arriba donde le golpeó. */
+  avoidableMechanicFailCount: number | null;
+  /** Solo para el escalón de fallback más antiguo (ni personal_mechanic_fail_count existe todavía). */
+  hadAvoidableDamage: boolean;
+  selfPositioningDeath: boolean;
+}
+
+/**
+ * §"consistente... contemplar muchas posibilidades distintas" (feedback
+ * real, 2026-08-28): fórmula ÚNICA de "qué tan limpia fue la mecánica en
+ * este pull", compartida por Fiabilidad (reliability.service.ts, eje
+ * Mecánica) y Puntuación de la noche (night-player-summary.service.ts,
+ * pullScore) — ambas leen la MISMA fila de player_pull_reliability_inputs
+ * y llaman a esta MISMA función, en vez de cada una tener su propio conteo
+ * sincronizado a mano (el bug real que llevó a "un 77% de puntuación de
+ * noche pero un 44 de fiabilidad" — feedback real, 2026-08-27).
+ *
+ * Dos señales que se combinan multiplicando (asumiendo independencia,
+ * ninguna "vale más" que la otra a priori):
+ *  - ratioScore: instancias-esquivadas/instancias-elegibles de
+ *    avoidable-ground/spread — ahí que te golpee es sin ambigüedad un
+ *    fallo, así que fallar tu ÚNICA oportunidad ya no puntúa igual que
+ *    fallar 1 de 15. null (no participa) si no hubo ninguna instancia
+ *    elegible este pull.
+ *  - countScore: conteo plano con penalización fija para soak/
+ *    personal-target — ahí que te golpee suele ser lo CORRECTO (alguien
+ *    asignado tiene que absorberlo) y no sabemos quién estaba asignado;
+ *    fingir un ratio culparía a quien hizo lo que tenía que hacer.
+ */
+export function mechanicScoreFor(inputs: MechanicScoreInputs): number {
+  // El conteo de soak/personal-target es "las 4 categorías menos las 2 de
+  // ratio" — no hace falta una columna nueva para eso, ya se puede restar.
+  const countCategoryFails =
+    inputs.personalMechanicFailCount != null && inputs.avoidableMechanicFailCount != null
+      ? Math.max(0, inputs.personalMechanicFailCount - inputs.avoidableMechanicFailCount)
+      : inputs.personalMechanicFailCount;
+  const countScore =
+    countCategoryFails != null
+      ? Math.max(0, 1 - countCategoryFails * PULL_SCORE_FAIL_PENALTY)
+      : !inputs.hadAvoidableDamage && !inputs.selfPositioningDeath
+        ? 1
+        : 0;
+  const ratioScore =
+    inputs.avoidableMechanicEligibleCount != null && inputs.avoidableMechanicEligibleCount > 0
+      ? Math.max(0, (inputs.avoidableMechanicEligibleCount - (inputs.avoidableMechanicFailCount ?? 0)) / inputs.avoidableMechanicEligibleCount)
+      : null;
+  return ratioScore != null ? ratioScore * countScore : countScore;
+}
+
 function toDefensiveRefs(options: DefensiveOption[], status: DefensiveOption['status'], deathTimeMs?: number, castTimestamps?: Map<number, number[]>): import('../shared/models/ui').DefensiveRef[] {
   return options
     .filter((o) => o.status === status)

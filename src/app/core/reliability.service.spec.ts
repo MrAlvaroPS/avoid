@@ -31,6 +31,11 @@ function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow 
     // promediando preparación sobre todas sus filas, comportamiento previo.
     report_code: null,
     pull_number: null,
+    // null por defecto (mismo criterio que personal_mechanic_fail_count):
+    // mechanicScoreFor cae al conteo plano de siempre — ver el describe
+    // dedicado al ratio avoidable-ground/spread más abajo.
+    avoidable_mechanic_eligible_count: null,
+    avoidable_mechanic_fail_count: null,
     ...overrides,
   };
 }

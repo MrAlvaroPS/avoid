@@ -8,9 +8,9 @@
 // enlaces para poder hablar con esa persona con todo el contexto delante.
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
-import { ReliabilityService, type PlayerReliability, type ReliabilityBreakdown } from './reliability.service';
+import { ReliabilityService, type PlayerReliability, type ReliabilityBreakdown, type ReliabilityInputRow } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
-import { PERSONAL_RESPONSIBILITY_CATEGORIES, PULL_SCORE_FAIL_PENALTY, mapBrief } from './pull-analysis.service';
+import { PERSONAL_RESPONSIBILITY_CATEGORIES, PULL_SCORE_FAIL_PENALTY, mapBrief, mechanicScoreFor } from './pull-analysis.service';
 import { loadMechanicNotesByName } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
 import type { DeathCause, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
@@ -63,8 +63,11 @@ export interface NightPullSummary {
 
 export interface PullScoreBreakdown {
   mechanicFailCount: number;
-  /** 0-1, ya penalizado por mechanicFailCount × PULL_SCORE_FAIL_PENALTY. */
+  /** 0-1 — mismo mechanicScoreFor que usa Fiabilidad (ver pull-analysis.service.ts): ratio real para avoidable-ground/spread combinado con el conteo plano de siempre para soak/personal-target. */
   mechanicScore: number;
+  /** §"consistente... contemplar muchas posibilidades distintas" (feedback real, 2026-08-28): instancias avoidable-ground/spread elegibles (seguía vivo) y cuántas de ellas fallaron, para poder explicar el ratio en el tooltip. null si esta fila no tenía el dato (fallback antiguo). */
+  avoidableMechanicEligibleCount: number | null;
+  avoidableMechanicFailCount: number | null;
   died: boolean;
   /** Solo tiene sentido si died=true — si no murió, el check se aprueba automático (mismo criterio que Wipefest). */
   usedConsumable: boolean;
@@ -260,7 +263,7 @@ export class NightPlayerSummaryService {
     const allPulls = (pullsData ?? []) as (PullRowLite & { fight_id: number })[];
     const pullIds = allPulls.map((p) => p.id);
 
-    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, { data: interruptEventsData, error: interruptErr }, roster, reliabilityList, notesByMechanicName, { data: briefRow }] = await Promise.all([
+    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, { data: interruptEventsData, error: interruptErr }, roster, reliabilityList, notesByMechanicName, { data: briefRow }, reliabilityInputRows] = await Promise.all([
       pullIds.length
         ? client.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName)
         : Promise.resolve({ data: [] as PlayerPullRecordRow[], error: null }),
@@ -274,8 +277,16 @@ export class NightPlayerSummaryService {
       this.reliability.listPlayerReliability().catch(() => []),
       loadMechanicNotesByName(client, allPulls.map((p) => p.boss_id)).catch(() => new Map<string, string>()),
       client.from('night_player_briefs').select('*').eq('report_code', reportCode).eq('player_name', playerName).maybeSingle(),
+      // §"consistente... contemplar muchas posibilidades distintas"
+      // (feedback real, 2026-08-28): MISMAS filas que ya usa Fiabilidad
+      // (avoidable_mechanic_eligible_count/avoidable_mechanic_fail_count/
+      // personal_mechanic_fail_count) — computePullScore las reutiliza vía
+      // mechanicScoreFor en vez de re-derivar el ratio con su propia
+      // lógica, así los dos sistemas nunca pueden divergir en "Mecánica".
+      this.reliability.getPlayerPullReliabilityInputsForReport(reportCode, playerName).catch(() => []),
     ]);
     const nightReliability = await this.reliability.getNightReliability(reportCode, playerName).catch(() => null);
+    const reliabilityInputByPullId = new Map(reliabilityInputRows.map((r) => [r.pull_id, r]));
     if (recordsErr) throw recordsErr;
     if (mechErr) throw mechErr;
     if (interruptErr) throw interruptErr;
@@ -446,13 +457,41 @@ export class NightPlayerSummaryService {
     // pintar el tooltip.
     function computePullScore(pull: { pullId: string; durationMs: number | null }): { score: number; breakdown: PullScoreBreakdown } {
       const death = evaluatedDeathByPullId.get(pull.pullId);
-      const mechanicFailCount = mechanicFailCountByPullId.get(pull.pullId) ?? 0;
-      const mechanicScore = Math.max(0, 1 - mechanicFailCount * FAIL_PENALTY);
+      // §"consistente... contemplar muchas posibilidades distintas"
+      // (feedback real, 2026-08-28): MISMA fórmula/fuente que el eje
+      // Mecánica de Fiabilidad (reliability.service.ts) — ver
+      // mechanicScoreFor en pull-analysis.service.ts. Sin fila para este
+      // pull (no debería pasar salvo un fallo de red puntual) se cae al
+      // conteo plano derivado en cliente, nunca a "0 fallos" silencioso.
+      const reliabilityRow = reliabilityInputByPullId.get(pull.pullId);
+      const mechanicFailCount = reliabilityRow?.personal_mechanic_fail_count ?? mechanicFailCountByPullId.get(pull.pullId) ?? 0;
+      const mechanicScore = reliabilityRow
+        ? mechanicScoreFor({
+            personalMechanicFailCount: reliabilityRow.personal_mechanic_fail_count,
+            avoidableMechanicEligibleCount: reliabilityRow.avoidable_mechanic_eligible_count,
+            avoidableMechanicFailCount: reliabilityRow.avoidable_mechanic_fail_count,
+            hadAvoidableDamage: reliabilityRow.had_avoidable_damage,
+            selfPositioningDeath: reliabilityRow.self_positioning_death,
+          })
+        : Math.max(0, 1 - mechanicFailCount * FAIL_PENALTY);
       const usedConsumable = death ? death.usedHealthstoneInPull || death.usedHealthPotionInPull : false;
       const consumableScore = !death ? 1 : usedConsumable ? 1 : 0;
       const deathMultiplier = death && pull.durationMs ? Math.min(1, Math.max(0, death.timeMs / pull.durationMs)) : 1;
       const score = Math.round((mechanicScore * 0.7 + consumableScore * 0.3) * deathMultiplier * 1000) / 1000;
-      return { score, breakdown: { mechanicFailCount, mechanicScore, died: !!death, usedConsumable, consumableScore, deathMultiplier, deathTimeMs: death?.timeMs ?? null } };
+      return {
+        score,
+        breakdown: {
+          mechanicFailCount,
+          mechanicScore,
+          avoidableMechanicEligibleCount: reliabilityRow?.avoidable_mechanic_eligible_count ?? null,
+          avoidableMechanicFailCount: reliabilityRow?.avoidable_mechanic_fail_count ?? null,
+          died: !!death,
+          usedConsumable,
+          consumableScore,
+          deathMultiplier,
+          deathTimeMs: death?.timeMs ?? null,
+        },
+      };
     }
     const pullsWithScore: NightPullSummary[] = pulls.map((p) => {
       const { score, breakdown } = computePullScore(p);

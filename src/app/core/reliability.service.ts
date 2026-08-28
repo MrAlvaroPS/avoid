@@ -14,7 +14,7 @@ import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { WowauditRosterService } from './wowaudit-roster.service';
 import { AttendanceService } from './attendance.service';
-import { PULL_SCORE_FAIL_PENALTY } from './pull-analysis.service';
+import { mechanicScoreFor } from './pull-analysis.service';
 import { gearPreparationDetails } from '../shared/gear-preparation.util';
 import type { DeathCause, WclGearItem } from '../shared/models/domain';
 
@@ -130,6 +130,13 @@ export interface ReliabilityInputRow {
    * cambio, sin regresión. */
   report_code: string | null;
   pull_number: number | null;
+  /** §"consistente... contemplar muchas posibilidades distintas" (feedback
+   * real, 2026-08-28): instancias avoidable-ground/spread donde este
+   * jugador seguía vivo (elegible) y cuántas de ellas le golpearon — ver
+   * mechanicScoreFor en pull-analysis.service.ts. null en los 3 escalones
+   * de fallback más antiguos (columna todavía sin migrar). */
+  avoidable_mechanic_eligible_count: number | null;
+  avoidable_mechanic_fail_count: number | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -209,23 +216,19 @@ export function computeReliabilityBreakdown(
     const w = recencyWeight(r.closed_at, now);
     // §"un 77% de puntuación de noche pero a la vez un 44 de fiabilidad en
     // la noche... esto parece bastante incongruente" (feedback real,
-    // 2026-08-27): antes esto era un binario (1 fallo de responsabilidad
-    // individual puntuaba IGUAL que 5), mientras pullScore ya penalizaba
-    // fallo a fallo — de ahí el desajuste entre los dos números en pantalla.
-    // Mismo conteo (personal_mechanic_fail_count, ver la vista SQL) y la
-    // MISMA penalización que computePullScore en night-player-summary.
-    // service.ts (PULL_SCORE_FAIL_PENALTY, importado de pull-analysis.
-    // service.ts para que ambos lean el mismo número) — así Fiabilidad
-    // hereda la precisión de pullScore sin duplicar la fórmula.
-    // null = escalón de fallback sin la columna todavía (ver
-    // isReliabilitySchemaTransitionError): se cae al binario de siempre en
-    // vez de asumir 0 fallos.
-    const mecScore =
-      r.personal_mechanic_fail_count != null
-        ? Math.max(0, 1 - r.personal_mechanic_fail_count * PULL_SCORE_FAIL_PENALTY)
-        : !r.had_avoidable_damage && !r.self_positioning_death
-          ? 1
-          : 0;
+    // 2026-08-27) + "quiero que la puntuación... sea consistente en
+    // realidad" (feedback real, 2026-08-28): MISMA función que
+    // computePullScore en night-player-summary.service.ts
+    // (mechanicScoreFor, en pull-analysis.service.ts para que ambos lean
+    // la MISMA fila y apliquen la MISMA fórmula) — así Fiabilidad hereda la
+    // precisión de pullScore sin duplicar nada.
+    const mecScore = mechanicScoreFor({
+      personalMechanicFailCount: r.personal_mechanic_fail_count,
+      avoidableMechanicEligibleCount: r.avoidable_mechanic_eligible_count,
+      avoidableMechanicFailCount: r.avoidable_mechanic_fail_count,
+      hadAvoidableDamage: r.had_avoidable_damage,
+      selfPositioningDeath: r.self_positioning_death,
+    });
     mecSum += mecScore * w;
     mecWeight += w;
     // La respuesta en una muerte evaluable es la evidencia más directa y
@@ -324,6 +327,13 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
   unknown: 3,
 };
 
+// §"consistente... contemplar muchas posibilidades distintas" (feedback
+// real, 2026-08-28): avoidable_mechanic_eligible_count/
+// avoidable_mechanic_fail_count son las más nuevas de la vista — escalón
+// propio por encima de RELIABILITY_COLUMNS para el mismo despliegue en dos
+// tiempos de siempre (frontend puede llegar antes que la migración).
+const RATIO_RELIABILITY_COLUMNS =
+  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count';
 const RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number';
 const DEFENSIVE_RELIABILITY_COLUMNS =
@@ -366,7 +376,7 @@ function isReliabilitySchemaTransitionError(
   return (
     error.code === '42703' ||
     error.code === 'PGRST204' ||
-    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number/i.test(
+    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count/i.test(
       message,
     )
   );
@@ -400,8 +410,12 @@ export class ReliabilityService {
       return await query;
     };
 
-    let response = await run(RELIABILITY_COLUMNS);
-    let schemaLevel: 'current' | 'defensive' | 'legacy' = 'current';
+    let response = await run(RATIO_RELIABILITY_COLUMNS);
+    let schemaLevel: 'ratio' | 'current' | 'defensive' | 'legacy' = 'ratio';
+    if (response.error && isReliabilitySchemaTransitionError(response.error)) {
+      response = await run(RELIABILITY_COLUMNS);
+      schemaLevel = 'current';
+    }
     if (response.error && isReliabilitySchemaTransitionError(response.error)) {
       response = await run(DEFENSIVE_RELIABILITY_COLUMNS);
       schemaLevel = 'defensive';
@@ -417,17 +431,26 @@ export class ReliabilityService {
         schemaLevel === 'legacy' ? false : row.used_defensive_in_pull === true,
       defensive_use_opportunity:
         schemaLevel === 'legacy' ? false : row.defensive_use_opportunity === true,
-      gemmed_slot_count: schemaLevel === 'current' ? Number(row.gemmed_slot_count ?? 0) : 0,
-      gemmable_slot_count: schemaLevel === 'current' ? Number(row.gemmable_slot_count ?? 0) : 0,
-      // null (no 0) en los dos escalones de fallback a propósito —
-      // computeReliabilityBreakdown lo lee como "sin dato todavía, usa el
-      // binario de siempre" en vez de "0 fallos" (ver el comentario ahí).
+      gemmed_slot_count: schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmed_slot_count ?? 0) : 0,
+      gemmable_slot_count: schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmable_slot_count ?? 0) : 0,
+      // null (no 0) en los escalones de fallback a propósito —
+      // computeReliabilityBreakdown/mechanicScoreFor lo leen como "sin dato
+      // todavía" en vez de "0 fallos"/"0 elegibles" (ver el comentario ahí).
       personal_mechanic_fail_count:
-        schemaLevel === 'current' ? Number(row.personal_mechanic_fail_count ?? 0) : null,
+        schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.personal_mechanic_fail_count ?? 0) : null,
       // null en fallback (igual criterio): isFirstPullOfNight trata
       // cualquier fila como "primera" cuando no hay report_code/pull_number.
-      report_code: schemaLevel === 'current' ? (row.report_code ?? null) : null,
-      pull_number: schemaLevel === 'current' ? (row.pull_number ?? null) : null,
+      report_code: schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.report_code ?? null) : null,
+      pull_number: schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.pull_number ?? null) : null,
+      // §"consistente... contemplar muchas posibilidades distintas"
+      // (feedback real, 2026-08-28): null en los 3 escalones de fallback
+      // más antiguos — mechanicScoreFor cae al conteo plano de siempre
+      // (personal_mechanic_fail_count) en vez de asumir "sin oportunidades
+      // ratio" silenciosamente.
+      avoidable_mechanic_eligible_count:
+        schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
+      avoidable_mechanic_fail_count:
+        schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
     }));
   }
 
@@ -747,6 +770,26 @@ export class ReliabilityService {
   }
 
   /**
+   * §"consistente... contemplar muchas posibilidades distintas" (feedback
+   * real, 2026-08-28): filas crudas de player_pull_reliability_inputs para
+   * los pulls de UNA noche — night-player-summary.service.ts las reutiliza
+   * para que pullScore comparta EXACTAMENTE el mismo ratio avoidable-ground/
+   * spread (y el mismo conteo de mecánica) que ya usa el eje Mecánica de
+   * fiabilidad, en vez de re-derivarlo con su propia lógica. getNightReliability
+   * (debajo) es el otro consumidor — factorizado aquí para no traer los
+   * pulls del report dos veces.
+   */
+  async getPlayerPullReliabilityInputsForReport(
+    reportCode: string,
+    playerName: string,
+  ): Promise<ReliabilityInputRow[]> {
+    const { data: pulls } = await this.supabase.client.from('pulls').select('id').eq('report_code', reportCode);
+    const pullIds = ((pulls ?? []) as { id: string }[]).map((p) => p.id);
+    if (!pullIds.length) return [];
+    return this.fetchReliabilityInputs({ playerName, pullIds });
+  }
+
+  /**
    * §"fiabilidad en el dosier debería tener 2 valores: fiabilidad a 60 días
    * y fiabilidad de la noche" (feedback real): MISMA fórmula
    * (computeReliabilityBreakdown), acotada a los pulls de un solo
@@ -758,10 +801,8 @@ export class ReliabilityService {
     reportCode: string,
     playerName: string,
   ): Promise<ReliabilityBreakdown & { sampleSize: number }> {
-    const client = this.supabase.client;
-    const { data: pulls } = await client.from('pulls').select('id').eq('report_code', reportCode);
-    const pullIds = ((pulls ?? []) as { id: string }[]).map((p) => p.id);
-    if (!pullIds.length)
+    const rows = await this.getPlayerPullReliabilityInputsForReport(reportCode, playerName);
+    if (!rows.length)
       return {
         overall: 0,
         breakdown: { mecanica: null, defensiva: null, preparacion: null, asistencia: null },
@@ -769,7 +810,6 @@ export class ReliabilityService {
         sampleSize: 0,
       };
 
-    const rows = await this.fetchReliabilityInputs({ playerName, pullIds });
     const result = computeReliabilityBreakdown(rows, Date.now());
     return result
       ? { ...result, sampleSize: rows.length }
