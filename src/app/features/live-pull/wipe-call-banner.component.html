@@ -9,6 +9,9 @@
       }
     </span>
     <button type="button" class="link-btn" (click)="detailsOpen.set(!detailsOpen())">{{ detailsOpen() ? 'ocultar evidencia' : 'ver evidencia' }}</button>
+    <button type="button" class="link-btn" [disabled]="reanalyzing()" (click)="reanalyze()" title="Vuelve a pedir este pull a WCL y recalcula el wipe call con el algoritmo actual">
+      {{ reanalyzing() ? 'Recalculando…' : 'Reanalizar ↻' }}
+    </button>
     <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="toggle()">
       {{ toggling() ? 'Guardando…' : excluded() ? 'No fue un wipe call →' : 'Marcar como wipe call →' }}
     </button>
@@ -19,6 +22,9 @@
         <li>{{ line }}</li>
       }
     </ul>
+  }
+  @if (reanalyzeMessage(); as m) {
+    <p class="banner-note">{{ m }}</p>
   }
   @if (error(); as e) {
     <p class="banner-error" role="alert">{{ e }}</p>

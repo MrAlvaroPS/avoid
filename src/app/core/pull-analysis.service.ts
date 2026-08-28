@@ -329,6 +329,11 @@ export class PullAnalysisService {
     await this.edgeFunctions.setNinjaPullStatus(pullId, excluded);
   }
 
+  /** §"centralizar esta información... hacerla fiable": recalcula el wipe call de un pull ya analizado contra WCL con el algoritmo actual — ver edge-functions.service.ts. */
+  async reanalyzeWipeCall(pullId: string) {
+    return this.edgeFunctions.reanalyzeWipeCall(pullId);
+  }
+
   async generateBrief(pullId: string, force = false): Promise<LlmPullAnalysis> {
     const result = await this.edgeFunctions.generatePullBrief(pullId, force);
     return mapBrief(result.brief as unknown as PullBriefRow);

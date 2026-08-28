@@ -28,6 +28,8 @@ export class WipeCallBannerComponent {
 
   detailsOpen = signal(false);
   toggling = signal(false);
+  reanalyzing = signal(false);
+  reanalyzeMessage = signal<string | null>(null);
   error = signal<string | null>(null);
 
   async toggle(): Promise<void> {
@@ -40,6 +42,33 @@ export class WipeCallBannerComponent {
       this.error.set(errorMessage(err));
     } finally {
       this.toggling.set(false);
+    }
+  }
+
+  // §"Hay que ver la manera de centralizar esta información y, sobretodo,
+  // en hacerla fiable" (feedback real, 2026-08-28): vuelve a pedir a WCL
+  // este pull y recalcula el veredicto con el algoritmo actual — para
+  // cuando el algoritmo cambia después de que este pull ya se analizara
+  // (caso real: Pandokie quedó fuera del cluster por un fallo del
+  // algoritmo anterior). Si había una decisión manual (toggle() arriba) y
+  // la confianza recalculada es la misma, esa decisión se respeta.
+  async reanalyze(): Promise<void> {
+    this.reanalyzing.set(true);
+    this.error.set(null);
+    this.reanalyzeMessage.set(null);
+    try {
+      const result = await this.pullAnalysis.reanalyzeWipeCall(this.pullId());
+      const changed = result.clusterChanges.length;
+      this.reanalyzeMessage.set(
+        changed
+          ? `Recalculado: ${changed} jugador${changed === 1 ? '' : 'es'} cambiaron de estado (confianza ${result.before.confidence ?? '—'}% → ${result.after.confidence ?? '—'}%).`
+          : 'Recalculado: sin cambios respecto al análisis anterior.',
+      );
+      this.statusChanged.emit();
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.reanalyzing.set(false);
     }
   }
 

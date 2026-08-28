@@ -164,6 +164,25 @@ export class EdgeFunctionsService {
     return this.invoke('set-ninja-pull-status', { pullId, excluded });
   }
 
+  /**
+   * §"Hay que ver la manera de centralizar esta información y, sobretodo,
+   * en hacerla fiable" (feedback real, 2026-08-28): vuelve a pedir a WCL
+   * las muertes/sanación/daño de un pull YA analizado y recalcula su
+   * veredicto de wipe call con el algoritmo actual — para cuando el
+   * algoritmo cambia y un pull antiguo quedó mal clasificado (caso real:
+   * Pandokie, ver reanalyze-wipe-call/index.ts). No toca nada más del pull.
+   */
+  async reanalyzeWipeCall(pullId: string): Promise<{
+    ok: true;
+    pullId: string;
+    before: { confidence: number | null; excluded: boolean };
+    after: { confidence: number | null; excluded: boolean; signals: Record<string, number | boolean | null> | null };
+    excludedDecisionPreserved: boolean;
+    clusterChanges: { playerName: string; before: boolean; after: boolean }[];
+  }> {
+    return this.invoke('reanalyze-wipe-call', { pullId });
+  }
+
   /** §"un prompt para pasar a la IA y que investigue... clasificar todas las mecánicas" — mismo patrón que manual-pull-brief, sin gastar la API propia. */
   // difficulties=undefined/[] => todas las dificultades que tengan
   // candidatas para este boss en un único prompt (feedback real,
