@@ -39,46 +39,64 @@
       </button>
     </header>
 
-    <div class="stat-row">
-      <div class="stat">
-        <span class="stat-value tabular">{{ d.pulls.length }}</span>
-        <span class="stat-label">pulls</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value tabular tone-danger">{{ d.totalDeaths }}</span>
-        <span class="stat-label">muertes</span>
-      </div>
-      <div class="stat">
-        <span class="stat-value tabular tone-warning">{{ d.totalMechanicFails }}</span>
-        <span class="stat-label">mecánicas falladas</span>
-      </div>
+    <!-- §"parece que es calcular lo mismo de 3 formas distintas... hace que
+         sea un poco caos" (feedback real, 2026-08-28): antes estos 6
+         números vivían en una sola fila plana, todos con el mismo peso
+         visual — nada distinguía "esto es solo un recuento" de "esto es
+         una puntuación", ni avisaba de que las dos fiabilidades son la
+         MISMA fórmula en dos ventanas mientras que la puntuación de la
+         noche es una fórmula totalmente distinta (mocked/aprobado en
+         https://claude.ai/code/artifact/c83a501e-6274-44c6-99fb-6c8be9f10790).
+         Reagrupado en 3 preguntas: qué pasó (recuento, sin caja) / cómo
+         ejecutaste hoy (tarjeta propia) / cuán fiable eres (las dos
+         ventanas juntas bajo un techo). -->
+    <div class="meta-strip">
+      <span><strong class="tabular">{{ d.pulls.length }}</strong> pulls</span>
+      <span class="meta-dot">·</span>
+      <span><strong class="tabular tone-danger">{{ d.totalDeaths }}</strong> muertes</span>
+      <span class="meta-dot">·</span>
+      <span><strong class="tabular tone-warning">{{ d.totalMechanicFails }}</strong> mecánicas falladas</span>
+    </div>
+
+    <div class="score-grid">
       <!-- §"puntuación compuesta... como wipefest" (feedback real,
-           2026-08-27): distinto de la fiabilidad de abajo (esa es un
+           2026-08-27): distinto de la fiabilidad de al lado (esa es un
            sistema propio de 60 días con 4 ejes) — esta es la puntuación
            por pull (mecánicas + consumibles al morir, penalizada por
            cuándo murió), agregada para la noche. -->
       @if (d.nightScore != null) {
-        <div class="stat">
+        <div class="score-card">
+          <span class="eyebrow">Ejecución de esta noche</span>
           <button type="button" class="score-trigger" (click)="openExplanation(nightScoreExplanation(d.nightScore, d.pulls))">
             <span class="stat-value tabular" [class]="'tone-' + nightScoreTone(d.nightScore)">{{ formatPct(d.nightScore * 100) }}</span>
+            <span class="stat-label">puntuación de la noche</span>
           </button>
-          <span class="stat-label">puntuación de la noche</span>
+          <p class="score-card-note">Mecánica (70%) + consumibles al morir (30%) × cuánto sobreviviste. Por pull, ponderada por duración.</p>
         </div>
       }
-      @if (d.reliability; as rel) {
-        <div class="stat">
-          <button type="button" class="score-trigger" (click)="openExplanation(reliabilityWindowExplanation(rel))">
-            <span class="reliability-badge" [class]="'tone-' + reliabilityTone()">{{ rel.overall }}</span>
-          </button>
-          <span class="stat-label">fiabilidad — 60 días</span>
-        </div>
-      }
-      @if (d.nightReliability; as nr) {
-        <div class="stat">
-          <button type="button" class="score-trigger" (click)="openExplanation(nightReliabilityExplanation(nr))">
-            <span class="reliability-badge" [class]="'tone-' + nightReliabilityTone()">{{ nr.overall }}</span>
-          </button>
-          <span class="stat-label">fiabilidad — esta noche</span>
+      @if (d.reliability || d.nightReliability) {
+        <div class="score-card">
+          <span class="eyebrow">Fiabilidad</span>
+          <p class="score-card-note">Mecánica + defensiva + preparación (+ asistencia a 60 días) — misma fórmula, dos ventanas de tiempo.</p>
+          <div class="badge-pair">
+            @if (d.reliability; as rel) {
+              <button type="button" class="score-trigger badge-trigger" (click)="openExplanation(reliabilityWindowExplanation(rel))">
+                <span class="reliability-badge" [class]="'tone-' + reliabilityTone()">{{ rel.overall }}</span>
+                <span class="stat-label">60 días</span>
+              </button>
+            }
+            @if (d.reliability && d.nightReliability) {
+              <svg class="badge-arrow" width="20" height="12" viewBox="0 0 20 12" fill="none" aria-hidden="true">
+                <path d="M1 6H18M18 6L13 1M18 6L13 11" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            }
+            @if (d.nightReliability; as nr) {
+              <button type="button" class="score-trigger badge-trigger" (click)="openExplanation(nightReliabilityExplanation(nr))">
+                <span class="reliability-badge" [class]="'tone-' + nightReliabilityTone()">{{ nr.overall }}</span>
+                <span class="stat-label">esta noche</span>
+              </button>
+            }
+          </div>
         </div>
       }
     </div>
