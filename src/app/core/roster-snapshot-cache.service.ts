@@ -53,17 +53,31 @@ export class RosterSnapshotCacheService {
   }
 
   /**
-   * Comprobación ligera al entrar en Roster. El cálculo completo solo se
-   * repite si cambió el último pull, avanzó el último report o cambió la
-   * composición oficial de wowaudit.
+   * Comprobación ligera al entrar en Roster. El cálculo completo se repite
+   * si cambió el último pull, avanzó el último report, cambió la
+   * composición oficial de wowaudit, O se corrigió algo retroactivamente en
+   * un pull YA existente (wipe call reanalizado o editado a mano, ninja
+   * pull revertido — ver pulls.updated_at). §"esto aplica a varias partes
+   * de la app y varios raiders" (feedback real, 2026-08-28): sin esta
+   * última señal, una corrección retroactiva no mueve ni el último pull ni
+   * el último report ni el roster de wowaudit, así que el snapshot
+   * cacheado se quedaba enseñando el veredicto viejo indefinidamente aunque
+   * la base de datos ya estuviera bien (caso real: Pandokie seguía
+   * apareciendo sin usar un defensivo en un pull ya reanalizado).
    */
   async fingerprint(): Promise<string> {
     const client = this.supabase.client;
-    const [pullResponse, reportResponse, rosterResponse] = await Promise.all([
+    const [pullResponse, correctedPullResponse, reportResponse, rosterResponse] = await Promise.all([
       client
         .from('pulls')
         .select('id, closed_at')
         .order('closed_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      client
+        .from('pulls')
+        .select('id, updated_at')
+        .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
       client
@@ -75,6 +89,7 @@ export class RosterSnapshotCacheService {
       client.from('wowaudit_roster').select('character_id, name, role, rank'),
     ]);
     if (pullResponse.error) throw pullResponse.error;
+    if (correctedPullResponse.error) throw correctedPullResponse.error;
     if (reportResponse.error) throw reportResponse.error;
     if (rosterResponse.error) throw rosterResponse.error;
 
@@ -84,6 +99,7 @@ export class RosterSnapshotCacheService {
     return stableHash(
       JSON.stringify({
         pull: pullResponse.data ?? null,
+        correctedPull: correctedPullResponse.data ?? null,
         report: reportResponse.data ?? null,
         roster,
       }),

@@ -44,7 +44,11 @@ Deno.serve(async (req: Request) => {
   if (!pull) return jsonResponse({ ok: false, error: `Pull ${body.pullId} no encontrado` }, 404);
   if (!pull.ninja_pull_signals) return jsonResponse({ ok: false, error: 'Este pull no tiene una evaluación de ninja pull — nada que marcar/restaurar.' }, 400);
 
-  const { error } = await supabase.from('pulls').update({ ninja_pull_excluded: body.excluded }).eq('id', body.pullId);
+  // updated_at: señal que consume roster-snapshot-cache.service.ts para
+  // saber que este pull cambió DESPUÉS de su análisis original — sin esto
+  // el snapshot cacheado del roster se queda desfasado indefinidamente (ver
+  // 20260828100000_pulls_updated_at_cache_invalidation.sql).
+  const { error } = await supabase.from('pulls').update({ ninja_pull_excluded: body.excluded, updated_at: new Date().toISOString() }).eq('id', body.pullId);
   if (error) return jsonResponse({ ok: false, error: error.message }, 500);
 
   return jsonResponse({ ok: true, pullId: body.pullId, excluded: body.excluded });

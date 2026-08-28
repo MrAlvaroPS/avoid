@@ -131,6 +131,14 @@ Deno.serve(async (req: Request) => {
     const pullPatch: Record<string, unknown> = {
       wipe_call_confidence: newConfidence,
       wipe_call_signals: wipeCallDetection?.signals ?? null,
+      // §"esto aplica a varias partes de la app... roster tampoco se está
+      // corrigiendo" (feedback real, 2026-08-28): roster-snapshot-cache.
+      // service.ts solo invalida su snapshot cacheado si cambió el último
+      // pull/report/roster — un reanálisis retroactivo como este no mueve
+      // ninguna de esas señales, así que sin bumpear updated_at el roster
+      // se queda enseñando el veredicto viejo indefinidamente aunque la
+      // base de datos ya esté corregida.
+      updated_at: new Date().toISOString(),
     };
     // Solo se toca la decisión editable a mano cuando la detección en sí
     // cambió — así una edición manual previa del RL (set-wipe-call-status)
