@@ -6,7 +6,7 @@ function player(overrides: Partial<PlayerReliability> = {}): PlayerReliability {
   return {
     playerName: 'Raider',
     overall: 82,
-    breakdown: { mecanica: 90, defensiva: 80, preparacion: 100, asistencia: 100 },
+    breakdown: { mecanica: 90, defensiva: 80, preparacion: 100 },
     consistency: null,
     latestGemCount: 3,
     latestGemmedSlotCount: 3,
@@ -96,14 +96,14 @@ describe('roster operativo', () => {
   it('solo alerta por defensivos cuando hay una muestra evaluable mínima', () => {
     const tooLittleEvidence = buildRosterPlayerView(
       player({
-        breakdown: { mecanica: 90, defensiva: 20, preparacion: 100, asistencia: 100 },
+        breakdown: { mecanica: 90, defensiva: 20, preparacion: 100 },
         defensiveOpportunityCount: 2,
       }),
       [],
     );
     const enoughEvidence = buildRosterPlayerView(
       player({
-        breakdown: { mecanica: 90, defensiva: 20, preparacion: 100, asistencia: 100 },
+        breakdown: { mecanica: 90, defensiva: 20, preparacion: 100 },
         defensiveOpportunityCount: 3,
       }),
       [],

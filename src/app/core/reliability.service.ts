@@ -3,13 +3,27 @@
 // score 1-100. La parte cara (cruzar pulls+player_pull_records de TODA la
 // guild en una ventana móvil) ya vive en SQL — player_pull_reliability_inputs
 // (ver la migración) — este servicio solo aplica la fórmula: peso por
-// recencia, blend de ejes, renormalización si falta uno. Los 4 ejes del
-// documento original ya están activos: mecánica 40%/defensiva 30%/
-// preparación 20% (por pull) + asistencia 10% (wowaudit_roster.
-// attended_percentage). Preparación = siete slots de enchant de esta season
-// + tres slots de gema (cuello/anillos). Para gemas se evalúa si el slot
-// elegible lleva al menos una, no un máximo de sockets que WCL no expone.
-// Nunca se rellena un eje ausente con un cero silencioso.
+// recencia, blend de ejes, renormalización si falta uno. Mecánica 40%/
+// defensiva 30%/preparación 20% (por pull), en proporción 4:3:2 entre ellos
+// — sin eje de asistencia (ver más abajo). Preparación = siete slots de
+// enchant de esta season + tres slots de gema (cuello/anillos). Para gemas
+// se evalúa si el slot elegible lleva al menos una, no un máximo de
+// sockets que WCL no expone. Nunca se rellena un eje ausente con un cero
+// silencioso.
+//
+// §"quitar de ahí asistencia... eventualmente habrá rotaciones y rotar en
+// un boss por tema de specs no tiene por qué afectar a la fiabilidad"
+// (feedback real, 2026-08-28): la asistencia SÍ se sigue calculando y
+// enseñando (attendanceNightsAttended/attendanceNightsTotal en
+// PlayerReliability, informativo) pero deja de puntuar dentro de
+// Fiabilidad — no asistir a un pull por rotación de composición es una
+// decisión del RL, no un fallo del jugador, y no debería poder bajarle la
+// puntuación. Efecto colateral que arregla también la inconsistencia real
+// que reportó el usuario ("fiabilidad esta noche" parecía peor que "60
+// días" sin que hubiera ejecución peor detrás): "esta noche" nunca tuvo
+// asistencia (no tiene sentido en una sola noche) mientras "60 días" sí la
+// tenía — dos ejes distintos con la etiqueta de "misma fórmula". Al
+// quitarla de las dos, vuelven a ser comparables de verdad.
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { WowauditRosterService } from './wowaudit-roster.service';
@@ -20,7 +34,7 @@ import type { DeathCause, WclGearItem } from '../shared/models/domain';
 
 const WINDOW_DAYS = 60; // "varias noches o semanas", no los 21 días de una versión anterior
 const HALF_LIFE_DAYS = 10; // un pull de hace 10 días pesa la mitad que uno de hoy
-const AXIS_WEIGHTS = { mecanica: 0.4, defensiva: 0.3, preparacion: 0.2, asistencia: 0.1 } as const;
+const AXIS_WEIGHTS = { mecanica: 0.4, defensiva: 0.3, preparacion: 0.2 } as const;
 
 export interface PlayerReliability {
   playerName: string;
@@ -29,7 +43,6 @@ export interface PlayerReliability {
     mecanica: number | null;
     defensiva: number | null;
     preparacion: number | null;
-    asistencia: number | null;
   };
   consistency: PlayerConsistency | null;
   /** Snapshot de preparación al inicio de la última noche observada. */
@@ -150,7 +163,6 @@ export interface ReliabilityBreakdown {
     mecanica: number | null;
     defensiva: number | null;
     preparacion: number | null;
-    asistencia: number | null;
   };
   consistency: PlayerConsistency | null;
 }
@@ -168,15 +180,16 @@ export interface PlayerConsistency {
  * Mismo cálculo que usaba `overall` en listPlayerReliability, factorizado
  * para poder aplicarlo a CUALQUIER subconjunto de filas — la ventana
  * completa, cada mitad (tendencia), los cubos semanales de player-detail, y
- * ahora también (§"fiabilidad de la noche" — feedback real) las filas de
- * una sola noche. `asistenciaPct` es opcional a propósito: solo tiene
- * sentido sobre una ventana de varios días (attendance.service.ts), nunca
- * sobre una noche suelta.
+ * también (§"fiabilidad de la noche" — feedback real) las filas de una
+ * sola noche. Sin eje de asistencia (§"rotar en un boss por tema de specs
+ * no tiene por qué afectar a la fiabilidad" — feedback real, 2026-08-28):
+ * mecánica/defensiva/preparación son las únicas señales, la MISMA fórmula
+ * para cualquier ventana — ya no hace falta un parámetro aparte para "esta
+ * noche no tiene asistencia".
  */
 export function computeReliabilityBreakdown(
   rows: ReliabilityInputRow[],
   now: number,
-  asistenciaPct: number | null = null,
 ): ReliabilityBreakdown | null {
   if (!rows.length) return null;
 
@@ -272,7 +285,6 @@ export function computeReliabilityBreakdown(
   if (mecanica != null) axes.push({ key: 'mecanica', value: mecanica });
   if (defensiva != null) axes.push({ key: 'defensiva', value: defensiva });
   if (preparacion != null) axes.push({ key: 'preparacion', value: preparacion });
-  if (asistenciaPct != null) axes.push({ key: 'asistencia', value: asistenciaPct });
   const weightSum = axes.reduce((s, a) => s + AXIS_WEIGHTS[a.key], 0);
   const overall =
     weightSum > 0
@@ -301,7 +313,7 @@ export function computeReliabilityBreakdown(
   }
   return {
     overall,
-    breakdown: { mecanica, defensiva, preparacion, asistencia: asistenciaPct },
+    breakdown: { mecanica, defensiva, preparacion },
     consistency,
   };
 }
@@ -607,14 +619,16 @@ export class ReliabilityService {
         }
       }
 
-      // Eje asistencia: de reports REALMENTE importados en Avoid desde el
-      // inicio de season (attendance.service.ts), no del calendario propio
-      // de wowaudit — ver comentario ahí. null si no hay reports importados
-      // todavía desde el inicio de season, o el jugador no aparece en ninguno.
+      // §"rotar en un boss por tema de specs no tiene por qué afectar a la
+      // fiabilidad" (feedback real, 2026-08-28): asistencia ya no puntúa
+      // dentro de Fiabilidad (ver comentario junto a AXIS_WEIGHTS) — sigue
+      // calculándose y mostrándose (attendanceNightsAttended/
+      // attendanceNightsTotal más abajo, informativo) a partir de reports
+      // REALMENTE importados en Avoid desde el inicio de season
+      // (attendance.service.ts), no del calendario propio de wowaudit.
       const rosterEntry = rosterByName.get(playerName);
       const attendance = realAttendance.get(playerName) ?? null;
-      const asistencia = attendance?.pct ?? null;
-      const result = computeReliabilityBreakdown(rows, now, asistencia);
+      const result = computeReliabilityBreakdown(rows, now);
       const overall = result?.overall ?? 0;
       const { mecanica, defensiva, preparacion } = result?.breakdown ?? {
         mecanica: null,
@@ -731,7 +745,7 @@ export class ReliabilityService {
       results.push({
         playerName,
         overall,
-        breakdown: { mecanica, defensiva, preparacion, asistencia },
+        breakdown: { mecanica, defensiva, preparacion },
         consistency: result?.consistency ?? null,
         latestGemCount,
         latestGemmedSlotCount,
@@ -793,9 +807,10 @@ export class ReliabilityService {
    * §"fiabilidad en el dosier debería tener 2 valores: fiabilidad a 60 días
    * y fiabilidad de la noche" (feedback real): MISMA fórmula
    * (computeReliabilityBreakdown), acotada a los pulls de un solo
-   * report_code en vez de la ventana de 60 días — sin eje asistencia (no
-   * tiene sentido sobre una sola noche). null si el jugador no tiene ningún
-   * pull evaluable esa noche.
+   * report_code en vez de la ventana de 60 días — de verdad la misma
+   * fórmula ahora que ninguna de las dos lleva eje de asistencia (ver
+   * AXIS_WEIGHTS). null si el jugador no tiene ningún pull evaluable esa
+   * noche.
    */
   async getNightReliability(
     reportCode: string,
@@ -805,7 +820,7 @@ export class ReliabilityService {
     if (!rows.length)
       return {
         overall: 0,
-        breakdown: { mecanica: null, defensiva: null, preparacion: null, asistencia: null },
+        breakdown: { mecanica: null, defensiva: null, preparacion: null },
         consistency: null,
         sampleSize: 0,
       };
@@ -815,7 +830,7 @@ export class ReliabilityService {
       ? { ...result, sampleSize: rows.length }
       : {
           overall: 0,
-          breakdown: { mecanica: null, defensiva: null, preparacion: null, asistencia: null },
+          breakdown: { mecanica: null, defensiva: null, preparacion: null },
           consistency: null,
           sampleSize: 0,
         };

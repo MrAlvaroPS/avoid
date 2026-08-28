@@ -201,16 +201,19 @@ export class NightPlayerDossierComponent {
     };
   }
 
-  /** Mismo contenido que antes tenía el tooltip de fiabilidad — 60 días, ahora en el modal. */
+  /** Mismo contenido que antes tenía el tooltip de fiabilidad — 60 días, ahora en el modal.
+   * §"rotar en un boss por tema de specs no tiene por qué afectar a la
+   * fiabilidad" (feedback real, 2026-08-28): sin eje de asistencia — se
+   * enseña aparte, informativo, para que quede claro que ya no puntúa. */
   reliabilityWindowExplanation(rel: PlayerReliability): ExplanationContent {
     return {
       title: `Fiabilidad — 60 días (${rel.overall}/100)`,
       lines: [
-        `Mecánica (40%): ${rel.breakdown.mecanica != null ? rel.breakdown.mecanica.toFixed(0) + '%' : 'sin dato'}`,
-        `Defensiva (30%): ${rel.breakdown.defensiva != null ? rel.breakdown.defensiva.toFixed(0) + '%' : 'sin dato'} — uso durante el try; la respuesta en una muerte evaluable pesa el doble.`,
-        `Preparación (20%): ${rel.breakdown.preparacion != null ? rel.breakdown.preparacion.toFixed(0) + '%' : 'sin dato'}`,
-        `Asistencia (10%): ${rel.breakdown.asistencia != null ? rel.breakdown.asistencia.toFixed(0) + '%' : 'sin dato'}`,
+        `Mecánica (44%): ${rel.breakdown.mecanica != null ? rel.breakdown.mecanica.toFixed(0) + '%' : 'sin dato'}`,
+        `Defensiva (33%): ${rel.breakdown.defensiva != null ? rel.breakdown.defensiva.toFixed(0) + '%' : 'sin dato'} — uso durante el try; la respuesta en una muerte evaluable pesa el doble.`,
+        `Preparación (22%): ${rel.breakdown.preparacion != null ? rel.breakdown.preparacion.toFixed(0) + '%' : 'sin dato'}`,
         `Consistencia: ${rel.consistency ? rel.consistency.score + '/100 (media ' + rel.consistency.averageExecution + ', variabilidad ' + rel.consistency.volatility + ')' : 'sin muestra suficiente'}`,
+        `Asistencia (informativo, no puntúa): ${rel.attendanceNightsAttended != null && rel.attendanceNightsTotal != null ? rel.attendanceNightsAttended + '/' + rel.attendanceNightsTotal + ' noches' : 'sin cruce suficiente'} — una rotación por composición no debe penalizar la fiabilidad.`,
       ],
     };
   }
@@ -220,11 +223,11 @@ export class NightPlayerDossierComponent {
     return {
       title: `Fiabilidad — esta noche (${nr.overall}/100)`,
       lines: [
-        `Mecánica: ${nr.breakdown.mecanica != null ? nr.breakdown.mecanica.toFixed(0) + '%' : 'sin dato'}`,
-        `Defensiva: ${nr.breakdown.defensiva != null ? nr.breakdown.defensiva.toFixed(0) + '%' : 'sin dato'} — uso durante el try; la respuesta en una muerte evaluable pesa el doble.`,
-        `Preparación: ${nr.breakdown.preparacion != null ? nr.breakdown.preparacion.toFixed(0) + '%' : 'sin dato'}`,
+        `Mecánica (44%): ${nr.breakdown.mecanica != null ? nr.breakdown.mecanica.toFixed(0) + '%' : 'sin dato'}`,
+        `Defensiva (33%): ${nr.breakdown.defensiva != null ? nr.breakdown.defensiva.toFixed(0) + '%' : 'sin dato'} — uso durante el try; la respuesta en una muerte evaluable pesa el doble.`,
+        `Preparación (22%): ${nr.breakdown.preparacion != null ? nr.breakdown.preparacion.toFixed(0) + '%' : 'sin dato'}`,
         `Consistencia: ${nr.consistency ? nr.consistency.score + '/100 (media ' + nr.consistency.averageExecution + ', variabilidad ' + nr.consistency.volatility + ')' : 'sin muestra suficiente'}`,
-        `${nr.sampleSize} pull${nr.sampleSize === 1 ? '' : 's'} evaluados. Sin eje de asistencia (no aplica a una sola noche).`,
+        `${nr.sampleSize} pull${nr.sampleSize === 1 ? '' : 's'} evaluados. Misma fórmula que Fiabilidad — 60 días, solo acotada a esta noche.`,
       ],
     };
   }

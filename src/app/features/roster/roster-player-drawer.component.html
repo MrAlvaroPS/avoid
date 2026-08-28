@@ -323,7 +323,7 @@
                   ? '—'
                   : (view.player.breakdown.mecanica | number: '1.0-0')
               }}</strong
-              ><small>40% del compuesto</small>
+              ><small>44% del compuesto</small>
             </article>
             <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.defensiva)">
               <span>Defensivos</span
@@ -351,26 +351,24 @@
               }}</strong
               ><small>inicio de cada noche</small>
             </article>
-            <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.asistencia)">
-              <span>Asistencia</span
-              ><strong>{{
-                view.player.breakdown.asistencia == null
-                  ? '—'
-                  : (view.player.breakdown.asistencia | number: '1.0-0')
-              }}</strong>
-              <small>
-                @if (
-                  view.player.attendanceNightsAttended != null &&
-                  view.player.attendanceNightsTotal != null
-                ) {
-                  {{ view.player.attendanceNightsAttended }}/{{ view.player.attendanceNightsTotal }}
-                  noches
-                } @else {
-                  sin cruce suficiente
-                }
-              </small>
-            </article>
           </div>
+          <!-- §"rotar en un boss por tema de specs no tiene por qué afectar
+               a la fiabilidad" (feedback real, 2026-08-28): asistencia ya
+               no puntúa dentro de Fiabilidad — se enseña aparte, fuera de
+               la rejilla de ejes, para que no parezca un cuarto ingrediente
+               de la puntuación. -->
+          <p class="attendance-note">
+            Asistencia (informativo, no puntúa):
+            @if (
+              view.player.attendanceNightsAttended != null &&
+              view.player.attendanceNightsTotal != null
+            ) {
+              {{ view.player.attendanceNightsAttended }}/{{ view.player.attendanceNightsTotal }}
+              noches
+            } @else {
+              sin cruce suficiente
+            }
+          </p>
         </section>
 
         <section class="drawer-section preparation-snapshot">
