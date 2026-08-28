@@ -9,16 +9,29 @@ import {
   ViewChild,
   ViewEncapsulation,
   computed,
+  inject,
   input,
   output,
   signal,
 } from '@angular/core';
-import { toBlob } from 'html-to-image';
+import { toBlob, toCanvas } from 'html-to-image';
 import { formatDuration, formatPct } from '../../shared/format.util';
 import type { NightFullReport, NightReportTrend } from '../../shared/models/night-full-report';
 import { bilingualName } from './night-full-report-markdown';
+import { EdgeFunctionsService } from '../../core/edge-functions.service';
+import { errorMessage } from '../../shared/error-message.util';
 
-type ExportStatus = 'idle' | 'rendering' | 'copied' | 'downloaded' | 'error';
+// §"dejar preparada una capa para interactuar en discord para enviar la
+// infografía directamente a discord" (feedback real, 2026-08-27): reutiliza
+// renderPng() (ya existía para copiar/descargar) — la infografía en sí no
+// cambia nada, solo se añade un tercer destino para la misma imagen.
+type ExportStatus = 'idle' | 'rendering' | 'copied' | 'downloaded' | 'sendingDiscord' | 'sentDiscord' | 'error';
+// §"IRIS siempre escribirá en el canal ID X, que es el que he creado para
+// ella" (feedback real, 2026-08-27): fijo — no es secreto (un ID de canal
+// no da acceso a nada por sí solo, el bot token sigue solo en Supabase),
+// así que vive aquí igual que cualquier otra constante de config del
+// frontend en vez de pedirlo cada vez o guardarlo en localStorage.
+const DEFAULT_DISCORD_CHANNEL_ID = '1542517353525284984';
 
 interface InfographicPriority {
   title: string;
@@ -34,6 +47,20 @@ const MIN_SHEET_HEIGHT = 1500;
 // aumentar la tipografía y reducir la altura sin sacrificar información;
 // la exportación 4.6K conserva detalle tras la recompresión de Discord.
 const EXPORT_PIXEL_RATIO = 1.8;
+// §"Discord devolvió HTTP 413: Request entity too large" (feedback real,
+// 2026-08-27): el PNG sin pérdida a 4.6K de ancho podía superar los ~10MB
+// que Discord acepta de subida en un guild sin boost. La recompresión
+// generosa de su CDN (el motivo original del ancho 4.6K, ver el comentario
+// de EXPORT_PIXEL_RATIO) pasa DESPUÉS de aceptar la subida — este 413
+// ocurre antes, en la propia ingesta, y no hay recompresión que valga si
+// ni siquiera la acepta. Solo para el envío a Discord: JPEG en vez de PNG
+// (mucho más pequeño para este tipo de contenido, con calidad de sobra
+// para una vista previa de chat) + reintento a menos resolución si aun
+// así no cupiera. Copiar portapapeles/descargar siguen en PNG sin pérdida
+// vía renderPng() — ahí no hay límite de tamaño que cumplir.
+const DISCORD_MAX_BYTES = 8 * 1024 * 1024; // margen bajo los ~10MB base de Discord (guilds con boost admiten más, pero no hay forma de saber el nivel desde aquí)
+const DISCORD_JPEG_QUALITY = 0.9;
+const DISCORD_RENDER_ATTEMPTS = 4;
 const FALLBACK_ICON_URL =
   'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
 const BOSS_ARTWORKS: Record<string, string> = {
@@ -55,6 +82,8 @@ const BOSS_ARTWORKS: Record<string, string> = {
   encapsulation: ViewEncapsulation.None,
 })
 export class NightReportInfographicComponent implements OnInit, AfterViewInit, OnDestroy {
+  private edgeFunctions = inject(EdgeFunctionsService);
+
   report = input.required<NightFullReport>();
   generatedAt = input.required<string>();
   closed = output<void>();
@@ -68,6 +97,7 @@ export class NightReportInfographicComponent implements OnInit, AfterViewInit, O
   readonly exportHeight = computed(() => Math.round(this.sheetHeight() * EXPORT_PIXEL_RATIO));
   readonly exportStatus = signal<ExportStatus>('idle');
   readonly previewScale = signal(0.6);
+  readonly discordError = signal<string | null>(null);
   readonly fitToScreen = signal(true);
   readonly iconUrls = signal<Record<number, string>>({});
   readonly bossArtworkFailed = signal(false);
@@ -234,6 +264,68 @@ export class NightReportInfographicComponent implements OnInit, AfterViewInit, O
     if (!blob) return;
     this.downloadBlob(blob);
     this.setStatus('downloaded');
+  }
+
+  async sendToDiscord(): Promise<void> {
+    this.discordError.set(null);
+    try {
+      const blob = await this.renderDiscordImage();
+      const base64 = await this.blobToBase64(blob);
+      this.exportStatus.set('sendingDiscord');
+      await this.edgeFunctions.sendDiscordMessage({
+        channelId: DEFAULT_DISCORD_CHANNEL_ID,
+        imageBase64: base64,
+        imageFilename: `iris-informe-combate-${this.report().reportCode}.jpg`,
+      });
+      this.setStatus('sentDiscord');
+    } catch (err) {
+      this.discordError.set(errorMessage(err));
+      this.setStatus('error');
+    }
+  }
+
+  // §"Discord devolvió HTTP 413" (feedback real, 2026-08-27): ver el
+  // comentario de DISCORD_MAX_BYTES arriba — JPEG en vez del PNG de
+  // renderPng(), con reintentos a menos resolución si aun así no cupiera
+  // (un informe con muchos bosses da una imagen más alta de partida).
+  // toCanvas (no toBlob) porque el propio wrapper toBlob de html-to-image
+  // no deja elegir formato/calidad, solo canvas.toBlob nativo lo permite.
+  private async renderDiscordImage(): Promise<Blob> {
+    if (!this.sheet) throw new Error('No se pudo generar la imagen: la infografía no está lista todavía.');
+    this.exportStatus.set('rendering');
+    await this.waitForVisuals();
+    const height = Math.max(MIN_SHEET_HEIGHT, Math.ceil(this.sheet.nativeElement.scrollHeight));
+    let pixelRatio = Math.max(1, Math.min(EXPORT_PIXEL_RATIO, 14_000 / height));
+    let lastBlob: Blob | null = null;
+    for (let attempt = 0; attempt < DISCORD_RENDER_ATTEMPTS; attempt++) {
+      const canvas = await toCanvas(this.sheet.nativeElement, {
+        width: SHEET_WIDTH,
+        height,
+        pixelRatio,
+        backgroundColor: '#080711',
+        cacheBust: true,
+        skipFonts: true,
+      });
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', DISCORD_JPEG_QUALITY));
+      if (!blob) throw new Error('No se pudo crear la imagen para Discord.');
+      lastBlob = blob;
+      if (blob.size <= DISCORD_MAX_BYTES) return blob;
+      pixelRatio *= 0.7;
+    }
+    const sizeMb = lastBlob ? (lastBlob.size / 1024 / 1024).toFixed(1) : '?';
+    throw new Error(`La infografía sigue pesando ${sizeMb} MB incluso reducida — supera el límite de subida de Discord. Prueba "Descargar PNG" y súbela a mano al canal.`);
+  }
+
+  private blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.slice(result.indexOf(',') + 1));
+      };
+      reader.onerror = () => reject(reader.error ?? new Error('No se pudo leer la imagen generada.'));
+      reader.readAsDataURL(blob);
+    });
   }
 
   statValue(value: number): string {

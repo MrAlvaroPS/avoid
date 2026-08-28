@@ -269,41 +269,60 @@ export interface RawRanking {
 }
 
 const RANKINGS_QUERY = `
-query FightRankings($encounterId: Int!, $difficulty: Int!) {
+query FightRankings($encounterId: Int!, $difficulty: Int!, $page: Int) {
   worldData {
     encounter(id: $encounterId) {
-      fightRankings(difficulty: $difficulty)
+      fightRankings(difficulty: $difficulty, page: $page)
     }
   }
 }`;
 
+const RANKINGS_PAGE_SIZE = 50; // tamaño de página real de WCL, verificado en real (no documentado en el schema)
+
 /**
- * Hasta 50 de las mejores kills públicas de este boss+dificultad, en JSON
- * crudo (fightRankings no es un tipo GraphQL fuerte) — verificado en real
- * que trae `duration`/`deaths`/`size`/`guild.name` por cada una, no solo el
- * código de report. UNA sola llamada — de aquí salen tanto el benchmark de
- * ritmo (percentil, no solo "contra el número 1 del mundo") como las
- * referencias que se usan para inferir categoría de mecánica.
+ * Kills públicas de este boss+dificultad, en JSON crudo (fightRankings no es
+ * un tipo GraphQL fuerte) — verificado en real que trae
+ * `duration`/`deaths`/`size`/`guild.name` por cada una, no solo el código de
+ * report. De aquí salen tanto el benchmark de ritmo (percentil, no solo
+ * "contra el número 1 del mundo") como las referencias que se usan para
+ * inferir categoría de mecánica y comparar severidad.
+ *
+ * §"cuantos logs nos podemos traer" (feedback real, 2026-08-27): `page` NO
+ * es un límite fijo en 50 — verificado en real (páginas 1/2/3 devuelven 150
+ * kills totalmente distintos, sin solapamiento, duración creciente = misma
+ * clasificación, no datos repetidos/aleatorios). `minCount` pagina hasta
+ * reunir al menos ese número o hasta que WCL se quede sin más páginas
+ * (una página con menos de RANKINGS_PAGE_SIZE resultados = última página
+ * real). Por defecto 50 (una sola llamada, comportamiento idéntico al de
+ * antes para quien no pase minCount).
  */
-export async function fetchPublicRankings(encounterId: number, wclDifficultyId: number): Promise<RawRanking[]> {
-  const data = await graphql<{
-    worldData: {
-      encounter: {
-        fightRankings: {
-          rankings: { duration: number; deaths: number; size: number; guild: { name: string } | null; report: { code: string; fightID: number } }[];
-        };
-      } | null;
-    };
-  }>(RANKINGS_QUERY, { encounterId, difficulty: wclDifficultyId });
-  const rankings = data.worldData.encounter?.fightRankings?.rankings ?? [];
-  return rankings.map((r) => ({
-    duration: r.duration,
-    deaths: r.deaths,
-    size: r.size,
-    guildName: r.guild?.name ?? null,
-    reportCode: r.report.code,
-    reportFightId: r.report.fightID,
-  }));
+export async function fetchPublicRankings(encounterId: number, wclDifficultyId: number, minCount = RANKINGS_PAGE_SIZE): Promise<RawRanking[]> {
+  const all: RawRanking[] = [];
+  const maxPages = Math.max(1, Math.ceil(minCount / RANKINGS_PAGE_SIZE));
+  for (let page = 1; page <= maxPages; page++) {
+    const data = await graphql<{
+      worldData: {
+        encounter: {
+          fightRankings: {
+            rankings: { duration: number; deaths: number; size: number; guild: { name: string } | null; report: { code: string; fightID: number } }[];
+          };
+        } | null;
+      };
+    }>(RANKINGS_QUERY, { encounterId, difficulty: wclDifficultyId, page });
+    const rankings = data.worldData.encounter?.fightRankings?.rankings ?? [];
+    all.push(
+      ...rankings.map((r) => ({
+        duration: r.duration,
+        deaths: r.deaths,
+        size: r.size,
+        guildName: r.guild?.name ?? null,
+        reportCode: r.report.code,
+        reportFightId: r.report.fightID,
+      })),
+    );
+    if (rankings.length < RANKINGS_PAGE_SIZE) break; // última página real de WCL — no forzar más llamadas
+  }
+  return all;
 }
 
 /** Percentil ligero (mediana + top cuartil) de ritmo, y qué fracción de las kills de referencia fueron "limpias" (0 muertes) — sin pedir ni un solo evento de fight, todo sale de fetchPublicRankings. */
@@ -324,17 +343,40 @@ export function summarizePublicRankings(rankings: RawRanking[]): {
   };
 }
 
-/** Resuelve la ventana real (startTime/endTime del FIGHT) de las primeras `count` rankings — necesario para poder pedir sus eventos (Casts/DamageTaken/...). Solo se llama para un puñado (2-3), no para las 50: cada una exige una consulta getReportFights aparte. */
+/**
+ * Resuelve la ventana real (startTime/endTime del FIGHT) de las primeras
+ * `count` rankings — necesario para poder pedir sus eventos (Casts/
+ * DamageTaken/...), una consulta getReportFights por ranking.
+ *
+ * §"cuantos logs nos podemos traer" (feedback real, 2026-08-27): esta
+ * función se escribió pensando en "un puñado (2-3)" y por eso resolvía
+ * secuencial, una llamada esperando a la anterior — con el reparto por
+ * dificultad nuevo (hasta 120 en Mítico) eso son 120 idas y vueltas de red
+ * en fila, un cuello de botella real que no aparecía cuando count era
+ * pequeño. Mismo patrón de concurrencia acotada que ya usa
+ * sync-boss-mechanics para processReferenceFight (4 a la vez) — ni todo en
+ * paralelo (arriesga saturar la API) ni todo en fila (demasiado lento).
+ */
 export async function resolveTopReportRefs(rankings: RawRanking[], count: number): Promise<TopReportRef[]> {
   const refs: TopReportRef[] = [];
-  for (const ranking of rankings.slice(0, count)) {
-    try {
-      const detail = await getReportFights(ranking.reportCode);
-      const fight = detail.fights.find((f) => f.id === ranking.reportFightId);
-      if (fight) refs.push({ code: ranking.reportCode, fightId: fight.id, startTime: fight.startTime, endTime: fight.endTime, raidSize: fight.friendlyPlayers.length || ranking.size || 1 });
-    } catch {
-      // best-effort: una entrada del leaderboard que falle no tumba el resto
-    }
+  const CONCURRENCY = 4;
+  const targets = rankings.slice(0, count);
+  for (let batchStart = 0; batchStart < targets.length; batchStart += CONCURRENCY) {
+    const batch = targets.slice(batchStart, batchStart + CONCURRENCY);
+    const resolved = await Promise.all(
+      batch.map(async (ranking) => {
+        try {
+          const detail = await getReportFights(ranking.reportCode);
+          const fight = detail.fights.find((f) => f.id === ranking.reportFightId);
+          if (!fight) return null;
+          return { code: ranking.reportCode, fightId: fight.id, startTime: fight.startTime, endTime: fight.endTime, raidSize: fight.friendlyPlayers.length || ranking.size || 1 };
+        } catch {
+          // best-effort: una entrada del leaderboard que falle no tumba el resto
+          return null;
+        }
+      }),
+    );
+    for (const ref of resolved) if (ref) refs.push(ref);
   }
   return refs;
 }

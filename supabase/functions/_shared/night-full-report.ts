@@ -8,14 +8,23 @@ import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './s
 // TODO lo de aquí es agregación pura sobre columnas que YA existen — nada
 // de LLM, nada inventado. Deliberadamente FUERA (documentado en
 // `notAvailable` para que se vea en el propio informe, no se esconde):
-// fases del encuentro, raid cooldowns (Barrier/Devotion Aura/Rallying
-// Cry...), Battle Res, Bloodlust/Heroism, dispels, buffs de consumibles
-// (flask/food/weapon oil/augment rune), prioridad de objetivos/adds — WCL
-// tiene estos datos pero esta app no los trae hoy (harían falta llamadas
-// nuevas a events(dataType: Resurrection/Buffs/Dispels) y un modelo de
-// adds/targets que no existe). Enfoque agregado/anónimo a propósito
-// (§"no se convierta en un ranking de culpables") — nunca se agrupa por
-// nombre de jugador, solo recuentos y porcentajes de raid.
+// raid cooldowns (Barrier/Devotion Aura/Rallying Cry...), Battle Res,
+// Bloodlust/Heroism, buffs de consumibles (flask/food/weapon oil/augment
+// rune), prioridad de objetivos/adds — WCL tiene estos datos pero esta app
+// no los trae hoy (harían falta llamadas nuevas a
+// events(dataType: Resurrection/Buffs) y un modelo de adds/targets que no
+// existe).
+// (§"WCL tiene fases de encuentro, importarlas" + "Dispels — sin
+// ingestión", ambos 2026-08-27: ESTO YA NO ES CIERTO, se corrigió aquí
+// mismo — fases se importan desde analyze-report y se resumen en
+// phaseBreakdown [boss de progress]; dispels se ingieren y refinan
+// deaths.byRootCause.undispelled_debuff. No los borres de esta lista de
+// "qué SÍ falta" sin comprobar primero que la ingestión sigue viva.)
+// Enfoque agregado/anónimo a propósito, EXCEPTO defensiveUsage (§"puedes
+// ver quien no ha usado ninguno en ningún pull o boss", feedback real
+// 2026-08-27: esa pregunta es intrínsecamente por jugador, no tiene
+// versión anónima con sentido) — el resto nunca se agrupa por nombre de
+// jugador, solo recuentos y porcentajes de raid.
 
 const EARLY_WIPE_MS = 90_000;
 const MECHANIC_CATEGORY_LABEL: Record<string, string> = {
@@ -147,7 +156,7 @@ export interface NightTimelinePatterns {
 }
 
 export interface NightFullReport {
-  schemaVersion: 11;
+  schemaVersion: 15;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -193,6 +202,9 @@ export interface NightFullReport {
     lethalFinalBlows: number;
     avoidableDamageTotal: number | null;
     trend: 'improving' | 'worsening' | 'flat' | 'insufficient_data';
+    /** §"muestra el percentil + fuente" (feedback real, 2026-08-27): media entre los fallos de esta mecánica esta noche — null si ninguno tuvo percentil (todos fixed_threshold o sin fallos). Fuente = la del fallo más reciente. */
+    comparisonSource: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
+    comparisonPercentile: number | null;
   }[];
   timelinePatterns: NightTimelinePatterns | null;
   /** null = el manifiesto de esta noche no tiene NINGÚN "Evitable" confirmado todavía (Ajustes) — un 0 real sería engañoso ("night limpia") cuando en verdad es "sin medir". Ver notAvailable. */
@@ -225,6 +237,8 @@ export interface NightFullReport {
       isProgressBoss: boolean;
       note: string | null;
       count: number;
+      /** §"fusionar informe 1 e informe 2... asegurando que no se duplican datos" (feedback real, 2026-08-27): mismo dato que topDeathCauses.distinctPlayers del informe de raid-session — un golpe final puede repetirse muchas veces sobre pocos jugadores o repartido entre muchos, son lecturas distintas. */
+      distinctPlayers: number;
     }[];
     topLastDamageBeforeUnknownFinalBlow: {
       mechanicName: string;
@@ -272,6 +286,25 @@ export interface NightFullReport {
     totalEvaluated: number;
     byCategory: { category: string; label: string; availableUnusedPct: number; evaluated: number }[];
   };
+  /**
+   * §"la parte de los defensivos usados no me gusta, me gustaría que fuesen
+   * desplegables los bosses de la noche y ahí aparezca en detalle qué
+   * defensivo se ha tirado quién y en qué minuto, y claramente señalado si
+   * alguien no se ha tirado defensivo" (feedback real, 2026-08-27):
+   * reemplaza el agregado por jugador de la versión anterior — registro
+   * real por boss+dificultad, uno por cada uno de la noche (no solo con
+   * varios bosses). offsetMs es relativo al inicio del pull (mismo origen
+   * que trigger_time_ms en mechanics/interrupts) — la UI lo convierte a
+   * minuto:segundo.
+   */
+  defensiveUsage: {
+    bossName: string;
+    bossNameEs: string | null;
+    difficulty: string;
+    playersAttended: number;
+    playersWithZeroCasts: string[];
+    casts: { playerName: string; spellName: string; wowheadSpellId: number | null; pullNumber: number; offsetMs: number }[];
+  }[];
   interrupts: {
     totalCasts: number;
     interrupted: number;
@@ -288,6 +321,13 @@ export interface NightFullReport {
       topUninterrupted: { mechanicName: string; mechanicNameEs: string | null; wowheadSpellId: number | null; note: string | null; completedCount: number }[];
     } | null;
   };
+  /** §"ten en cuenta todo lo último que hemos añadido... fases" (feedback real, 2026-08-27): scoped SIEMPRE al boss de progress (el resto del informe también prioriza ese boss para el detalle táctico) — null cuando ese boss no tiene fases definidas en WCL (un solo golpe, o el pull no trajo phase_transitions), que es un caso real y frecuente, no un fallo de ingesta. */
+  phaseBreakdown: {
+    bossName: string;
+    bossNameEs: string | null;
+    difficulty: string;
+    phases: { phaseId: number; name: string; isIntermission: boolean; deaths: number; mechanicFails: number }[];
+  } | null;
   wipePatterns: { category: string; label: string; count: number; pct: number }[];
   wipeRecovery: { windowMs: number; wipesEvaluable: number; wipesWithCascade: number; pctWipesWithCascade: number };
   roleInsights: {
@@ -341,6 +381,8 @@ interface RecordLite {
     damageWindowEvents?: { time_ms: number; amount: number; ability_id: number | null; ability_name: string | null }[];
     defensiveOptions?: { spellId: number; status: string }[];
     statisticalExclusionReason?: string | null;
+    /** §"WCL tiene fases de encuentro, importarlas... en todos los sitios donde corresponda" (feedback real): fase activa en timeMs, ver boss_encounter_phases. Ausente en muertes analizadas antes de esta columna (best-effort). */
+    phaseId?: number | null;
   } | null;
   wipe_call_cluster: boolean;
   avoidable_damage_taken: number;
@@ -362,6 +404,18 @@ interface MechEventLite {
   players_hit: number;
   avoidable: boolean | null;
   player_hit_details: { name?: string; damage_taken?: number }[];
+  /** Ver death_cause.phaseId — mismo dato, columna real en vez de campo del JSONB. */
+  phase_id?: number | null;
+  /** §"muestra el percentil + fuente" (feedback real, 2026-08-27) — ver resolveSeverity en _shared/mechanic-severity.ts. */
+  comparison_source?: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
+  comparison_percentile?: number | null;
+}
+
+interface PhaseLite {
+  boss_id: string;
+  phase_id: number;
+  name: string;
+  is_intermission: boolean | null;
 }
 
 interface MechanicManifestLite {
@@ -411,7 +465,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   const pullById = new Map(allPulls.map((p) => [p.id, p]));
 
   const bossIds = [...new Set(pulls.map((p) => p.boss_id))];
-  const [rawRecords, rawMechEvents, manifest, knownBossResult] = await Promise.all([
+  const [rawRecords, rawMechEvents, manifest, knownBossResult, phasesResult] = await Promise.all([
     fetchAllByValues<RecordLite>(
       supabase,
       'player_pull_records',
@@ -422,7 +476,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     fetchAllByValues<MechEventLite>(
       supabase,
       'applicable_pull_mechanic_events',
-      'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, responsibility, outcome, players_hit, avoidable, player_hit_details',
+      'id, pull_id, mechanic_name, ability_id, trigger_time_ms, category, responsibility, outcome, players_hit, avoidable, player_hit_details, phase_id, comparison_source, comparison_percentile',
       'pull_id',
       pullIds,
     ),
@@ -442,8 +496,14 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       bossIds,
     ),
     supabase.from('known_raid_bosses').select('encounter_id, journal_encounter_id').in('encounter_id', bossIds.map(Number)),
+    // §"fases del encuentro... importarlas e implementarlas en todos los
+    // sitios donde corresponda" (feedback real): metadata estática, igual
+    // para todos los pulls de estos bosses -- una sola consulta por boss_id,
+    // no por pull.
+    supabase.from('boss_encounter_phases').select('boss_id, phase_id, name, is_intermission').in('boss_id', bossIds),
   ]);
   if (knownBossResult.error) throw knownBossResult.error;
+  if (phasesResult.error) throw phasesResult.error;
 
   // Un ninja pull puede seguir teniendo player_pull_records/eventos de
   // mecánica (alguien murió en esos pocos segundos) porque se pidieron con
@@ -454,6 +514,12 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
   const isRealPull = (pullId: string) => !pullById.get(pullId)?.ninja_pull_excluded;
   const records = rawRecords.filter((r) => isRealPull(r.pull_id));
   const mechEvents = rawMechEvents.filter((e) => isRealPull(e.pull_id));
+
+  const phasesByBossId = new Map<string, PhaseLite[]>();
+  for (const phase of (phasesResult.data ?? []) as PhaseLite[]) {
+    if (!phasesByBossId.has(phase.boss_id)) phasesByBossId.set(phase.boss_id, []);
+    phasesByBossId.get(phase.boss_id)!.push(phase);
+  }
 
   // El nombre castellano del boss sale del Journal oficial de Blizzard. Es
   // best-effort: una caída de esa API no impide generar el informe ni se
@@ -661,6 +727,13 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       pullsAffected: Set<string>;
       firstHalfPullsAffected: Set<string>;
       secondHalfPullsAffected: Set<string>;
+      // §"muestra el percentil + fuente" (feedback real, 2026-08-27): media
+      // de percentiles entre los fallos de esta mecánica esta noche (solo
+      // entre los que sí tienen uno — fixed_threshold no aporta percentil),
+      // más la fuente del fallo más reciente como representativa del grupo.
+      percentileSum: number;
+      percentileCount: number;
+      lastComparisonSource: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
     }
   >();
   for (const ev of reportableMechEvents) {
@@ -681,6 +754,9 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
         pullsAffected: new Set(),
         firstHalfPullsAffected: new Set(),
         secondHalfPullsAffected: new Set(),
+        percentileSum: 0,
+        percentileCount: 0,
+        lastComparisonSource: null,
       });
     }
     const entry = mechByKey.get(key)!;
@@ -692,6 +768,11 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       const idx = group.pulls.findIndex((p) => p.id === ev.pull_id);
       if (idx < half) entry.firstHalfPullsAffected.add(ev.pull_id);
       else entry.secondHalfPullsAffected.add(ev.pull_id);
+      if (ev.comparison_percentile != null) {
+        entry.percentileSum += ev.comparison_percentile;
+        entry.percentileCount++;
+      }
+      if (ev.comparison_source) entry.lastComparisonSource = ev.comparison_source;
     }
   }
   const deathsByMechanicKey = new Map<string, number>();
@@ -755,6 +836,8 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
         lethalFinalBlows: deathsByMechanicKey.get(key) ?? 0,
         avoidableDamageTotal: measuredAvoidableScopes.has(scope) ? (avoidableDamageByMechanicKey.get(key) ?? 0) : null,
         trend,
+        comparisonSource: e.lastComparisonSource,
+        comparisonPercentile: e.percentileCount ? Math.round((e.percentileSum / e.percentileCount) * 10) / 10 : null,
       };
     })
     .filter((m) => m.totalFails > 0)
@@ -762,6 +845,53 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       Number(b.isProgressBoss) * 10_000 + b.lethalFinalBlows * 3 + b.pullsAffected -
       (Number(a.isProgressBoss) * 10_000 + a.lethalFinalBlows * 3 + a.pullsAffected),
     );
+
+  // ---- 2b. Fases del boss de progress ----
+  // §"WCL tiene fases de encuentro, importarlas e implementarlas en todos
+  // los sitios donde corresponda" (feedback real): scoped al boss de
+  // progress a propósito (mismo criterio de foco táctico que interrupts.
+  // progressBoss) -- null cuando ese boss no tiene fases definidas en WCL
+  // (un solo golpe) o cuando ningún pull analizado trajo phase_transitions
+  // todavía (datos anteriores a esta columna), casos reales, no un fallo.
+  const phaseBreakdown: NightFullReport['phaseBreakdown'] = (() => {
+    if (!progressBossGroup) return null;
+    const phases = phasesByBossId.get(progressBossGroup.bossId);
+    if (!phases?.length) return null;
+    const progressPullIds = new Set(progressBossGroup.pulls.map((p) => p.id));
+    const byPhaseId = new Map<number, { deaths: number; mechanicFails: number }>();
+    for (const phase of phases) byPhaseId.set(phase.phase_id, { deaths: 0, mechanicFails: 0 });
+    for (const r of realDeaths) {
+      if (!progressPullIds.has(r.pull_id)) continue;
+      const phaseId = r.death_cause?.phaseId;
+      if (phaseId == null || !byPhaseId.has(phaseId)) continue;
+      byPhaseId.get(phaseId)!.deaths++;
+    }
+    for (const ev of statisticallyEvaluableMechEvents) {
+      if (ev.outcome === 'clean' || !progressPullIds.has(ev.pull_id)) continue;
+      const phaseId = ev.phase_id;
+      if (phaseId == null || !byPhaseId.has(phaseId)) continue;
+      byPhaseId.get(phaseId)!.mechanicFails++;
+    }
+    const rows = phases
+      .map((phase) => ({
+        phaseId: phase.phase_id,
+        name: phase.name,
+        isIntermission: phase.is_intermission ?? false,
+        deaths: byPhaseId.get(phase.phase_id)?.deaths ?? 0,
+        mechanicFails: byPhaseId.get(phase.phase_id)?.mechanicFails ?? 0,
+      }))
+      .sort((a, b) => a.phaseId - b.phaseId);
+    // Sin ninguna muerte ni fallo asignado a NINGUNA fase (todos los pulls
+    // analizados antes de que existiera esta columna): una tabla toda a
+    // ceros no aporta nada, mejor omitir la sección entera.
+    if (!rows.some((row) => row.deaths > 0 || row.mechanicFails > 0)) return null;
+    return {
+      bossName: progressBossGroup.bossName,
+      bossNameEs: progressBossGroup.bossNameEs,
+      difficulty: progressBossGroup.difficulty,
+      phases: rows,
+    };
+  })();
 
   // ---- 3. Muertes clasificadas ----
   const rootCauseCounts = new Map<string, number>();
@@ -779,6 +909,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       isProgressBoss: boolean;
       note: string | null;
       count: number;
+      players: Set<string>;
     }
   >();
   const lastDamageContextCounts = new Map<
@@ -845,8 +976,10 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       const mechanicName = rawMechanicName;
       const key = `${pull.boss_id}|${pull.difficulty}|${dc.mechanicId || normalizeAbilityName(mechanicName)}`;
       const current = finalBlowCounts.get(key);
-      if (current) current.count++;
-      else {
+      if (current) {
+        current.count++;
+        current.players.add(r.player_name);
+      } else {
         finalBlowCounts.set(key, {
           bossId: pull.boss_id,
           mechanicName,
@@ -858,6 +991,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
           isProgressBoss: progressBossGroup?.bossId === pull.boss_id && progressBossGroup.difficulty === pull.difficulty,
           note: mechanicNote(pull.boss_id, pull.difficulty, mechanicName),
           count: 1,
+          players: new Set([r.player_name]),
         });
       }
     }
@@ -877,7 +1011,10 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     byCategory: [...categoryCounts.entries()]
       .map(([category, count]) => ({ category, label: category === 'sin-categoria' ? 'Sin categoría' : (MECHANIC_CATEGORY_LABEL[category] ?? category), count, pct: pct(count, realDeaths.length) }))
       .sort((a, b) => b.count - a.count),
-    topFinalBlows: [...finalBlowCounts.values()].sort((a, b) => b.count - a.count).slice(0, 8),
+    topFinalBlows: [...finalBlowCounts.values()]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8)
+      .map(({ players, ...rest }) => ({ ...rest, distinctPlayers: players.size })),
     topLastDamageBeforeUnknownFinalBlow: [...lastDamageContextCounts.values()].sort((a, b) => b.count - a.count).slice(0, 5),
     pctWithDefensiveAvailableUnused: pct(defensiveAvailableUnused, defensiveEvaluable),
     defensiveEvaluableCount: defensiveEvaluable,
@@ -1447,6 +1584,51 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       .sort((a, b) => b.evaluated - a.evaluated),
   };
 
+  // ---- 5b. Uso de defensivos, por boss ----
+  // §"la parte de los defensivos usados no me gusta, me gustaría que fuesen
+  // desplegables los bosses de la noche y ahí aparezca en detalle qué
+  // defensivo se ha tirado quién y en qué minuto, y claramente señalado si
+  // alguien no se ha tirado defensivo" (feedback real, 2026-08-27):
+  // registro real por boss+dificultad (los 8 de la noche, no solo si hay
+  // más de uno) — cada cast individual con jugador/hechizo/pull/momento, más
+  // quién no lanzó ninguno en ESE boss. spellId/name ya vienen directos en
+  // defensive_casts, no hace falta cruzar con cooldown_catalog.
+  // §"excluye a los tanks por ahora que no tiene sentido ponerlos" (feedback
+  // real, 2026-08-27): su mitigación es continua por diseño del rol (uptime
+  // de Ignore Pain/Shield Block, etc.), no un botón de emergencia puntual —
+  // se excluyen de attended/withCasts/casts, no solo de la vista, para que
+  // playersAttended y el aviso de "sin defensivo" cuenten solo sobre
+  // healers/dps.
+  const defensiveUsage: NightFullReport['defensiveUsage'] = [...bossGroups.values()].map((group) => {
+    const bossPullIds = new Set(group.pulls.map((p) => p.id));
+    const pullNumberById = new Map(group.pulls.map((p) => [p.id, p.pull_number]));
+    const casts: NightFullReport['defensiveUsage'][number]['casts'] = [];
+    const attended = new Set<string>();
+    const withCasts = new Set<string>();
+    for (const r of records) {
+      if (!bossPullIds.has(r.pull_id)) continue;
+      if (raidRole(r.class, r.spec) === 'tank') continue;
+      attended.add(r.player_name);
+      const pullNumber = pullNumberById.get(r.pull_id)!;
+      for (const defensive of r.defensive_casts ?? []) {
+        for (const timestamp of defensive.timestampsMs) {
+          if (!timestampIsEvaluable(r.pull_id, timestamp)) continue;
+          withCasts.add(r.player_name);
+          casts.push({ playerName: r.player_name, spellName: defensive.name, wowheadSpellId: defensive.spellId || null, pullNumber, offsetMs: timestamp });
+        }
+      }
+    }
+    casts.sort((a, b) => a.pullNumber - b.pullNumber || a.offsetMs - b.offsetMs);
+    return {
+      bossName: group.bossName,
+      bossNameEs: group.bossNameEs,
+      difficulty: group.difficulty,
+      playersAttended: attended.size,
+      playersWithZeroCasts: [...attended].filter((name) => !withCasts.has(name)).sort((a, b) => a.localeCompare(b)),
+      casts,
+    };
+  });
+
   // ---- 6. Interrupciones ----
   const interruptEvents = reportableMechEvents.filter((ev) => ev.category === 'interrupt');
   const summarizeInterruptEvents = (events: MechEventLite[]) => {
@@ -1739,7 +1921,7 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     .reduce((sum, p) => sum + (p.raid_damage_taken_series?.points ?? []).reduce((pointSum, point) => pointSum + point, 0), 0);
 
   return {
-    schemaVersion: 11,
+    schemaVersion: 15,
     reportCode,
     reportTitle: (reportResult.data as { title: string } | null)?.title ?? reportCode,
     reportDate: (reportResult.data as { start_time: number } | null)?.start_time ? new Date((reportResult.data as { start_time: number }).start_time).toISOString() : '',
@@ -1771,7 +1953,9 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
     responsibilities,
     survival,
     defensives,
+    defensiveUsage,
     interrupts,
+    phaseBreakdown,
     wipePatterns,
     wipeRecovery,
     roleInsights,
@@ -1792,11 +1976,21 @@ export async function buildNightFullReport(supabase: SupabaseClient, reportCode:
       ...(excludedUnverifiedInterruptCasts > 0
         ? [`Interrupciones inferidas solo por texto — se excluyeron ${excludedUnverifiedInterruptCasts} casts históricos sin confirmación manual ni evidencia observada como Interrupt`]
         : []),
-      'Fases del encuentro (WCL las tiene, esta app no las importa todavía)',
+      // §"WCL tiene fases de encuentro, importarlas e implementarlas en
+      // todos los sitios donde corresponda" + "Dispels — sin ingestión de
+      // eventos de dispel" (feedback real, contrastado en real 2026-08-27):
+      // las dos AFIRMACIONES de abajo ya eran falsas — fases se importan
+      // desde analyze-report (boss_encounter_phases/phase_transitions) y
+      // dispels se ingieren para refinar rootCause (undispelled_debuff, ver
+      // deaths.byRootCause). Se sustituyen por notas honestas sobre lo que
+      // SÍ falta de verdad, en vez de dejar una mentira porque "siempre
+      // estuvo ahí".
+      ...(progressBossGroup && !phaseBreakdown
+        ? ['Fases del boss de progress — no tiene fases definidas en WCL (encuentro de una sola fase), o los pulls analizados son anteriores a que esta app empezara a traerlas']
+        : []),
       'Planificación y cobertura de cooldowns de raid (Barrier, Devotion Aura, Rallying Cry...) — algunos casts pueden constar para quien los lanzó, pero falta un modelo raid-wide de destinatarios y ventanas asignadas',
       'Battle Res / Combat Res — sin ingestión de eventos de resurrección',
       'Bloodlust/Heroism — sin ingestión de ese buff',
-      'Dispels — sin ingestión de eventos de dispel',
       'Consumibles de buff (flask/food/weapon oil/augment rune) — sin ingestión de esos buffs',
       'Prioridad de objetivos/adds — sin modelo de adds/targets',
     ],

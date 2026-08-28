@@ -1,6 +1,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { buildNightFullReport } from '../_shared/night-full-report.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 
 // §"cambiar 'copiar informe' por 'generar informe'... cuando el informe
 // está generado ese botón se convierte en 'ver informe' pero se puede
@@ -32,7 +33,7 @@ Deno.serve(async (req: Request) => {
   try {
     if (!body.force) {
       const { data: existing } = await supabase.from('night_full_reports').select('*').eq('report_code', body.reportCode).maybeSingle();
-      if (existing?.report?.schemaVersion === 11) {
+      if (existing?.report?.schemaVersion === 15) {
         return jsonResponse({ ok: true, cached: true, report: existing.report, generatedAt: existing.generated_at });
       }
     }
@@ -49,6 +50,10 @@ Deno.serve(async (req: Request) => {
 
     return jsonResponse({ ok: true, cached: false, report: saved.report, generatedAt: saved.generated_at });
   } catch (err) {
-    return jsonResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+    // §"[object Object]" bug ya visto varias veces esta sesión (classify-defensives,
+    // etc.) — el mismo patrón vivía aquí sin arreglar. errorMessage() sí
+    // sabe leer un PostgrestError real en vez de sólo Error/String().
+    console.error('generate-night-full-report falló:', err);
+    return jsonResponse({ ok: false, error: errorMessage(err) }, 500);
   }
 });

@@ -7,7 +7,7 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { ManifestService, type ObservedHitStat } from '../../core/manifest.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
-import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
+import { formatPct, STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
 import { MechanicResolutionIconComponent } from '../../shared/mechanic-resolution-icon.component';
@@ -362,6 +362,25 @@ export class ManifestComponent {
   difficultyLabel(id: number): string {
     return WCL_DIFFICULTY_NAME_BY_ID[id] ?? `Dificultad ${id}`;
   }
+
+  // §"si tienes muestras para que no sea el 0.35, actualiza ahi el valor
+  // real para que sea visual" (feedback real, 2026-08-27): en cuanto hay
+  // ≥5 muestras de referencia, resolveSeverity (_shared/mechanic-severity.
+  // ts) deja de mirar el severity_threshold fijo de esta fila — el número
+  // del <input> deja de ser "la verdad" y esto calcula la que sí lo es,
+  // para no dejar la cifra vieja en pantalla sin avisar. Ahí,
+  // percentileRank es count(samples <= X)/length > 50%; eso equivale
+  // exactamente al valor en el índice floor(length/2) del array ordenado —
+  // misma frontera, forma cerrada. No se puede importar el archivo real
+  // (Deno vs Angular, mismo problema que PERSONAL_RESPONSIBILITY_CATEGORIES
+  // duplicado a mano en la migración de personal_mechanic_fail_count).
+  effectiveThreshold(samples: number[] | null | undefined): number | null {
+    if (!samples || samples.length < 5) return null;
+    const sorted = [...samples].sort((a, b) => a - b);
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+
+  formatPct = formatPct;
 
   hitStatFor(abilityId: number): ObservedHitStat | null {
     return this.hitStats().get(abilityId) ?? null;

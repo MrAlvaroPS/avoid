@@ -42,13 +42,36 @@ interface SyncRequest {
   // quedan sin evidencia suficiente (verificado en real: un boss con solo
   // 15-17 casts de enemigo por log, la mayoría de candidatas del Journal ni
   // siquiera aparecen 3 veces) — más muestra reduce ese ruido estadístico.
-  // 100 no es realista en una sola llamada HTTP síncrona (cada referencia
-  // exige ~5 llamadas a WCL; 100×5 con latencia real supera cualquier
-  // timeout razonable) — 20 es un salto real (~6-7x more) que sigue
-  // terminando en un tiempo razonable.
+  // §"cuantos logs nos podemos traer... comprueba WCL" (feedback real,
+  // 2026-08-27): la suposición anterior de "100 no es realista" era de
+  // cuando esto solo servía para inferir categoría — verificado en real
+  // contra la cuenta de WCL (rateLimitData) que un bundle de referencia
+  // completo cuesta 9,25 puntos de un presupuesto de 3600/hora (~389
+  // fights/hora solo por cuota), y un batch real de 4 concurrentes tarda
+  // ~940ms (120 referencias ≈ 28s) — hay margen real. El techo de verdad es
+  // la ejecución de la Edge Function (WORKER_RESOURCE_LIMIT ya visto esta
+  // sesión), no la cuota de WCL — se verifica en real, no en teoría.
   deepSync?: boolean;
 }
-const DEEP_SYNC_REFERENCE_COUNT = 20;
+// §"lo repartimos por dificultad" (feedback real, 2026-08-27): no tiene
+// sentido pedir la misma muestra en las 3 — Normal ya sale fluido, Heroico
+// va por la mitad, y Mítico es donde Avoid de verdad se atasca y donde más
+// falta hace una comparación fina. La mayoría del presupuesto va ahí.
+// §"mientras dura el world first no hay logs de mítico, pero los habrá
+// pronto, hay que dejarlo preparado" (feedback real, 2026-08-27): bajado de
+// la primera versión (10/30/120) tras un HTTP 546 real en producción
+// (WORKER_RESOURCE_LIMIT, boss 3445 Mítico, solo 21 referencias — ver notas
+// de maxPages/REFERENCE_CONCURRENCY más abajo, que atacan la causa real).
+// Con esas dos mitigaciones puestas, estos números deberían aguantar
+// cuando existan logs de sobra — pero como con world-first no hay forma de
+// probar 50/120 reales todavía, se deja un techo realista y se puede subir
+// con confianza en cuanto haya muestra real que lo permita comprobar.
+const DEEP_SYNC_REFERENCE_COUNT_BY_DIFFICULTY: Record<string, number> = {
+  Normal: 10,
+  Heroic: 25,
+  Mythic: 50,
+};
+const DEFAULT_DEEP_SYNC_REFERENCE_COUNT = 25; // fallback si difficultyName no coincide con el mapa (no debería pasar, LFR ya no se sincroniza)
 const QUICK_SYNC_REFERENCE_COUNT = 3;
 
 const WCL_DIFFICULTY_NAME_BY_ID: Record<number, string> = { 1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic' };
@@ -281,8 +304,17 @@ Deno.serve(async (req: Request) => {
       const referenceBundles: ReferenceBundle[] = [];
       let referenceReportCode: string | null = null;
       let referenceFetchError: string | null = null;
+      const referenceCount = body.deepSync
+        ? (DEEP_SYNC_REFERENCE_COUNT_BY_DIFFICULTY[difficultyName] ?? DEFAULT_DEEP_SYNC_REFERENCE_COUNT)
+        : QUICK_SYNC_REFERENCE_COUNT;
       try {
-        const rankings = await fetchPublicRankings(encounterId, Number(wclDifficultyId));
+        // §pide directamente el número de páginas que hagan falta para
+        // referenceCount (ver fetchPublicRankings — page ya no está topado
+        // en 50, verificado en real) — antes se pedía siempre 1 página y
+        // resolveTopReportRefs recortaba, así que un boss con
+        // referenceCount>50 (Mítico) se quedaba corto de candidatas aunque
+        // WCL tuviera más disponibles.
+        const rankings = await fetchPublicRankings(encounterId, Number(wclDifficultyId), referenceCount);
         const summary = summarizePublicRankings(rankings);
         if (summary && rankings[0]) {
           // §"a qué estamos llegando tarde": duración del #1 del mundo (listón
@@ -306,13 +338,14 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        const referenceCount = body.deepSync ? DEEP_SYNC_REFERENCE_COUNT : QUICK_SYNC_REFERENCE_COUNT;
         const topRefs = await resolveTopReportRefs(rankings, referenceCount);
-        // Lote de 4 en paralelo — con deepSync (hasta 20 referencias) hacerlo
-        // todo secuencial (una por una) sería demasiado lento para una sola
-        // llamada HTTP; todo a la vez (20×5 llamadas simultáneas) arriesga
-        // saturar la API de WCL. 4 concurrentes es un término medio real.
-        const REFERENCE_CONCURRENCY = 4;
+        // §HTTP 546 real (ver nota de maxPages arriba): bajado de 4 a 3 —
+        // menos payloads pesados en memoria a la vez. Más lento en tiempo de
+        // pared, pero el techo real resultó ser memoria, no tiempo (30
+        // referencias con concurrencia 4 tardaron 65s sin problema; 21 de un
+        // boss más pesado murieron con 546 a los 48s — no es una cuestión de
+        // cuántas, es de cuántas EN PARALELO a la vez).
+        const REFERENCE_CONCURRENCY = 3;
         for (let batchStart = 0; batchStart < topRefs.length; batchStart += REFERENCE_CONCURRENCY) {
           const batch = topRefs.slice(batchStart, batchStart + REFERENCE_CONCURRENCY);
           await Promise.all(batch.map((ref) => processReferenceFight(ref)));
@@ -322,7 +355,16 @@ Deno.serve(async (req: Request) => {
           const [interrupts, casts, damageTaken, deaths, referenceAbilities, damageTakenTable, roles] = await Promise.all([
             getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'Interrupts', startTime: ref.startTime, endTime: ref.endTime, maxPages: 3 }),
             getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'Casts', startTime: ref.startTime, endTime: ref.endTime, maxPages: 5, hostilityType: 'Enemies' }),
-            getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'DamageTaken', startTime: ref.startTime, endTime: ref.endTime, maxPages: 10 }),
+            // §HTTP 546 (WORKER_RESOURCE_LIMIT) real en producción (2026-08-27,
+            // boss 3445 Mítico, solo 21 referencias): maxPages:10 sin
+            // hostilityType podía traer hasta 10.000 eventos de daño CRUDOS
+            // por referencia (todo el daño del fight, no solo el del boss),
+            // mantenidos en memoria simultáneamente para las ~20-120
+            // referencias — buildBehaviorSample solo usa damageTaken dentro
+            // de una ventana de 4s tras un cast concreto (REFERENCE_REACTION_WINDOW_MS),
+            // nunca el fight entero. 4 páginas es un techo real más bajo sin
+            // vaciar esa ventana en fights normales.
+            getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'DamageTaken', startTime: ref.startTime, endTime: ref.endTime, maxPages: 4 }),
             getFightEvents({ code: ref.code, fightId: ref.fightId, dataType: 'Deaths', startTime: ref.startTime, endTime: ref.endTime, maxPages: 3 }),
             getReportAbilities(ref.code),
             getDamageTakenByPlayerTable({ code: ref.code, fightId: ref.fightId, startTime: ref.startTime, endTime: ref.endTime }).catch(() => null),
@@ -531,6 +573,15 @@ Deno.serve(async (req: Request) => {
                     reference_avg_players_hit: referenceAvgPlayersHit,
                     reference_occurrences: behavior?.occurrences ?? null,
                     reference_source_report: referenceReportCode,
+                    // §"severidad variable estilo Wipefest" (feedback real,
+                    // 2026-08-27): el ratio CRUDO por cast (no la media que
+                    // ya se guarda arriba) — es la muestra que consume
+                    // resolveSeverity en _shared/mechanic-severity.ts para
+                    // comparar un pull real contra la distribución de logs
+                    // de referencia. Mismo dato que ya se calculaba
+                    // (behavior.targetRatiosPerCast), solo que antes se
+                    // colapsaba a un único número y se descartaba.
+                    reference_hit_ratio_samples: behavior?.targetRatiosPerCast?.length ? [...behavior.targetRatiosPerCast].sort((a, b) => a - b) : null,
                   }
                 : {}),
               updated_at: new Date().toISOString(),

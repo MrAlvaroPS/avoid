@@ -959,6 +959,19 @@ function buildTimeline(
 // individual?") a nivel de una noche entera, no solo de un pull.
 export const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set(['avoidable-ground', 'spread', 'soak', 'personal-target']);
 
+// §"actualizar el binario de 'Mecánica' para que use este mismo conteo
+// graduado... así Fiabilidad hereda la precisión sin duplicar nada"
+// (feedback real, 2026-08-27): cuánto resta CADA fallo de mecánica de
+// responsabilidad individual (el Set de arriba) a un score 0-1. Vivía solo
+// en night-player-summary.service.ts (pullScore); ahora también lo consume
+// reliability.service.ts para el eje Mecánica — un único número compartido
+// para que un 2/2 "sin fallos" en un sitio no pueda leerse distinto en el
+// otro. Aquí y no en reliability.service.ts ni night-player-summary.service.ts
+// porque reliability.service.ts es importado POR night-player-summary.service.ts
+// (ReliabilityService) — ponerlo en cualquiera de los dos crearía un ciclo;
+// pull-analysis.service.ts no depende de ninguno de los dos.
+export const PULL_SCORE_FAIL_PENALTY = 0.25;
+
 function toDefensiveRefs(options: DefensiveOption[], status: DefensiveOption['status'], deathTimeMs?: number, castTimestamps?: Map<number, number[]>): import('../shared/models/ui').DefensiveRef[] {
   return options
     .filter((o) => o.status === status)

@@ -52,35 +52,32 @@
         <span class="stat-value tabular tone-warning">{{ d.totalMechanicFails }}</span>
         <span class="stat-label">mecánicas falladas</span>
       </div>
+      <!-- §"puntuación compuesta... como wipefest" (feedback real,
+           2026-08-27): distinto de la fiabilidad de abajo (esa es un
+           sistema propio de 60 días con 4 ejes) — esta es la puntuación
+           por pull (mecánicas + consumibles al morir, penalizada por
+           cuándo murió), agregada para la noche. -->
+      @if (d.nightScore != null) {
+        <div class="stat">
+          <button type="button" class="score-trigger" (click)="openExplanation(nightScoreExplanation(d.nightScore, d.pulls))">
+            <span class="stat-value tabular" [class]="'tone-' + nightScoreTone(d.nightScore)">{{ formatPct(d.nightScore * 100) }}</span>
+          </button>
+          <span class="stat-label">puntuación de la noche</span>
+        </div>
+      }
       @if (d.reliability; as rel) {
         <div class="stat">
-          <span class="reliability-wrap" tabindex="0">
+          <button type="button" class="score-trigger" (click)="openExplanation(reliabilityWindowExplanation(rel))">
             <span class="reliability-badge" [class]="'tone-' + reliabilityTone()">{{ rel.overall }}</span>
-            <div class="reliability-tooltip" role="tooltip">
-              <p><strong>Fiabilidad — 60 días</strong></p>
-              <p>Mecánica (40%): {{ rel.breakdown.mecanica != null ? rel.breakdown.mecanica.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p title="Uso durante el try; la respuesta en una muerte evaluable pesa el doble">Defensiva (30%): {{ rel.breakdown.defensiva != null ? rel.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p>Preparación (20%): {{ rel.breakdown.preparacion != null ? rel.breakdown.preparacion.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p>Consistencia: {{ rel.consistency ? rel.consistency.score + '/100 (media ' + rel.consistency.averageExecution + ', variabilidad ' + rel.consistency.volatility + ')' : 'sin muestra suficiente' }}</p>
-              <p>Asistencia (10%): {{ rel.breakdown.asistencia != null ? rel.breakdown.asistencia.toFixed(0) + '%' : 'sin dato' }}</p>
-            </div>
-          </span>
+          </button>
           <span class="stat-label">fiabilidad — 60 días</span>
         </div>
       }
       @if (d.nightReliability; as nr) {
         <div class="stat">
-          <span class="reliability-wrap" tabindex="0">
+          <button type="button" class="score-trigger" (click)="openExplanation(nightReliabilityExplanation(nr))">
             <span class="reliability-badge" [class]="'tone-' + nightReliabilityTone()">{{ nr.overall }}</span>
-            <div class="reliability-tooltip" role="tooltip">
-              <p><strong>Fiabilidad — esta noche</strong></p>
-              <p>Mecánica: {{ nr.breakdown.mecanica != null ? nr.breakdown.mecanica.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p title="Uso durante el try; la respuesta en una muerte evaluable pesa el doble">Defensiva: {{ nr.breakdown.defensiva != null ? nr.breakdown.defensiva.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p>Preparación: {{ nr.breakdown.preparacion != null ? nr.breakdown.preparacion.toFixed(0) + '%' : 'sin dato' }}</p>
-              <p>Consistencia: {{ nr.consistency ? nr.consistency.score + '/100 (media ' + nr.consistency.averageExecution + ', variabilidad ' + nr.consistency.volatility + ')' : 'sin muestra suficiente' }}</p>
-              <p class="meta">{{ nr.sampleSize }} pull{{ nr.sampleSize === 1 ? '' : 's' }} evaluados. Sin eje de asistencia (no aplica a una sola noche).</p>
-            </div>
-          </span>
+          </button>
           <span class="stat-label">fiabilidad — esta noche</span>
         </div>
       }
@@ -136,11 +133,27 @@
               <th>Intento</th>
               <th>Resultado</th>
               <th class="align-right">Duración</th>
+              <!-- §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27) -->
+              <th class="align-right">Puntuación</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             @for (p of d.pulls; track p.pullId) {
-              <tr>
+              <!-- §"eso es obviamente un ninja pull... no debería contar
+                   para ninguna estadística ni métrica" (feedback real,
+                   2026-08-27): la fila se sigue viendo (no se borra, mismo
+                   criterio que el resto de la app) pero atenuada + sin
+                   puntuación clicable — excludedFromStats ya viene resuelto
+                   de night-player-summary.service.ts (ninja_pull_excluded).
+                   §CORRECCIÓN (feedback real, 2026-08-27): "el wipecall solo
+                   lo deben tener los que, en efecto, murieron... todo lo que
+                   suceda antes debe ser evaluable" — un wipe call YA NO
+                   entra en excludedFromStats (un pull real de 3+ minutos con
+                   daño real no deja de contar solo porque alguien se dejó
+                   morir al final); hadWipeCall es solo informativo, no
+                   atenúa la fila ni quita la puntuación. -->
+              <tr [class.row-excluded]="p.excludedFromStats">
                 <td class="death-col">{{ p.died ? '💀' : '' }}</td>
                 <td class="cell-boss">
                   <a [routerLink]="['/boss', p.bossId, p.difficulty]">{{ p.bossName }}</a>
@@ -153,8 +166,25 @@
                   } @else {
                     <span class="result-pill result-wipe">Wipe {{ formatPct(p.wipePct) }}</span>
                   }
+                  @if (p.excludedReason === 'ninja_pull') {
+                    <span class="cat-tag cat-tag-wipecall" title="Duración muy corta y casi nadie de la raid llegó a entrar en combate, o al boss apenas le bajó la vida — probable enganche accidental, no un intento real.">NINJA PULL</span>
+                  } @else if (p.hadWipeCall) {
+                    <span class="cat-tag cat-tag-wipecall" title="Este jugador murió dentro del cluster de wipe call — su muerte no cuenta como evaluable, pero el resto del pull (mecánicas de antes, otros jugadores) sí.">WIPE CALL</span>
+                  }
                 </td>
                 <td class="tabular align-right">{{ formatDuration(p.durationMs) }}</td>
+                <td class="tabular align-right">
+                  @if (p.pullScore != null) {
+                    <button type="button" class="score-trigger" (click)="openExplanation(pullScoreExplanation(p, p.pullScore, d.mechanicFails))">
+                      <span [class]="'tone-' + nightScoreTone(p.pullScore)">{{ formatPct(p.pullScore * 100) }}</span>
+                    </button>
+                  } @else {
+                    <span class="meta">No evaluable</span>
+                  }
+                </td>
+                <td class="align-right">
+                  <a class="external-tool-link" [href]="wowAnalyzerUrl(d.reportCode, p.fightId, d.playerName)" target="_blank" rel="noopener" title="Analizar rotación en la instancia local de WoWAnalyzer">Rotación ↗</a>
+                </td>
               </tr>
             }
           </tbody>
@@ -257,9 +287,49 @@
                     } @else {
                       <span class="cat-tag cat-tag-unknown">SIN CLASIFICAR</span>
                     }
+                    <!-- §"muestra el percentil + fuente" (feedback real, 2026-08-27) -->
+                    @if (comparisonLabel(fail.comparisonSource, fail.comparisonPercentile); as label) {
+                      <small class="meta comparison-label">{{ label }}</small>
+                    }
                   </td>
                   <td>{{ fail.outcome === 'fail' ? 'Fallo' : 'Aviso' }}</td>
                   <td class="tabular align-right">{{ fail.damageTaken | number: '1.0-0' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </section>
+
+    <!-- §"informe de mejora por jugador... wipefest para mejorar en el boss
+         concreto" (feedback real, 2026-08-27): lo contrario de la sección de
+         arriba — aciertos, no fallos. Nuevo con la atribución de interrupt
+         añadida en analyze-report (antes solo se sabía SI se cortó, no
+         quién). -->
+    <section class="widget" aria-labelledby="interrupts-heading">
+      <h2 id="interrupts-heading" class="widget-heading">Interrupciones conseguidas</h2>
+      @if (!d.interrupts.length) {
+        <app-empty-panel icon="—" message="Sin interrupciones registradas a su nombre esta noche." />
+      } @else {
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Boss</th>
+                <th>Mecánica cortada</th>
+                <th class="align-right">Momento</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (cut of d.interrupts; track cut.pullId + cut.mechanicName + cut.timeMs) {
+                <tr>
+                  <td class="cell-boss">{{ cut.bossName }} <span class="meta">#{{ cut.pullNumber }}</span></td>
+                  <td class="cell-mechanic">
+                    <app-wowhead-link type="spell" [id]="cut.mechanicId">{{ cut.mechanicName }}</app-wowhead-link>
+                    <app-mechanic-info-icon [note]="cut.aiNote" />
+                  </td>
+                  <td class="tabular align-right">{{ formatDuration(cut.timeMs) }}</td>
                 </tr>
               }
             </tbody>
@@ -306,4 +376,50 @@
       </section>
     }
   </div>
+
+  <!-- §"el tooltip se sale de la pantalla... tiene que ser un clicable con
+       un modal que te dé una explicación completa de la puntuación"
+       (feedback real, 2026-08-27): un solo modal para las 4 puntuaciones de
+       la página — ver explanationModal en el componente. -->
+  @if (explanationModal(); as modal) {
+    <div class="modal-backdrop" (click)="closeExplanation()">
+      <div class="modal-panel" role="dialog" aria-modal="true" [attr.aria-label]="modal.title" (click)="$event.stopPropagation()">
+        <button type="button" class="modal-close" (click)="closeExplanation()" aria-label="Cerrar">✕</button>
+        <h3>{{ modal.title }}</h3>
+        @for (line of modal.lines; track line) {
+          <p>{{ line }}</p>
+        }
+        @if (modal.items?.length) {
+          <ul class="modal-item-list">
+            @for (item of modal.items; track item) {
+              <li>{{ item }}</li>
+            }
+          </ul>
+        }
+        <!-- §"ponle tooltip y el boton de I de información que traemos del
+             prompt con cómo resolverlo" (feedback real, 2026-08-27): mismo
+             markup que "Mecánicas falladas sin morir" más abajo — no un
+             nombre suelto, el mismo wowhead link + info icon + categoría +
+             comparación. -->
+        @if (modal.mechanics?.length) {
+          <ul class="modal-item-list modal-mechanic-list">
+            @for (fail of modal.mechanics; track fail.pullId + fail.mechanicName) {
+              <li>
+                <app-wowhead-link type="spell" [id]="fail.mechanicId">{{ fail.mechanicName }}</app-wowhead-link>
+                <app-mechanic-info-icon [note]="fail.aiNote" />
+                @if (categoryMeta(fail.category); as meta) {
+                  <span class="cat-tag">{{ meta.short }}</span>
+                } @else {
+                  <span class="cat-tag cat-tag-unknown">SIN CLASIFICAR</span>
+                }
+                @if (comparisonLabel(fail.comparisonSource, fail.comparisonPercentile); as label) {
+                  <small class="meta comparison-label">{{ label }}</small>
+                }
+              </li>
+            }
+          </ul>
+        }
+      </div>
+    </div>
+  }
 }

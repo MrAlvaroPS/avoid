@@ -1,0 +1,194 @@
+@if (view(); as view) {
+  <button
+    type="button"
+    class="drawer-backdrop"
+    aria-label="Cerrar detalle"
+    (click)="close.emit()"
+  ></button>
+  <aside
+    class="player-drawer"
+    role="dialog"
+    aria-modal="true"
+    [attr.aria-labelledby]="'drawer-' + view.player.playerName"
+  >
+    <header class="drawer-header">
+      <div class="drawer-player">
+        <app-role-icon [role]="view.player.role" />
+        <div>
+          <p>{{ view.player.role ?? 'Rol sin confirmar' }}</p>
+          <h2 [id]="'drawer-' + view.player.playerName">{{ view.player.playerName }}</h2>
+        </div>
+        @if (view.player.rank === 'Trial') {
+          <span class="trial-badge">Trial</span>
+        }
+      </div>
+      <button type="button" class="drawer-close" aria-label="Cerrar" (click)="close.emit()">
+        ×
+      </button>
+    </header>
+
+    <div class="drawer-content">
+      <section class="drawer-overview" [class]="'drawer-overview status-' + view.status">
+        <div>
+          <span class="drawer-status"><i aria-hidden="true"></i>{{ view.statusLabel }}</span>
+          <strong>{{ view.summaryTitle }}</strong>
+          <p>{{ view.summaryDetail }}</p>
+        </div>
+        @if (view.player.sampleSize) {
+          <div class="overall-score">
+            <strong>{{ view.player.overall }}</strong
+            ><span>señal compuesta</span><small>{{ view.player.observedAxisCount }}/4 ejes</small>
+          </div>
+        }
+      </section>
+
+      <div class="evidence-strip">
+        <span
+          ><strong>{{ view.player.sampleNightCount }}</strong> noches</span
+        >
+        <span
+          ><strong>{{ view.player.sampleSize }}</strong> pulls</span
+        >
+        <span
+          ><strong>{{ confidenceLabel(view) }}</strong></span
+        >
+        @if (view.player.lastObservedAt) {
+          <span
+            >Visto <strong>{{ view.player.lastObservedAt | date: 'd MMM' }}</strong></span
+          >
+        }
+      </div>
+
+      @if (view.signals.length) {
+        <section class="drawer-section">
+          <p class="section-kicker">Qué revisar</p>
+          <div class="drawer-signal-list">
+            @for (signal of view.signals; track signal.kind + signal.title) {
+              <article [class]="'drawer-signal signal-' + signal.severity">
+                <span aria-hidden="true"></span>
+                <div>
+                  <strong>{{ signal.title }}</strong>
+                  <p>{{ signal.detail }}</p>
+                  @if (signal.lastOccurredAt) {
+                    <small>Última evidencia {{ signal.lastOccurredAt | date: 'd MMM' }}</small>
+                  }
+                </div>
+              </article>
+            }
+          </div>
+        </section>
+      }
+
+      @if (view.player.sampleSize) {
+        <section class="drawer-section">
+          <div class="drawer-section-title">
+            <div>
+              <p class="section-kicker">Lectura</p>
+              <h3>Señales observadas</h3>
+            </div>
+            <small>La puntuación no sustituye a la evidencia</small>
+          </div>
+          <div class="axis-grid">
+            <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.mecanica)">
+              <span>Mecánica</span
+              ><strong>{{
+                view.player.breakdown.mecanica == null
+                  ? '—'
+                  : (view.player.breakdown.mecanica | number: '1.0-0')
+              }}</strong
+              ><small>40% del compuesto</small>
+            </article>
+            <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.defensiva)">
+              <span>Defensivos</span
+              ><strong>{{
+                view.player.breakdown.defensiva == null
+                  ? '—'
+                  : (view.player.breakdown.defensiva | number: '1.0-0')
+              }}</strong
+              ><small>{{ view.player.defensiveOpportunityCount }} oportunidades</small>
+            </article>
+            <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.preparacion)">
+              <span>Preparación</span
+              ><strong>{{
+                view.player.breakdown.preparacion == null
+                  ? '—'
+                  : (view.player.breakdown.preparacion | number: '1.0-0')
+              }}</strong
+              ><small>inicio de cada noche</small>
+            </article>
+            <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.asistencia)">
+              <span>Asistencia</span
+              ><strong>{{
+                view.player.breakdown.asistencia == null
+                  ? '—'
+                  : (view.player.breakdown.asistencia | number: '1.0-0')
+              }}</strong>
+              <small>
+                @if (
+                  view.player.attendanceNightsAttended != null &&
+                  view.player.attendanceNightsTotal != null
+                ) {
+                  {{ view.player.attendanceNightsAttended }}/{{
+                    view.player.attendanceNightsTotal
+                  }}
+                  noches
+                } @else {
+                  sin cruce suficiente
+                }
+              </small>
+            </article>
+          </div>
+        </section>
+
+        <section class="drawer-section preparation-snapshot">
+          <div>
+            <p class="section-kicker">Inicio de la última noche</p>
+            <h3>Preparación observada</h3>
+          </div>
+          <div class="preparation-values">
+            <span
+              ><strong
+                >{{ view.player.latestEnchantedSlotCount ?? '—' }}/{{
+                  view.player.latestEnchantableSlotCount ?? '—'
+                }}</strong
+              >
+              enchants</span
+            >
+            <span
+              ><strong
+                >{{ view.player.latestGemmedSlotCount ?? '—' }}/{{
+                  view.player.latestGemmableSlotCount ?? '—'
+                }}</strong
+              >
+              slots con gema</span
+            >
+          </div>
+        </section>
+
+        <section class="drawer-section compact-metrics">
+          <div>
+            <span>Consistencia</span><strong>{{ view.player.consistency?.score ?? '—' }}</strong>
+          </div>
+          <div>
+            <span>Tendencia</span><strong>{{ trendLabel(view.player.trend) }}</strong>
+          </div>
+          <div>
+            <span>Confianza</span><strong>{{ confidenceLabel(view) }}</strong>
+          </div>
+        </section>
+      } @else {
+        <div class="drawer-empty">
+          <strong>Todavía no hay pulls evaluables</strong>
+          <p>
+            El jugador está en el roster oficial, pero no se le asigna una puntuación negativa por
+            ausencia de muestra.
+          </p>
+        </div>
+      }
+
+      <a class="player-history-link" [routerLink]="['/player', view.player.playerName]"
+        >Abrir historial completo <span aria-hidden="true">→</span></a
+      >
+    </div>
+  </aside>
+}

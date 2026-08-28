@@ -68,6 +68,18 @@ app-night-report-infographic {
     &.primary { color: #fff; background: linear-gradient(135deg, #8c63ab, #6e58cf); border-color: #c59cdb80; }
   }
 
+  // §"IRIS siempre escribirá en el canal ID X" (feedback real, 2026-08-27):
+  // ya no hay panel/input que mostrar — solo el error, si lo hay, como
+  // línea suelta bajo la barra de herramientas.
+  .iris-infographic-discord-error {
+    margin: 0;
+    padding: 8px 20px;
+    color: #ff9d9d;
+    background: rgb(0 0 0 / 25%);
+    border-bottom: 1px solid rgb(255 255 255 / 8%);
+    font-size: 10.5px;
+  }
+
   .iris-infographic-close {
     width: 38px;
     padding: 0 0 3px;

@@ -1,0 +1,468 @@
+ Image wowanalyzer-app-wowanalyzer-app Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 797B 0.0s done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 3.52kB done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/nginx:stable-alpine
+#3 ...
+
+#4 [auth] library/nginx:pull token for registry-1.docker.io
+#4 DONE 0.0s
+
+#5 [auth] library/node:pull token for registry-1.docker.io
+#5 DONE 0.0s
+
+#6 [internal] load metadata for docker.io/library/node:20-slim
+#6 ...
+
+#3 [internal] load metadata for docker.io/library/nginx:stable-alpine
+#3 DONE 1.3s
+
+#6 [internal] load metadata for docker.io/library/node:20-slim
+#6 DONE 1.4s
+
+#7 [internal] load .dockerignore
+#7 transferring context: 2B done
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 619B done
+#8 DONE 0.0s
+
+#9 [build 1/7] FROM docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+#9 resolve docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 0.0s done
+#9 DONE 0.1s
+
+#10 [stage-1 1/3] FROM docker.io/library/nginx:stable-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+#10 resolve docker.io/library/nginx:stable-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46 0.0s done
+#10 sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 1.05MB / 20.31MB 0.2s
+#10 sha256:1bf9957874ad25fbdb6eccefd92a689a87f8c371be2a0338d7d0a27907c865e3 0B / 1.40kB 0.2s
+#10 sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 6.29MB / 20.31MB 0.3s
+#10 sha256:1bf9957874ad25fbdb6eccefd92a689a87f8c371be2a0338d7d0a27907c865e3 1.40kB / 1.40kB 0.2s done
+#10 sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 9.44MB / 20.31MB 0.5s
+#10 sha256:8f9abe9abe215f90cbca603ac503dcda05ab9793dbe527ae301bd69ced334adf 1.21kB / 1.21kB 0.1s done
+#10 sha256:5728898b7b7118b8e7bb93799f2cb0b82b48a479b1559a044d7355e4396ef6ae 405B / 405B 0.1s done
+#10 sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 13.63MB / 20.31MB 0.6s
+#10 sha256:ac2d8fcab7e1eeb5781a07930c195b01a736440474d8b17318d9408bd809736d 957B / 957B 0.1s done
+#10 sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 17.83MB / 20.31MB 0.8s
+#10 sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 20.31MB / 20.31MB 0.9s
+#10 sha256:86ffcbfd30a515eb6aaf22183a661fa9d54dc67e9b4654df58539bd15c22c6c3 628B / 628B 0.1s done
+#10 sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 20.31MB / 20.31MB 0.9s done
+#10 sha256:33c8cdf1e4bcd93282537f6c88188c37b2fbd22504cac414b159f5d2d0db4876 1.88MB / 1.88MB 0.2s done
+#10 extracting sha256:33c8cdf1e4bcd93282537f6c88188c37b2fbd22504cac414b159f5d2d0db4876 0.1s done
+#10 DONE 1.5s
+
+#9 [build 1/7] FROM docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+#9 sha256:3c02fd806613748139b8b8a14a69ae3518a1b0e863c57c35aada3b92ed87fb31 447B / 447B 0.1s done
+#9 sha256:64cfb949317c9824fd081d55c59a7225bfe1f650c6395ba42d7ed0ccf51993d2 1.71MB / 1.71MB 0.4s done
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 16.78MB / 41.42MB 1.4s
+#9 sha256:e54aec64c365815cd7b91e718f00ac6e625562b1de09036b38614621b42c7582 3.31kB / 3.31kB 0.3s done
+#9 sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 15.73MB / 28.24MB 1.2s
+#9 sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 19.92MB / 28.24MB 1.5s
+#9 ...
+
+#10 [stage-1 1/3] FROM docker.io/library/nginx:stable-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+#10 extracting sha256:86ffcbfd30a515eb6aaf22183a661fa9d54dc67e9b4654df58539bd15c22c6c3 0.0s done
+#10 extracting sha256:ac2d8fcab7e1eeb5781a07930c195b01a736440474d8b17318d9408bd809736d 0.0s done
+#10 extracting sha256:5728898b7b7118b8e7bb93799f2cb0b82b48a479b1559a044d7355e4396ef6ae 0.0s done
+#10 extracting sha256:8f9abe9abe215f90cbca603ac503dcda05ab9793dbe527ae301bd69ced334adf 0.0s done
+#10 extracting sha256:1bf9957874ad25fbdb6eccefd92a689a87f8c371be2a0338d7d0a27907c865e3 0.0s done
+#10 extracting sha256:f42b2e963e9e47286a9783c2f89b815f4edea814eacc6fba9f0a7d8af1801434 0.2s done
+#10 DONE 1.8s
+
+#9 [build 1/7] FROM docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 19.92MB / 41.42MB 1.7s
+#9 sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 22.02MB / 28.24MB 1.7s
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 23.07MB / 41.42MB 1.8s
+#9 sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 25.17MB / 28.24MB 1.8s
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 25.17MB / 41.42MB 2.0s
+#9 sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 27.26MB / 28.24MB 2.0s
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 30.41MB / 41.42MB 2.3s
+#9 sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 28.24MB / 28.24MB 2.0s done
+#9 extracting sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 32.51MB / 41.42MB 2.4s
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 34.60MB / 41.42MB 2.6s
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 36.70MB / 41.42MB 2.7s
+#9 extracting sha256:ff86ea2e5edce334d19a34fbc65d1a511aa1fc823dba1110422f991aa56b44d4 0.5s done
+#9 extracting sha256:e54aec64c365815cd7b91e718f00ac6e625562b1de09036b38614621b42c7582 0.0s done
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 38.80MB / 41.42MB 2.9s
+#9 sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 41.42MB / 41.42MB 3.0s done
+#9 extracting sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f
+#9 extracting sha256:804d4d68057cbb26cbcde9a735148ebc6589911bad32cf9dbddb5b0ba878bf1f 0.6s done
+#9 DONE 3.7s
+
+#9 [build 1/7] FROM docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+#9 extracting sha256:64cfb949317c9824fd081d55c59a7225bfe1f650c6395ba42d7ed0ccf51993d2 0.0s done
+#9 extracting sha256:3c02fd806613748139b8b8a14a69ae3518a1b0e863c57c35aada3b92ed87fb31 done
+#9 DONE 3.7s
+
+#11 [build 2/7] RUN corepack enable
+#11 DONE 0.2s
+
+#12 [build 3/7] WORKDIR /app
+#12 DONE 0.2s
+
+#13 [build 4/7] RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates     && rm -rf /var/lib/apt/lists/*
+#13 0.162 Get:1 http://deb.debian.org/debian bookworm InRelease [151 kB]
+#13 0.177 Get:2 http://deb.debian.org/debian bookworm-updates InRelease [55.4 kB]
+#13 0.186 Get:3 http://deb.debian.org/debian-security bookworm-security InRelease [34.8 kB]
+#13 0.219 Get:4 http://deb.debian.org/debian bookworm/main amd64 Packages [8790 kB]
+#13 0.797 Get:5 http://deb.debian.org/debian bookworm-updates/main amd64 Packages [6924 B]
+#13 0.799 Get:6 http://deb.debian.org/debian-security bookworm-security/main amd64 Packages [335 kB]
+#13 1.335 Fetched 9374 kB in 1s (7864 kB/s)
+#13 1.335 Reading package lists...
+#13 1.631 Reading package lists...
+#13 1.893 Building dependency tree...
+#13 1.960 Reading state information...
+#13 2.027 The following additional packages will be installed:
+#13 2.027   git-man libbrotli1 libcurl3-gnutls liberror-perl libexpat1 libgdbm-compat4
+#13 2.027   libgdbm6 libgssapi-krb5-2 libk5crypto3 libkeyutils1 libkrb5-3
+#13 2.027   libkrb5support0 libldap-2.5-0 libnghttp2-14 libperl5.36 libpsl5 librtmp1
+#13 2.027   libsasl2-2 libsasl2-modules-db libssh2-1 libssl3 openssl perl
+#13 2.027   perl-modules-5.36
+#13 2.027 Suggested packages:
+#13 2.027   gettext-base git-daemon-run | git-daemon-sysvinit git-doc git-email git-gui
+#13 2.027   gitk gitweb git-cvs git-mediawiki git-svn gdbm-l10n krb5-doc krb5-user
+#13 2.027   sensible-utils perl-doc libterm-readline-gnu-perl
+#13 2.027   | libterm-readline-perl-perl make libtap-harness-archive-perl
+#13 2.027 Recommended packages:
+#13 2.027   patch less ssh-client krb5-locales libldap-common publicsuffix
+#13 2.027   libsasl2-modules netbase
+#13 2.125 The following NEW packages will be installed:
+#13 2.125   ca-certificates git git-man libbrotli1 libcurl3-gnutls liberror-perl
+#13 2.125   libexpat1 libgdbm-compat4 libgdbm6 libgssapi-krb5-2 libk5crypto3
+#13 2.125   libkeyutils1 libkrb5-3 libkrb5support0 libldap-2.5-0 libnghttp2-14
+#13 2.125   libperl5.36 libpsl5 librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1
+#13 2.125   libssl3 openssl perl perl-modules-5.36
+#13 2.147 0 upgraded, 26 newly installed, 0 to remove and 13 not upgraded.
+#13 2.147 Need to get 22.3 MB of archives.
+#13 2.147 After this operation, 112 MB of additional disk space will be used.
+#13 2.147 Get:1 http://deb.debian.org/debian bookworm/main amd64 perl-modules-5.36 all 5.36.0-7+deb12u3 [2815 kB]
+#13 2.330 Get:2 http://deb.debian.org/debian bookworm/main amd64 libgdbm6 amd64 1.23-3 [72.2 kB]
+#13 2.335 Get:3 http://deb.debian.org/debian bookworm/main amd64 libgdbm-compat4 amd64 1.23-3 [48.2 kB]
+#13 2.339 Get:4 http://deb.debian.org/debian bookworm/main amd64 libperl5.36 amd64 5.36.0-7+deb12u3 [4196 kB]
+#13 2.609 Get:5 http://deb.debian.org/debian bookworm/main amd64 perl amd64 5.36.0-7+deb12u3 [239 kB]
+#13 2.625 Get:6 http://deb.debian.org/debian bookworm/main amd64 libssl3 amd64 3.0.20-1~deb12u2 [2036 kB]
+#13 2.757 Get:7 http://deb.debian.org/debian bookworm/main amd64 openssl amd64 3.0.20-1~deb12u2 [1439 kB]
+#13 2.851 Get:8 http://deb.debian.org/debian-security bookworm-security/main amd64 ca-certificates all 20250419~deb12u1 [162 kB]
+#13 2.859 Get:9 http://deb.debian.org/debian bookworm/main amd64 libbrotli1 amd64 1.0.9-2+b6 [275 kB]
+#13 2.878 Get:10 http://deb.debian.org/debian bookworm/main amd64 libkrb5support0 amd64 1.20.1-2+deb12u5 [33.2 kB]
+#13 2.879 Get:11 http://deb.debian.org/debian bookworm/main amd64 libk5crypto3 amd64 1.20.1-2+deb12u5 [79.7 kB]
+#13 2.884 Get:12 http://deb.debian.org/debian bookworm/main amd64 libkeyutils1 amd64 1.6.3-2 [8808 B]
+#13 2.884 Get:13 http://deb.debian.org/debian bookworm/main amd64 libkrb5-3 amd64 1.20.1-2+deb12u5 [332 kB]
+#13 2.906 Get:14 http://deb.debian.org/debian bookworm/main amd64 libgssapi-krb5-2 amd64 1.20.1-2+deb12u5 [135 kB]
+#13 2.915 Get:15 http://deb.debian.org/debian bookworm/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg-10 [20.3 kB]
+#13 2.916 Get:16 http://deb.debian.org/debian bookworm/main amd64 libsasl2-2 amd64 2.1.28+dfsg-10 [59.7 kB]
+#13 2.920 Get:17 http://deb.debian.org/debian bookworm/main amd64 libldap-2.5-0 amd64 2.5.13+dfsg-5 [183 kB]
+#13 2.932 Get:18 http://deb.debian.org/debian bookworm/main amd64 libnghttp2-14 amd64 1.52.0-1+deb12u3 [72.4 kB]
+#13 2.937 Get:19 http://deb.debian.org/debian bookworm/main amd64 libpsl5 amd64 0.21.2-1 [58.7 kB]
+#13 2.941 Get:20 http://deb.debian.org/debian bookworm/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b2 [60.8 kB]
+#13 2.945 Get:21 http://deb.debian.org/debian bookworm/main amd64 libssh2-1 amd64 1.10.0-3+b1 [179 kB]
+#13 2.956 Get:22 http://deb.debian.org/debian bookworm/main amd64 libcurl3-gnutls amd64 7.88.1-10+deb12u15 [386 kB]
+#13 2.981 Get:23 http://deb.debian.org/debian bookworm/main amd64 libexpat1 amd64 2.5.0-1+deb12u2 [99.9 kB]
+#13 2.986 Get:24 http://deb.debian.org/debian bookworm/main amd64 liberror-perl all 0.17029-2 [29.0 kB]
+#13 2.988 Get:25 http://deb.debian.org/debian bookworm/main amd64 git-man all 1:2.39.5-0+deb12u3 [2053 kB]
+#13 3.121 Get:26 http://deb.debian.org/debian bookworm/main amd64 git amd64 1:2.39.5-0+deb12u3 [7264 kB]
+#13 3.640 debconf: delaying package configuration, since apt-utils is not installed
+#13 3.655 Fetched 22.3 MB in 1s (15.4 MB/s)
+#13 3.665 Selecting previously unselected package perl-modules-5.36.
+#13 3.665 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 6096 files and directories currently installed.)
+#13 3.667 Preparing to unpack .../00-perl-modules-5.36_5.36.0-7+deb12u3_all.deb ...
+#13 3.669 Unpacking perl-modules-5.36 (5.36.0-7+deb12u3) ...
+#13 3.832 Selecting previously unselected package libgdbm6:amd64.
+#13 3.833 Preparing to unpack .../01-libgdbm6_1.23-3_amd64.deb ...
+#13 3.837 Unpacking libgdbm6:amd64 (1.23-3) ...
+#13 3.855 Selecting previously unselected package libgdbm-compat4:amd64.
+#13 3.856 Preparing to unpack .../02-libgdbm-compat4_1.23-3_amd64.deb ...
+#13 3.858 Unpacking libgdbm-compat4:amd64 (1.23-3) ...
+#13 3.877 Selecting previously unselected package libperl5.36:amd64.
+#13 3.877 Preparing to unpack .../03-libperl5.36_5.36.0-7+deb12u3_amd64.deb ...
+#13 3.879 Unpacking libperl5.36:amd64 (5.36.0-7+deb12u3) ...
+#13 4.069 Selecting previously unselected package perl.
+#13 4.069 Preparing to unpack .../04-perl_5.36.0-7+deb12u3_amd64.deb ...
+#13 4.075 Unpacking perl (5.36.0-7+deb12u3) ...
+#13 4.104 Selecting previously unselected package libssl3:amd64.
+#13 4.104 Preparing to unpack .../05-libssl3_3.0.20-1~deb12u2_amd64.deb ...
+#13 4.107 Unpacking libssl3:amd64 (3.0.20-1~deb12u2) ...
+#13 4.198 Selecting previously unselected package openssl.
+#13 4.199 Preparing to unpack .../06-openssl_3.0.20-1~deb12u2_amd64.deb ...
+#13 4.201 Unpacking openssl (3.0.20-1~deb12u2) ...
+#13 4.274 Selecting previously unselected package ca-certificates.
+#13 4.275 Preparing to unpack .../07-ca-certificates_20250419~deb12u1_all.deb ...
+#13 4.278 Unpacking ca-certificates (20250419~deb12u1) ...
+#13 4.307 Selecting previously unselected package libbrotli1:amd64.
+#13 4.308 Preparing to unpack .../08-libbrotli1_1.0.9-2+b6_amd64.deb ...
+#13 4.311 Unpacking libbrotli1:amd64 (1.0.9-2+b6) ...
+#13 4.339 Selecting previously unselected package libkrb5support0:amd64.
+#13 4.340 Preparing to unpack .../09-libkrb5support0_1.20.1-2+deb12u5_amd64.deb ...
+#13 4.342 Unpacking libkrb5support0:amd64 (1.20.1-2+deb12u5) ...
+#13 4.361 Selecting previously unselected package libk5crypto3:amd64.
+#13 4.362 Preparing to unpack .../10-libk5crypto3_1.20.1-2+deb12u5_amd64.deb ...
+#13 4.364 Unpacking libk5crypto3:amd64 (1.20.1-2+deb12u5) ...
+#13 4.385 Selecting previously unselected package libkeyutils1:amd64.
+#13 4.386 Preparing to unpack .../11-libkeyutils1_1.6.3-2_amd64.deb ...
+#13 4.388 Unpacking libkeyutils1:amd64 (1.6.3-2) ...
+#13 4.406 Selecting previously unselected package libkrb5-3:amd64.
+#13 4.407 Preparing to unpack .../12-libkrb5-3_1.20.1-2+deb12u5_amd64.deb ...
+#13 4.409 Unpacking libkrb5-3:amd64 (1.20.1-2+deb12u5) ...
+#13 4.442 Selecting previously unselected package libgssapi-krb5-2:amd64.
+#13 4.442 Preparing to unpack .../13-libgssapi-krb5-2_1.20.1-2+deb12u5_amd64.deb ...
+#13 4.444 Unpacking libgssapi-krb5-2:amd64 (1.20.1-2+deb12u5) ...
+#13 4.464 Selecting previously unselected package libsasl2-modules-db:amd64.
+#13 4.465 Preparing to unpack .../14-libsasl2-modules-db_2.1.28+dfsg-10_amd64.deb ...
+#13 4.467 Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg-10) ...
+#13 4.483 Selecting previously unselected package libsasl2-2:amd64.
+#13 4.484 Preparing to unpack .../15-libsasl2-2_2.1.28+dfsg-10_amd64.deb ...
+#13 4.486 Unpacking libsasl2-2:amd64 (2.1.28+dfsg-10) ...
+#13 4.507 Selecting previously unselected package libldap-2.5-0:amd64.
+#13 4.507 Preparing to unpack .../16-libldap-2.5-0_2.5.13+dfsg-5_amd64.deb ...
+#13 4.510 Unpacking libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+#13 4.537 Selecting previously unselected package libnghttp2-14:amd64.
+#13 4.538 Preparing to unpack .../17-libnghttp2-14_1.52.0-1+deb12u3_amd64.deb ...
+#13 4.540 Unpacking libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+#13 4.558 Selecting previously unselected package libpsl5:amd64.
+#13 4.559 Preparing to unpack .../18-libpsl5_0.21.2-1_amd64.deb ...
+#13 4.561 Unpacking libpsl5:amd64 (0.21.2-1) ...
+#13 4.580 Selecting previously unselected package librtmp1:amd64.
+#13 4.580 Preparing to unpack .../19-librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb ...
+#13 4.582 Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+#13 4.602 Selecting previously unselected package libssh2-1:amd64.
+#13 4.603 Preparing to unpack .../20-libssh2-1_1.10.0-3+b1_amd64.deb ...
+#13 4.605 Unpacking libssh2-1:amd64 (1.10.0-3+b1) ...
+#13 4.629 Selecting previously unselected package libcurl3-gnutls:amd64.
+#13 4.630 Preparing to unpack .../21-libcurl3-gnutls_7.88.1-10+deb12u15_amd64.deb ...
+#13 4.632 Unpacking libcurl3-gnutls:amd64 (7.88.1-10+deb12u15) ...
+#13 4.662 Selecting previously unselected package libexpat1:amd64.
+#13 4.663 Preparing to unpack .../22-libexpat1_2.5.0-1+deb12u2_amd64.deb ...
+#13 4.665 Unpacking libexpat1:amd64 (2.5.0-1+deb12u2) ...
+#13 4.682 Selecting previously unselected package liberror-perl.
+#13 4.683 Preparing to unpack .../23-liberror-perl_0.17029-2_all.deb ...
+#13 4.685 Unpacking liberror-perl (0.17029-2) ...
+#13 4.700 Selecting previously unselected package git-man.
+#13 4.701 Preparing to unpack .../24-git-man_1%3a2.39.5-0+deb12u3_all.deb ...
+#13 4.703 Unpacking git-man (1:2.39.5-0+deb12u3) ...
+#13 4.774 Selecting previously unselected package git.
+#13 4.775 Preparing to unpack .../25-git_1%3a2.39.5-0+deb12u3_amd64.deb ...
+#13 4.782 Unpacking git (1:2.39.5-0+deb12u3) ...
+#13 5.000 Setting up libexpat1:amd64 (2.5.0-1+deb12u2) ...
+#13 5.007 Setting up libkeyutils1:amd64 (1.6.3-2) ...
+#13 5.013 Setting up libpsl5:amd64 (0.21.2-1) ...
+#13 5.021 Setting up libbrotli1:amd64 (1.0.9-2+b6) ...
+#13 5.028 Setting up libssl3:amd64 (3.0.20-1~deb12u2) ...
+#13 5.035 Setting up libnghttp2-14:amd64 (1.52.0-1+deb12u3) ...
+#13 5.041 Setting up libkrb5support0:amd64 (1.20.1-2+deb12u5) ...
+#13 5.046 Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg-10) ...
+#13 5.052 Setting up perl-modules-5.36 (5.36.0-7+deb12u3) ...
+#13 5.058 Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b2) ...
+#13 5.064 Setting up libk5crypto3:amd64 (1.20.1-2+deb12u5) ...
+#13 5.070 Setting up libsasl2-2:amd64 (2.1.28+dfsg-10) ...
+#13 5.076 Setting up git-man (1:2.39.5-0+deb12u3) ...
+#13 5.082 Setting up libssh2-1:amd64 (1.10.0-3+b1) ...
+#13 5.091 Setting up libkrb5-3:amd64 (1.20.1-2+deb12u5) ...
+#13 5.097 Setting up openssl (3.0.20-1~deb12u2) ...
+#13 5.105 Setting up libgdbm6:amd64 (1.23-3) ...
+#13 5.111 Setting up libldap-2.5-0:amd64 (2.5.13+dfsg-5) ...
+#13 5.117 Setting up ca-certificates (20250419~deb12u1) ...
+#13 5.159 debconf: unable to initialize frontend: Dialog
+#13 5.159 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#13 5.159 debconf: falling back to frontend: Readline
+#13 5.163 debconf: unable to initialize frontend: Readline
+#13 5.163 debconf: (This frontend requires a controlling tty.)
+#13 5.163 debconf: falling back to frontend: Teletype
+#13 5.400 Updating certificates in /etc/ssl/certs...
+#13 5.732 150 added, 0 removed; done.
+#13 5.750 Setting up libgssapi-krb5-2:amd64 (1.20.1-2+deb12u5) ...
+#13 5.758 Setting up libgdbm-compat4:amd64 (1.23-3) ...
+#13 5.764 Setting up libperl5.36:amd64 (5.36.0-7+deb12u3) ...
+#13 5.770 Setting up libcurl3-gnutls:amd64 (7.88.1-10+deb12u15) ...
+#13 5.776 Setting up perl (5.36.0-7+deb12u3) ...
+#13 5.791 Setting up liberror-perl (0.17029-2) ...
+#13 5.797 Setting up git (1:2.39.5-0+deb12u3) ...
+#13 5.808 Processing triggers for libc-bin (2.36-9+deb12u13) ...
+#13 5.817 Processing triggers for ca-certificates (20250419~deb12u1) ...
+#13 5.821 Updating certificates in /etc/ssl/certs...
+#13 6.074 0 added, 0 removed; done.
+#13 6.074 Running hooks in /etc/ca-certificates/update.d...
+#13 6.075 done.
+#13 DONE 6.2s
+
+#14 [build 5/7] RUN git clone --depth 1 https://github.com/WoWAnalyzer/WoWAnalyzer.git .
+#14 0.179 Cloning into '.'...
+#14 DONE 4.3s
+
+#15 [build 6/7] RUN pnpm install --frozen-lockfile
+#15 0.229 ! Corepack is about to download https://registry.npmjs.org/pnpm/-/pnpm-9.5.0.tgz
+#15 1.341 Scope: all 3 workspace projects
+#15 1.373 Lockfile is up to date, resolution step is skipped
+#15 1.421 Progress: resolved 1, reused 0, downloaded 0, added 0
+#15 1.466 Packages: +773
+#15 1.466 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+#15 2.422 Progress: resolved 773, reused 0, downloaded 239, added 237
+#15 3.422 Progress: resolved 773, reused 0, downloaded 470, added 469
+#15 4.422 Progress: resolved 773, reused 0, downloaded 767, added 768
+#15 4.431 Packages are hard linked from the content-addressable store to the virtual store.
+#15 4.431   Content-addressable store is at: /root/.local/share/pnpm/store/v3
+#15 4.431   Virtual store is at:             node_modules/.pnpm
+#15 5.422 Progress: resolved 773, reused 0, downloaded 770, added 771
+#15 5.672 Progress: resolved 773, reused 0, downloaded 772, added 773, done
+#15 5.822 .../node_modules/@swc/core postinstall$ node postinstall.js
+#15 5.841 .../node_modules/@parcel/watcher install$ node scripts/build-from-source.js
+#15 5.841 .../node_modules/@sentry/cli postinstall$ node ./scripts/install.js
+#15 5.841 .../node_modules/@sentry/cli postinstall$ node ./scripts/install.js
+#15 5.890 .../esbuild@0.25.1/node_modules/esbuild postinstall$ node install.js
+#15 5.891 .../node_modules/@swc/core postinstall: Done
+#15 5.913 .../node_modules/@sentry/cli postinstall: Done
+#15 5.913 .../node_modules/@parcel/watcher install: Done
+#15 5.915 .../core-js@3.36.1/node_modules/core-js postinstall$ node -e "try{require('./postinstall')}catch(e){}"
+#15 5.933 .../node_modules/@sentry/cli postinstall: Done
+#15 5.942 .../esbuild@0.25.1/node_modules/esbuild postinstall: Done
+#15 5.943 .../sharp@0.34.5/node_modules/sharp install$ node install/check.js || npm run build
+#15 5.958 .../core-js@3.36.1/node_modules/core-js postinstall: Done
+#15 5.990 .../sharp@0.34.5/node_modules/sharp install: Done
+#15 6.149 
+#15 6.149 dependencies:
+#15 6.149 + @lingui/core 6.0.1
+#15 6.149 + @lingui/react 6.0.1
+#15 6.149 + @reduxjs/toolkit 2.9.2
+#15 6.149 + @sentry/react 10.22.0
+#15 6.149 + @unhead/react 2.0.19
+#15 6.149 + clsx 2.1.1
+#15 6.149 + core-js 3.36.1
+#15 6.149 + prop-types 15.8.1
+#15 6.149 + rc-slider 10.5.0
+#15 6.149 + react 19.2.6
+#15 6.149 + react-animate-height 3.2.4
+#15 6.149 + react-dom 19.2.6
+#15 6.149 + react-masonry-component 6.3.0
+#15 6.149 + react-redux 9.2.0
+#15 6.149 + react-router-dom 6.30.3
+#15 6.149 + react-textfit 1.1.1
+#15 6.149 + react-transition-group 4.4.5
+#15 6.149 + react-vega 7.6.0
+#15 6.149 + react-virtualized 9.22.6
+#15 6.149 + react-virtualized-auto-sizer 1.0.26
+#15 6.149 + redux 5.0.1
+#15 6.149 + redux-thunk 3.1.0
+#15 6.149 + sass-text-stroke 1.2.0
+#15 6.149 + spin-delay 2.0.1
+#15 6.149 + swr 2.3.6
+#15 6.149 + universal-cookie 4.0.4
+#15 6.149 + vega 5.23.0
+#15 6.149 + vega-lite 5.6.0
+#15 6.149 
+#15 6.149 devDependencies:
+#15 6.149 + @lingui/cli 6.0.1
+#15 6.149 + @lingui/conf 6.0.1
+#15 6.149 + @lingui/format-json 6.0.1
+#15 6.149 + @lingui/vite-plugin 6.0.1
+#15 6.149 + @oxc-project/types 0.94.0
+#15 6.149 + @playwright/test 1.54.2
+#15 6.149 + @rolldown/plugin-babel 0.2.3
+#15 6.149 + @sentry/cli 2.57.0
+#15 6.149 + @sentry/vite-plugin 5.2.1
+#15 6.149 + @testing-library/dom 10.4.1
+#15 6.149 + @testing-library/jest-dom 6.9.1
+#15 6.149 + @testing-library/react 16.3.0
+#15 6.149 + @types/jscodeshift 17.3.0
+#15 6.149 + @types/node 22.19.18
+#15 6.149 + @types/prop-types 15.7.15
+#15 6.149 + @types/react 19.2.14
+#15 6.149 + @types/react-dom 19.2.3
+#15 6.149 + @types/react-test-renderer 19.1.0
+#15 6.149 + @types/react-textfit 1.1.4
+#15 6.149 + @types/react-toggle 4.0.5
+#15 6.149 + @types/react-transition-group 4.4.12
+#15 6.149 + @types/react-virtualized 9.22.2
+#15 6.149 + @vitejs/plugin-react 6.0.1
+#15 6.149 + @vitest/ui 4.1.5
+#15 6.149 + eslint-plugin-wowanalyzer 0.0.0 <- packages/eslint-plugin-wowanalyzer
+#15 6.149 + glob 11.0.0
+#15 6.149 + globals 16.0.0
+#15 6.149 + husky 9.1.7
+#15 6.149 + identity-obj-proxy 3.0.0
+#15 6.149 + is-ci 3.0.1
+#15 6.149 + jiti 2.4.2
+#15 6.149 + jscodeshift 17.3.0
+#15 6.149 + jsdom 22.1.0
+#15 6.149 + lint-staged 15.2.2
+#15 6.149 + oxc-parser 0.94.0
+#15 6.149 + oxfmt 0.40.0
+#15 6.149 + oxlint 1.55.0
+#15 6.149 + react-test-renderer 19.2.0
+#15 6.149 + sass 1.93.2
+#15 6.149 + ts-node 10.9.2
+#15 6.149 + tsconfig-paths 4.2.0
+#15 6.149 + tsx 4.20.6
+#15 6.149 + typescript 5.9.3
+#15 6.149 + vite 8.0.10
+#15 6.149 + vite-plugin-checker 0.12.0
+#15 6.149 + vite-plugin-svgr 4.5.0
+#15 6.149 + vitest 4.1.5
+#15 6.149 + wow-dbc 0.1.0
+#15 6.149 
+#15 6.170 . prepare$ is-ci || husky
+#15 6.199 . prepare: Done
+#15 6.200 Done in 5.1s
+#15 DONE 6.6s
+
+#16 [build 7/7] RUN pnpm build
+#16 0.474 
+#16 0.474 > wowanalyzer@ build /app
+#16 0.474 > vite build
+#16 0.474 
+#16 0.673 [31mfailed to load config from /app/vite.config.ts[39m
+#16 0.673 [31merror during build:
+#16 0.673 file:///app/node_modules/.pnpm/@lingui+cli@6.0.1_babel-plugin-macros@3.1.0/node_modules/@lingui/cli/dist/api/catalog.js:3
+#16 0.673 import { globSync } from "node:fs";
+#16 0.673          ^^^^^^^^
+#16 0.673 SyntaxError: The requested module 'node:fs' does not provide an export named 'globSync'
+#16 0.673     at ModuleJob._instantiate (node:internal/modules/esm/module_job:213:21)
+#16 0.673     at async ModuleJob.run (node:internal/modules/esm/module_job:320:5)
+#16 0.673     at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
+#16 0.673     at async loadConfigFromBundledFile (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34771:12)
+#16 0.673     at async bundleAndLoadConfigFile (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34632:17)
+#16 0.673     at async loadConfigFromFile (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34599:42)
+#16 0.673     at async resolveConfig (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34223:22)
+#16 0.673     at async createBuilder (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:33415:17)
+#16 0.673     at async CAC.<anonymous> (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/cli.js:767:19)[39m
+#16 0.678  ELIFECYCLE  Command failed with exit code 1.
+#16 ERROR: process "/bin/sh -c pnpm build" did not complete successfully: exit code: 1
+------
+ > [build 7/7] RUN pnpm build:
+0.673     at ModuleJob._instantiate (node:internal/modules/esm/module_job:213:21)
+0.673     at async ModuleJob.run (node:internal/modules/esm/module_job:320:5)
+0.673     at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
+0.673     at async loadConfigFromBundledFile (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34771:12)
+0.673     at async bundleAndLoadConfigFile (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34632:17)
+0.673     at async loadConfigFromFile (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34599:42)
+0.673     at async resolveConfig (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:34223:22)
+0.673     at async createBuilder (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/chunks/node.js:33415:17)
+0.673     at async CAC.<anonymous> (file:///app/node_modules/.pnpm/vite@8.0.10_@types+node@22.19.18_jiti@2.4.2_sass@1.93.2_tsx@4.20.6/node_modules/vite/dist/node/cli.js:767:19)[39m
+0.678  ELIFECYCLE  Command failed with exit code 1.
+------
+Dockerfile:59
+
+--------------------
+
+  57 |     
+
+  58 |     RUN pnpm install --frozen-lockfile
+
+  59 | >>> RUN pnpm build
+
+  60 |     
+
+  61 |     # Stage final: MISMO Dockerfile que trae el repo real de WoWAnalyzer en su
+
+--------------------
+
+failed to solve: process "/bin/sh -c pnpm build" did not complete successfully: exit code: 1
+
+
+
+View build details: docker-desktop://dashboard/build/default/default/j4cdpydp6g2sginjfc8391wmq
+

@@ -2,7 +2,7 @@ import type { NightFullReport } from '../../shared/models/night-full-report';
 import { bilingualName, buildNightDiscordSummary, buildNightFullReportMarkdown } from './night-full-report-markdown';
 
 const report: NightFullReport = {
-  schemaVersion: 11,
+  schemaVersion: 15,
   reportCode: 'ABC123',
   reportTitle: 'Raid test',
   reportDate: '2026-08-24T18:00:00.000Z',
@@ -40,6 +40,8 @@ const report: NightFullReport = {
     lethalFinalBlows: 2,
     avoidableDamageTotal: null,
     trend: 'improving',
+    comparisonSource: 'own_history',
+    comparisonPercentile: 65,
   }],
   timelinePatterns: null,
   avoidableDamage: null,
@@ -54,7 +56,7 @@ const report: NightFullReport = {
     unknownFinalBlowWithDamageContextCount: 1,
     byRootCause: [{ rootCause: 'self_positioning', label: 'Posicionamiento propio', count: 4, pct: 40 }],
     byCategory: [{ category: 'avoidable-ground', label: 'Zona evitable', count: 4, pct: 40 }],
-    topFinalBlows: [{ mechanicName: 'Fire Test', mechanicNameEs: 'Prueba de Fuego', wowheadSpellId: 12345, bossName: 'The Test Boss', bossNameEs: 'El Boss de Prueba', difficulty: 'Heroic', isProgressBoss: true, note: 'Evita el área de fuego antes de que explote.', count: 4 }],
+    topFinalBlows: [{ mechanicName: 'Fire Test', mechanicNameEs: 'Prueba de Fuego', wowheadSpellId: 12345, bossName: 'The Test Boss', bossNameEs: 'El Boss de Prueba', difficulty: 'Heroic', isProgressBoss: true, note: 'Evita el área de fuego antes de que explote.', count: 4, distinctPlayers: 3 }],
     topLastDamageBeforeUnknownFinalBlow: [{ mechanicName: 'Lingering Fire', mechanicNameEs: 'Fuego persistente', wowheadSpellId: 333, bossName: 'The Test Boss', bossNameEs: 'El Boss de Prueba', difficulty: 'Heroic', isProgressBoss: true, note: null, count: 1 }],
     pctWithDefensiveAvailableUnused: 25,
     defensiveEvaluableCount: 8,
@@ -72,6 +74,17 @@ const report: NightFullReport = {
     pctDeathsWithNoEmergencyConsumableInPull: 60,
   },
   defensives: { playersEverUsed: 18, totalPlayersTracked: 20, pctPlayersUsedAtLeastOnce: 90, totalCasts: 90, castsPerCombatMinute: 5.6, globalAvailableUnusedPct: 25, availableUnusedCount: 2, totalEvaluated: 8, byCategory: [] },
+  defensiveUsage: [{
+    bossName: 'The Test Boss',
+    bossNameEs: 'El Boss de Prueba',
+    difficulty: 'Heroic',
+    playersAttended: 2,
+    playersWithZeroCasts: ['Nunca Usa'],
+    casts: [
+      { playerName: 'Sí Usa', spellName: 'Ice Block', wowheadSpellId: 45438, pullNumber: 3, offsetMs: 95_000 },
+      { playerName: 'Sí Usa', spellName: 'Ice Block', wowheadSpellId: 45438, pullNumber: 5, offsetMs: 12_000 },
+    ],
+  }],
   interrupts: {
     totalCasts: 10,
     interrupted: 8,
@@ -80,6 +93,7 @@ const report: NightFullReport = {
     topUninterrupted: [{ mechanicName: 'Danger Cast', mechanicNameEs: 'Lanzamiento Peligroso', wowheadSpellId: 9876, note: 'Debe interrumpirse.', completedCount: 2 }],
     progressBoss: { bossName: 'The Test Boss', bossNameEs: 'El Boss de Prueba', difficulty: 'Heroic', totalCasts: 10, interrupted: 8, pctSuccess: 80, topUninterrupted: [{ mechanicName: 'Danger Cast', mechanicNameEs: 'Lanzamiento Peligroso', wowheadSpellId: 9876, note: 'Debe interrumpirse.', completedCount: 2 }] },
   },
+  phaseBreakdown: null,
   wipePatterns: [{ category: 'mecanica_personal', label: 'Alguna muerte asociada a posicionamiento o soak', count: 4, pct: 57.1 }],
   wipeRecovery: { windowMs: 10_000, wipesEvaluable: 7, wipesWithCascade: 3, pctWipesWithCascade: 42.9 },
   roleInsights: {
@@ -107,10 +121,39 @@ describe('buildNightFullReportMarkdown', () => {
     expect(markdown).toContain('## Límites del informe');
     expect(markdown).toContain('No demuestran por sí solas');
     expect(markdown).toContain('```text');
-    expect(markdown).toContain('## Golpe final más repetido de la noche');
+    expect(markdown).toContain('## Bosses de la noche');
+    expect(markdown).toContain('**Golpes finales más repetidos:**');
     expect(markdown).toContain('## Información por función');
     expect(markdown).toContain('Qué hace:');
     expect(markdown).not.toMatch(/^\|.+\|$/m);
+    expect(markdown).toContain('3 jugadores distintos');
+  });
+
+  it('sintetiza el informe por boss: mecánicas, golpes finales y defensivos juntos, sin duplicar', () => {
+    const markdown = buildNightFullReportMarkdown(report);
+    // Solo aparece una vez la sección de mecánicas de este boss (no una lista plana + otra por boss).
+    expect(markdown.match(/\*\*Mecánicas:\*\*/g)?.length).toBe(1);
+  });
+
+  it('desglosa defensivos por boss agrupados por jugador: quién no usó ninguno, y quién usó cuál, cuántas veces y en qué pull/minuto', () => {
+    const markdown = buildNightFullReportMarkdown(report);
+    expect(markdown).toContain('⚠ Sin ningún defensivo (1/2): Nunca Usa');
+    expect(markdown).toContain('**Sí Usa** · 2 casts');
+    expect(markdown).toContain('[Ice Block](https://www.wowhead.com/spell=45438) ×2 — P3: 1:35 · P5: 0:12');
+  });
+
+  it('incluye asistencia (presentes/ausentes) solo cuando se pasa como extra', () => {
+    const withAttendance = buildNightFullReportMarkdown(report, undefined, {
+      attendingMain: ['Alvaro', 'Bea'],
+      attendingTrial: ['Carla'],
+      absentMain: ['Dani'],
+    });
+    expect(withAttendance).toContain('## Asistencia');
+    expect(withAttendance).toContain('Alvaro');
+    expect(withAttendance).toContain('Dani');
+
+    const withoutAttendance = buildNightFullReportMarkdown(report);
+    expect(withoutAttendance).not.toContain('## Asistencia');
   });
 
   it('genera un resumen Discord con tabla ASCII y todas las secciones útiles', () => {

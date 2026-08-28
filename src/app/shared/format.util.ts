@@ -20,6 +20,19 @@ export function formatPct(value: number | null | undefined, digits = 1): string 
   return `${value.toFixed(digits).replace(/\.0+$/, '')}%`;
 }
 
+// §"muestra el percentil + fuente" (feedback real, 2026-08-27): compartido
+// entre el dosier y el informe de noche — nunca mezclar las dos fuentes sin
+// decir cuál es. own_history (más representativo) vs world_reference
+// (sesgado a los mejores del mundo, se dice explícitamente) vs
+// fixed_threshold (sin comparación real todavía, se dice también en vez de
+// callarlo). Ver resolveSeverity en supabase/functions/_shared/mechanic-severity.ts.
+export function comparisonLabel(source: 'own_history' | 'world_reference' | 'fixed_threshold' | null, percentile: number | null): string | null {
+  if (source === 'own_history' && percentile != null) return `Peor que el ${formatPct(percentile)} de tus kills anteriores`;
+  if (source === 'world_reference' && percentile != null) return `Peor que el ${formatPct(percentile)} de las mejores kills públicas del mundo`;
+  if (source === 'fixed_threshold') return 'Umbral fijo — sin historial suficiente todavía';
+  return null;
+}
+
 const WCL_DIFFICULTY_LABEL: Record<string, string> = {
   LFR: 'lfr',
   Normal: 'normal',

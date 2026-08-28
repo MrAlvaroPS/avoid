@@ -1,23 +1,25 @@
-// Colocar en: src/app/features/roster/roster.component.ts
-// §12 de la hoja de ruta (auditoría v2): "un valor único de 1 a 100 junto al
-// nombre del jugador... con detalle al pasar el ratón o pulsar". 3 de los 4
-// ejes construidos en reliability.service.ts. Preparación usa exclusivamente
-// los slots elegibles de la season; icono de rol + Main/Trial vienen del
-// roster real de wowaudit (wowaudit-roster.service.ts vía reliability.service.ts).
 import { Component, computed, inject, signal } from '@angular/core';
-import { DatePipe, DecimalPipe } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { DatePipe } from '@angular/common';
 import { ReliabilityService, type PlayerReliability } from '../../core/reliability.service';
 import { OffendersService, type RepeatOffenderRow } from '../../core/offenders.service';
-import { mechanicCategoryMeta } from '../../shared/format.util';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
 import { RoleIconComponent } from '../../shared/role-icon.component';
 import { errorMessage } from '../../shared/error-message.util';
+import {
+  buildRosterPlayerView,
+  filterRosterViews,
+  groupRosterViews,
+  sortAttentionViews,
+  summarizeRosterPatterns,
+  type RosterFilter,
+  type RosterPlayerView,
+} from './roster-view.util';
+import { RosterPlayerDrawerComponent } from './roster-player-drawer.component';
 
 @Component({
   selector: 'app-roster',
   standalone: true,
-  imports: [DecimalPipe, DatePipe, RouterLink, EmptyPanelComponent, RoleIconComponent],
+  imports: [DatePipe, EmptyPanelComponent, RoleIconComponent, RosterPlayerDrawerComponent],
   templateUrl: './roster.component.html',
   styleUrl: './roster.component.scss',
 })
@@ -26,19 +28,64 @@ export class RosterComponent {
   private offendersService = inject(OffendersService);
 
   players = signal<PlayerReliability[]>([]);
-  loading = signal(true);
-  error = signal<string | null>(null);
-  expandedPlayer = signal<string | null>(null);
-
-  // §"atascos constantes... a través de todos los bosses": carga aparte,
-  // silenciosa si falla (best-effort) — que la vista de repeat offenders
-  // aún no tenga migración desplegada en un entorno concreto no debe tumbar
-  // el roster entero, que es el contenido principal de esta pantalla.
   offenders = signal<RepeatOffenderRow[]>([]);
+  loading = signal(true);
   offendersLoading = signal(true);
-  categoryMeta = mechanicCategoryMeta;
+  error = signal<string | null>(null);
+  search = signal('');
+  filter = signal<RosterFilter>('all');
+  selectedPlayerName = signal<string | null>(null);
 
   hasAnyData = computed(() => this.players().length > 0);
+  playerViews = computed(() => {
+    const patternsByPlayer = new Map<string, RepeatOffenderRow[]>();
+    for (const pattern of this.offenders()) {
+      const patterns = patternsByPlayer.get(pattern.playerName) ?? [];
+      patterns.push(pattern);
+      patternsByPlayer.set(pattern.playerName, patterns);
+    }
+    return this.players().map((player) =>
+      buildRosterPlayerView(player, patternsByPlayer.get(player.playerName) ?? []),
+    );
+  });
+  attentionPlayers = computed(() => sortAttentionViews(this.playerViews()));
+  priorityPlayers = computed(() => this.attentionPlayers().slice(0, 5));
+  remainingAttentionCount = computed(() =>
+    Math.max(0, this.attentionPlayers().length - this.priorityPlayers().length),
+  );
+  patternSummaries = computed(() => summarizeRosterPatterns(this.offenders()));
+  filteredGroups = computed(() =>
+    groupRosterViews(filterRosterViews(this.playerViews(), this.filter(), this.search())),
+  );
+  filteredCount = computed(() =>
+    this.filteredGroups().reduce((total, group) => total + group.players.length, 0),
+  );
+  noDataCount = computed(
+    () => this.playerViews().filter((view) => view.status === 'no-data').length,
+  );
+  playersWithEvidence = computed(() => this.players().length - this.noDataCount());
+  trialCount = computed(() => this.players().filter((player) => player.rank === 'Trial').length);
+  composition = computed(() => ({
+    tanks: this.players().filter((player) => player.role === 'Tank').length,
+    healers: this.players().filter((player) => player.role === 'Heal').length,
+    dps: this.players().filter((player) => player.role === 'Melee' || player.role === 'Ranged')
+      .length,
+  }));
+  lastObservedAt = computed(() =>
+    this.players().reduce<string | null>(
+      (latest, player) =>
+        player.lastObservedAt && (!latest || player.lastObservedAt > latest)
+          ? player.lastObservedAt
+          : latest,
+      null,
+    ),
+  );
+  selectedPlayer = computed(() => {
+    const name = this.selectedPlayerName();
+    return name
+      ? (this.playerViews().find((view) => view.player.playerName === name) ?? null)
+      : null;
+  });
 
   constructor() {
     void this.load();
@@ -62,20 +109,31 @@ export class RosterComponent {
     try {
       this.offenders.set(await this.offendersService.listRepeatOffenders());
     } catch {
-      // best-effort, ver comentario en la declaración de `offenders`
+      // Best-effort: el roster sigue siendo útil aunque la vista histórica
+      // de patrones todavía no esté desplegada en un entorno concreto.
     } finally {
       this.offendersLoading.set(false);
     }
   }
 
-  toggle(playerName: string): void {
-    this.expandedPlayer.update((current) => (current === playerName ? null : playerName));
+  setFilter(filter: RosterFilter): void {
+    this.filter.set(filter);
   }
 
-  tone(score: number): 'danger' | 'warning' | 'success' {
-    if (score < 50) return 'danger';
-    if (score < 75) return 'warning';
-    return 'success';
+  showAllAttention(): void {
+    this.filter.set('attention');
+    setTimeout(() =>
+      document
+        .getElementById('roster-list')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    );
   }
 
+  openPlayer(view: RosterPlayerView): void {
+    this.selectedPlayerName.set(view.player.playerName);
+  }
+
+  closePlayer(): void {
+    this.selectedPlayerName.set(null);
+  }
 }

@@ -145,6 +145,13 @@
 .tone-warning {
   color: var(--warning);
 }
+// §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27):
+// faltaba a nivel global — reliability-badge ya lo tenía anidado (más abajo
+// en este archivo), pero pullScore/nightScore lo usan como color de texto
+// suelto, igual que .tone-danger/.tone-warning de aquí arriba.
+.tone-success {
+  color: var(--success);
+}
 
 .widget {
   background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
@@ -206,6 +213,19 @@ tr:last-child td {
 .align-right {
   text-align: right;
 }
+// §"wowanalyzer para mejorar las rotaciones... todo en nuestra app"
+// (feedback real, 2026-08-27): enlace a la instancia LOCAL de WoWAnalyzer
+// (supabase/wowanalyzer-app/) — discreto a propósito, solo funciona si ese
+// contenedor está levantado.
+.external-tool-link {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-decoration: none;
+  white-space: nowrap;
+  &:hover {
+    color: var(--accent);
+  }
+}
 .meta {
   color: var(--text-faint);
 }
@@ -237,6 +257,16 @@ tr:last-child td {
   color: var(--text);
   font-weight: 600;
   white-space: nowrap;
+}
+// §"muestra el percentil + fuente" (feedback real, 2026-08-27): en su
+// propia línea, no en nowrap con el resto de la celda (nombre/tag) — un
+// "peor que el X% de..." es más largo que cabe cómodo en una sola fila.
+.comparison-label {
+  display: block;
+  margin-top: 2px;
+  font-size: 9.5px;
+  font-weight: 400;
+  white-space: normal;
 }
 .cat-tag {
   margin-left: 5px;
@@ -271,6 +301,12 @@ tr:last-child td {
 }
 
 .row-wipecall {
+  opacity: 0.65;
+}
+// §"no debería contar para ninguna estadística ni métrica" (feedback real,
+// 2026-08-27): mismo tratamiento visual que .row-wipecall (arriba) para la
+// tabla de "Bosses de la noche" — la fila se sigue viendo, solo atenuada.
+.row-excluded {
   opacity: 0.65;
 }
 
@@ -324,49 +360,115 @@ tr:last-child td {
   }
 }
 
-// §"al pasar el ratón por encima deberían salir los valores con los que lo
-// calcula" (feedback real): mismo patrón de hover que app-mechanic-info-icon
-// (shared/mechanic-info-icon.component.ts) — CSS puro, sin estado ni click.
-.reliability-wrap {
-  position: relative;
+// §"el tooltip se sale de la pantalla... tiene que ser un clicable con un
+// modal" (feedback real, 2026-08-27): reemplaza al hover-tooltip anterior
+// (.reliability-wrap/.reliability-tooltip, anclado a la izquierda del
+// elemento — se salía de la pantalla en las columnas de la derecha de la
+// tabla de pulls, capturas reales, y no funciona en táctil). El valor
+// dentro no cambia de aspecto — el botón solo añade el cursor y el foco.
+.score-trigger {
   display: inline-flex;
-  outline: none;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+
+  &:hover .stat-value,
+  &:hover .reliability-badge {
+    filter: brightness(1.15);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
 }
-.reliability-tooltip {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
-  z-index: 30;
-  width: max-content;
-  min-width: 190px;
-  padding: 8px 10px;
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.5);
+}
+.modal-panel {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  max-height: min(80vh, 560px);
+  overflow-y: auto;
+  // §"tiene scroll raro y hay que quitarlo" (feedback real, 2026-08-27):
+  // por CSS, si overflow-y no es 'visible' y overflow-x no se toca (queda
+  // en su 'visible' por defecto), el navegador computa overflow-x como
+  // 'auto' también — aparecía una barra horizontal espuria en cuanto
+  // cualquier hijo (el wowhead-link+icono+tag de la lista de mecánicas)
+  // rozaba el borde por un par de px. explicit hidden en el eje horizontal,
+  // el contenido ya envuelve por texto normal, no necesita scroll ahí.
+  overflow-x: hidden;
+  padding: 20px;
   background: var(--surface-2);
   border: 1px solid var(--card-border);
-  border-radius: 6px;
+  border-radius: 10px;
   box-shadow: var(--shadow-card);
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 0.1s ease;
 
-  p {
-    margin: 0;
-  }
-  strong {
+  h3 {
+    margin: 0 0 12px;
+    padding-right: 24px;
+    font-size: 15px;
     color: var(--text);
   }
-  .meta {
-    margin-top: 4px;
-    color: var(--text-faint);
+  p {
+    margin: 0 0 8px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-muted);
   }
 }
-.reliability-wrap:hover .reliability-tooltip,
-.reliability-wrap:focus-within .reliability-tooltip {
-  opacity: 1;
-  visibility: visible;
+.modal-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-faint);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+
+  &:hover {
+    color: var(--text);
+    background: var(--surface-hover);
+  }
+}
+.modal-item-list {
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--card-border);
+  list-style: none;
+
+  li {
+    padding: 3px 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-muted);
+    // con overflow-x: hidden en .modal-panel (arriba), sin esto un nombre
+    // largo o varios chips seguidos recortarían texto en vez de bajar de línea.
+    overflow-wrap: break-word;
+
+    &::before {
+      content: '· ';
+      color: var(--text-faint);
+    }
+  }
 }
 
 .gear-sub {

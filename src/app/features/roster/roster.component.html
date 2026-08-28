@@ -1,147 +1,291 @@
-<div class="roster">
-  <h1>Fiabilidad del roster</h1>
-  <p class="intro">
-    §12: un número de 1 a 100 por jugador — ejecución mecánica (40%), disciplina defensiva
-    (30%; uso durante el try y, con doble peso, respuesta en una muerte evaluable) y preparación (20%; enchants de cabeza, hombros, pecho, piernas, botas y anillos, más gemas de cuello y anillos) sobre los últimos 60 días de
-    pulls, ponderados por recencia (un pull de hace 10 días pesa la mitad que uno de hoy);
-    asistencia (10%) — de los reports importados en Avoid desde el inicio de la season actual,
-    no del calendario de wowaudit (que cuenta firmas/eventos programados, no raids reales). Para gemas se exige al menos una en cada slot elegible, sin inventar sockets máximos; flask/comida siguen sin detectar. Nunca
-    se rellena un eje sin dato con un cero — se excluye y se renormaliza sobre lo que sí hay.
-  </p>
+<div class="roster-page">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Equipo · últimos 60 días</p>
+      <h1>Estado del roster</h1>
+      <p class="page-intro">
+        Qué conviene revisar antes de la próxima raid, con evidencia suficiente para poder actuar.
+      </p>
+    </div>
+    @if (lastObservedAt(); as updatedAt) {
+      <p class="last-update">
+        Última evidencia <strong>{{ updatedAt | date: 'd MMM' }}</strong>
+      </p>
+    }
+  </header>
+
+  <details class="methodology">
+    <summary>Cómo se construyen estas señales</summary>
+    <p>
+      La fiabilidad combina ejecución mecánica, respuesta defensiva, preparación al inicio de cada
+      noche y asistencia. Los ejes sin datos no se convierten en cero. Una prioridad solo aparece si
+      hay una acción concreta: equipo pendiente, una zona evitable repetida con atribución personal
+      o varias oportunidades defensivas evaluables con respuesta baja.
+    </p>
+  </details>
 
   @if (error(); as e) {
     <p class="error" role="alert">{{ e }}</p>
   }
 
-  <!-- §"atascos constantes... a través de todos los bosses" (feedback real):
-       distinto de la tabla de fiabilidad de abajo (un número por jugador,
-       sin desglosar por categoría) y de "todos los pulls" de un boss (por
-       categoría, pero un solo boss) — aquí es "¿este jugador falla SIEMPRE
-       la misma categoría, en varios bosses distintos?". Solo se enseña si
-       hay algo que enseñar: sin patrones repetidos, la sección desaparece
-       en vez de mostrar un "todo limpio" que compite por atención con el
-       resto de la pantalla. -->
-  @if (!offendersLoading() && offenders().length > 0) {
-    <section class="offenders-panel" aria-labelledby="offenders-heading">
-      <h2 id="offenders-heading" class="section-heading">Atascos constantes (últimos 60 días)</h2>
-      <p class="section-intro">Misma categoría de mecánica, fallada en varios bosses distintos — no un mal pull puntual de uno solo.</p>
-      <ul class="offenders-list">
-        @for (o of offenders(); track o.playerName + o.category) {
-          <li class="offender-row">
-            <app-role-icon [role]="o.role" />
-            <a class="offender-player" [routerLink]="['/player', o.playerName]">{{ o.playerName }}</a>
-            @if (categoryMeta(o.category); as meta) {
-              <span class="cat-tag">{{ meta.label }}</span>
-            }
-            <span class="offender-meta tabular">{{ o.instanceCount }} veces · {{ o.distinctBossCount }} bosses distintos</span>
-            <span class="offender-meta meta">última vez {{ o.lastOccurredAt | date: 'd MMM' }}</span>
-          </li>
-        }
-      </ul>
-    </section>
-  }
-
   @if (loading()) {
-    <p class="muted">Calculando…</p>
+    <section class="loading-panel" aria-live="polite">
+      <span class="loading-dot" aria-hidden="true"></span>
+      <div>
+        <strong>Preparando el estado del equipo</strong
+        ><span>Cruzando roster, noches y señales evaluables…</span>
+      </div>
+    </section>
   } @else if (!hasAnyData()) {
-    <app-empty-panel icon="🛡️" message="Sin pulls en los últimos 60 días todavía." hint="En cuanto se importe un report, aquí aparece el roster con su fiabilidad." />
+    <app-empty-panel
+      icon="🛡️"
+      message="Sin roster o pulls evaluables todavía."
+      hint="Sincroniza wowaudit e importa un report para construir el estado del equipo."
+    />
   } @else {
-    <table>
-      <thead>
-        <tr>
-          <th></th>
-          <th></th>
-          <th>Jugador</th>
-          <th title="Ejecución mecánica (40%) + disciplina defensiva (30%) + preparación (20%) + asistencia (10%), renormalizado sobre los ejes con datos">Fiabilidad</th>
-          <th title="Ejecución media por pull menos una penalización por altibajos. Requiere al menos 5 pulls; no premia ser constantemente malo.">Consistencia</th>
-          <th title="Primera mitad de los 60 días vs. segunda mitad — ¿va a mejor o a peor?">Tendencia</th>
-          <th>Muestra</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (p of players(); track p.playerName) {
-          <tr class="summary-row" (click)="toggle(p.playerName)">
-            <td class="rank-col tabular">{{ $index + 1 }}</td>
-            <td class="role-col"><app-role-icon [role]="p.role" /></td>
-            <td class="player-col">
-              {{ p.playerName }}
-              @if (p.rank === 'Trial') {
-                <span class="trial-badge" title="Trial en wowaudit">Trial</span>
-              }
-            </td>
-            <td>
-              <span class="reliability-badge" [class]="'tone-' + tone(p.overall)">{{ p.overall }}</span>
-            </td>
-            <td>
-              @if (p.consistency; as consistency) {
-                <span class="reliability-badge" [class]="'tone-' + tone(consistency.score)" [title]="'Ejecución media ' + consistency.averageExecution + ' · variabilidad ' + consistency.volatility + ' · pulls limpios ' + consistency.cleanPullRate + '%'">{{ consistency.score }}</span>
-              } @else {
-                <span class="meta" title="Se necesitan al menos 5 pulls">—</span>
-              }
-            </td>
-            <td>
-              @if (p.trend === 'up') {
-                <span class="trend-arrow trend-up" title="Mejorando: 2ª mitad de la ventana por encima de la 1ª">↑</span>
-              } @else if (p.trend === 'down') {
-                <span class="trend-arrow trend-down" title="Empeorando: 2ª mitad de la ventana por debajo de la 1ª">↓</span>
-              } @else if (p.trend === 'flat') {
-                <span class="trend-arrow trend-flat" title="Estable: sin cambio significativo entre mitades">→</span>
-              } @else {
-                <span class="meta" title="Hace falta al menos un pull en cada mitad de la ventana para comparar">—</span>
-              }
-            </td>
-            <td class="tabular meta">{{ p.sampleSize }} pull{{ p.sampleSize === 1 ? '' : 's' }}</td>
-          </tr>
-          @if (expandedPlayer() === p.playerName) {
-            <tr class="detail-row">
-              <td colspan="7">
-                <div class="breakdown">
-                  <div class="axis">
-                    <span class="axis-label">Ejecución mecánica <span class="axis-weight">40%</span></span>
-                    @if (p.breakdown.mecanica != null) {
-                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.mecanica"></div></div>
-                      <span class="axis-value tabular">{{ p.breakdown.mecanica | number: '1.0-0' }}</span>
-                    } @else {
-                      <span class="axis-empty">sin datos suficientes todavía</span>
+    <section class="summary-grid" aria-label="Resumen del roster">
+      <article class="summary-card">
+        <span class="summary-label">Roster oficial</span>
+        <strong>{{ players().length }}</strong>
+        <small>{{ playersWithEvidence() }} con evidencia reciente</small>
+      </article>
+      <article class="summary-card composition-card">
+        <span class="summary-label">Composición</span>
+        <div class="composition-pills">
+          <span
+            ><b>{{ composition().tanks }}</b> Tanks</span
+          >
+          <span
+            ><b>{{ composition().healers }}</b> Healers</span
+          >
+          <span
+            ><b>{{ composition().dps }}</b> DPS</span
+          >
+        </div>
+        <small>{{ trialCount() }} trial{{ trialCount() === 1 ? '' : 's' }} en wowaudit</small>
+      </article>
+      <article class="summary-card" [class.summary-alert]="attentionPlayers().length > 0">
+        <span class="summary-label">Requieren atención</span>
+        <strong>{{ attentionPlayers().length }}</strong>
+        <small>{{
+          attentionPlayers().length
+            ? 'con una acción o revisión concreta'
+            : 'sin señales accionables'
+        }}</small>
+      </article>
+      <article class="summary-card" [class.summary-muted]="noDataCount() > 0">
+        <span class="summary-label">Sin evidencia</span>
+        <strong>{{ noDataCount() }}</strong>
+        <small>nunca se muestran como un 0 negativo</small>
+      </article>
+    </section>
+
+    <div class="decision-grid">
+      <section class="priority-panel" aria-labelledby="priorities-heading">
+        <div class="section-header">
+          <div>
+            <p class="section-kicker">Decisión</p>
+            <h2 id="priorities-heading">Antes de la próxima raid</h2>
+          </div>
+          @if (attentionPlayers().length) {
+            <span class="section-count">{{ attentionPlayers().length }} jugadores</span>
+          }
+        </div>
+
+        @if (!priorityPlayers().length) {
+          <div class="all-clear">
+            <span aria-hidden="true">✓</span>
+            <div>
+              <strong>Sin acciones pendientes detectadas</strong>
+              <p>La muestra actual no contiene señales individuales que requieran intervención.</p>
+            </div>
+          </div>
+        } @else {
+          <div class="priority-list">
+            @for (view of priorityPlayers(); track view.player.playerName; let index = $index) {
+              <button type="button" class="priority-row" (click)="openPlayer(view)">
+                <span class="priority-index tabular">{{ index + 1 }}</span>
+                <app-role-icon [role]="view.player.role" />
+                <span class="priority-copy">
+                  <span class="priority-player"
+                    >{{ view.player.playerName }}
+                    @if (view.player.rank === 'Trial') {
+                      <small class="trial-badge">Trial</small>
                     }
-                  </div>
-                  <div class="axis">
-                    <span class="axis-label">Disciplina defensiva <span class="axis-weight">30%</span></span>
-                    @if (p.breakdown.defensiva != null) {
-                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.defensiva"></div></div>
-                      <span class="axis-value tabular">{{ p.breakdown.defensiva | number: '1.0-0' }}</span>
-                    } @else {
-                      <span class="axis-empty">sin oportunidades defensivas evaluables todavía</span>
-                    }
-                  </div>
-                  <div class="axis">
-                    <span class="axis-label">Preparación <span class="axis-weight">20%</span></span>
-                    @if (p.breakdown.preparacion != null) {
-                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.preparacion"></div></div>
-                      <span class="axis-value tabular">{{ p.breakdown.preparacion | number: '1.0-0' }}</span>
-                    } @else {
-                      <span class="axis-empty">sin datos suficientes todavía</span>
-                    }
-                  </div>
-                  @if (p.latestGemmedSlotCount != null && p.latestGemmableSlotCount != null) {
-                    <p class="gem-note">💎 {{ p.latestGemmedSlotCount }}/{{ p.latestGemmableSlotCount }} slots elegibles con gema en el último pull (cuello y anillos; {{ p.latestGemCount }} gemas totales). Sí forma parte de Preparación.</p>
-                  }
-                  <div class="axis">
-                    <span class="axis-label">Asistencia <span class="axis-weight">10%</span></span>
-                    @if (p.breakdown.asistencia != null) {
-                      <div class="axis-bar-track"><div class="axis-bar-fill" [style.width.%]="p.breakdown.asistencia"></div></div>
-                      <span class="axis-value tabular">{{ p.breakdown.asistencia | number: '1.0-0' }}</span>
-                    } @else {
-                      <span class="axis-empty">no cruza con el roster de wowaudit todavía</span>
-                    }
-                  </div>
-                </div>
-                <a class="history-link" [routerLink]="['/player', p.playerName]" (click)="$event.stopPropagation()">Ver historial y tendencia →</a>
-              </td>
-            </tr>
+                  </span>
+                  <strong>{{ view.summaryTitle }}</strong>
+                  <small>{{ view.summaryDetail }}</small>
+                </span>
+                @if (view.signals.length > 1) {
+                  <span class="extra-signals">+{{ view.signals.length - 1 }}</span>
+                }
+                <span class="row-arrow" aria-hidden="true">→</span>
+              </button>
+            }
+          </div>
+          @if (remainingAttentionCount()) {
+            <button type="button" class="show-more" (click)="showAllAttention()">
+              Ver {{ remainingAttentionCount() }} más en el roster
+            </button>
           }
         }
-      </tbody>
-    </table>
+      </section>
+
+      <aside class="patterns-panel" aria-labelledby="patterns-heading">
+        <div class="section-header compact">
+          <div>
+            <p class="section-kicker">Patrón del equipo</p>
+            <h2 id="patterns-heading">Repeticiones confirmadas</h2>
+          </div>
+        </div>
+        @if (offendersLoading()) {
+          <p class="panel-note">Buscando patrones individuales evaluables…</p>
+        } @else if (!patternSummaries().length) {
+          <div class="quiet-state">
+            <span aria-hidden="true">✓</span>
+            <p>Sin patrones personales repetidos en varios bosses.</p>
+          </div>
+        } @else {
+          <div class="pattern-list">
+            @for (pattern of patternSummaries(); track pattern.category) {
+              <div class="pattern-row">
+                <span class="pattern-mark" aria-hidden="true"></span>
+                <div>
+                  <strong>{{ pattern.label }}</strong
+                  ><small
+                    >{{ pattern.players }} jugadores · {{ pattern.instances }} impactos ·
+                    {{ pattern.bosses }} bosses</small
+                  >
+                </div>
+              </div>
+            }
+          </div>
+          <p class="panel-note">
+            Solo zonas evitables con atribución personal; el daño de raid y los tankbusters no se
+            convierten en culpables.
+          </p>
+        }
+      </aside>
+    </div>
+
+    <section id="roster-list" class="roster-section" aria-labelledby="roster-heading">
+      <div class="roster-toolbar">
+        <div>
+          <p class="section-kicker">Equipo completo</p>
+          <h2 id="roster-heading">Roster actual</h2>
+        </div>
+        <label class="search-field">
+          <span class="sr-only">Buscar jugador</span>
+          <span aria-hidden="true">⌕</span>
+          <input
+            type="search"
+            placeholder="Buscar jugador"
+            [value]="search()"
+            (input)="search.set($any($event.target).value)"
+          />
+        </label>
+      </div>
+
+      <div class="filter-bar" aria-label="Filtros del roster">
+        <button
+          type="button"
+          [class.active]="filter() === 'all'"
+          [attr.aria-pressed]="filter() === 'all'"
+          (click)="setFilter('all')"
+        >
+          Todos <span>{{ players().length }}</span>
+        </button>
+        <button
+          type="button"
+          [class.active]="filter() === 'attention'"
+          [attr.aria-pressed]="filter() === 'attention'"
+          (click)="setFilter('attention')"
+        >
+          Atención <span>{{ attentionPlayers().length }}</span>
+        </button>
+        <button
+          type="button"
+          [class.active]="filter() === 'no-data'"
+          [attr.aria-pressed]="filter() === 'no-data'"
+          (click)="setFilter('no-data')"
+        >
+          Sin datos <span>{{ noDataCount() }}</span>
+        </button>
+        <button
+          type="button"
+          [class.active]="filter() === 'trial'"
+          [attr.aria-pressed]="filter() === 'trial'"
+          (click)="setFilter('trial')"
+        >
+          Trials <span>{{ trialCount() }}</span>
+        </button>
+      </div>
+
+      @if (!filteredCount()) {
+        <div class="no-results">No hay jugadores que coincidan con esta búsqueda y filtro.</div>
+      } @else {
+        <div class="roster-column-head" aria-hidden="true">
+          <span>Jugador</span><span>Estado</span><span>Señal principal</span><span>Evidencia</span
+          ><span></span>
+        </div>
+        <div class="role-groups">
+          @for (group of filteredGroups(); track group.key) {
+            <section class="role-group" [attr.aria-labelledby]="'role-' + group.key">
+              <header class="role-heading">
+                <div>
+                  <h3 [id]="'role-' + group.key">{{ group.label }}</h3>
+                  <span>{{ group.description }}</span>
+                </div>
+                <strong>{{ group.players.length }}</strong>
+              </header>
+              <div class="role-player-list">
+                @for (view of group.players; track view.player.playerName) {
+                  <button
+                    type="button"
+                    class="roster-row"
+                    [class]="'roster-row status-' + view.status"
+                    [attr.aria-label]="'Abrir detalle de ' + view.player.playerName"
+                    (click)="openPlayer(view)"
+                  >
+                    <span class="player-cell">
+                      <app-role-icon [role]="view.player.role" />
+                      <span
+                        ><strong>{{ view.player.playerName }}</strong>
+                        @if (view.player.rank === 'Trial') {
+                          <small class="trial-badge">Trial</small>
+                        }
+                      </span>
+                    </span>
+                    <span class="status-cell"
+                      ><i aria-hidden="true"></i>{{ view.statusLabel }}</span
+                    >
+                    <span class="signal-cell"
+                      ><strong>{{ view.summaryTitle }}</strong
+                      ><small>{{ view.summaryDetail }}</small></span
+                    >
+                    <span class="evidence-cell"
+                      ><strong>{{ view.evidenceLabel }}</strong>
+                      @if (view.player.sampleSize) {
+                        <small
+                          >Fiabilidad {{ view.player.overall }}/100 ·
+                          {{ view.player.observedAxisCount }}/4 señales</small
+                        >
+                      } @else {
+                        <small>Roster oficial</small>
+                      }
+                    </span>
+                    <span class="row-arrow" aria-hidden="true">→</span>
+                  </button>
+                }
+              </div>
+            </section>
+          }
+        </div>
+      }
+    </section>
   }
 </div>
+
+@if (selectedPlayer(); as view) {
+  <app-roster-player-drawer [view]="view" (close)="closePlayer()" />
+}

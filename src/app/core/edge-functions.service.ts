@@ -136,6 +136,17 @@ export class EdgeFunctionsService {
   async generateNightFullReport(reportCode: string, force = false): Promise<GenerateNightFullReportResult> {
     return this.invoke<GenerateNightFullReportResult>('generate-night-full-report', { reportCode, force });
   }
+
+  /**
+   * §"dejar preparada una capa para interactuar en discord para enviar la
+   * infografía directamente a discord" (feedback real): REST directo
+   * (POST /channels/{id}/messages con el bot token), sin gateway — el
+   * servidor comprueba que el canal pertenece al guild autorizado antes de
+   * publicar nada (ver send-discord-message/index.ts).
+   */
+  async sendDiscordMessage(params: { channelId: string; content?: string; imageBase64?: string; imageFilename?: string }): Promise<{ ok: true; messageId: string; channelName: string | null }> {
+    return this.invoke('send-discord-message', params);
+  }
   async getManualNightBriefPrompt(reportCode: string): Promise<{ ok: true; systemPrompt: string; userMessage: string }> {
     return this.invoke('manual-night-brief', { reportCode, action: 'prompt' });
   }

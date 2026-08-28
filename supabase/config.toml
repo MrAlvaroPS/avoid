@@ -408,6 +408,18 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 # Set enabled = false to fall back to the legacy migra engine.
 [experimental.pgdelta]
 enabled = true
+
+# §"gestionarlo en local, no depender de links externos" (feedback real,
+# 2026-08-27): la SPA de WoWAnalyzer autoalojada (supabase/wowanalyzer-app/)
+# llama a este proxy con fetch() normal, sin cabecera Authorization — no
+# conoce ni puede conocer nuestra anon key (no es código nuestro). Sin
+# verify_jwt=false, el gateway de Supabase la rechaza ANTES de que el propio
+# handler llegue a ejecutarse (confirmado en real: 401
+# UNAUTHORIZED_NO_AUTH_HEADER incluso con el código del proxy desplegado y
+# correcto). Solo expone lectura de datos de WCL ya públicos — mismo perfil
+# de riesgo que la propia wowanalyzer.com pública, sin escritura ni secretos.
+[functions.wowanalyzer-proxy]
+verify_jwt = false
 # Directory under `supabase/` where declarative files are written.
 # declarative_schema_path = "./schemas"
 # JSON string passed through to pg-delta SQL formatting.

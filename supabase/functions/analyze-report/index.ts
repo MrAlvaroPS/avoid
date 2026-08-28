@@ -18,6 +18,7 @@ import { resolveConsumableAbilityIds, buildConsumableUsage } from '../_shared/co
 import { normalizeAbilityName, buildAbilityIdsByName } from '../_shared/ability-name-match.ts';
 import { computeDamageProfile } from '../_shared/damage-profile.ts';
 import { upsertReportEncounters } from '../_shared/report-encounters.ts';
+import { resolveSeverity } from '../_shared/mechanic-severity.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 
 // "Engancharse a los pulls": trae fights nuevos de WCL y genera `pulls` +
@@ -98,6 +99,8 @@ interface MechanicRow {
   observed_as_interrupt: boolean;
   avoidable: boolean | null;
   severity_threshold: number | null;
+  /** Muestra cruda de logs públicos de referencia (nivel 2 de resolveSeverity) — ver sync-boss-mechanics/index.ts. null si el boss no se ha (re)clasificado desde que existe esta columna. */
+  reference_hit_ratio_samples: number[] | null;
 }
 
 function effectiveMechanicCategory(mechanic: MechanicRow, observedInCurrentReport = false): string | null {
@@ -108,6 +111,11 @@ function effectiveMechanicCategory(mechanic: MechanicRow, observedInCurrentRepor
 interface InterruptEvent {
   timestamp?: number;
   extraAbilityGameID?: number; // verificado en real el 2026-08-22 contra un log público: es la habilidad que SE interrumpió, no la que interrumpe
+  // §"wipefest para mejorar en el boss concreto... informe de mejora por
+  // jugador" (feedback real, 2026-08-27): quién lanzó el interrupt. Ya
+  // venía en el JSON crudo de WCL (todo evento trae sourceID), solo no se
+  // leía porque hasta ahora bastaba con el booleano wasInterrupted.
+  sourceID?: number;
 }
 
 // §"Dispels — sin ingestión de eventos de dispel" (feedback real): mismo
@@ -416,10 +424,30 @@ Deno.serve(async (req: Request) => {
         // directamente de lo que se haya sincronizado/revisado en la sección de mecánicas.
         const { data: mechanics } = await supabase
           .from('applicable_boss_mechanics_candidates')
-          .select('ability_id,name,description,category,responsibility,inferred_category,observed_as_interrupt,avoidable,severity_threshold')
+          .select('ability_id,name,description,category,responsibility,inferred_category,observed_as_interrupt,avoidable,severity_threshold,reference_hit_ratio_samples')
           .eq('boss_id', bossId)
           .eq('difficulty', difficulty)
           .returns<MechanicRow[]>();
+
+        // §"variable como wipefest" (feedback real, 2026-08-27): nivel 1 de
+        // resolveSeverity — ratios de kills PROPIOS de Avoid en este boss+
+        // dificultad, agrupados por ability_id. Una consulta por fight
+        // (mismo criterio que la de `mechanics` justo arriba, que tampoco
+        // se cachea entre fights del mismo batch) contra own_mechanic_hit_ratios
+        // (ver migración 20260827220000 — ya viene kill-only y sin filas de
+        // categoría interrupt).
+        const { data: ownRatioRows } = await supabase
+          .from('own_mechanic_hit_ratios')
+          .select('ability_id,hit_ratio')
+          .eq('boss_id', bossId)
+          .eq('difficulty', difficulty)
+          .returns<{ ability_id: number; hit_ratio: number }[]>();
+        const ownHistoryRatiosByAbilityId = new Map<number, number[]>();
+        for (const row of ownRatioRows ?? []) {
+          const arr = ownHistoryRatiosByAbilityId.get(row.ability_id);
+          if (arr) arr.push(row.hit_ratio);
+          else ownHistoryRatiosByAbilityId.set(row.ability_id, [row.hit_ratio]);
+        }
         // Mapa DEFINITIVO "abilityGameID real de WCL -> mecánica curada":
         // combina el match directo por ID (por si alguna vez sí coincide) con
         // el match por nombre (el que de verdad funciona casi siempre, ver
@@ -950,25 +978,44 @@ Deno.serve(async (req: Request) => {
         // real): alguien engancha al boss sin que la raid lo haya decidido
         // -- WCL igual crea una fight real, de unos pocos segundos, donde
         // casi nadie de la raid llegó a entrar en combate. No es un intento
-        // fallido, es que no hubo intento. Se detecta con dos señales, las
-        // dos tienen que darse a la vez para minimizar falsos positivos
-        // (un wipe real, incluso uno malísimo donde muere todo el mundo casi
-        // a la vez a una mecánica de raid, sigue enganchando a la mayoría):
-        //  - duración muy corta: casi ningún wipe organizado se resuelve en
-        //    menos de esto;
+        // fallido, es que no hubo intento. Igual que el wipe call: nunca se
+        // borra la fila (conserva duración/pull_number/contexto), solo se
+        // excluye de las estadísticas que asumen que hubo un intento real.
+        // Un kill nunca es ninja pull -- si el boss murió, hubo intento.
+        //
+        // §"hay muchos que estan al 99.8% o 100% incluso el try... ni aunque
+        // se quede al 96%, si el combate dura menos de 40-50 segundos y
+        // apenas le baja la vida, es un ninja pull o un wipe call y debería
+        // excluirse" (feedback real, 2026-08-27): la duración por sí sola
+        // (15s) se quedaba corta -- un pull de 16s a un 100% de vida del
+        // boss (caso real visto) no llegaba ni a evaluarse. Dos señales
+        // INDEPENDIENTES, cualquiera de las dos basta para excluir (antes
+        // las dos tenían que darse a la vez):
         //  - fracción de la raid que llegó a "engancharse" (murió o recibió
-        //    daño durante el pull) muy baja: en un intento de verdad el RL
-        //    lo cantó y la mayoría entra a la vez.
-        // Igual que el wipe call: nunca se borra la fila (conserva
-        // duración/pull_number/contexto), solo se excluye de las
-        // estadísticas que asumen que hubo un intento real. Un kill nunca
-        // es ninja pull -- si el boss murió, hubo intento.
-        const NINJA_PULL_MAX_DURATION_MS = 15_000;
+        //    daño durante el pull) muy baja -- nadie llegó a entrar en
+        //    combate de verdad;
+        //  - al boss apenas le bajó la vida -- aunque TODA la raid se
+        //    enganchara, si en <45s el boss sigue casi a full vida no fue un
+        //    intento real evaluable (accidente o wipe call casi instantáneo,
+        //    a efectos de estadísticas da igual cuál de los dos).
+        // La duración sigue siendo obligatoria en ambos casos: un wipe real
+        // y largo que además hizo poco daño (un enrage temprano, un pull
+        // duro de verdad) SÍ debe seguir contando -- no es "poco daño" lo
+        // que lo descarta, es "poco daño Y muy poco tiempo".
+        const NINJA_PULL_MAX_DURATION_MS = 45_000;
         const NINJA_PULL_MAX_ENGAGED_FRACTION = 0.3;
+        const NINJA_PULL_MIN_BOSS_HEALTH_PCT = 90; // wipe_pct >= esto = al boss le queda ≥90% de vida = "apenas le baja la vida"
 
         interface NinjaPullDetection {
           excluded: boolean;
-          signals: { durationMs: number; raidSize: number; engagedPlayerCount: number; engagedFraction: number };
+          signals: {
+            durationMs: number;
+            raidSize: number;
+            engagedPlayerCount: number;
+            engagedFraction: number;
+            bossHealthPct: number | null;
+            barelyDamagedBoss: boolean;
+          };
         }
 
         function detectNinjaPull(): NinjaPullDetection | null {
@@ -982,10 +1029,19 @@ Deno.serve(async (req: Request) => {
             (actorId) => deathByTarget.has(actorId) || (damageEventsByTarget.get(actorId)?.length ?? 0) > 0,
           ).length;
           const engagedFraction = engagedPlayerCount / raidSizeForNinjaCheck;
+          const bossHealthPct = fight.bossPercentage ?? null;
+          const barelyDamagedBoss = bossHealthPct != null && bossHealthPct >= NINJA_PULL_MIN_BOSS_HEALTH_PCT;
 
           return {
-            excluded: engagedFraction <= NINJA_PULL_MAX_ENGAGED_FRACTION,
-            signals: { durationMs, raidSize: raidSizeForNinjaCheck, engagedPlayerCount, engagedFraction: Math.round(engagedFraction * 100) / 100 },
+            excluded: engagedFraction <= NINJA_PULL_MAX_ENGAGED_FRACTION || barelyDamagedBoss,
+            signals: {
+              durationMs,
+              raidSize: raidSizeForNinjaCheck,
+              engagedPlayerCount,
+              engagedFraction: Math.round(engagedFraction * 100) / 100,
+              bossHealthPct,
+              barelyDamagedBoss,
+            },
           };
         }
 
@@ -1283,6 +1339,8 @@ Deno.serve(async (req: Request) => {
           avoidable: boolean | null;
           player_hit_details: PlayerHitDetail[];
           phase_id: number | null;
+          comparison_source: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
+          comparison_percentile: number | null;
         }[] = [];
 
         for (const raw of enemyCastEvents) {
@@ -1307,11 +1365,19 @@ Deno.serve(async (req: Request) => {
           const observedInCurrentReport = interruptEvents.some((raw) => (raw as InterruptEvent).extraAbilityGameID === abilityId);
           const effectiveCategory = effectiveMechanicCategory(mech, observedInCurrentReport);
           if (effectiveCategory === 'interrupt') {
-            const wasInterrupted = interruptEvents.some((raw) => {
-              const e = raw as InterruptEvent;
-              const t = e.timestamp ?? 0;
-              return e.extraAbilityGameID === abilityId && t >= t0 && t <= windowEnd;
-            });
+            // §"informe de mejora por jugador... wipefest para mejorar en el
+            // boss concreto" (feedback real, 2026-08-27): antes solo se
+            // guardaba SI se interrumpió, no QUIÉN — sin eso no hay forma de
+            // atribuirle el mérito a nadie en un informe por jugador. Cuando
+            // hay varios candidatos dentro de la ventana (kick + purga
+            // simultáneos, p.ej.) nos quedamos con el más cercano a t0: es
+            // el que de verdad cortó el cast, no una coincidencia posterior.
+            const interrupter = interruptEvents
+              .map((raw) => raw as InterruptEvent)
+              .filter((e) => e.extraAbilityGameID === abilityId && (e.timestamp ?? 0) >= t0 && (e.timestamp ?? 0) <= windowEnd)
+              .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))[0];
+            const wasInterrupted = interrupter != null;
+            const interrupterName = interrupter?.sourceID != null ? actorById.get(interrupter.sourceID)?.name : undefined;
             mechanicEventRows.push({
               pull_id: insertedPull.id,
               ability_id: abilityId,
@@ -1323,9 +1389,21 @@ Deno.serve(async (req: Request) => {
               phase_id: resolvePhaseId(t0),
               outcome: wasInterrupted ? 'clean' : 'fail',
               players_hit: wasInterrupted ? 1 : 0, // reutilizado como "¿se resolvió?" para esta categoría, no cuenta jugadores golpeados
-              players_hit_names: [], // players_hit no cuenta golpes aquí, así que tampoco hay nombres que dar
+              // Solo se rellena en un interrupt CONSEGUIDO, con quien lo hizo
+              // (1 nombre, no "a quién golpeó"). En un fail se deja vacío a
+              // propósito: no sabemos quién tenía la asignación de kick, así
+              // que no hay a quién señalar — night-player-summary.service.ts
+              // ya filtra por outcome='clean' al preguntar "qué interrumpió
+              // este jugador", y PERSONAL_RESPONSIBILITY_CATEGORIES (pull-
+              // analysis.service.ts) no incluye 'interrupt', así que esto no
+              // se cuela en el coaching de "a quién golpeó esta mecánica".
+              players_hit_names: interrupterName ? [interrupterName] : [],
               avoidable: mech.avoidable,
               player_hit_details: [],
+              // resolveSeverity no aplica a interrupts (outcome sale de
+              // wasInterrupted arriba, nunca de un ratio contra umbral).
+              comparison_source: null,
+              comparison_percentile: null,
             });
             continue;
           }
@@ -1352,10 +1430,15 @@ Deno.serve(async (req: Request) => {
           }
 
           const ratio = hitTargets.size / raidSize;
-          const threshold = mech.severity_threshold ?? 0.35;
+          const severity = resolveSeverity({
+            ratio,
+            fixedThreshold: mech.severity_threshold ?? 0.35,
+            ownHistoryRatios: ownHistoryRatiosByAbilityId.get(abilityId) ?? [],
+            referenceRatiosSorted: mech.reference_hit_ratio_samples,
+          });
           const outcome: 'clean' | 'partial_fail' | 'fail' = causedDeath
             ? 'fail'
-            : mech.avoidable && ratio >= threshold
+            : mech.avoidable && severity.isSevere
               ? 'partial_fail'
               : 'clean';
 
@@ -1377,6 +1460,8 @@ Deno.serve(async (req: Request) => {
             players_hit_names: hitNames,
             avoidable: mech.avoidable,
             player_hit_details: buildPlayerHitDetails(hitTargets, t0, windowEnd),
+            comparison_source: severity.source,
+            comparison_percentile: severity.percentile,
           });
         }
 
@@ -1436,8 +1521,13 @@ Deno.serve(async (req: Request) => {
 
             const causedDeath = (deathEvents as DeathEvent[]).some((e) => e.killingAbilityGameID === abilityId && (e.timestamp ?? 0) >= t0 && (e.timestamp ?? 0) <= windowEnd);
             const ratio = hitTargets.size / raidSize;
-            const threshold = mech.severity_threshold ?? 0.35;
-            const outcome: 'clean' | 'partial_fail' | 'fail' = causedDeath ? 'fail' : mech.avoidable && ratio >= threshold ? 'partial_fail' : 'clean';
+            const severity = resolveSeverity({
+              ratio,
+              fixedThreshold: mech.severity_threshold ?? 0.35,
+              ownHistoryRatios: ownHistoryRatiosByAbilityId.get(abilityId) ?? [],
+              referenceRatiosSorted: mech.reference_hit_ratio_samples,
+            });
+            const outcome: 'clean' | 'partial_fail' | 'fail' = causedDeath ? 'fail' : mech.avoidable && severity.isSevere ? 'partial_fail' : 'clean';
             const hitNames = [...hitTargets.keys()].map((id) => actorById.get(id)?.name).filter((n): n is string => typeof n === 'string');
 
             mechanicEventRows.push({
@@ -1454,6 +1544,8 @@ Deno.serve(async (req: Request) => {
               players_hit_names: hitNames,
               avoidable: mech.avoidable,
               player_hit_details: buildPlayerHitDetails(hitTargets, t0, windowEnd),
+              comparison_source: severity.source,
+              comparison_percentile: severity.percentile,
             });
           }
         }

@@ -21,6 +21,14 @@ function formatDuration(ms: number): string {
   return hours ? `${hours} h ${minutes} min` : minutes ? `${minutes} min ${seconds} s` : `${seconds} s`;
 }
 
+/** "2:35" — offsetMs es relativo al inicio del pull, ver defensiveUsage. */
+export function formatOffset(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 function escapeMarkdown(value: string): string {
   return value.replace(/([\\`*_{}\[\]#+!|>~])/g, '\\$1');
 }
@@ -31,6 +39,18 @@ function plainNote(value: string): string {
     .replace(/https?:\/\/\S+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+// §"fusionar informe 1 e informe 2... asegurando que no se duplican datos"
+// (feedback real, 2026-08-27): asistencia vivía SOLO en NightReportService
+// (informe 1, comparación contra el roster de wowaudit) — no tiene sentido
+// duplicar esa consulta aquí dentro de night-full-report.ts (deterministe,
+// sin wowaudit), así que el componente la sigue trayendo de ahí y la pasa
+// como extra opcional para que el texto copiado/Discord también la lleve.
+export interface NightReportAttendanceExtras {
+  attendingMain: string[];
+  attendingTrial: string[];
+  absentMain: string[];
 }
 
 export function bilingualName(english: string, spanish: string | null): string {
@@ -78,17 +98,71 @@ function bossAsciiTable(report: NightFullReport, limit = report.summary.bosses.l
   return ['```text', header, '-'.repeat(header.length), ...rows, '```'].join('\n');
 }
 
+function findDefensiveUsage(report: NightFullReport, bossName: string, difficulty: string) {
+  return report.defensiveUsage.find((entry) => entry.bossName === bossName && entry.difficulty === difficulty) ?? null;
+}
+
+// §"organizados así los defensivos no me entero de nada... organizados por
+// quien, no me interesa una lista infinita" (feedback real, 2026-08-27):
+// mismo reagrupado por jugador → hechizo que en la vista (ver
+// castsByPlayer en night-report.component.ts) — una línea por hechizo con
+// su cuenta, no una línea por cast individual.
+function groupDefensiveCastsByPlayer(casts: NightFullReport['defensiveUsage'][number]['casts']) {
+  const byPlayer = new Map<string, Map<string, { spellName: string; wowheadSpellId: number | null; occurrences: { pullNumber: number; offsetMs: number }[] }>>();
+  for (const cast of casts) {
+    let spells = byPlayer.get(cast.playerName);
+    if (!spells) {
+      spells = new Map();
+      byPlayer.set(cast.playerName, spells);
+    }
+    const spellKey = cast.wowheadSpellId != null ? String(cast.wowheadSpellId) : cast.spellName;
+    let spell = spells.get(spellKey);
+    if (!spell) {
+      spell = { spellName: cast.spellName, wowheadSpellId: cast.wowheadSpellId, occurrences: [] };
+      spells.set(spellKey, spell);
+    }
+    spell.occurrences.push({ pullNumber: cast.pullNumber, offsetMs: cast.offsetMs });
+  }
+  return [...byPlayer.entries()]
+    .map(([playerName, spells]) => {
+      const spellList = [...spells.values()].sort((a, b) => b.occurrences.length - a.occurrences.length);
+      return { playerName, totalCasts: spellList.reduce((sum, spell) => sum + spell.occurrences.length, 0), spells: spellList };
+    })
+    .sort((a, b) => a.playerName.localeCompare(b.playerName));
+}
+
+/** Agrupa los momentos de un mismo hechizo por pull: "P3: 0:02 0:13 · P5: 0:30". */
+function formatOccurrences(occurrences: { pullNumber: number; offsetMs: number }[]): string {
+  const byPull: { pullNumber: number; times: string[] }[] = [];
+  for (const occ of occurrences) {
+    const last = byPull.at(-1);
+    if (last?.pullNumber === occ.pullNumber) last.times.push(formatOffset(occ.offsetMs));
+    else byPull.push({ pullNumber: occ.pullNumber, times: [formatOffset(occ.offsetMs)] });
+  }
+  return byPull.map((group) => `P${group.pullNumber}: ${group.times.join(' ')}`).join(' · ');
+}
+
 /**
  * Resumen para Discord sin recortes. Puede requerir varios mensajes, pero
  * conserva completas todas las notas y explicaciones incluidas.
+ *
+ * §"sintetiza el informe completo... es un informe de RL así que solo datos
+ * útiles" (feedback real, 2026-08-27): el resumen de Discord se queda
+ * deliberadamente en lo accionable — progress, prioridades, roles, quién no
+ * usó ningún defensivo EN EL BOSS DE PROGRESS (el detalle completo por
+ * boss+pull+minuto vive en "Copiar informe completo", no aquí).
  */
-export function buildNightDiscordSummary(report: NightFullReport): string {
+export function buildNightDiscordSummary(report: NightFullReport, attendance?: NightReportAttendanceExtras): string {
   const lines = [
     `# Informe de combate de IRIS · ${escapeMarkdown(reportDateLabel(report))}`,
     `**${report.summary.totalPulls} pulls · ${report.summary.totalKills} kills · ${report.summary.totalWipes} wipes · ${formatDuration(report.summary.totalCombatTimeMs)} en combate**`,
     '',
     bossAsciiTable(report),
   ];
+
+  if (attendance?.absentMain.length) {
+    lines.push('', `## Ausentes — Main (${attendance.absentMain.length})`, `- ${attendance.absentMain.map(escapeMarkdown).join(', ')}`);
+  }
 
   if (report.summary.progressBoss) {
     const progress = report.summary.progressBoss;
@@ -100,6 +174,10 @@ export function buildNightDiscordSummary(report: NightFullReport): string {
       `## Progress actual · ${escapeMarkdown(bilingualName(progress.bossName, progress.bossNameEs))}`,
       `**${progress.pulls} pulls · ${formatNumber(progress.firstWipePct)}% → ${formatNumber(progress.lastWipePct)}% · mejor ${formatNumber(progress.bestWipePct)}%${progressGained != null && progressGained > 0 ? ` · avance de ${formatNumber(progressGained)} puntos` : ''}**`,
     );
+    const progressDefensives = findDefensiveUsage(report, progress.bossName, progress.difficulty);
+    if (progressDefensives?.playersWithZeroCasts.length) {
+      lines.push(`Sin ningún defensivo en este boss: ${progressDefensives.playersWithZeroCasts.map(escapeMarkdown).join(', ')}`);
+    }
   }
 
   // Evita duplicar la habilidad principal cuando ya abre las prioridades.
@@ -174,38 +252,42 @@ export function buildNightDiscordSummary(report: NightFullReport): string {
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** Informe detallado, pensado para compartirlo completo o como archivo de texto. */
-export function buildNightFullReportMarkdown(report: NightFullReport, generatedAt?: string): string {
+/**
+ * Informe detallado, pensado para compartirlo completo o como archivo de
+ * texto.
+ *
+ * §"el informe ahora mismo es un poco caos y necesita orden y síntesis...
+ * es un informe de RL así que solo datos útiles" (feedback real,
+ * 2026-08-27): reorganizado alrededor de los bosses de la noche (mecánicas,
+ * golpes finales y uso de defensivos de CADA boss viven juntos, en vez de
+ * tres listas planas separadas mezclando todos los bosses) — así se lee
+ * como "qué pasó en cada boss", que es como piensa un RL, no como tres ejes
+ * de datos sin relación entre sí.
+ */
+export function buildNightFullReportMarkdown(report: NightFullReport, generatedAt?: string, attendance?: NightReportAttendanceExtras): string {
   const lines: string[] = [
     `# Informe de combate de IRIS · ${escapeMarkdown(reportDateLabel(report))}`,
     `Datos agregados y deterministas · ${report.reportCode}${generatedAt ? ` · actualizado ${new Intl.DateTimeFormat('es-ES', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(generatedAt))}` : ''}`,
     '',
     '## Resumen',
-    `- **${report.summary.totalPulls} pulls** · **${report.summary.totalKills} kills** · **${report.summary.totalWipes} wipes** · ${report.summary.totalBosses} bosses`,
-    `- **Tiempo en combate:** ${formatDuration(report.summary.totalCombatTimeMs)} · media ${formatDuration(report.summary.avgPullDurationMs)} por pull`,
-    `- **Wipes tempranos (<${formatDuration(report.summary.earlyWipeThresholdMs)}):** ${report.summary.earlyWipeCount}`,
+    `- **${report.summary.totalPulls} pulls** · **${report.summary.totalKills} kills** · **${report.summary.totalWipes} wipes** · ${report.summary.totalBosses} bosses · ${formatDuration(report.summary.totalCombatTimeMs)} en combate`,
     '',
     bossAsciiTable(report),
   ];
 
-  if (report.summary.bestPull) {
-    const best = report.summary.bestPull;
-    lines.push(`- **Mejor resultado:** ${escapeMarkdown(bilingualName(best.bossName, best.bossNameEs))} [${escapeMarkdown(best.difficulty)}] #${best.pullNumber} · ${best.kill ? 'kill' : `wipe al ${formatNumber(best.wipePct)}%`}`);
+  if (attendance) {
+    lines.push(
+      '',
+      '## Asistencia',
+      `- **Main presentes (${attendance.attendingMain.length}):** ${attendance.attendingMain.map(escapeMarkdown).join(', ') || '—'}`,
+      ...(attendance.attendingTrial.length ? [`- **Trial presentes (${attendance.attendingTrial.length}):** ${attendance.attendingTrial.map(escapeMarkdown).join(', ')}`] : []),
+      ...(attendance.absentMain.length ? [`- **Main ausentes (${attendance.absentMain.length}):** ${attendance.absentMain.map(escapeMarkdown).join(', ')}`] : []),
+    );
   }
 
   if (report.summary.progressBoss) {
     const progress = report.summary.progressBoss;
     lines.push(`- **Progress actual:** ${escapeMarkdown(bilingualName(progress.bossName, progress.bossNameEs))} [${escapeMarkdown(progress.difficulty)}] · ${progress.pulls} pulls · ${formatNumber(progress.firstWipePct)}% → ${formatNumber(progress.lastWipePct)}% · mejor ${formatNumber(progress.bestWipePct)}%`);
-  }
-
-  const topLethal = report.deaths.topFinalBlows[0];
-  if (topLethal) {
-    lines.push(
-      '',
-      '## Golpe final más repetido de la noche',
-      `- ${mechanicLink(topLethal.mechanicName, topLethal.mechanicNameEs, topLethal.wowheadSpellId)} · ${escapeMarkdown(bilingualName(topLethal.bossName, topLethal.bossNameEs))} [${escapeMarkdown(topLethal.difficulty)}] · **${topLethal.count} muertes**`,
-    );
-    if (topLethal.note) lines.push(`  - **Qué hace:** ${escapeMarkdown(plainNote(topLethal.note))}`);
   }
 
   lines.push('', '## Foco para la próxima raid');
@@ -217,117 +299,115 @@ export function buildNightFullReportMarkdown(report: NightFullReport, generatedA
   } else {
     lines.push('- No hay una prioridad sólida del boss de progress con la muestra disponible.');
   }
-
   lines.push('', '### Lo que funcionó');
   lines.push(...(report.goodPoints.length ? report.goodPoints.map((point) => `- ${escapeMarkdown(point)}`) : ['- Sin señal suficiente para destacar una mejora colectiva concreta.']));
 
-  lines.push('', '## Mecánicas recurrentes de la noche', '> El boss de progress aparece primero; después se conserva el contexto útil de los bosses anteriores.');
-  if (report.mechanics.length) {
-    for (const mechanic of report.mechanics) {
-      lines.push(
-        `- **${mechanicLink(mechanic.mechanicName, mechanic.mechanicNameEs, mechanic.wowheadSpellId)}** · ${escapeMarkdown(bilingualName(mechanic.bossName, mechanic.bossNameEs))} [${escapeMarkdown(mechanic.difficulty)}]`,
-        `  - ${mechanic.totalFails} fallos en ${mechanic.pullsAffected}/${mechanic.totalPulls} pulls (${formatNumber(mechanic.pctPullsAffected)}%) · ${mechanic.lethalFinalBlows} golpes finales letales · responsable: ${escapeMarkdown(mechanic.responsibilityLabel ?? 'sin clasificar')} · tendencia: ${trendLabel(mechanic.trend)}${mechanic.avoidableDamageTotal == null ? '' : ` · daño evitable ${formatCompact(mechanic.avoidableDamageTotal)}`}`,
-      );
-      if (mechanic.note) lines.push(`  - **Qué hace:** ${escapeMarkdown(plainNote(mechanic.note))}`);
-    }
-  } else {
-    lines.push('- No hay fallos mecánicos verificables registrados.');
-  }
-
-  lines.push(
-    '',
-    '## Responsabilidad de las mecánicas',
-    `- **Cobertura:** ${report.responsibilities.classifiedMechanics}/${report.responsibilities.totalMechanics} mecánicas (${formatNumber(report.responsibilities.classificationCoveragePct)}%)`,
-    ...report.responsibilities.byResponsibility.map((entry) =>
-      `- **${escapeMarkdown(entry.label)}:** ${entry.mechanics} mecánicas · ${entry.failedEvents} fallos en ${entry.pullsAffected} pulls · ${entry.deaths} muertes · ${entry.playersHit} jugadores alcanzados · ${formatCompact(entry.damageTaken)} de daño registrado en esos fallos`,
-    ),
-    '> La responsabilidad indica quién tenía la acción principal para resolver la mecánica. Es una señal agregada para preparar la raid, no una atribución individual de culpa.',
-  );
-
-  lines.push(
-    '',
-    '## Muertes: evidencia y cobertura',
-    `- **Muertes reales:** ${report.deaths.totalRealDeaths}${report.deaths.totalWipeCallExcluded ? ` · ${report.deaths.totalWipeCallExcluded} excluidas por wipe call` : ''}`,
-    `- **Causa raíz clasificable:** ${report.deaths.rootCauseClassifiedCount}/${report.deaths.totalRealDeaths} (${formatNumber(report.deaths.rootCauseCoveragePct)}%)`,
-    `- **Categoría mecánica conocida:** ${report.deaths.mechanicCategorizedCount}/${report.deaths.totalRealDeaths} (${formatNumber(report.deaths.mechanicCategoryCoveragePct)}%)`,
-    `- **Golpe final sin habilidad identificada:** ${report.deaths.unknownFinalBlowCount}/${report.deaths.totalRealDeaths}`,
-    '- “Daño sostenido sin sanación registrada” describe una ventana de 6 s; no atribuye la causa a los healers.',
-    '',
-    '### Golpes finales más repetidos',
-  );
-  if (report.deaths.topFinalBlows.length) {
-    for (const death of report.deaths.topFinalBlows) {
-      lines.push(`- ${mechanicLink(death.mechanicName, death.mechanicNameEs, death.wowheadSpellId)} · ${escapeMarkdown(bilingualName(death.bossName, death.bossNameEs))} [${escapeMarkdown(death.difficulty)}] · **${death.count} muertes**`);
-      if (death.note) lines.push(`  - ${escapeMarkdown(plainNote(death.note))}`);
-    }
-  } else {
-    lines.push('- Sin golpes finales identificables.');
-  }
-  if (report.deaths.unknownFinalBlowCount) {
+  // ---- Bosses de la noche: mecánicas + golpes finales + defensivos, juntos ----
+  lines.push('', '## Bosses de la noche', '> El boss de progress aparece primero; después, el resto en el mismo orden que la tabla de arriba.');
+  for (const boss of report.summary.bosses) {
+    const isProgress = report.summary.progressBoss?.bossName === boss.bossName && report.summary.progressBoss?.difficulty === boss.difficulty;
     lines.push(
       '',
-      '### Contexto de muertes sin golpe final identificado',
-      `- En ${report.deaths.unknownFinalBlowWithDamageContextCount}/${report.deaths.unknownFinalBlowCount} se conserva al menos un impacto positivo anterior. Esto es contexto, no atribución del golpe final.`,
-      ...report.deaths.topLastDamageBeforeUnknownFinalBlow.map((damage) => `- Último daño registrado: ${mechanicLink(damage.mechanicName, damage.mechanicNameEs, damage.wowheadSpellId)} · ${escapeMarkdown(bilingualName(damage.bossName, damage.bossNameEs))} · ${damage.count} casos`),
+      `### ${escapeMarkdown(bilingualName(boss.bossName, boss.bossNameEs))} [${escapeMarkdown(boss.difficulty)}]${isProgress ? ' · progress actual' : ''}`,
+      `${boss.pulls} pulls · ${boss.kills > 0 ? `${boss.kills} kill${boss.kills === 1 ? '' : 's'}` : `mejor ${formatNumber(boss.bestWipePct)}% de vida`}`,
     );
+
+    const bossMechanics = report.mechanics.filter((m) => m.bossName === boss.bossName && m.difficulty === boss.difficulty);
+    if (bossMechanics.length) {
+      lines.push('', '**Mecánicas:**');
+      for (const mechanic of bossMechanics) {
+        lines.push(
+          `- ${mechanicLink(mechanic.mechanicName, mechanic.mechanicNameEs, mechanic.wowheadSpellId)}: ${mechanic.totalFails} fallos en ${mechanic.pullsAffected}/${mechanic.totalPulls} pulls (${formatNumber(mechanic.pctPullsAffected)}%) · ${mechanic.lethalFinalBlows} golpes finales letales · responsable: ${escapeMarkdown(mechanic.responsibilityLabel ?? 'sin clasificar')} · tendencia: ${trendLabel(mechanic.trend)}${mechanic.avoidableDamageTotal == null ? '' : ` · daño evitable ${formatCompact(mechanic.avoidableDamageTotal)}`}`,
+        );
+      }
+    }
+
+    const bossDeaths = report.deaths.topFinalBlows.filter((d) => d.bossName === boss.bossName && d.difficulty === boss.difficulty);
+    if (bossDeaths.length) {
+      lines.push('', '**Golpes finales más repetidos:**');
+      for (const death of bossDeaths) {
+        lines.push(`- ${mechanicLink(death.mechanicName, death.mechanicNameEs, death.wowheadSpellId)}: **${death.count} muertes** · ${death.distinctPlayers} jugador${death.distinctPlayers === 1 ? '' : 'es'} distinto${death.distinctPlayers === 1 ? '' : 's'}`);
+      }
+    }
+
+    const defensives = findDefensiveUsage(report, boss.bossName, boss.difficulty);
+    if (defensives) {
+      lines.push('', '**Defensivos:** (sin tanks — su mitigación es continua por diseño del rol)');
+      if (defensives.playersWithZeroCasts.length) {
+        lines.push(`- ⚠ Sin ningún defensivo (${defensives.playersWithZeroCasts.length}/${defensives.playersAttended}): ${defensives.playersWithZeroCasts.map(escapeMarkdown).join(', ')}`);
+      } else if (defensives.playersAttended) {
+        lines.push('- Todos los presentes usaron al menos un defensivo.');
+      }
+      for (const player of groupDefensiveCastsByPlayer(defensives.casts)) {
+        lines.push(`  **${escapeMarkdown(player.playerName)}** · ${player.totalCasts} cast${player.totalCasts === 1 ? '' : 's'}`);
+        for (const spell of player.spells) {
+          lines.push(`    - ${mechanicLink(spell.spellName, null, spell.wowheadSpellId)} ×${spell.occurrences.length} — ${formatOccurrences(spell.occurrences)}`);
+        }
+      }
+    }
+
+    if (isProgress && report.phaseBreakdown) {
+      lines.push('', '**Fases:**');
+      for (const phase of report.phaseBreakdown.phases) {
+        lines.push(`- ${escapeMarkdown(phase.name)}${phase.isIntermission ? ' (intermedio)' : ''}: ${phase.deaths} muerte${phase.deaths === 1 ? '' : 's'} · ${phase.mechanicFails} fallo${phase.mechanicFails === 1 ? '' : 's'} mecánico${phase.mechanicFails === 1 ? '' : 's'}`);
+      }
+    }
+    if (isProgress && report.interrupts.progressBoss?.totalCasts) {
+      const pi = report.interrupts.progressBoss;
+      lines.push('', `**Interrupciones:** ${pi.interrupted}/${pi.totalCasts} (${formatNumber(pi.pctSuccess)}%)`);
+      for (const cast of pi.topUninterrupted) lines.push(`  - ${mechanicLink(cast.mechanicName, cast.mechanicNameEs, cast.wowheadSpellId)}: ${cast.completedCount} sin cortar`);
+    }
   }
-  lines.push('', '### Señales de causa raíz', ...report.deaths.byRootCause.map((cause) => `- **${escapeMarkdown(cause.label)}:** ${cause.count} (${formatNumber(cause.pct)}%)`));
+
+  // ---- Síntesis de toda la noche (ejes que no tienen sentido por boss) ----
+  lines.push(
+    '',
+    '## Responsabilidad de las mecánicas · toda la noche',
+    `- **Cobertura:** ${report.responsibilities.classifiedMechanics}/${report.responsibilities.totalMechanics} mecánicas (${formatNumber(report.responsibilities.classificationCoveragePct)}%)`,
+    ...report.responsibilities.byResponsibility.map((entry) =>
+      `- **${escapeMarkdown(entry.label)}:** ${entry.mechanics} mecánicas · ${entry.failedEvents} fallos en ${entry.pullsAffected} pulls · ${entry.deaths} muertes · ${formatCompact(entry.damageTaken)} de daño registrado`,
+    ),
+  );
 
   const roles = report.roleInsights;
   lines.push(
     '',
     `## Información por función${roles.scope ? ` · ${escapeMarkdown(bilingualName(roles.scope.bossName, roles.scope.bossNameEs))} [${escapeMarkdown(roles.scope.difficulty)}]` : ' · toda la noche'}`,
-    `- **Cobertura de roles:** ${roles.classifiedPlayers}/${roles.totalPlayers} jugadores (${formatNumber(roles.classificationCoveragePct)}%)`,
-    `- **Tanks (${roles.tanks.players}):** ${roles.tanks.deaths} muertes (${formatNumber(roles.tanks.deathsPerPull)}/pull) · ${roles.tanks.tankbusterDeaths} por tankbuster · defensivo registrado en ${roles.tanks.playersUsingDefensive}/${roles.tanks.players}${roles.tanks.nonTankTankbusterDeaths ? ` · ${roles.tanks.nonTankTankbusterDeaths} tankbusters letales alcanzaron a no-tanks` : ''}`,
-    `- **Healers (${roles.healers.players}):** ${roles.healers.deaths} muertes (${formatNumber(roles.healers.deathsPerPull)}/pull) · defensivo registrado en ${roles.healers.playersUsingDefensive}/${roles.healers.players} · ${roles.healers.raidDeathsWithSustainedNoHealingSignal} muertes de raid con daño sostenido sin sanación registrada en 6 s`,
-    `- **DPS (${roles.dps.players}):** ${roles.dps.deaths} muertes (${formatNumber(roles.dps.deathsPerPull)}/pull) · defensivo registrado en ${roles.dps.playersUsingDefensive}/${roles.dps.players} · ${roles.dps.personalMechanicDeaths} muertes asociadas a posicionamiento/soak`,
-    '- La señal de healing describe lo registrado en la ventana; no identifica responsable ni demuestra que la muerte fuese salvable.',
+    `- **Tanks (${roles.tanks.players}):** ${roles.tanks.deaths} muertes (${formatNumber(roles.tanks.deathsPerPull)}/pull) · ${roles.tanks.tankbusterDeaths} por tankbuster${roles.tanks.nonTankTankbusterDeaths ? ` · ${roles.tanks.nonTankTankbusterDeaths} tankbusters letales alcanzaron a no-tanks` : ''}`,
+    `- **Healers (${roles.healers.players}):** ${roles.healers.deaths} muertes (${formatNumber(roles.healers.deathsPerPull)}/pull) · ${roles.healers.raidDeathsWithSustainedNoHealingSignal} muertes de raid con daño sostenido sin sanación registrada en 6 s`,
+    `- **DPS (${roles.dps.players}):** ${roles.dps.deaths} muertes (${formatNumber(roles.dps.deathsPerPull)}/pull) · ${roles.dps.personalMechanicDeaths} muertes asociadas a posicionamiento/soak`,
+  );
+
+  lines.push(
+    '',
+    '## Muertes: cobertura de datos',
+    `- **Muertes reales:** ${report.deaths.totalRealDeaths}${report.deaths.totalWipeCallExcluded ? ` · ${report.deaths.totalWipeCallExcluded} excluidas por wipe call` : ''}`,
+    `- **Causa raíz clasificable:** ${report.deaths.rootCauseClassifiedCount}/${report.deaths.totalRealDeaths} (${formatNumber(report.deaths.rootCauseCoveragePct)}%)`,
+    ...report.deaths.byRootCause.map((cause) => `  - ${escapeMarkdown(cause.label)}: ${cause.count} (${formatNumber(cause.pct)}%)`),
   );
 
   lines.push(
     '',
     '## Recursos personales',
-    `- **Herramientas defensivas registradas:** ${report.defensives.playersEverUsed}/${report.defensives.totalPlayersTracked} jugadores (${formatNumber(report.defensives.pctPlayersUsedAtLeastOnce)}%) · ${report.defensives.totalCasts} casts · ${formatNumber(report.defensives.castsPerCombatMinute)}/min de combate`,
+    `- **Defensivos:** ${report.defensives.playersEverUsed}/${report.defensives.totalPlayersTracked} jugadores usaron alguno (${formatNumber(report.defensives.pctPlayersUsedAtLeastOnce)}%) · ${report.defensives.totalCasts} casts · ${formatNumber(report.defensives.castsPerCombatMinute)}/min de combate`,
     report.defensives.totalEvaluated
-      ? `- **Otra herramienta defensiva disponible al morir:** ${report.defensives.availableUnusedCount}/${report.defensives.totalEvaluated} muertes evaluables (${formatNumber(report.defensives.globalAvailableUnusedPct)}%)`
+      ? `- **Otra herramienta disponible al morir sin usar:** ${report.defensives.availableUnusedCount}/${report.defensives.totalEvaluated} muertes evaluables (${formatNumber(report.defensives.globalAvailableUnusedPct)}%)`
       : '- **Disponibilidad al morir:** sin muertes evaluables con información de cooldown.',
-    `- **Healthstone:** ${report.survival.healthstone.playersEverUsed}/${report.survival.healthstone.playersWithObservedAccess} jugadores con acceso observable registraron uso (${formatNumber(report.survival.healthstone.pctUsedAtLeastOnce)}%)`,
-    `- **Health potion:** ${report.survival.healthPotion.playersEverUsed}/${report.survival.healthPotion.totalPlayersTracked} jugadores registraron uso (${formatNumber(report.survival.healthPotion.pctUsedAtLeastOnce)}%)`,
-    `- **Algún recurso de emergencia:** ${report.survival.either.playersEverUsed}/${report.survival.either.totalPlayersTracked} jugadores registraron healthstone o health potion (${formatNumber(report.survival.either.pctUsedAtLeastOnce)}%)`,
-    `- **Muertes sin uso registrado de esos recursos durante el try:** ${formatNumber(report.survival.pctDeathsWithNoEmergencyConsumableInPull)}%`,
+    `- **Healthstone/health potion:** ${report.survival.either.playersEverUsed}/${report.survival.either.totalPlayersTracked} jugadores usaron alguno (${formatNumber(report.survival.either.pctUsedAtLeastOnce)}%) · ${formatNumber(report.survival.pctDeathsWithNoEmergencyConsumableInPull)}% de las muertes sin uso registrado en el try`,
   );
-  if (report.survival.healthstone.deathsEvaluable) {
-    lines.push(`- **Acceso observable a healthstone y sin uso durante el try:** ${report.survival.healthstone.deathsWithObservedAccessNoUseInPull}/${report.survival.healthstone.deathsEvaluable} muertes evaluables`);
-  }
-
-  lines.push('', '## Interrupciones verificables');
-  if (report.interrupts.progressBoss) {
-    const progressInterrupts = report.interrupts.progressBoss;
-    lines.push(`- **Boss de progress — ${escapeMarkdown(bilingualName(progressInterrupts.bossName, progressInterrupts.bossNameEs))}:** ${progressInterrupts.interrupted}/${progressInterrupts.totalCasts} (${formatNumber(progressInterrupts.pctSuccess)}%)`);
-    for (const cast of progressInterrupts.topUninterrupted) {
-      lines.push(`  - ${mechanicLink(cast.mechanicName, cast.mechanicNameEs, cast.wowheadSpellId)}: ${cast.completedCount} sin cortar`);
-      if (cast.note) lines.push(`    - ${escapeMarkdown(plainNote(cast.note))}`);
-    }
-  }
-  lines.push(report.interrupts.totalCasts
-    ? `- **Toda la noche:** ${report.interrupts.interrupted}/${report.interrupts.totalCasts} casts interrumpidos (${formatNumber(report.interrupts.pctSuccess)}%)`
-    : '- Sin casts interruptibles con clasificación verificada.');
-  for (const cast of report.interrupts.topUninterrupted) lines.push(`- ${mechanicLink(cast.mechanicName, cast.mechanicNameEs, cast.wowheadSpellId)}: ${cast.completedCount} sin cortar`);
-  if (report.interrupts.excludedUnverifiedCasts) lines.push(`- ${report.interrupts.excludedUnverifiedCasts} casts históricos excluidos: solo estaban inferidos como interrupt por texto.`);
 
   if (report.avoidableDamage) {
     const avoidable = report.avoidableDamage;
     lines.push(
       '',
       '## Daño evitable medido',
-      `- **${formatCompact(avoidable.total)}** · ${formatCompact(avoidable.perMinute)}/min${avoidable.pctOfRaidDamage == null ? '' : ` · ${formatNumber(avoidable.pctOfRaidDamage)}% del daño recibido de raid en el ámbito medido`}`,
-      `- Cobertura: ${avoidable.measuredBossScopes}/${avoidable.totalBossScopes} combinaciones boss+dificultad${avoidable.complete ? ' (completa)' : ' (parcial)'}.`,
+      `- **${formatCompact(avoidable.total)}** · ${formatCompact(avoidable.perMinute)}/min${avoidable.pctOfRaidDamage == null ? '' : ` · ${formatNumber(avoidable.pctOfRaidDamage)}% del daño de raid en el ámbito medido`} · cobertura ${avoidable.measuredBossScopes}/${avoidable.totalBossScopes} boss+dificultad${avoidable.complete ? ' (completa)' : ' (parcial)'}`,
     );
   }
 
-  lines.push('', '## Señales presentes en wipes', '> Son señales no exclusivas: un wipe puede aparecer en varias filas. No demuestran por sí solas qué causó el wipe.');
+  lines.push('', '## Señales presentes en wipes', '> Son señales no exclusivas: un mismo wipe puede aparecer en varias filas. No demuestran por sí solas qué causó el wipe.');
   if (report.wipeRecovery.wipesEvaluable) {
-    lines.push(`- **Caída en cadena:** en ${report.wipeRecovery.wipesWithCascade}/${report.wipeRecovery.wipesEvaluable} wipes evaluables hubo al menos 3 muertes reales dentro de los ${report.wipeRecovery.windowMs / 1_000} s desde la primera (${formatNumber(report.wipeRecovery.pctWipesWithCascade)}%).`);
+    lines.push(`- **Caída en cadena:** ${report.wipeRecovery.wipesWithCascade}/${report.wipeRecovery.wipesEvaluable} wipes con ≥3 muertes reales en ${report.wipeRecovery.windowMs / 1_000} s desde la primera (${formatNumber(report.wipeRecovery.pctWipesWithCascade)}%)`);
   }
   lines.push(...(report.wipePatterns.length
     ? report.wipePatterns.map((pattern) => `- **${escapeMarkdown(pattern.label)}:** ${pattern.count}/${report.summary.totalWipes} (${formatNumber(pattern.pct)}%)`)
@@ -335,10 +415,10 @@ export function buildNightFullReportMarkdown(report: NightFullReport, generatedA
 
   lines.push('', '## Progresión');
   lines.push(...(report.summary.progression.length
-    ? report.summary.progression.map((progress) => `- **${escapeMarkdown(bilingualName(progress.bossName, progress.bossNameEs))}** [${escapeMarkdown(progress.difficulty)}] · vida: ${formatNumber(progress.firstWipePct)}% → ${formatNumber(progress.lastWipePct)}% (${progress.pulls} pulls)`)
+    ? report.summary.progression.map((progress) => `- **${escapeMarkdown(bilingualName(progress.bossName, progress.bossNameEs))}** [${escapeMarkdown(progress.difficulty)}]: ${formatNumber(progress.firstWipePct)}% → ${formatNumber(progress.lastWipePct)}% (${progress.pulls} pulls)`)
     : ['- Hace falta más de un pull por boss para medir progresión.']));
   if (report.progressionComparison) {
-    lines.push(`- **Segunda mitad vs primera, mismo boss+dificultad:** muertes/pull ${signedPct(report.progressionComparison.deathsDeltaPct)} · daño evitable/pull ${signedPct(report.progressionComparison.avoidableDamageDeltaPct)} · cobertura de defensivos ${signedPct(report.progressionComparison.defensiveCoverageDeltaPct)}`);
+    lines.push(`- **Segunda mitad vs primera, mismo boss+dificultad:** muertes/pull ${signedPct(report.progressionComparison.deathsDeltaPct)} · daño evitable/pull ${signedPct(report.progressionComparison.avoidableDamageDeltaPct)} · cobertura defensivos ${signedPct(report.progressionComparison.defensiveCoverageDeltaPct)}`);
   }
 
   lines.push('', '## Límites del informe', ...report.notAvailable.map((item) => `- ${escapeMarkdown(item)}`));

@@ -121,7 +121,7 @@
                    eso tarda más en total (~4x) y el botón muestra en qué
                    dificultad va en vez de un tiempo fijo. -->
               <button type="button" class="sync-btn" [disabled]="syncing() || deepSyncing()" (click)="onSync(true)" title="Journal + DB2 + hasta 20 logs públicos de referencia por dificultad, para las 4 dificultades del boss una a una. Tarda ~2-3 min en total.">
-                {{ syncProgress() && deepSyncing() ? syncProgress() : '🔄 Sincronizar boss (4 dificultades)' }}
+                {{ syncProgress() && deepSyncing() ? syncProgress() : '🔄 Sincronizar boss (3 dificultades)' }}
               </button>
               <button type="button" class="sync-btn-quick" [disabled]="syncing() || deepSyncing()" (click)="onSync(false)" title="Igual, pero con solo 3 logs de referencia por dificultad en vez de 20 — más rápido, con menos muestra para contrastar entre dificultades.">
                 {{ syncProgress() && syncing() ? syncProgress() : 'sync rápido' }}
@@ -357,6 +357,30 @@
                       [value]="c.severity_threshold ?? 0.35"
                       (change)="onEdit(c, { severity_threshold: toNumber($any($event.target).value) })"
                     />
+                    <!-- §"el umbral de los bosses no requiere la explicación
+                         completa en todas las filas... si tienes muestras
+                         para que no sea el 0.35, actualiza ahi el valor real
+                         para que sea visual" (feedback real, 2026-08-27):
+                         antes una frase entera siempre visible; ahora una
+                         nota corta con el valor real que de verdad se está
+                         aplicando (cuando hay ≥5 muestras, ver
+                         effectiveThreshold), y la explicación completa solo
+                         en el title nativo del navegador — mismo patrón que
+                         el botón 💡 de sugerencia de categoría de arriba,
+                         inmune al recorte de pantalla del tooltip CSS que
+                         sí tenía el dosier de jugador. El historial propio
+                         de Avoid no se puede enseñar aquí — depende del
+                         report en curso, no de este catálogo. -->
+                    @if (effectiveThreshold(c.reference_hit_ratio_samples); as eff) {
+                      <p
+                        class="reasons"
+                        [title]="'Comparación variable activa: ' + c.reference_hit_ratio_samples!.length + ' muestras de referencia. Este umbral fijo (' + (c.severity_threshold ?? 0.35) + ') solo se usa si tampoco hay historial propio de Avoid.'"
+                      >
+                        Real: ≈{{ formatPct(eff * 100) }} ({{ c.reference_hit_ratio_samples!.length }} muestras)
+                      </p>
+                    } @else {
+                      <p class="reasons meta" title="Sin logs de referencia suficientes todavía (hacen falta ≥5) — se usa este umbral fijo salvo que Avoid ya tenga suficiente historial propio.">Sin muestras aún</p>
+                    }
                   </td>
                   <td>
                     <input type="checkbox" [checked]="c.reviewed" (change)="onEdit(c, { reviewed: $any($event.target).checked })" />

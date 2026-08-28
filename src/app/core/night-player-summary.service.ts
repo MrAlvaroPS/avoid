@@ -10,7 +10,7 @@ import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { ReliabilityService, type PlayerReliability, type ReliabilityBreakdown } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
-import { PERSONAL_RESPONSIBILITY_CATEGORIES, mapBrief } from './pull-analysis.service';
+import { PERSONAL_RESPONSIBILITY_CATEGORIES, PULL_SCORE_FAIL_PENALTY, mapBrief } from './pull-analysis.service';
 import { loadMechanicNotesByName } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
 import type { DeathCause, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
@@ -23,6 +23,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export interface NightPullSummary {
   pullId: string;
   pullNumber: number;
+  /** §"wowanalyzer para mejorar las rotaciones... todo en nuestra app" (feedback real, 2026-08-27): id de fight de WCL, para enlazar directo a ese pull en la instancia local de WoWAnalyzer (ver supabase/wowanalyzer-app/). */
+  fightId: number;
   bossId: string;
   bossName: string;
   difficulty: string;
@@ -31,6 +33,45 @@ export interface NightPullSummary {
   durationMs: number | null;
   closedAt: string;
   died: boolean;
+  /** §"eso es obviamente un ninja pull... no debería contar para ninguna
+   * estadística ni métrica" (feedback real, 2026-08-27): true si
+   * analyze-report marcó este pull como ninja pull (ver
+   * pulls.ninja_pull_excluded) — un pull ENTERO que no fue un intento real.
+   * La fila se sigue mostrando en "Bosses de la noche" (mismo criterio que
+   * el resto de la app: no se borra, se marca) pero pullScore es null y
+   * nightScore lo ignora al promediar. NO incluye wipe call — ver
+   * hadWipeCall más abajo, un wipe call nunca invalida el pull entero. */
+  excludedFromStats: boolean;
+  excludedReason: 'ninja_pull' | null;
+  /** §CORRECCIÓN (feedback real, 2026-08-27): "el wipecall solo lo deben
+   * tener los que, en efecto, murieron a consecuencia de que el RL lo
+   * dijese... todo lo que suceda antes de ese momento debe ser evaluable" —
+   * puramente informativo (tag en la UI), NUNCA anula pullScore ni
+   * excludedFromStats. true solo si la muerte de ESTE jugador en concreto
+   * fue la del cluster de wipe call (mismo criterio que isWipeCall en
+   * NightDeathRow) — que el pull tuviera un wipe call de otra persona no
+   * cuenta aquí. La exclusión real ya vive en evaluatedDeaths/
+   * isMechanicExcludedByWipeCall (más abajo): solo descartan la muerte y
+   * los eventos DESPUÉS del momento del wipe call, todo lo anterior sigue
+   * evaluándose con normalidad. */
+  hadWipeCall: boolean;
+  /** §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27): (mecánicas de responsabilidad individual + consumibles al morir) × penalización por momento de muerte. null si excludedFromStats — no hubo intento real que puntuar. Ver computePullScore más abajo para la fórmula completa. */
+  pullScore: number | null;
+  /** §"debería salir por qué ha obtenido esta puntuación" (feedback real, 2026-08-27): los ingredientes de pullScore, para el tooltip — no solo el número final. Se calcula igual aunque excludedFromStats (barato, y deja auditar qué había) — el componente solo lo enseña cuando pullScore no es null. */
+  scoreBreakdown: PullScoreBreakdown;
+}
+
+export interface PullScoreBreakdown {
+  mechanicFailCount: number;
+  /** 0-1, ya penalizado por mechanicFailCount × PULL_SCORE_FAIL_PENALTY. */
+  mechanicScore: number;
+  died: boolean;
+  /** Solo tiene sentido si died=true — si no murió, el check se aprueba automático (mismo criterio que Wipefest). */
+  usedConsumable: boolean;
+  consumableScore: number;
+  /** 1.0 si no murió; si murió, fracción del pull que estuvo vivo (0-1). */
+  deathMultiplier: number;
+  deathTimeMs: number | null;
 }
 
 export interface NightDeathRow {
@@ -66,6 +107,25 @@ export interface NightMechanicFailRow {
   outcome: 'partial_fail' | 'fail';
   timeMs: number;
   damageTaken: number;
+  aiNote: string | null;
+  /** §"muestra el percentil + fuente" (feedback real, 2026-08-27): de dónde salió el umbral que marcó este fallo — ver resolveSeverity en _shared/mechanic-severity.ts. */
+  comparisonSource: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
+  comparisonPercentile: number | null;
+}
+
+// §"informe de mejora por jugador... wipefest para mejorar en el boss
+// concreto" (feedback real, 2026-08-27): al contrario que mechanicFails
+// (fallos), esto es una lista de ACIERTOS — qué interrumpió de verdad este
+// jugador esa noche. Antes pull_mechanic_events no guardaba QUIÉN lanzó el
+// interrupt (solo si se resolvió), así que esto no era posible con los
+// datos que había — ver analyze-report/index.ts, InterruptEvent.sourceID.
+export interface NightInterruptRow {
+  pullId: string;
+  bossName: string;
+  pullNumber: number;
+  mechanicName: string;
+  mechanicId: number;
+  timeMs: number;
   aiNote: string | null;
 }
 
@@ -104,10 +164,13 @@ export interface NightPlayerSummary {
   /** §"fiabilidad debería tener 2 valores: 60 días y de la noche" (feedback real): misma fórmula, acotada a los pulls de ESTE report_code. sampleSize=0 = sin ningún pull evaluable esa noche (no debería pasar si llegó hasta aquí, pero por si acaso). */
   nightReliability: (ReliabilityBreakdown & { sampleSize: number }) | null;
   pulls: NightPullSummary[];
+  /** §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27): media de pullScore ponderada por duración de pull — null solo si pulls está vacío (no debería pasar si llegó hasta aquí). */
+  nightScore: number | null;
   totalDeaths: number;
   totalMechanicFails: number;
   deaths: NightDeathRow[];
   mechanicFails: NightMechanicFailRow[];
+  interrupts: NightInterruptRow[];
   repeatedPatterns: NightRepeatedPattern[];
   gearSnapshot: NightGearSnapshot | null;
   battleNetUrl: string | null;
@@ -121,7 +184,11 @@ export interface NightPlayerSummary {
 // app.html: "Sanguino · EU") — no hay wowaudit_roster.region que leer.
 const REGION = 'eu';
 
-const MECHANIC_EVENT_FIELDS = 'pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms, player_hit_details';
+/** Re-exportado tal cual (ahora vive en pull-analysis.service.ts, ver el comentario ahí — reliability.service.ts también lo consume desde allí y no puede importarlo de aquí sin crear un ciclo) para no tocar el import existente en night-player-dossier.component.ts. */
+export { PULL_SCORE_FAIL_PENALTY } from './pull-analysis.service';
+const FAIL_PENALTY = PULL_SCORE_FAIL_PENALTY;
+
+const MECHANIC_EVENT_FIELDS = 'pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms, player_hit_details, comparison_source, comparison_percentile';
 
 async function loadPlayerMechanicEvents(client: SupabaseClient, pullIds: string[], playerName: string) {
   const query = (relation: string) => client
@@ -134,6 +201,25 @@ async function loadPlayerMechanicEvents(client: SupabaseClient, pullIds: string[
   // Compatibilidad durante despliegues escalonados: la vista nueva aplica el
   // filtro de dificultad en servidor. Hasta que exista, conservamos el dosier
   // con los eventos base; las exclusiones por wipe call aún se aplican abajo.
+  return withSupabaseRelationFallback(
+    'applicable_pull_mechanic_events',
+    () => query('applicable_pull_mechanic_events'),
+    () => query('pull_mechanic_events'),
+  );
+}
+
+const INTERRUPT_EVENT_FIELDS = 'pull_id, ability_id, mechanic_name, trigger_time_ms';
+
+/** Mecánicas category='interrupt' que ESTE jugador cortó (outcome='clean' + su nombre en players_hit_names — ver analyze-report/index.ts). */
+async function loadPlayerInterrupts(client: SupabaseClient, pullIds: string[], playerName: string) {
+  const query = (relation: string) => client
+    .from(relation)
+    .select(INTERRUPT_EVENT_FIELDS)
+    .in('pull_id', pullIds)
+    .eq('category', 'interrupt')
+    .eq('outcome', 'clean')
+    .contains('players_hit_names', [playerName]);
+
   return withSupabaseRelationFallback(
     'applicable_pull_mechanic_events',
     () => query('applicable_pull_mechanic_events'),
@@ -174,13 +260,16 @@ export class NightPlayerSummaryService {
     const allPulls = (pullsData ?? []) as (PullRowLite & { fight_id: number })[];
     const pullIds = allPulls.map((p) => p.id);
 
-    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, roster, reliabilityList, notesByMechanicName, { data: briefRow }] = await Promise.all([
+    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, { data: interruptEventsData, error: interruptErr }, roster, reliabilityList, notesByMechanicName, { data: briefRow }] = await Promise.all([
       pullIds.length
         ? client.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName)
         : Promise.resolve({ data: [] as PlayerPullRecordRow[], error: null }),
       pullIds.length
         ? loadPlayerMechanicEvents(client, pullIds, playerName)
         : Promise.resolve({ data: [] as MechEventRowLite[], error: null }),
+      pullIds.length
+        ? loadPlayerInterrupts(client, pullIds, playerName)
+        : Promise.resolve({ data: [] as InterruptEventRowLite[], error: null }),
       this.wowauditRoster.listRoster().catch(() => []),
       this.reliability.listPlayerReliability().catch(() => []),
       loadMechanicNotesByName(client, allPulls.map((p) => p.boss_id)).catch(() => new Map<string, string>()),
@@ -189,6 +278,7 @@ export class NightPlayerSummaryService {
     const nightReliability = await this.reliability.getNightReliability(reportCode, playerName).catch(() => null);
     if (recordsErr) throw recordsErr;
     if (mechErr) throw mechErr;
+    if (interruptErr) throw interruptErr;
 
     const records = (recordsData ?? []) as PlayerPullRecordRow[];
     const recordByPullId = new Map(records.map((r) => [r.pull_id, r]));
@@ -201,13 +291,43 @@ export class NightPlayerSummaryService {
     // Solo los pulls donde este jugador de verdad participó (tiene fila en
     // player_pull_records) — un report puede tener bosses/pulls donde
     // estuvo de bench, no tiene sentido enseñarlos en su dosier.
-    const pulls: NightPullSummary[] = allPulls
+    // pullScore se calcula en un segundo paso (necesita mechanicFails/deaths,
+    // que todavía no existen aquí) — ver pullsWithScore más abajo.
+    const pulls: Omit<NightPullSummary, 'pullScore' | 'scoreBreakdown'>[] = allPulls
       .filter((p) => recordByPullId.has(p.id))
       .map((p) => {
         const r = recordByPullId.get(p.id)!;
+        // §"eso es obviamente un ninja pull... no debería contar para
+        // ninguna estadística ni métrica" (feedback real, 2026-08-27): antes
+        // "Bosses de la noche"/pullScore/nightScore incluían TODOS los
+        // pulls sin mirar ninja_pull_excluded (ese flag solo se leía para
+        // deaths/mechanicFails más abajo) — un enganche de 16s al 100% de
+        // vida del boss puntuaba igual que un intento real. Mismo criterio
+        // que el resto de la app: la fila NO se borra (se sigue viendo qué
+        // pasó), solo se excluye del cálculo.
+        //
+        // §CORRECCIÓN (feedback real, 2026-08-27): "el wipecall solo lo
+        // deben tener los que, en efecto, murieron a consecuencia de que el
+        // RL lo dijese... todo lo que suceda antes de ese momento debe ser
+        // evaluable" — wipe_call_excluded es un flag de TODO EL PULL (hubo
+        // un wipe call en algún momento, de ALGUIEN), no significa que este
+        // pull entero ni que ESTE jugador en concreto sea el que se dejó
+        // morir. Por eso NO entra aquí (a diferencia de ninja_pull, que sí
+        // invalida el pull completo) — un intento real de 3 minutos con
+        // daño real al boss (caso real reportado: Coiled Altar #7/#8) no
+        // deja de ser evaluable solo porque alguien más muriera en un wipe
+        // call al final. La exclusión fina YA existe más abajo y es la
+        // correcta: evaluatedDeaths descarta la muerte-wipe-call concreta
+        // (no cuenta como "murió" para deathMultiplier/consumableScore) e
+        // isMechanicExcludedByWipeCall descarta solo los eventos de
+        // mecánica DESPUÉS del momento del wipe call — todo lo de antes
+        // (mecánicas falladas de cualquiera, incluido este jugador) se
+        // sigue contando, tal como debe ser.
+        const excludedReason: 'ninja_pull' | null = p.ninja_pull_excluded ? 'ninja_pull' : null;
         return {
           pullId: p.id,
           pullNumber: p.pull_number,
+          fightId: p.fight_id,
           bossId: p.boss_id,
           bossName: bossNameByFightId.get(p.fight_id) ?? `Boss ${p.boss_id}`,
           difficulty: p.difficulty,
@@ -216,6 +336,13 @@ export class NightPlayerSummaryService {
           durationMs: p.duration_ms,
           closedAt: p.closed_at,
           died: r.died,
+          excludedFromStats: excludedReason != null,
+          excludedReason,
+          // §informativo solamente (ver arriba) — nunca anula pullScore.
+          // Mismo criterio que isWipeCall más abajo: solo cuenta como "wipe
+          // call de ESTE jugador" si SU muerte fue la del cluster, no basta
+          // con que el pull tuviera un wipe call de alguien más.
+          hadWipeCall: !!r.wipe_call_cluster && p.wipe_call_excluded,
         };
       });
 
@@ -283,10 +410,88 @@ export class NightPlayerSummaryService {
           outcome: ev.outcome as 'partial_fail' | 'fail',
           timeMs: ev.trigger_time_ms,
           damageTaken: detail?.damage_taken ?? 0,
+          comparisonSource: ev.comparison_source,
+          comparisonPercentile: ev.comparison_percentile,
           aiNote: notesByMechanicName.get(ev.mechanic_name) ?? null,
         };
       })
       .filter((row) => !evaluatedDeaths.some((death) => death.pullId === row.pullId && death.mechanicId === row.mechanicId && Math.abs(death.timeMs - row.timeMs) <= 4000))
+      .sort((a, b) => {
+        const aPull = pullById.get(a.pullId)!;
+        const bPull = pullById.get(b.pullId)!;
+        return (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) || a.pullNumber - b.pullNumber || a.timeMs - b.timeMs;
+      });
+
+    // §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27):
+    // "puntos ganados/posibles ponderados por importancia... si mueres, la
+    // puntuación entera se multiplica por el % del fight que estuviste
+    // vivo... piedra/pociones aprobado automático si no mueres" — investigado
+    // y confirmado en real (ver historial de la conversación). Adaptado, no
+    // copiado: IRIS registra QUIÉN golpeó cada instancia de mecánica, no un
+    // roster completo de aprobado/suspendido por jugador (Wipefest sí lo
+    // tiene) — sin ese denominador, mechanicScore es un PENALIZADOR por
+    // fallo (no un ratio puntos-ganados/posibles literal), fiel al concepto
+    // sin fingir una precisión que estos datos no dan. Mismo criterio que
+    // Wipefest en consumibles: solo se evalúa piedra/poción SI murió.
+    const mechanicFailCountByPullId = new Map<string, number>();
+    for (const fail of mechanicFails) {
+      mechanicFailCountByPullId.set(fail.pullId, (mechanicFailCountByPullId.get(fail.pullId) ?? 0) + 1);
+    }
+    const evaluatedDeathByPullId = new Map(evaluatedDeaths.map((death) => [death.pullId, death]));
+    // §"al pasar el ratón por encima de puntuación, debería salir por qué ha
+    // obtenido esta puntuación... no se tiene contexto para mejorar"
+    // (feedback real, 2026-08-27): devuelve el desglose, no solo el número
+    // final — un único sitio calcula la fórmula Y explica de qué está hecha,
+    // para que el componente no tenga que duplicar FAIL_PENALTY/pesos para
+    // pintar el tooltip.
+    function computePullScore(pull: { pullId: string; durationMs: number | null }): { score: number; breakdown: PullScoreBreakdown } {
+      const death = evaluatedDeathByPullId.get(pull.pullId);
+      const mechanicFailCount = mechanicFailCountByPullId.get(pull.pullId) ?? 0;
+      const mechanicScore = Math.max(0, 1 - mechanicFailCount * FAIL_PENALTY);
+      const usedConsumable = death ? death.usedHealthstoneInPull || death.usedHealthPotionInPull : false;
+      const consumableScore = !death ? 1 : usedConsumable ? 1 : 0;
+      const deathMultiplier = death && pull.durationMs ? Math.min(1, Math.max(0, death.timeMs / pull.durationMs)) : 1;
+      const score = Math.round((mechanicScore * 0.7 + consumableScore * 0.3) * deathMultiplier * 1000) / 1000;
+      return { score, breakdown: { mechanicFailCount, mechanicScore, died: !!death, usedConsumable, consumableScore, deathMultiplier, deathTimeMs: death?.timeMs ?? null } };
+    }
+    const pullsWithScore: NightPullSummary[] = pulls.map((p) => {
+      const { score, breakdown } = computePullScore(p);
+      return { ...p, pullScore: p.excludedFromStats ? null : score, scoreBreakdown: breakdown };
+    });
+    // §"no debería contar para ninguna estadística ni métrica" (feedback
+    // real, 2026-08-27): ninja pulls/wipe calls tempranos quedan fuera de
+    // la media — ni de la ponderada por duración ni del denominador de
+    // pulls, igual que ya se excluían de deaths/mechanicFails más arriba.
+    // Media ponderada por duración (un pull de 8 min pesa más que uno de 40s
+    // en la impresión "de qué tal fue la noche") — 0 si algún pull evaluable
+    // no tiene duración registrada, mejor que sesgar la media ignorándolo en silencio.
+    const scoredPulls = pullsWithScore.filter((p): p is NightPullSummary & { pullScore: number } => p.pullScore != null);
+    const totalDurationMs = scoredPulls.reduce((sum, p) => sum + (p.durationMs ?? 0), 0);
+    const nightScore = scoredPulls.length
+      ? totalDurationMs > 0
+        ? Math.round((scoredPulls.reduce((sum, p) => sum + p.pullScore * (p.durationMs ?? 0), 0) / totalDurationMs) * 1000) / 1000
+        : Math.round((scoredPulls.reduce((sum, p) => sum + p.pullScore, 0) / scoredPulls.length) * 1000) / 1000
+      : null;
+
+    // §"informe de mejora por jugador... wipefest para mejorar en el boss
+    // concreto" (feedback real, 2026-08-27): lo que SÍ cortó, no solo lo que
+    // falló. Sin exclusión por wipe call a propósito — un kick conseguido
+    // sigue siendo un acierto real aunque el pull terminase en wipe; sí se
+    // descartan ninja pulls, igual que el resto de estadísticas de esta noche.
+    const interrupts: NightInterruptRow[] = ((interruptEventsData ?? []) as InterruptEventRowLite[])
+      .filter((ev) => !pullById.get(ev.pull_id)?.ninja_pull_excluded)
+      .map((ev) => {
+        const pull = pullById.get(ev.pull_id)!;
+        return {
+          pullId: ev.pull_id,
+          bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
+          pullNumber: pull.pull_number,
+          mechanicName: ev.mechanic_name,
+          mechanicId: ev.ability_id,
+          timeMs: ev.trigger_time_ms,
+          aiNote: notesByMechanicName.get(ev.mechanic_name) ?? null,
+        };
+      })
       .sort((a, b) => {
         const aPull = pullById.get(a.pullId)!;
         const bPull = pullById.get(b.pullId)!;
@@ -347,11 +552,13 @@ export class NightPlayerSummaryService {
       roster: rosterEntry,
       reliability: reliabilityEntry,
       nightReliability,
-      pulls,
+      pulls: pullsWithScore,
+      nightScore,
       totalDeaths: evaluatedDeaths.length,
       totalMechanicFails: mechanicFails.length,
       deaths,
       mechanicFails,
+      interrupts,
       repeatedPatterns,
       gearSnapshot,
       battleNetUrl,
@@ -360,7 +567,7 @@ export class NightPlayerSummaryService {
     };
   }
 
-  private buildGearSnapshot(pull: NightPullSummary, record: PlayerPullRecordRow): NightGearSnapshot {
+  private buildGearSnapshot(pull: Pick<NightPullSummary, 'pullNumber' | 'bossName'>, record: PlayerPullRecordRow): NightGearSnapshot {
     const items = (record.equipped_items ?? []) as (WclGearItem | null)[];
     const preparation = gearPreparationCounts(items);
     return {
@@ -398,4 +605,13 @@ interface MechEventRowLite {
   outcome: string;
   trigger_time_ms: number;
   player_hit_details: { name: string; damage_taken: number; damage_hits: number; healing_received: number; used_defensive_spell_id: number | null }[];
+  comparison_source: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
+  comparison_percentile: number | null;
+}
+
+interface InterruptEventRowLite {
+  pull_id: string;
+  ability_id: number;
+  mechanic_name: string;
+  trigger_time_ms: number;
 }

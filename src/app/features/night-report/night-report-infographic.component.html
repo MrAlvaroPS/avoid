@@ -10,6 +10,8 @@
           @case ('rendering') { Preparando PNG… }
           @case ('copied') { ✓ Imagen copiada }
           @case ('downloaded') { ✓ PNG descargado }
+          @case ('sendingDiscord') { Enviando a Discord… }
+          @case ('sentDiscord') { ✓ Enviado a Discord }
           @case ('error') { No se pudo generar }
           @default { PNG · {{ exportWidth }} × {{ exportHeight() }} px }
         }
@@ -27,6 +29,14 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
         Copiar imagen
       </button>
+      <!-- §"IRIS siempre escribirá en el canal ID X, que es el que he
+           creado para ella" (feedback real, 2026-08-27): canal fijo, sin
+           input que rellenar — un clic, igual que "Copiar imagen"/
+           "Descargar PNG". Ver DEFAULT_DISCORD_CHANNEL_ID en el .ts. -->
+      <button type="button" class="iris-infographic-tool-button" [disabled]="exportStatus() === 'rendering' || exportStatus() === 'sendingDiscord'" (click)="sendToDiscord()">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9V6a3 3 0 0 0-3-3H9a3 3 0 0 0-3 3v3M4 9h16l-1 11H5L4 9Z"/></svg>
+        {{ exportStatus() === 'sendingDiscord' ? 'Enviando…' : 'Enviar a Discord' }}
+      </button>
       <button type="button" class="iris-infographic-tool-button primary" [disabled]="exportStatus() === 'rendering'" (click)="downloadPng()">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 5-5m-5 5-5-5M4 19h16"/></svg>
         Descargar PNG
@@ -34,6 +44,10 @@
       <button #closeButton type="button" class="iris-infographic-close" aria-label="Cerrar infografía" (click)="closed.emit()">×</button>
     </div>
   </header>
+
+  @if (discordError(); as err) {
+    <p class="iris-infographic-discord-error" role="alert">{{ err }}</p>
+  }
 
   <div class="iris-infographic-viewport">
     <div class="iris-infographic-stage" [style.width.px]="sheetWidth * previewScale()" [style.height.px]="sheetHeight() * previewScale()">

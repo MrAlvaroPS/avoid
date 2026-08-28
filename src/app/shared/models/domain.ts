@@ -198,13 +198,22 @@ export interface PullMechanicEventRow {
   trigger_time_ms: number;
   outcome: 'clean' | 'partial_fail' | 'fail';
   players_hit: number;
-  /** Igual que players_hit pero con nombres — vacío en category='interrupt' (ahí players_hit es "¿se resolvió?", no un conteo de golpes). */
+  /**
+   * Igual que players_hit pero con nombres. En category='interrupt', players_hit
+   * es "¿se resolvió?" (no un conteo de golpes) y este array es distinto:
+   * o bien vacío (fail — no sabemos quién tenía la asignación de kick) o
+   * bien EXACTAMENTE 1 nombre, quien lo interrumpió (outcome='clean').
+   */
   players_hit_names: string[];
   avoidable: boolean | null;
   /** Uno por nombre en players_hit_names — vacío en category='interrupt'. */
   player_hit_details: PlayerMechanicHitDetail[];
   /** §"fases de encuentro": fase activa en trigger_time_ms — ver boss_encounter_phases para el nombre legible. Null si el boss no tiene fases. */
   phase_id: number | null;
+  /** §"variable como wipefest" (feedback real, 2026-08-27): de dónde salió el umbral usado para este outcome — ver resolveSeverity en _shared/mechanic-severity.ts. null en category='interrupt' (no pasa por comparación de ratio). */
+  comparison_source: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
+  /** Percentil (0-100) del ratio dentro de la muestra de comparison_source. null si comparison_source es 'fixed_threshold' o null. */
+  comparison_percentile: number | null;
 }
 
 export interface PlayerMechanicHitDetail {
@@ -274,6 +283,8 @@ export interface BossMechanicCandidateRow {
   reference_avg_players_hit: number | null;
   reference_occurrences: number | null;
   reference_source_report: string | null;
+  /** §"muestra el percentil + fuente" (feedback real, 2026-08-27): array de ratios (jugadores_golpeados/raidSize) de los logs de referencia — la muestra cruda para resolveSeverity (nivel 2, world_reference). null/vacío hasta el próximo (re)sync tras la migración que añadió esta columna. */
+  reference_hit_ratio_samples: number[] | null;
   avoidable: boolean | null;
   expected_response: { type: string; scope: string } | null;
   severity_threshold: number | null;

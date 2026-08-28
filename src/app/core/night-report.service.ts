@@ -91,7 +91,7 @@ export class NightReportService {
     if (error) throw error;
     if (!data) return null;
     const report = data.report as unknown as NightFullReport;
-    if (report.schemaVersion !== 11) return null;
+    if (report.schemaVersion !== 15) return null;
     return { report, generatedAt: data.generated_at as string };
   }
 

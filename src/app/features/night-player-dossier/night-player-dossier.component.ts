@@ -3,13 +3,14 @@
 // poco como un dosier de personaje de una noche concreta" (feedback real).
 // Ruta /report/:code/player/:name — toda la agregación vive en
 // night-player-summary.service.ts, este componente solo pinta.
-import { Component, computed, effect, inject, input, signal } from '@angular/core';
+import { Component, computed, effect, HostListener, inject, input, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { NightPlayerSummaryService, type NightPlayerSummary } from '../../core/night-player-summary.service';
+import { NightPlayerSummaryService, PULL_SCORE_FAIL_PENALTY, type NightMechanicFailRow, type NightPlayerSummary, type NightPullSummary, type PullScoreBreakdown } from '../../core/night-player-summary.service';
+import type { PlayerReliability, ReliabilityBreakdown } from '../../core/reliability.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { mapBrief } from '../../core/pull-analysis.service';
-import { formatDuration, formatPct, mechanicCategoryMeta, mechanicDisplayName, rootCauseMeta } from '../../shared/format.util';
+import { comparisonLabel, formatDuration, formatPct, mechanicCategoryMeta, mechanicDisplayName, rootCauseMeta } from '../../shared/format.util';
 import { RoleIconComponent } from '../../shared/role-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
@@ -23,6 +24,21 @@ import { errorMessage } from '../../shared/error-message.util';
 function toneForScore(score: number | null): 'danger' | 'warning' | 'success' | null {
   if (score == null) return null;
   return score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
+}
+
+/** Contenido del modal de "por qué esta puntuación" — ver explanationModal más abajo. */
+interface ExplanationContent {
+  title: string;
+  lines: string[];
+  /** Sub-lista opcional de texto plano — pulls concretos (modal de noche). undefined = sin sub-lista, no una vacía visible. */
+  items?: string[];
+  /** §"ponle tooltip y el boton de I de información que traemos del
+   * prompt con cómo resolverlo" (feedback real, 2026-08-27): sub-lista
+   * RICA solo para el modal de puntuación de un pull — mismo markup
+   * (wowhead link + info icon + tag de categoría + comparación) que ya usa
+   * la tabla "Mecánicas falladas sin morir", para no perder ese contexto
+   * al mover el nombre de la mecánica del tooltip antiguo al modal nuevo. */
+  mechanics?: NightMechanicFailRow[];
 }
 
 @Component({
@@ -47,6 +63,19 @@ export class NightPlayerDossierComponent {
   formatDuration = formatDuration;
   formatPct = formatPct;
   mechanicDisplayName = mechanicDisplayName;
+
+  comparisonLabel = comparisonLabel;
+
+  // §"wowanalyzer para mejorar las rotaciones... todo en nuestra app"
+  // (feedback real, 2026-08-27): enlace a la instancia LOCAL autoalojada
+  // (supabase/wowanalyzer-app/), no a wowanalyzer.com — puerto fijo del
+  // docker-compose.yml de ese directorio. Solo funciona si ese contenedor
+  // está levantado; si no, el enlace da un error de conexión normal (mismo
+  // criterio que un enlace a RaidBots/RaiderIO que no resuelve — no hay
+  // forma de saber desde aquí si el contenedor está arriba sin intentarlo).
+  wowAnalyzerUrl(reportCode: string, fightId: number, playerName: string): string {
+    return `http://localhost:4321/report/${reportCode}/${fightId}/${encodeURIComponent(playerName)}/standard`;
+  }
 
   copyStatus = signal<'idle' | 'copied' | 'error'>('idle');
 
@@ -75,6 +104,116 @@ export class NightPlayerDossierComponent {
   reliabilityTone = computed<'danger' | 'warning' | 'success' | null>(() => toneForScore(this.data()?.reliability?.overall ?? null));
   // §"fiabilidad debería tener 2 valores: 60 días y de la noche" (feedback real).
   nightReliabilityTone = computed<'danger' | 'warning' | 'success' | null>(() => toneForScore(this.data()?.nightReliability?.overall ?? null));
+  /** §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27): nightScore/pullScore van en escala 0-1 (no 0-100 como el resto de tonos) — se convierte aquí en vez de duplicar toneForScore con otra escala. */
+  nightScoreTone(score: number): 'danger' | 'warning' | 'success' | null {
+    return toneForScore(score * 100);
+  }
+
+  // §"el tooltip se sale de la pantalla, además creo que falta información
+  // ... igual más que un tooltip tiene que ser un clicable con un modal que
+  // te dé una explicación completa de la puntuación" (feedback real,
+  // 2026-08-27): un solo modal genérico reutilizado por las 4 puntuaciones
+  // de esta página (noche, fiabilidad 60 días, fiabilidad de la noche, y
+  // cada pull) — un hover-tooltip anclado a la izquierda del elemento se
+  // salía de la pantalla en las columnas de la derecha de la tabla de pulls
+  // (capturas reales) y además no funciona en táctil. `items` es una
+  // sub-lista opcional — de momento solo la usan pullScoreExplanation
+  // (mecánicas concretas) y nightScoreExplanation (pulls concretos).
+  explanationModal = signal<ExplanationContent | null>(null);
+
+  openExplanation(content: ExplanationContent): void {
+    this.explanationModal.set(content);
+  }
+
+  closeExplanation(): void {
+    this.explanationModal.set(null);
+  }
+
+  @HostListener('document:keydown.escape')
+  onEscapeKey(): void {
+    if (this.explanationModal()) this.closeExplanation();
+  }
+
+  // §"Ahi por ejemplo pone que falló 2 mecanicas pero no dice cuales"
+  // (feedback real, 2026-08-27): antes este texto solo daba el CONTEO;
+  // ahora además nombra cada una. mechanicFails ya es EXACTAMENTE el mismo
+  // array del que sale mechanicFailCountByPullId en
+  // night-player-summary.service.ts (agrupado por pullId) — filtrar aquí
+  // por pull.pullId nunca puede desajustarse del conteo que ya sale en
+  // scoreBreakdown, es la misma fuente.
+  // §pullScore recibido como número aparte (no leído de pull.pullScore
+  // dentro del método): pullScore es number|null a nivel de tipo (null en
+  // pulls excluidos, ver excludedFromStats) — el llamador solo lo invoca
+  // dentro de un @if (p.pullScore != null), y Angular únicamente estrecha
+  // esa expresión concreta ahí, no el objeto pull completo pasado entero.
+  pullScoreExplanation(pull: NightPullSummary, pullScore: number, mechanicFails: NightMechanicFailRow[]): ExplanationContent {
+    const b = pull.scoreBreakdown;
+    const durationMs = pull.durationMs;
+    const lines: string[] = [];
+    lines.push(
+      b.mechanicFailCount === 0
+        ? `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — sin fallos de responsabilidad individual.`
+        : `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — ${b.mechanicFailCount} fallo${b.mechanicFailCount === 1 ? '' : 's'} de responsabilidad individual (−${this.formatPct(PULL_SCORE_FAIL_PENALTY * 100)} cada uno):`,
+    );
+    if (!b.died) {
+      lines.push('Consumibles: 100% — no murió, se aprueba automático (igual que con piedra/poción, solo importa si mueres).');
+    } else {
+      lines.push(`Consumibles: ${this.formatPct(b.consumableScore * 100)} — murió ${b.usedConsumable ? 'con' : 'sin'} piedra de brujo o poción usada en el intento.`);
+      if (b.deathTimeMs != null && durationMs) {
+        lines.push(`Murió a los ${this.formatDuration(b.deathTimeMs)} de ${this.formatDuration(durationMs)} (${this.formatPct(b.deathMultiplier * 100)} del intento) — penaliza toda la puntuación, no solo el punto de consumibles.`);
+      }
+    }
+    lines.push('Fórmula: (mecánica×70% + consumibles×30%) × % del intento vivo.');
+    const fails = mechanicFails.filter((f) => f.pullId === pull.pullId);
+    return { title: `Puntuación del pull — ${this.formatPct(pullScore * 100)}`, lines, mechanics: fails.length ? fails : undefined };
+  }
+
+  /** Mismo texto que antes tenía el tooltip de "puntuación de la noche" — el modal añade el desglose pull a pull, que antes solo se veía pasando el ratón por cada fila una a una. */
+  nightScoreExplanation(nightScore: number, pulls: NightPullSummary[]): ExplanationContent {
+    const scoredCount = pulls.filter((p) => p.pullScore != null).length;
+    const excludedCount = pulls.length - scoredCount;
+    return {
+      title: `Puntuación de la noche — ${this.formatPct(nightScore * 100)}`,
+      lines: [
+        'Media de la puntuación de cada pull, ponderada por su duración — un pull de 8 min pesa más que uno de 40s.',
+        excludedCount
+          ? `${scoredCount} pull${scoredCount === 1 ? '' : 's'} evaluados esta noche (${excludedCount} más excluido${excludedCount === 1 ? '' : 's'} — ninja pull o wipe call temprano, no cuentan).`
+          : `${scoredCount} pull${scoredCount === 1 ? '' : 's'} evaluados esta noche.`,
+      ],
+      // §"no debería contar para ninguna estadística ni métrica" (feedback
+      // real, 2026-08-27): los excluidos se listan igual (contexto de qué
+      // pasó esa noche), pero sin un % que no significa nada.
+      items: pulls.map((p) => `${p.bossName} #${p.pullNumber}: ${p.pullScore != null ? this.formatPct(p.pullScore * 100) + (p.died ? ' (murió)' : '') : 'excluido — ' + (p.excludedReason === 'ninja_pull' ? 'ninja pull' : 'wipe call')}`),
+    };
+  }
+
+  /** Mismo contenido que antes tenía el tooltip de fiabilidad — 60 días, ahora en el modal. */
+  reliabilityWindowExplanation(rel: PlayerReliability): ExplanationContent {
+    return {
+      title: `Fiabilidad — 60 días (${rel.overall}/100)`,
+      lines: [
+        `Mecánica (40%): ${rel.breakdown.mecanica != null ? rel.breakdown.mecanica.toFixed(0) + '%' : 'sin dato'}`,
+        `Defensiva (30%): ${rel.breakdown.defensiva != null ? rel.breakdown.defensiva.toFixed(0) + '%' : 'sin dato'} — uso durante el try; la respuesta en una muerte evaluable pesa el doble.`,
+        `Preparación (20%): ${rel.breakdown.preparacion != null ? rel.breakdown.preparacion.toFixed(0) + '%' : 'sin dato'}`,
+        `Asistencia (10%): ${rel.breakdown.asistencia != null ? rel.breakdown.asistencia.toFixed(0) + '%' : 'sin dato'}`,
+        `Consistencia: ${rel.consistency ? rel.consistency.score + '/100 (media ' + rel.consistency.averageExecution + ', variabilidad ' + rel.consistency.volatility + ')' : 'sin muestra suficiente'}`,
+      ],
+    };
+  }
+
+  /** Mismo contenido que antes tenía el tooltip de fiabilidad — esta noche, ahora en el modal. */
+  nightReliabilityExplanation(nr: ReliabilityBreakdown & { sampleSize: number }): ExplanationContent {
+    return {
+      title: `Fiabilidad — esta noche (${nr.overall}/100)`,
+      lines: [
+        `Mecánica: ${nr.breakdown.mecanica != null ? nr.breakdown.mecanica.toFixed(0) + '%' : 'sin dato'}`,
+        `Defensiva: ${nr.breakdown.defensiva != null ? nr.breakdown.defensiva.toFixed(0) + '%' : 'sin dato'} — uso durante el try; la respuesta en una muerte evaluable pesa el doble.`,
+        `Preparación: ${nr.breakdown.preparacion != null ? nr.breakdown.preparacion.toFixed(0) + '%' : 'sin dato'}`,
+        `Consistencia: ${nr.consistency ? nr.consistency.score + '/100 (media ' + nr.consistency.averageExecution + ', variabilidad ' + nr.consistency.volatility + ')' : 'sin muestra suficiente'}`,
+        `${nr.sampleSize} pull${nr.sampleSize === 1 ? '' : 's'} evaluados. Sin eje de asistencia (no aplica a una sola noche).`,
+      ],
+    };
+  }
 
   // §bug real ya visto en LivePullComponent/BossHistoryComponent: leer un
   // input() (incluido el vinculado por ruta) DENTRO del constructor revienta

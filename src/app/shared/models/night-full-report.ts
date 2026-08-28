@@ -1,7 +1,7 @@
 export type NightReportTrend = 'improving' | 'worsening' | 'flat' | 'insufficient_data';
 
 export interface NightFullReport {
-  schemaVersion: 11;
+  schemaVersion: 15;
   reportCode: string;
   reportTitle: string;
   reportDate: string;
@@ -68,6 +68,9 @@ export interface NightFullReport {
     lethalFinalBlows: number;
     avoidableDamageTotal: number | null;
     trend: NightReportTrend;
+    /** §"muestra el percentil + fuente" (feedback real, 2026-08-27): media entre los fallos de esta mecánica esta noche — null si ninguno tuvo percentil (todos fixed_threshold o sin fallos). Fuente = la del fallo más reciente. */
+    comparisonSource: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
+    comparisonPercentile: number | null;
   }[];
   timelinePatterns: {
     bossName: string;
@@ -132,6 +135,7 @@ export interface NightFullReport {
       isProgressBoss: boolean;
       note: string | null;
       count: number;
+      distinctPlayers: number;
     }[];
     topLastDamageBeforeUnknownFinalBlow: {
       mechanicName: string;
@@ -185,6 +189,14 @@ export interface NightFullReport {
     totalEvaluated: number;
     byCategory: { category: string; label: string; availableUnusedPct: number; evaluated: number }[];
   };
+  defensiveUsage: {
+    bossName: string;
+    bossNameEs: string | null;
+    difficulty: string;
+    playersAttended: number;
+    playersWithZeroCasts: string[];
+    casts: { playerName: string; spellName: string; wowheadSpellId: number | null; pullNumber: number; offsetMs: number }[];
+  }[];
   interrupts: {
     totalCasts: number;
     interrupted: number;
@@ -213,6 +225,12 @@ export interface NightFullReport {
       }[];
     } | null;
   };
+  phaseBreakdown: {
+    bossName: string;
+    bossNameEs: string | null;
+    difficulty: string;
+    phases: { phaseId: number; name: string; isIntermission: boolean; deaths: number; mechanicFails: number }[];
+  } | null;
   wipePatterns: {
     category: string;
     label: string;

@@ -1,0 +1,14 @@
+services:
+  wowanalyzer-app:
+    build:
+      context: .
+      args:
+        # URL pública del proxy (supabase/functions/wowanalyzer-proxy/) —
+        # NO es secreta (misma categoría que supabaseUrl en environment.ts),
+        # así que vive aquí en vez de en un .env aparte. Cambiar solo si el
+        # project ref de Supabase cambiase.
+        WOWANALYZER_PROXY_BASE_URL: https://qiniulkhivpvbjoquvon.supabase.co/functions/v1/wowanalyzer-proxy/
+    ports:
+      # host:contenedor — cambia el de la izquierda si 4321 ya está en uso.
+      - '4321:80'
+    restart: unless-stopped
