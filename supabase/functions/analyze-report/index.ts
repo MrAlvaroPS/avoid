@@ -20,6 +20,7 @@ import { computeDamageProfile } from '../_shared/damage-profile.ts';
 import { upsertReportEncounters } from '../_shared/report-encounters.ts';
 import { resolveSeverity } from '../_shared/mechanic-severity.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { detectWipeCall as detectWipeCallShared, WIPE_CALL_CONFIDENCE_THRESHOLD, type WipeCallDetection } from '../_shared/wipe-call-detection.ts';
 
 // "Engancharse a los pulls": trae fights nuevos de WCL y genera `pulls` +
 // `player_pull_records` reales. A PROPÓSITO no llama al LLM aquí — eso es
@@ -808,230 +809,20 @@ Deno.serve(async (req: Request) => {
         // encima) y la sanación/el daño de la raid se desploman justo antes
         // (nadie sigue intentando). Solo se evalúa en wipes — un kill nunca
         // es un wipe call por definición.
-        const WIPE_CALL_MAX_DEATH_GAP_MS = 4000; // §"si te vas a WCL puedes ver que es un wipecall y nadie se tiró defensivo" (caso real Pandokie, 2026-08-28): antes se probaba una ventana fija de 8s desde cada muerte candidata y se elegía la que cazase más gente — una ventana que arrancaba unos segundos más tarde podía cazar más muertes y dejar fuera a quien murió justo antes de que "ganase" esa ventana, aunque fuese la misma avalancha. Ahora se encadenan muertes consecutivas mientras el hueco con la anterior sea corto — sin ambigüedad de qué ventana gana (ver bestCluster más abajo).
-        const WIPE_CALL_MIN_FRACTION = 0.6; // §"si somos 20 y mueren 16 en 6s" ≈ 0.8 de ejemplo — 0.6 de margen para no dejar escapar el caso real
-        const WIPE_CALL_NEAR_END_MS = 15_000; // el cluster tiene que estar pegado al final del pull — un pico de muertes a mitad de pull que luego se recuperó no cuenta
-        const EARLY_MASS_WIPE_MS = 10_000;
-        const WIPE_CALL_CONFIDENCE_THRESHOLD = 55; // 0-100 — por debajo se guarda como "posible" visible en la UI, pero NO se auto-excluye
-        const WIPE_CALL_COLLAPSE_RATIO_THRESHOLD = 0.35; // sanación/daño de la raid por debajo de esta fracción de su media previa = "ya se ha desplomado" — mismo umbral para la señal de confianza y para decidir si una muerte temprana de la cadena es la causa o ya una víctima del desplome (ver triggerDeathCount más abajo)
-        // §"aunque sea un wipe call los primeros 2-3-4 que mueren no suelen
-        // ser parte de ese wipe call... es mecánica fallida seguramente, lo
-        // que deriva en el wipe call" (feedback real): el cluster detecta
-        // BIEN el momento en que "la raid da la pelea por perdida", pero las
-        // primeras muertes DENTRO de esa ventana suelen ser la CAUSA (un
-        // fallo real que hace evidente que se ha perdido), no la
-        // consecuencia — esas SÍ deben seguir contando. Se excluyen del
-        // cluster solo las muertes a partir de la Nª (el "pile-on" real),
-        // nunca las primeras — como mucho 3, y nunca más de la mitad del
-        // cluster si es pequeño (un cluster de 4 no puede tener "las 3
-        // primeras" como causa y solo 1 de pile-on real).
-        const WIPE_CALL_TRIGGER_DEATHS = 3;
-
-        interface WipeCallDetection {
-          clusterActorIds: Set<number>;
-          confidence: number;
-          signals: {
-            simultaneityFraction: number;
-            abilityDiversity: number;
-            nearEndMs: number;
-            healingCollapseRatio: number | null;
-            damageCollapseRatio: number | null;
-            sustainedDeathFraction: number;
-            unknownDeathFraction: number;
-            triggerDeathsKept: number;
-            alreadyCollapsedBeforeCluster: boolean;
-            wipeCallStartMs: number;
-            earlyMassDeath: boolean;
-          };
-        }
-
+        // §"Hay que ver la manera de centralizar esta información y,
+        // sobretodo, en hacerla fiable" (feedback real, 2026-08-28): la
+        // detección en sí vive en _shared/wipe-call-detection.ts — así
+        // reanalyze-wipe-call/index.ts puede recalcular el veredicto de un
+        // pull YA analizado (p.ej. tras corregir el algoritmo) con la
+        // MISMA lógica, sin una segunda copia que pueda divergir.
         function detectWipeCall(): WipeCallDetection | null {
-          if (fight.kill) return null;
-
-          const deaths = [...deathByTarget.entries()]
-            .map(([actorId, d]) => ({ actorId, ...d }))
-            .sort((a, b) => a.timestamp - b.timestamp);
-          if (deaths.length < 2) return null;
-
-          // Mayor cadena TERMINAL de muertes consecutivas con hueco corto
-          // entre ellas (ver WIPE_CALL_MAX_DEATH_GAP_MS). Antes se elegía el
-          // mayor cluster de todo el pull y solo después se comprobaba si
-          // estaba al final: un pico grande a mitad podía tapar un wipe
-          // call terminal algo menor y hacer que no se detectara ninguno —
-          // ese criterio se conserva, solo cambia cómo se agrupan las
-          // muertes candidatas.
-          const chains: typeof deaths[] = [];
-          for (const death of deaths) {
-            const lastChain = chains.at(-1);
-            const lastDeath = lastChain?.at(-1);
-            if (lastChain && lastDeath && death.timestamp - lastDeath.timestamp <= WIPE_CALL_MAX_DEATH_GAP_MS) {
-              lastChain.push(death);
-            } else {
-              chains.push([death]);
-            }
-          }
-          let bestCluster: typeof deaths = [];
-          for (const chain of chains) {
-            if (chain.length < 2 || fight.endTime - chain.at(-1)!.timestamp > WIPE_CALL_NEAR_END_MS) continue;
-            if (chain.length > bestCluster.length) bestCluster = chain;
-          }
-          if (bestCluster.length < 2) return null;
-
-          const localRaidSize = fight.friendlyPlayers.length || 1;
-          const aliveAtClusterStart = localRaidSize - deaths.filter((d) => d.timestamp < bestCluster[0].timestamp).length;
-          const simultaneityFraction = aliveAtClusterStart > 0 ? bestCluster.length / aliveAtClusterStart : 0;
-          const clusterStart = bestCluster[0].timestamp;
-          const clusterEnd = bestCluster.at(-1)!.timestamp;
-          const nearEndMs = fight.endTime - clusterEnd;
-          const earlyMassDeath = clusterEnd - fight.startTime <= EARLY_MASS_WIPE_MS && bestCluster.length / localRaidSize >= WIPE_CALL_MIN_FRACTION;
-          if (simultaneityFraction < WIPE_CALL_MIN_FRACTION) return null;
-
-          // Señal 1: diversidad de killing ability — 0 = todos murieron a la
-          // MISMA habilidad (mecánica real), 1 = todos a algo distinto (cada
-          // uno se murió a lo que tenía encima, típico de "ya nadie reacciona").
-          const knownAbilities = bestCluster.map((d) => d.killingAbilityGameID).filter((id) => id > 0);
-          const distinctAbilities = new Set(knownAbilities).size;
-          const abilityDiversity = knownAbilities.length > 1 ? Math.min(1, (distinctAbilities - 1) / (knownAbilities.length - 1)) : 0;
-          const unknownDeathFraction = bestCluster.filter((d) => d.killingAbilityGameID === 0).length / bestCluster.length;
-
-          // §"solo si la muerte precede a la caída de sanación/daño"
-          // (criterio elegido, 2026-08-28): las primeras muertes de la
-          // cadena solo se dan por "causa real" si la raid todavía sanaba/
-          // hacía daño con normalidad justo antes de morir la primera. Si
-          // sanación o daño YA estaban desplomados en los 5s previos (p.ej.
-          // un healer que muere cuando la sanación llevaba rato cayendo —
-          // caso real Pandokie, healing ya caído desde antes de las 3:00 en
-          // WCL) esa primera muerte es una víctima más del mismo desplome,
-          // no su causa: el recorte no se aplica y el límite pasa a ser la
-          // propia primera muerte de la cadena.
-          const PRE_COLLAPSE_WINDOW_MS = 5000;
-          const preCollapseWindowStart = Math.max(fight.startTime, clusterStart - PRE_COLLAPSE_WINDOW_MS);
-          const preCollapseBaselineMs = Math.max(1, preCollapseWindowStart - fight.startTime);
-          const preCollapseSpanMs = Math.max(1, clusterStart - preCollapseWindowStart);
-          const allHealingForPreCheck = [...healingEventsByTarget.values()].flat();
-          const avgHealingBeforePreCheck =
-            (allHealingForPreCheck.filter((h) => h.timestamp < preCollapseWindowStart).reduce((s, h) => s + h.amount, 0) / preCollapseBaselineMs) * 10_000;
-          const preCollapseHealingPer10s =
-            (allHealingForPreCheck.filter((h) => h.timestamp >= preCollapseWindowStart && h.timestamp < clusterStart).reduce((s, h) => s + h.amount, 0) / preCollapseSpanMs) * 10_000;
-          const preCollapseHealingRatio = avgHealingBeforePreCheck > 0 ? preCollapseHealingPer10s / avgHealingBeforePreCheck : null;
-
-          const friendlyIdsForPreCheck = new Set(fight.friendlyPlayers);
-          const priorFriendlyDamageForPreCheck = (damageDoneEvents as ThroughputEvent[]).filter(
-            (e) => typeof e.sourceID === 'number' && friendlyIdsForPreCheck.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp < preCollapseWindowStart,
-          );
-          const avgDamageBeforePreCheck = (priorFriendlyDamageForPreCheck.reduce((s, e) => s + (e.amount ?? 0), 0) / preCollapseBaselineMs) * 10_000;
-          const preCollapseDamagePer10s =
-            ((damageDoneEvents as ThroughputEvent[])
-              .filter((e) => typeof e.sourceID === 'number' && friendlyIdsForPreCheck.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp >= preCollapseWindowStart && e.timestamp < clusterStart)
-              .reduce((s, e) => s + (e.amount ?? 0), 0) /
-              preCollapseSpanMs) *
-            10_000;
-          const preCollapseDamageRatio = avgDamageBeforePreCheck > 0 ? preCollapseDamagePer10s / avgDamageBeforePreCheck : null;
-
-          const alreadyCollapsedBeforeCluster =
-            (preCollapseHealingRatio != null && preCollapseHealingRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD) ||
-            (preCollapseDamageRatio != null && preCollapseDamageRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD);
-
-          // Las primeras muertes suelen ser la causa real — salvo que el
-          // desplome ya viniera de antes (ver arriba). El límite explícito
-          // permite conservar toda mecánica anterior y excluir solo el
-          // pile-on. En una muerte masiva durante los primeros 10s no hay
-          // fase previa evaluable: se considera reset/wipe call desde el
-          // inicio.
-          const triggerDeathCount =
-            earlyMassDeath || alreadyCollapsedBeforeCluster ? 0 : Math.min(WIPE_CALL_TRIGGER_DEATHS, Math.max(1, Math.floor(bestCluster.length * 0.2)));
-          const pileOnDeaths = bestCluster.slice(triggerDeathCount);
-          const wipeCallStartTimestamp = earlyMassDeath ? fight.startTime : pileOnDeaths[0].timestamp;
-
-          // Señal 2/3: sanación y daño de la RAID (no de un jugador) en los
-          // actividad DESPUÉS de las muertes desencadenantes, comparada con la
-          // media anterior. Medir antes del primer muerto evaluaba la ejecución
-          // previa al fallo, no el momento en que la raid dio el pull por perdido.
-          const fightSoFarMs = Math.max(1, wipeCallStartTimestamp - fight.startTime);
-          const postWindowEnd = Math.min(fight.endTime, wipeCallStartTimestamp + 10_000);
-          const postWindowMs = Math.max(1000, postWindowEnd - wipeCallStartTimestamp);
-          const allHealing = [...healingEventsByTarget.values()].flat();
-          const priorHealing = allHealing.filter((h) => h.timestamp < wipeCallStartTimestamp);
-          const postTriggerHealing = allHealing.filter((h) => h.timestamp >= wipeCallStartTimestamp && h.timestamp <= postWindowEnd).reduce((s, h) => s + h.amount, 0);
-          const avgHealingPer10s = (priorHealing.reduce((s, h) => s + h.amount, 0) / fightSoFarMs) * 10_000;
-          const projectedHealingPer10s = (postTriggerHealing / postWindowMs) * 10_000;
-          const healingCollapseRatio = avgHealingPer10s > 0 ? Math.min(1, projectedHealingPer10s / avgHealingPer10s) : null;
-
-          const friendlyIds = new Set(fight.friendlyPlayers);
-          const priorFriendlyDamage = (damageDoneEvents as ThroughputEvent[]).filter((e) => typeof e.sourceID === 'number' && friendlyIds.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp < wipeCallStartTimestamp);
-          const totalPriorDamage = priorFriendlyDamage.reduce((s, e) => s + (e.amount ?? 0), 0);
-          const avgDamagePer10s = (totalPriorDamage / fightSoFarMs) * 10_000;
-          const postTriggerDamage = (damageDoneEvents as ThroughputEvent[])
-            .filter((e) => typeof e.sourceID === 'number' && friendlyIds.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp >= wipeCallStartTimestamp && e.timestamp <= postWindowEnd)
-            .reduce((s, e) => s + (e.amount ?? 0), 0);
-          const projectedDamagePer10s = (postTriggerDamage / postWindowMs) * 10_000;
-          const damageCollapseRatio = avgDamagePer10s > 0 ? Math.min(1, projectedDamagePer10s / avgDamagePer10s) : null;
-
-          // Señal 4: perfil de daño de cada muerte del cluster — reutiliza
-          // computeDeathDamageProfile tal cual (mismo dato que ya se calcula
-          // para cada death_cause individual). 'burst' (un golpe dominante)
-          // apoya mecánica real; 'sustained'/'unknown' (nada nuevo la mató,
-          // se fue apagando) apoya wipe call.
-          const nonBurstCount = bestCluster.filter((d) => computeDeathDamageProfile(d.actorId, d.timestamp).damageProfile !== 'burst').length;
-          const sustainedDeathFraction = nonBurstCount / bestCluster.length;
-
-          // Contraseñal fuerte: casi todos mueren a la misma habilidad y de
-          // burst. Es una mecánica letal de raid, aunque el pull termine justo
-          // después y la actividad caiga a cero por haberse muerto todos.
-          const abilityCounts = new Map<number, number>();
-          for (const abilityId of knownAbilities) abilityCounts.set(abilityId, (abilityCounts.get(abilityId) ?? 0) + 1);
-          const dominantAbilityFraction = Math.max(0, ...abilityCounts.values()) / bestCluster.length;
-          if (!earlyMassDeath && dominantAbilityFraction >= 0.7 && sustainedDeathFraction <= 0.4) return null;
-
-          const evidenceCount = [
-            abilityDiversity >= 0.2 || unknownDeathFraction >= 0.3,
-            healingCollapseRatio != null && healingCollapseRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD,
-            damageCollapseRatio != null && damageCollapseRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD,
-            sustainedDeathFraction >= 0.5,
-          ].filter(Boolean).length;
-          if (!earlyMassDeath && evidenceCount < 2) return null;
-
-          const healingSignal = healingCollapseRatio != null ? 1 - healingCollapseRatio : 0.5; // sin dato = neutral, no penaliza ni favorece
-          const damageSignal = damageCollapseRatio != null ? 1 - damageCollapseRatio : 0.5;
-          const calculatedConfidence = Math.round(
-            (simultaneityFraction * 0.2 + abilityDiversity * 0.2 + unknownDeathFraction * 0.1 + healingSignal * 0.2 + damageSignal * 0.1 + sustainedDeathFraction * 0.1 + (1 - nearEndMs / WIPE_CALL_NEAR_END_MS) * 0.1) * 100,
-          );
-          const confidence = earlyMassDeath ? Math.max(85, calculatedConfidence) : calculatedConfidence;
-
-          return {
-            // La cadena corta sirve para DETECTAR el call; una vez fijado el
-            // límite, cualquier muerte posterior pertenece al cierre del try.
-            // Así un rezagado que cae varios segundos después no reaparece
-            // como fallo mecánico, mientras todo lo anterior al límite sigue
-            // evaluándose.
-            clusterActorIds: new Set(deaths.filter((d) => d.timestamp >= wipeCallStartTimestamp).map((d) => d.actorId)),
-            confidence,
-            signals: {
-              simultaneityFraction: Math.round(simultaneityFraction * 100) / 100,
-              abilityDiversity: Math.round(abilityDiversity * 100) / 100,
-              nearEndMs,
-              healingCollapseRatio: healingCollapseRatio != null ? Math.round(healingCollapseRatio * 100) / 100 : null,
-              damageCollapseRatio: damageCollapseRatio != null ? Math.round(damageCollapseRatio * 100) / 100 : null,
-              sustainedDeathFraction: Math.round(sustainedDeathFraction * 100) / 100,
-              unknownDeathFraction: Math.round(unknownDeathFraction * 100) / 100,
-              // §"los primeros 2-3-4 que mueren no suelen ser parte de ese
-              // wipe call" (feedback real): cuántas de las bestCluster.length
-              // muertes del cluster se dejaron FUERA de la exclusión por ser
-              // las primeras (probable causa, no consecuencia) — visible en
-              // "ver evidencia" del banner para que quede claro que no TODO
-              // el cluster se excluyó.
-              triggerDeathsKept: triggerDeathCount,
-              // §"solo si la muerte precede a la caída de sanación/daño":
-              // true = la sanación o el daño de la raid YA estaban
-              // desplomados antes de la primera muerte de la cadena, así
-              // que triggerDeathsKept se forzó a 0 (ninguna muerte de la
-              // cadena se dio por "causa real") — visible en el banner para
-              // explicar por qué no hay muertes "protegidas" en este caso.
-              alreadyCollapsedBeforeCluster,
-              wipeCallStartMs: Math.max(0, wipeCallStartTimestamp - fight.startTime),
-              earlyMassDeath,
-            },
-          };
+          return detectWipeCallShared({
+            fight,
+            deaths: [...deathByTarget.entries()].map(([actorId, d]) => ({ actorId, timestamp: d.timestamp, killingAbilityGameID: d.killingAbilityGameID })),
+            healingEvents: [...healingEventsByTarget.values()].flat(),
+            damageDoneEvents: damageDoneEvents as ThroughputEvent[],
+            damageProfileOf: (actorId, timestamp) => computeDeathDamageProfile(actorId, timestamp).damageProfile,
+          });
         }
 
         // §"un ninja pull... también cuenta en la estadística de wipes...
