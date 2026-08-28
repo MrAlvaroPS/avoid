@@ -30,6 +30,7 @@ import { formatTimeLabel } from '../../shared/format.util';
 })
 export class PlayerStatsTableComponent {
   players = input.required<PlayerStatRow[]>();
+  embedded = input(false);
   open = signal(false);
 
   // Escala de las mini-barras de DPS/HPS — máximo de ESTE pull, no un valor

@@ -15,16 +15,19 @@
   </div>
 
   <div class="attempt">
-    <span class="attempt-label">Intento</span>
-    <span class="attempt-number tabular">#{{ attemptNumber() }}</span>
-    @if (progressDeltaPct(); as delta) {
-      <span
-        class="progress-score tabular"
-        [class.tone-success]="delta > 0"
-        [class.tone-danger]="delta < 0"
-        title="Score compuesto (§13): HP del boss, duración vs. mejor kill, muertes y mecánicas falladas — comparado contra el intento anterior de este boss."
-      >
-        {{ delta > 0 ? '↑' : delta < 0 ? '↓' : '·' }} {{ delta > 0 ? '+' : '' }}{{ delta }} vs anterior
+    @if (attemptNumber(); as validAttempt) {
+      <span class="attempt-label">Intento válido</span>
+      <span class="attempt-number tabular">#{{ validAttempt }}</span>
+    } @else {
+      <span class="attempt-label">Pull excluido</span>
+      <span class="attempt-number tabular">Técnico · raw #{{ rawPullNumber() }}</span>
+    }
+    @if (attemptComparison(); as comparison) {
+      <span class="comparison-verdict" [class]="'tone-' + comparison.verdict">{{ comparisonLabel() }}</span>
+      <span class="comparison-deltas tabular" title="Cada delta conserva su unidad; no es un score compuesto.">
+        <span [class.good]="comparison.progressDeltaPp > 0" [class.bad]="comparison.progressDeltaPp < 0">{{ signed(comparison.progressDeltaPp, ' pp progreso') }}</span>
+        <span [class.good]="comparison.deathsDelta < 0" [class.bad]="comparison.deathsDelta > 0">{{ signed(comparison.deathsDelta, comparison.deathsDelta === 1 || comparison.deathsDelta === -1 ? ' muerte' : ' muertes') }}</span>
+        <span [class.good]="comparison.incidentsDelta < 0" [class.bad]="comparison.incidentsDelta > 0">{{ signed(comparison.incidentsDelta, comparison.incidentsDelta === 1 || comparison.incidentsDelta === -1 ? ' incidente' : ' incidentes') }}</span>
       </span>
     }
   </div>

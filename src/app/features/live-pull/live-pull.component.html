@@ -5,21 +5,20 @@
 } @else if (detail(); as d) {
   <div class="live-pull">
     <app-pull-header
-      class="area-header"
       [encounterName]="d.header.encounterName"
       [difficulty]="d.header.difficulty"
       [attemptNumber]="d.header.attemptNumber"
+      [rawPullNumber]="d.header.rawPullNumber"
       [durationLabel]="d.header.durationLabel"
       [bossHpRemainingPct]="d.header.bossHpRemainingPct"
       [result]="d.header.result"
-      [progressDeltaPct]="d.progressDeltaPct"
+      [attemptComparison]="d.attemptComparison"
       [referencePacing]="d.header.referencePacing"
       [phaseLabel]="d.header.phaseLabel"
     />
 
     @if (d.wipeCall; as wc) {
       <app-wipe-call-banner
-        class="area-wipecall"
         [pullId]="d.pullId"
         [confidence]="wc.confidence"
         [excluded]="wc.excluded"
@@ -29,75 +28,92 @@
     }
 
     @if (d.ninjaPull; as np) {
-      <app-ninja-pull-banner class="area-ninjapull" [pullId]="d.pullId" [excluded]="np.excluded" [signals]="np.signals" (statusChanged)="onNinjaPullStatusChanged()" />
+      <app-ninja-pull-banner [pullId]="d.pullId" [excluded]="np.excluded" [signals]="np.signals" (statusChanged)="onNinjaPullStatusChanged()" />
     }
 
-    <app-metrics-row class="area-metrics" [metrics]="d.metrics" [loading]="loading()" (provenanceRequested)="activeProvenance.set($event)" />
+    <div class="overview-grid">
+      <app-metrics-row [metrics]="d.metrics" [loading]="loading()" (provenanceRequested)="activeProvenance.set($event)" />
+      @if (d.progressTrend.length) {
+        <section class="widget trend-widget" aria-labelledby="trend-heading">
+          <div class="widget-title-row">
+            <div>
+              <span class="widget-kicker">Este report · solo intentos válidos</span>
+              <h2 id="trend-heading" class="widget-heading">Progreso entre intentos</h2>
+            </div>
+          </div>
+          <app-trend-bars [bars]="d.progressTrend" />
+        </section>
+      }
+    </div>
 
-    <!-- Widget nuevo: progreso entre intentos — mismos datos que ya se
-         traían (priorPulls), solo que ahora también en forma de gráfica, no
-         solo texto en una tarjeta de delta. -->
-    <section class="widget area-trend" aria-labelledby="trend-heading">
-      <h2 id="trend-heading" class="widget-heading">Progreso entre intentos</h2>
-      <app-trend-bars [bars]="d.progressTrend" />
-    </section>
-
-    <!-- §7.2 .compare-bar-row: antes una línea de texto en la cabecera, ahora
-         componente propio con más peso visual — mismo dato de siempre
-         (boss_reference_stats), solo aparece en un kill con referencia. -->
-    <app-compare-bar-row class="area-compare" [pacing]="d.header.referencePacing" />
-
-    <!-- Orden visual y de teclado: cabecera → métricas → callouts → análisis IA (§15.1). -->
     <app-coaching-callout-list
-      class="area-callouts"
       [callouts]="d.callouts"
       [mechanicFails]="d.mechanicFails"
-      [groupMechanicFailCount]="d.groupMechanicFailCount"
+      [incidentSummary]="d.incidentSummary"
       (provenanceRequested)="activeProvenance.set($event)"
     />
 
-    <!-- Dos roscos nuevos: de qué está hecho el pull (categoría de
-         mecánica) y cuánta defensa se desperdició en las muertes, en
-         conjunto — mismos datos ya calculados (pull_mechanic_events,
-         defensiveOptions), solo agregados en vez de solo por fila. -->
-    <section class="widget area-catdonut" aria-labelledby="catdonut-heading">
-      <h2 id="catdonut-heading" class="widget-heading">Mecánicas por categoría</h2>
-      <app-donut-chart [segments]="d.mechanicCategoryBreakdown" centerLabel="casts" (segmentSelected)="onDonutSegmentSelected($event, 'pull_mechanic_events agrupado por categoría')" />
-    </section>
+    <section class="detail-hub" aria-labelledby="detail-heading">
+      <div class="detail-head">
+        <div>
+          <span class="widget-kicker">Verificación</span>
+          <h2 id="detail-heading">Diagnóstico detallado</h2>
+        </div>
+        <span>Se mantiene cerrado para no competir con las decisiones del siguiente pull.</span>
+      </div>
+      <div class="detail-tabs" role="tablist" aria-label="Diagnóstico detallado del pull">
+        <button type="button" [class.active]="detailPanel() === 'ai'" [attr.aria-expanded]="detailPanel() === 'ai'" (click)="toggleDetailPanel('ai')">Análisis IA</button>
+        <button type="button" [class.active]="detailPanel() === 'players'" [attr.aria-expanded]="detailPanel() === 'players'" (click)="toggleDetailPanel('players')">Jugadores · {{ d.playerStats.length }}</button>
+        <button type="button" [class.active]="detailPanel() === 'timeline'" [attr.aria-expanded]="detailPanel() === 'timeline'" (click)="toggleDetailPanel('timeline')">Timeline</button>
+        <button type="button" [class.active]="detailPanel() === 'data'" [attr.aria-expanded]="detailPanel() === 'data'" (click)="toggleDetailPanel('data')">Datos y benchmarks</button>
+      </div>
 
-    <section class="widget area-defdonut" aria-labelledby="defdonut-heading">
-      <h2 id="defdonut-heading" class="widget-heading">Defensivos en las muertes</h2>
-      <app-donut-chart [segments]="d.defensiveStatusBreakdown" centerLabel="evaluados" (segmentSelected)="onDonutSegmentSelected($event, 'defensiveOptions de cada muerte agrupado por estado')" />
-    </section>
-
-    <app-llm-analysis-card
-      class="area-brief"
-      scope="pull"
-      [pullId]="d.pullId"
-      [entities]="briefEntities()"
-      [analysis]="d.brief"
-      [generating]="generatingBrief()"
-      [error]="briefError()"
-      (generateRequested)="onGenerateBrief()"
-      (manualBriefSaved)="onManualBriefSaved($event)"
-    />
-
-    <app-player-stats-table class="area-players" [players]="d.playerStats" />
-
-    <!-- §"si la gráfica vas a mantenerla bájala abajo del todo... un
-         timeline como el de lorrgs tendría más sentido": línea temporal
-         al fondo, una fila fija por mecánica en vez de una curva de daño
-         agregada — mismo dato de siempre (d.timeline), solo cambia el orden
-         en la página y la forma de leerlo. -->
-    <section class="widget area-timeline" aria-labelledby="timeline-heading">
-      <h2 id="timeline-heading" class="widget-heading">Línea temporal de mecánicas</h2>
-      <app-mechanic-swimlane
-        [chips]="d.timeline"
-        [background]="d.backgroundMechanics"
-        [durationMs]="d.header.durationMs"
-        [loading]="loading()"
-        (chipSelected)="onTimelineChipSelected($event)"
-      />
+      @if (detailPanel() === 'ai') {
+        <div class="detail-panel">
+          <app-llm-analysis-card
+            scope="pull"
+            [pullId]="d.pullId"
+            [entities]="briefEntities()"
+            [analysis]="d.brief"
+            [generating]="generatingBrief()"
+            [error]="briefError()"
+            (generateRequested)="onGenerateBrief()"
+            (manualBriefSaved)="onManualBriefSaved($event)"
+          />
+        </div>
+      } @else if (detailPanel() === 'players') {
+        <div class="detail-panel">
+          <app-player-stats-table [players]="d.playerStats" [embedded]="true" />
+        </div>
+      } @else if (detailPanel() === 'timeline') {
+        <section class="detail-panel widget timeline-panel" aria-labelledby="timeline-heading">
+          <h3 id="timeline-heading" class="widget-heading">Línea temporal completa</h3>
+          <p class="panel-note">Incluye casts limpios para auditoría. Las decisiones prioritarias están resumidas arriba.</p>
+          <app-mechanic-swimlane
+            [chips]="d.timeline"
+            [background]="d.backgroundMechanics"
+            [durationMs]="d.header.durationMs"
+            [loading]="loading()"
+            (chipSelected)="onTimelineChipSelected($event)"
+          />
+        </section>
+      } @else if (detailPanel() === 'data') {
+        <div class="detail-panel data-grid">
+          @if (d.header.referencePacing) {
+            <app-compare-bar-row [pacing]="d.header.referencePacing" />
+          }
+          <section class="widget" aria-labelledby="catdonut-heading">
+            <h3 id="catdonut-heading" class="widget-heading">Todos los casts por categoría</h3>
+            <p class="panel-note">Describe la composición del encuentro, no el número de fallos.</p>
+            <app-donut-chart [segments]="d.mechanicCategoryBreakdown" centerLabel="casts" (segmentSelected)="onDonutSegmentSelected($event, 'pull_mechanic_events agrupado por categoría')" />
+          </section>
+          <section class="widget" aria-labelledby="defdonut-heading">
+            <h3 id="defdonut-heading" class="widget-heading">Opciones defensivas al morir</h3>
+            <p class="panel-note">El total cuenta opciones de cooldown evaluadas, no muertes ni jugadores.</p>
+            <app-donut-chart [segments]="d.defensiveStatusBreakdown" centerLabel="opciones" (segmentSelected)="onDonutSegmentSelected($event, 'defensiveOptions de cada muerte agrupado por estado')" />
+          </section>
+        </div>
+      }
     </section>
   </div>
 

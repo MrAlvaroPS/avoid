@@ -1,10 +1,12 @@
 <section class="player-stats">
-  <button type="button" class="toggle" [attr.aria-expanded]="open()" (click)="toggle()">
-    <span>Detalle de jugadores (DPS/HPS/absorciones/talentos/consumibles)</span>
-    <span aria-hidden="true">{{ open() ? '▲' : '▼' }}</span>
-  </button>
+  @if (!embedded()) {
+    <button type="button" class="toggle" [attr.aria-expanded]="open()" (click)="toggle()">
+      <span>Detalle de jugadores (DPS/HPS/absorciones/talentos/consumibles)</span>
+      <span aria-hidden="true">{{ open() ? '▲' : '▼' }}</span>
+    </button>
+  }
 
-  @if (open()) {
+  @if (open() || embedded()) {
     <div class="table-wrap">
       <table>
         <thead>

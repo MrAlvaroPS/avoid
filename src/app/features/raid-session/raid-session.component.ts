@@ -22,6 +22,7 @@ import { LivePullComponent } from '../live-pull/live-pull.component';
 import { EmptyPanelComponent } from '../../shared/empty-panel.component';
 import { ClassIconComponent } from '../../shared/class-icon.component';
 import { errorMessage } from '../../shared/error-message.util';
+import { validAttemptOrdinal } from '../../shared/pull-consistency.util';
 
 export interface PullGroup {
   key: string;
@@ -29,6 +30,7 @@ export interface PullGroup {
   difficulty: string;
   pulls: PullListItem[];
   attemptCount: number;
+  excludedCount: number;
   killCount: number;
   bestWipePct: number | null;
 }
@@ -112,12 +114,17 @@ export class RaidSessionComponent {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
 
+  /** Expuesto al template sin duplicar la regla de formato compartida. */
+  readonly formatDuration = formatDuration;
+
   reportCodeInput = signal('');
   importing = signal(false);
   importProgress = signal<string | null>(null);
   error = signal<string | null>(null);
 
   currentReportCode = signal<string | null>(null);
+  currentReport = signal<ReportRow | null>(null);
+  showReportLoader = signal(false);
   // §"la noche duplicada... dos personas subieron el mismo log" (bug real,
   // arreglado a mano el 2026-08-23): analyze-report ya avisa si este report
   // parece la misma sesión que otro ya importado — se enseña como aviso, no
@@ -148,6 +155,23 @@ export class RaidSessionComponent {
 
   hasPulls = computed(() => this.pulls().length > 0);
   hasReportLoaded = computed(() => this.currentReportCode() !== null);
+  reportModeLabel = computed(() => (this.autoRefresh() ? 'Seguimiento en vivo' : 'Modo revisión'));
+  currentReportTitle = computed(() => {
+    const report = this.currentReport();
+    if (!report) return this.currentReportCode() ?? 'Report de raid';
+    return report.title?.trim() || `Raid del ${this.reportDateLabel(report.start_time)}`;
+  });
+  currentReportDateTime = computed(() => {
+    const report = this.currentReport();
+    if (!report) return null;
+    return new Date(report.start_time).toLocaleString('es-ES', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  });
 
   // §"esa Zona de la cabecera donde vienen los bosses y los pulls sigue
   // ocupando muchísimo espacio" (feedback repetido incluso tras la primera
@@ -197,11 +221,14 @@ export class RaidSessionComponent {
       const key = `${pull.boss_id}|${pull.difficulty}`;
       let group = groups.get(key);
       if (!group) {
-        group = { key, bossName: pull.bossName, difficulty: pull.difficulty, pulls: [], attemptCount: 0, killCount: 0, bestWipePct: null };
+        group = { key, bossName: pull.bossName, difficulty: pull.difficulty, pulls: [], attemptCount: 0, excludedCount: 0, killCount: 0, bestWipePct: null };
         groups.set(key, group);
       }
       group.pulls.push(pull);
-      if (pull.ninja_pull_excluded) continue;
+      if (pull.ninja_pull_excluded) {
+        group.excludedCount++;
+        continue;
+      }
       group.attemptCount++;
       if (pull.kill) group.killCount++;
       const pct = pull.wipe_pct ?? 100;
@@ -232,9 +259,12 @@ export class RaidSessionComponent {
   async copyNightSummary(): Promise<void> {
     const s = this.nightSummary();
     if (!s) return;
-    const today = new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'long' });
+    const reportDate = this.currentReport()?.start_time;
+    const dateLabel = reportDate
+      ? new Date(reportDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' })
+      : 'fecha no disponible';
     const lines = [
-      `📋 Resumen de la noche — ${today}`,
+      `📋 Resumen de la noche — ${dateLabel}`,
       `Bosses intentados: ${s.bossesAttempted} · Kills: ${s.totalKills} · Wipes: ${s.totalWipes} · Tiempo en pulls: ${formatDuration(s.totalDurationMs)}`,
       '',
       'Por boss:',
@@ -278,6 +308,8 @@ export class RaidSessionComponent {
           this.startAutoRefresh();
         }
       });
+    } else {
+      this.showReportLoader.set(true);
     }
     if (fromQueryParam) {
       // Limpia el query param de la URL tras consumirlo — así un refresh no
@@ -307,12 +339,20 @@ export class RaidSessionComponent {
     this.showRecentPicker.update((v) => !v);
   }
 
+  toggleReportLoader(): void {
+    this.showReportLoader.update((value) => !value);
+  }
+
   /** Carga un report ya importado antes, elegido por fecha — instantáneo, sin llamar a WCL (loadExisting solo lee lo que ya hay en Supabase). */
   async loadFromHistory(code: string): Promise<void> {
+    this.autoRefresh.set(false);
+    this.stopAutoRefresh();
     this.showRecentPicker.set(false);
+    this.showReportLoader.set(false);
     this.reportCodeInput.set(code);
     this.error.set(null);
     await this.loadExisting(code, /* analyzeIfEmpty */ true); // por si el histórico solo tenía metadata (sync-reports) y nunca se llegó a analizar
+    this.persistSession();
   }
 
   reportDateLabel(startTime: number): string {
@@ -332,7 +372,11 @@ export class RaidSessionComponent {
   /** Recarga desde Supabase lo que ya hay guardado, sin llamar a WCL — instantáneo al volver de otra pantalla. */
   private async loadExisting(code: string, analyzeIfEmpty = false): Promise<void> {
     try {
-      const pulls = await this.reportsService.listPulls(code);
+      const [pulls, report] = await Promise.all([
+        this.reportsService.listPulls(code),
+        this.reportsService.getReport(code),
+      ]);
+      this.currentReport.set(report);
       if (!pulls.length) {
         // Venimos del Histórico (sync-reports solo trae metadata, nunca
         // pulls) o el código guardado ya no tiene datos — en ambos casos,
@@ -343,6 +387,7 @@ export class RaidSessionComponent {
       this.currentReportCode.set(code);
       this.pulls.set(pulls);
       this.selectedPullId.set(pulls.at(-1)?.id ?? null);
+      this.showReportLoader.set(false);
       this.manualActiveKey.set(undefined); // sigue al pull recién cargado, no a un pin manual de una sesión anterior
       this.reportsService.listNightPlayers(code).then((p) => this.nightPlayers.set(p)).catch(() => {}); // best-effort, no bloquea la carga principal
     } catch {
@@ -353,6 +398,10 @@ export class RaidSessionComponent {
   async onImport(): Promise<void> {
     const code = extractReportCode(this.reportCodeInput());
     if (!code) return;
+    if (this.currentReportCode() && this.currentReportCode() !== code) {
+      this.autoRefresh.set(false);
+      this.stopAutoRefresh();
+    }
     await this.runAnalyze(code, true);
   }
 
@@ -381,8 +430,14 @@ export class RaidSessionComponent {
       if (newestPullId || isManual) this.lastActivityAt = Date.now();
       this.persistSession();
       this.lastCheckedAt.set(new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }));
-      const pulls = await this.reportsService.listPulls(code);
+      const [pulls, report] = await Promise.all([
+        this.reportsService.listPulls(code),
+        this.reportsService.getReport(code),
+      ]);
+      this.error.set(null);
+      this.currentReport.set(report);
       this.pulls.set(pulls);
+      this.showReportLoader.set(false);
       this.reportsService.listNightPlayers(code).then((p) => this.nightPlayers.set(p)).catch(() => {}); // best-effort, no bloquea la carga principal
       // Solo saltamos al pull recién procesado si de verdad hay uno nuevo — un
       // ciclo de auto-refresh sin novedades no debe robarte la selección actual.
@@ -444,8 +499,9 @@ export class RaidSessionComponent {
     this.selectedPullId.set(pull.id);
   }
 
-  pullLabel(pull: PullListItem): string {
-    return `#${pull.pull_number}`;
+  pullLabel(pull: PullListItem, group: PullGroup): string {
+    const ordinal = validAttemptOrdinal(group.pulls, pull.id);
+    return ordinal == null ? 'NP' : `#${ordinal}`;
   }
 
   pullSubLabel(pull: PullListItem): string {
@@ -462,8 +518,9 @@ export class RaidSessionComponent {
   }
 
   groupSummary(group: PullGroup): string {
-    const attempts = `${group.attemptCount} intento${group.attemptCount === 1 ? '' : 's'}`;
-    if (group.killCount > 0) return `${attempts} · ${group.killCount} kill${group.killCount === 1 ? '' : 's'}`;
-    return `${attempts} · mejor ${formatPct(group.bestWipePct)}`;
+    const attempts = `${group.attemptCount} válido${group.attemptCount === 1 ? '' : 's'}`;
+    const scope = group.excludedCount ? `${group.pulls.length} pulls · ${attempts}` : attempts;
+    if (group.killCount > 0) return `${scope} · ${group.killCount} kill${group.killCount === 1 ? '' : 's'}`;
+    return `${scope} · mejor ${formatPct(group.bestWipePct)}`;
   }
 }

@@ -47,6 +47,7 @@ export class LivePullComponent {
   loading = signal(true);
   error = signal<string | null>(null);
   generatingBrief = signal(false);
+  detailPanel = signal<'ai' | 'players' | 'timeline' | 'data' | null>(null);
   // Separado de `error` a propósito (bug real encontrado el 2026-08-22): si
   // reutilizaba `error`, un fallo al pedir el análisis IA (ej. sin
   // ANTHROPIC_API_KEY configurada) borraba TODA la pantalla del pull ya
@@ -150,5 +151,9 @@ export class LivePullComponent {
       method: `${segment.label}: ${segment.value}.`,
       detail: segment.detailLines?.length ? segment.detailLines.join('\n') : 'Sin desglose adicional para este segmento.',
     });
+  }
+
+  toggleDetailPanel(panel: 'ai' | 'players' | 'timeline' | 'data'): void {
+    this.detailPanel.update((current) => (current === panel ? null : panel));
   }
 }

@@ -3,328 +3,228 @@
   border: 1px solid var(--card-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card), var(--shadow-inset-top);
-  padding: 16px;
-  height: 100%;
+  padding: 18px;
 }
 
 .panel-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
+  gap: 16px;
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .heading {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  margin: 2px 0 0;
+  font: 700 19px/1.2 var(--font-display);
 }
 
-// §"la primera pestaña Mecánicas, la segunda Muertes" — misma superficie
-// recesiva que el resto de toggles de la app, sin inventar un componente de
-// tabs nuevo.
-.tabs {
+.heading-copy {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.incident-total {
   display: flex;
-  gap: 2px;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--warning-soft);
+  border: 1px solid rgba(227, 173, 79, 0.35);
+  border-radius: 999px;
+  color: var(--warning);
+  white-space: nowrap;
+
+  strong { font-size: 17px; }
+  span { font-size: 11px; font-weight: 700; }
+}
+
+.incident-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 14px;
+  padding: 10px 12px;
   background: var(--surface-2);
   border-radius: var(--radius-sm);
-  padding: 2px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+
+  b { color: var(--text); }
+}
+
+.collective-callout {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 9px 12px;
+  border-left: 3px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.collective-label {
+  color: var(--warning);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tabs {
+  display: flex;
+  gap: 3px;
+  margin: 14px 0 10px;
+  padding: 3px;
+  width: fit-content;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
 
   button {
-    border: none;
-    background: transparent;
-    color: var(--text-faint);
-    font-size: 11.5px;
-    font-weight: 600;
-    padding: 5px 10px;
-    border-radius: calc(var(--radius-sm) - 2px);
-    cursor: pointer;
     display: flex;
     align-items: center;
-    gap: 5px;
-
-    &.active {
-      background: var(--surface);
-      color: var(--text);
-      box-shadow: var(--shadow-card);
-    }
-    &:hover:not(.active) {
-      color: var(--text-muted);
-    }
+    gap: 6px;
+    padding: 6px 11px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-faint);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
   }
+  button.active { background: var(--surface); color: var(--text); }
 }
 
 .tab-count {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-faint);
-  background: var(--surface);
-  border-radius: 10px;
+  min-width: 18px;
   padding: 0 5px;
-  min-width: 15px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  font: 600 10px var(--font-mono);
   text-align: center;
 }
-.active .tab-count {
+
+.action-list { display: grid; gap: 7px; }
+
+.action-card {
+  display: grid;
+  grid-template-columns: minmax(230px, 1.3fr) minmax(160px, 0.8fr) minmax(270px, 1fr);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 8, 16, 0.28);
   color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+
+  &:hover { background: var(--surface-hover); border-color: var(--border-bright); }
+  &.is-critical { border-left-color: var(--danger); }
+  &.is-excluded { border-left-color: var(--text-faint); opacity: 0.72; }
+}
+
+.action-identity,
+.action-status,
+.facts,
+.player,
+.mechanic {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.action-identity { gap: 16px; }
+.player { gap: 5px; min-width: 112px; color: var(--text); font-weight: 700; }
+.mechanic { gap: 5px; }
+.mechanic b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-status { flex-wrap: wrap; gap: 5px; }
+.time { color: var(--text); }
+
+.outcome,
+.category {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+}
+.outcome.fail { background: var(--danger-soft); color: var(--danger); }
+.category { background: var(--accent-soft); color: var(--accent); }
+.category.unknown { background: var(--warning-soft); color: var(--warning); }
+
+.facts {
+  justify-content: flex-end;
+  gap: 18px;
+}
+.facts > span { display: flex; flex-direction: column; min-width: 64px; }
+.facts small { color: var(--text-faint); font-size: 9.5px; text-transform: uppercase; }
+.facts b { color: var(--text); font-size: 11.5px; }
+.facts .zero { color: var(--danger); }
+.facts .good { color: var(--success); }
+.facts .warn { color: var(--warning); }
+
+.defensive-summary { min-width: 150px !important; }
+.available-list {
+  grid-column: 1 / -1;
+  color: var(--warning);
+  font-size: 11px;
 }
 
 .empty {
   margin: 0;
+  padding: 18px 4px;
   color: var(--text-muted);
   font-size: 13px;
 }
-.empty-note {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-faint);
+.empty span { display: block; margin-top: 4px; color: var(--text-faint); font-size: 11.5px; }
+
+.show-more {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--card-border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-muted);
   font-size: 11.5px;
-}
-
-.row-head,
-.row {
-  display: grid;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 6px;
-}
-
-// §"scroll horizontal rarete" (bug real): cada fila es su propio grid
-// independiente (a propósito, ver nota más abajo sobre min-width:max-content)
-// y por defecto una pista de grid no se encoge por debajo del min-content de
-// SU contenido — una fila con una lista de defensivos más larga que otra
-// fuerza SU PROPIA pista más ancha que las demás, aunque todas compartan el
-// mismo grid-template-columns. El contenedor .row-list ajusta el scroll a
-// la fila más ancha, así que el resto de filas terminan con hueco vacío al
-// llegar al final del scroll — de ahí lo "raro". min-width:0 en cada celda
-// hace que las pistas respeten el minmax() declarado de verdad, y el
-// contenido que no cabe se envuelve (ya hay flex-wrap en las celdas que lo
-// necesitan) en vez de forzar la pista.
-.row-head > *,
-.row > * {
-  min-width: 0;
-}
-
-.mechanics-grid .row-head,
-.mechanics-grid .row {
-  grid-template-columns: minmax(84px, 1fr) minmax(150px, 1.7fr) 46px 74px 64px 64px 76px;
-}
-.deaths-grid .row-head,
-.deaths-grid .row {
-  grid-template-columns: 16px minmax(84px, 1fr) minmax(150px, 1.7fr) 46px 60px 64px 64px minmax(130px, 1.2fr) minmax(130px, 1.2fr) minmax(130px, 1.2fr);
-}
-
-.row-head {
-  color: var(--text-faint);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  border-bottom: 1px solid var(--surface-2);
-}
-
-.row {
-  width: 100%;
-  border: none;
-  border-bottom: 1px solid var(--surface-2);
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
   cursor: pointer;
-  transition: background 0.12s ease;
-
-  &:hover,
-  &:focus-visible {
-    background: var(--surface-2);
-  }
-  &:last-child {
-    border-bottom: none;
-  }
 }
 
-.row-fail .cell-player {
-  color: var(--danger);
-  font-weight: 600;
-}
-.row-wipecall {
-  opacity: 0.65;
-}
-.row-wipecall .cell-player {
-  color: var(--text-muted);
-  font-weight: 600;
-}
-.row-positive .cell-player {
-  color: var(--success);
-  font-weight: 600;
-}
+.positive-note { margin: 10px 0 0; color: var(--success); font-size: 11.5px; }
 
-.cell-player {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-// El icono/tooltip de la nota IA vive ahora en app-mechanic-info-icon
-// (shared/mechanic-info-icon.component.ts) — hover, no click, reutilizado
-// en todos los sitios que enseñan mecánicas.
-
-.cell-icon {
-  text-align: center;
-}
-
-// Único icono por fila (el de la mecánica) — el resto de nombres son texto
-// plano, a propósito, para no repetir el bug/ruido de "un icono por chip".
-.cell-mechanic {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
-  min-width: 0;
-}
-.mechanic-label {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-// El icono real es el <a class="wowhead-link"> DENTRO de <app-wowhead-link
-// class="icon-only">, no el mismo elemento — class="icon-only" en el uso del
-// componente cae en su host (<app-wowhead-link>), nunca en el <a> que
-// pinta su plantilla. ".icon-only.wowhead-link" (compuesto, mismo
-// elemento) por eso NUNCA coincidía con nada, y el <a> se quedaba sin ancho/
-// alto propios — un <a> vacío (sin texto) con solo background-image no
-// tiene tamaño intrínseco, así que el icono desaparecía (0×0) aunque el
-// background-image sí estuviera puesto. Selector de DESCENDIENTE, no compuesto.
 ::ng-deep .icon-only {
   display: inline-block;
   flex-shrink: 0;
-
   .wowhead-link {
     display: block;
     width: 18px;
     height: 18px;
     border-radius: 4px;
-    overflow: hidden;
-    border-bottom: none !important;
+    border-bottom: 0 !important;
     background-size: cover;
   }
 }
-.cat-tag {
-  flex-shrink: 0;
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 4px;
-  padding: 1px 4px;
-}
-// §"no estamos evaluando bien las mecánicas... no aparecen en dirección de
-// personajes": tono warning, no accent — a diferencia de una categoría
-// confirmada, esta fila es una señal de que el manifiesto necesita revisión,
-// no un dato ya cerrado.
-.cat-tag-unknown {
-  white-space: nowrap;
-  color: var(--warning);
-  background: var(--warning-soft);
+
+@media (max-width: 1100px) {
+  .action-card { grid-template-columns: 1fr; }
+  .facts { justify-content: flex-start; }
+  .available-list { grid-column: auto; }
 }
 
-.align-right {
-  text-align: right;
-}
-.align-center {
-  text-align: center;
-}
-
-.outcome-pill {
-  justify-self: start;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 20px;
-
-  &.pill-fail {
-    background: var(--danger-soft);
-    color: var(--danger);
-  }
-  &.pill-warning {
-    background: var(--warning-soft);
-    color: var(--warning);
-  }
-}
-
-.oneshot-yes {
-  color: var(--warning);
-  font-weight: 600;
-}
-.heal-zero {
-  color: var(--danger);
-}
-
-.cell-defensive {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.def-yes {
-  color: var(--success);
-  font-size: 11.5px;
-}
-
-// Listas de disponibles/en cooldown: texto plano separado por comas, SIN
-// icono por nombre — feedback real: "no llenar todo de iconos". El icono
-// queda reservado para la mecánica, que es lo que de verdad ayuda a
-// reconocer de un vistazo.
-.cell-defensive-list {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  white-space: normal;
-  font-size: 11.5px;
-  line-height: 1.4;
-  // §"scroll horizontal rarete": un nombre de defensivo largo (ej. "Greater
-  // Invisibility") no cabe en una sola línea aunque el resto SÍ envuelva —
-  // ese único elemento sin envolver seguía "sangrando" fuera de la celda
-  // visualmente (el layout de la pista ya estaba bien, era solo pintado),
-  // lo que inflaba el scrollWidth de esa fila por encima de las demás y
-  // descuadraba el scroll del contenedor entero. Recortar aquí, no dejar
-  // que se salga.
-  overflow-x: hidden;
-}
-
-// Icono + texto SEPARADOS (dos elementos, no un solo <a> con texto e icono
-// mezclados) — es lo que evita el bug real de antes: el icono de Wowhead se
-// inyecta como background-image sobre el propio <a>, y si ese <a> también
-// lleva el nombre como texto, icono y letras se dibujan uno encima del otro.
-.def-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  white-space: nowrap;
-
-  &.close-to-death {
-    color: var(--danger);
-    font-weight: 600;
-  }
-  // §"si tenía o no defensivo activo... eso es relevante para saber si usó
-  // algo": tono success — sí reaccionó, distinto del ámbar de "disponible
-  // sin usar" (podía haberlo hecho, no lo hizo) y del tenue de "en cooldown".
-  &.def-active {
-    color: var(--success);
-    font-weight: 600;
-  }
-}
-
-.meta {
-  color: var(--text-faint);
-  font-size: 11.5px;
+@media (max-width: 650px) {
+  .panel-head, .collective-callout, .action-identity { flex-direction: column; }
+  .action-identity { align-items: flex-start; gap: 5px; }
+  .facts { flex-wrap: wrap; }
 }

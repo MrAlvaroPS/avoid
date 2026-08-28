@@ -1,176 +1,132 @@
 <section class="callouts" aria-labelledby="callouts-heading">
   <div class="panel-head">
-    <h2 id="callouts-heading" class="heading">A quién dirigir</h2>
-    <div class="tabs" role="tablist">
-      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'mechanics'" [class.active]="activeTab() === 'mechanics'" (click)="activeTab.set('mechanics')">
-        Mecánicas <span class="tab-count">{{ mechanicFails().length }}</span>
-      </button>
-      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'deaths'" [class.active]="activeTab() === 'deaths'" (click)="activeTab.set('deaths')">
-        Muertes <span class="tab-count">{{ deathCount() }}</span>
-      </button>
+    <div>
+      <span class="eyebrow">Decisión</span>
+      <h2 id="callouts-heading" class="heading">Para el siguiente pull</h2>
+      <p class="heading-copy">Primero la acción; abre cualquier registro para comprobar el dato.</p>
     </div>
+    <div class="incident-total" title="Una instancia temporal cuenta una vez, aunque alcance a varios jugadores.">
+      <strong class="tabular">{{ incidentSummary().totalEvents }}</strong>
+      <span>incidentes</span>
+    </div>
+  </div>
+
+  <div class="incident-breakdown" aria-label="Desglose de incidentes de ejecución">
+    <span><b>{{ incidentSummary().personalEvents }}</b> personales</span>
+    <span><b>{{ incidentSummary().groupEvents }}</b> colectivos</span>
+    <span><b>{{ incidentSummary().unclassifiedEvents }}</b> sin clasificar</span>
+    <span><b>{{ incidentSummary().uncoveredDeathEvents }}</b> muertes sin cast correlacionado</span>
+  </div>
+
+  @if (incidentSummary().groupBreakdown.length) {
+    <div class="collective-callout">
+      <span class="collective-label">Llamada colectiva</span>
+      <span>
+        @for (item of incidentSummary().groupBreakdown.slice(0, 3); track item.label; let last = $last) {
+          {{ item.label }} ×{{ item.count }}{{ last ? '' : ' · ' }}
+        }
+      </span>
+    </div>
+  }
+
+  <div class="tabs" role="tablist" aria-label="Detalle de prioridades">
+    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'mechanics'" [class.active]="activeTab() === 'mechanics'" (click)="selectTab('mechanics')">
+      Personales <span class="tab-count">{{ mechanicFails().length }}</span>
+    </button>
+    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'deaths'" [class.active]="activeTab() === 'deaths'" (click)="selectTab('deaths')">
+      Muertes <span class="tab-count">{{ deathCount() }}</span>
+    </button>
   </div>
 
   @if (activeTab() === 'mechanics') {
     @if (!mechanicFails().length) {
-      <!-- §"pone mecánicas fallidas y luego 'a quién dirigir' no tiene
-           nada" (feedback real, verificado contra datos reales): la
-           tarjeta "Mecánicas falladas" también cuenta fallos de categorías
-           de GRUPO (raid-damage/tankbuster/interrupt/debuff-stack/
-           healing-absorb) — no son culpa de una persona, así que nunca
-           aparecen aquí. Sin esta nota, un número >0 arriba y "0" aquí
-           se leía como una contradicción; ahora se explica por qué. -->
       <p class="empty">
-        Sin mecánicas de responsabilidad individual falladas en este pull.
-        @if (groupMechanicFailCount() > 0) {
-          <span class="empty-note"
-            >(La tarjeta "Mecánicas falladas" de arriba sí cuenta {{ groupMechanicFailCount() }} fallo{{ groupMechanicFailCount() === 1 ? '' : 's' }} de categorías de grupo —
-            daño de raid, tankbuster, interrupción... — que no son responsabilidad de una persona y por eso no salen en esta pestaña.)</span
-          >
+        Sin impactos personales que dirigir en este pull.
+        @if (incidentSummary().groupEvents || incidentSummary().unclassifiedEvents || incidentSummary().uncoveredDeathEvents) {
+          <span>Los incidentes restantes son colectivos, no clasificados o muertes sin correlación; no se atribuyen a una persona.</span>
         }
       </p>
     } @else {
-      <div class="row-list mechanics-grid">
-        <div class="row-head">
-          <span>Jugador</span>
-          <span>Mecánica</span>
-          <span class="align-right">Minuto</span>
-          <span>Resultado</span>
-          <span class="align-right" title="Daño de esta instancia de la mecánica sobre este jugador">Daño</span>
-          <span class="align-right" title="Sanación recibida mientras duraba">Sanación</span>
-          <span title="¿Usó algún cast propio en los ±10s alrededor?">Defensivo</span>
-        </div>
-        @for (m of mechanicFails(); track m.raiderName + m.mechanic.label + m.timeLabel) {
-          <button type="button" class="row" [class.row-fail]="m.outcome === 'fail'" (click)="provenanceRequested.emit(m.provenance)">
-            <span class="cell-player"><app-class-icon [wclClass]="m.raiderClass" />{{ m.raiderName }}</span>
-            <span class="cell-mechanic">
-              @if (m.mechanic.wowheadSpellId) {
-                <app-wowhead-link type="spell" [id]="m.mechanic.wowheadSpellId" class="icon-only" />
-              }
-              <span class="mechanic-label">{{ m.mechanic.label }}</span>
-              <app-mechanic-info-icon [note]="m.notes" />
-              @if (categoryMeta(m.category); as meta) {
-                <span class="cat-tag">{{ meta.short }}</span>
-              } @else {
-                <span class="cat-tag cat-tag-unknown" title="Sin categoría confirmada en el manifiesto todavía — clasifícala en Ajustes.">
-                  SIN CLASIFICAR · {{ m.totalPlayersHit }} golpeados
-                </span>
-              }
+      <div class="action-list">
+        @for (m of visibleMechanicFails(); track m.raiderName + m.mechanic.label + m.timeLabel) {
+          <button type="button" class="action-card" [class.is-critical]="m.outcome === 'fail'" (click)="provenanceRequested.emit(m.provenance)">
+            <span class="action-identity">
+              <span class="player"><app-class-icon [wclClass]="m.raiderClass" />{{ m.raiderName }}</span>
+              <span class="mechanic">
+                @if (m.mechanic.wowheadSpellId) { <app-wowhead-link type="spell" [id]="m.mechanic.wowheadSpellId" class="icon-only" /> }
+                <b>{{ m.mechanic.label }}</b>
+                <app-mechanic-info-icon [note]="m.notes" />
+              </span>
             </span>
-            <span class="cell-time tabular align-right">{{ m.timeLabel }}</span>
-            <span class="outcome-pill" [class.pill-fail]="m.outcome === 'fail'" [class.pill-warning]="m.outcome === 'partial_fail'">{{ outcomeLabel(m.outcome) }}</span>
-            <span class="tabular align-right">{{ m.damageTaken | number: '1.0-0' }}</span>
-            <span class="tabular align-right" [class.heal-zero]="m.healingReceived === 0">{{ m.healingReceived | number: '1.0-0' }}</span>
-            <span class="cell-defensive">
-              @if (m.usedDefensiveSpellId) {
-                <app-wowhead-link type="spell" [id]="m.usedDefensiveSpellId" class="icon-only" />
-                <span class="def-yes">Sí</span>
-              } @else {
-                <span class="meta">No</span>
-              }
+            <span class="action-status">
+              <span class="time tabular">{{ m.timeLabel }}</span>
+              <span class="outcome" [class.fail]="m.outcome === 'fail'">{{ outcomeLabel(m.outcome) }}</span>
+              @if (categoryMeta(m.category); as meta) { <span class="category">{{ meta.short }}</span> }
+              @else { <span class="category unknown">SIN CLASIFICAR · {{ m.totalPlayersHit }} golpeados</span> }
+            </span>
+            <span class="facts">
+              <span><small>Daño</small><b class="tabular">{{ m.damageTaken | number: '1.0-0' }}</b></span>
+              <span><small>Sanación</small><b class="tabular" [class.zero]="m.healingReceived === 0">{{ m.healingReceived | number: '1.0-0' }}</b></span>
+              <span><small>Defensivo</small><b [class.good]="m.usedDefensiveSpellId">{{ m.usedDefensiveSpellId ? 'Sí' : 'No' }}</b></span>
             </span>
           </button>
         }
       </div>
     }
   } @else {
-    @if (!callouts().length) {
-      <p class="empty">Sin muertes en este pull.</p>
+    @if (!deathRows().length) {
+      <p class="empty">Sin muertes registradas en este pull.</p>
     } @else {
-      <div class="row-list deaths-grid">
-        <div class="row-head">
-          <span></span>
-          <span>Jugador</span>
-          <span>Mecánica</span>
-          <span class="align-right">Minuto</span>
-          <span class="align-center" title="¿Un golpe o varios impactos del último segundo concentraron al menos el 80% de su vida máxima, sin ventana razonable para curarlo?">Oneshot</span>
-          <span class="align-right" title="Daño recibido en los últimos 5s antes de morir">Daño (5s)</span>
-          <span class="align-right" title="Sanación real recibida en los últimos 6s antes de morir">Sanación</span>
-          <span title="Defensivos que YA tenía activos en el momento de morir — sí reaccionó, y aun así no bastó">Activo</span>
-          <span title="Defensivos disponibles y sin usar en el momento de morir">Disponibles</span>
-          <span title="Defensivos en cooldown en el momento de morir, con cuánto faltaba">En cooldown</span>
-        </div>
-        @for (c of callouts(); track c.raiderName + c.mechanic.label + c.timeLabel) {
+      <div class="action-list">
+        @for (c of visibleDeaths(); track c.raiderName + c.mechanic.label + c.timeLabel) {
           <button
             type="button"
-            class="row"
-            [class.row-fail]="c.severity === 'critical' && !c.isWipeCall && !c.statisticalExclusionReason"
-            [class.row-positive]="c.severity === 'positive'"
-            [class.row-wipecall]="c.isWipeCall"
+            class="action-card death-card"
+            [class.is-critical]="!c.isWipeCall && !c.statisticalExclusionReason"
+            [class.is-excluded]="c.isWipeCall || c.statisticalExclusionReason"
             (click)="provenanceRequested.emit(c.provenance)"
           >
-            <span class="cell-icon" aria-hidden="true">{{ c.isWipeCall ? '🏳️' : c.statisticalExclusionReason ? 'ℹ️' : c.severity === 'critical' ? '💀' : '📈' }}</span>
-            <span class="cell-player"><app-class-icon [wclClass]="c.raiderClass" />{{ c.raiderName }}</span>
-            <span class="cell-mechanic">
-              @if (c.mechanic.wowheadSpellId) {
-                <app-wowhead-link type="spell" [id]="c.mechanic.wowheadSpellId" class="icon-only" />
-              }
-              <span class="mechanic-label">{{ c.mechanic.label }}</span>
-              <app-mechanic-info-icon [note]="c.notes" />
-              @if (c.isWipeCall) {
-                <span class="cat-tag cat-tag-unknown" title="Excluida de fiabilidad/métricas/racha — ver el aviso de wipe call arriba del pull.">WIPE CALL</span>
-              }
-              @if (c.statisticalExclusionReason === 'boss_melee_on_non_tank') {
-                <span class="cat-tag cat-tag-unknown" title="Melee del boss sobre un no-tank; se menciona, pero no evalúa defensivos ni consumibles del objetivo.">TANKS CAÍDOS · NO EVALUABLE</span>
-              }
+            <span class="action-identity">
+              <span class="player"><app-class-icon [wclClass]="c.raiderClass" />{{ c.raiderName }}</span>
+              <span class="mechanic">
+                @if (c.mechanic.wowheadSpellId) { <app-wowhead-link type="spell" [id]="c.mechanic.wowheadSpellId" class="icon-only" /> }
+                <b>{{ c.mechanic.label }}</b>
+                <app-mechanic-info-icon [note]="c.notes" />
+              </span>
             </span>
-            <span class="cell-time tabular align-right">{{ c.timeLabel || '—' }}</span>
-            <span class="align-center">
-              @if (c.oneshot === true) {
-                <span class="oneshot-yes">⚡ Sí</span>
-              } @else if (c.oneshot === false) {
-                <span class="meta">No</span>
-              } @else {
-                <span class="meta">—</span>
-              }
+            <span class="action-status">
+              <span class="time tabular">{{ c.timeLabel || '—' }}</span>
+              @if (c.isWipeCall) { <span class="category unknown">WIPE CALL · EXCLUIDA</span> }
+              @if (c.statisticalExclusionReason) { <span class="category unknown">NO EVALUABLE</span> }
+              @if (c.oneshot === true) { <span class="outcome">ONESHOT</span> }
             </span>
-            <span class="tabular align-right">{{ c.damageWindowTotal != null ? (c.damageWindowTotal | number: '1.0-0') : '—' }}</span>
-            <span class="tabular align-right">
-              @if (c.healingWindowTotal != null) {
-                <span [class.heal-zero]="c.healingWindowTotal === 0">{{ c.healingWindowTotal | number: '1.0-0' }}</span>
-              } @else {
-                <span class="meta">—</span>
-              }
+            <span class="facts death-facts">
+              <span><small>Daño · 5s</small><b class="tabular">{{ c.damageWindowTotal != null ? (c.damageWindowTotal | number: '1.0-0') : '—' }}</b></span>
+              <span><small>Sanación</small><b class="tabular" [class.zero]="c.healingWindowTotal === 0">{{ c.healingWindowTotal != null ? (c.healingWindowTotal | number: '1.0-0') : '—' }}</b></span>
+              <span class="defensive-summary">
+                <small>Defensivos</small>
+                @if (c.defensivesActive.length) { <b class="good">{{ c.defensivesActive.length }} activos</b> }
+                @if (c.defensivesAvailable.length) { <b class="warn">{{ c.defensivesAvailable.length }} disponibles</b> }
+                @if (c.defensivesOnCooldown.length) { <b>{{ c.defensivesOnCooldown.length }} en CD</b> }
+                @if (!c.defensivesActive.length && !c.defensivesAvailable.length && !c.defensivesOnCooldown.length) { <b>sin dato</b> }
+              </span>
             </span>
-            <span class="cell-defensive-list">
-              @if (c.defensivesActive.length) {
-                @for (d of c.defensivesActive; track d.spellId) {
-                  <span class="def-item def-active">
-                    <app-wowhead-link type="spell" [id]="d.spellId" class="icon-only" />
-                    <span>{{ d.name }}</span>
-                  </span>
-                }
-              } @else {
-                <span class="meta">—</span>
-              }
-            </span>
-            <span class="cell-defensive-list">
-              @if (c.defensivesAvailable.length) {
-                @for (d of c.defensivesAvailable; track d.spellId) {
-                  <span class="def-item">
-                    <app-wowhead-link type="spell" [id]="d.spellId" class="icon-only" />
-                    <span>{{ d.name }}</span>
-                  </span>
-                }
-              } @else {
-                <span class="meta">—</span>
-              }
-            </span>
-            <span class="cell-defensive-list">
-              @if (c.defensivesOnCooldown.length) {
-                @for (d of c.defensivesOnCooldown; track d.spellId) {
-                  <span class="def-item" [class.close-to-death]="d.closeToDeath">
-                    <app-wowhead-link type="spell" [id]="d.spellId" class="icon-only" />
-                    <span>{{ d.name }}{{ d.cooldownRemainingMs != null ? ' (−' + (d.cooldownRemainingMs / 1000 | number: '1.0-0') + 's)' : '' }}</span>
-                  </span>
-                }
-              } @else {
-                <span class="meta">—</span>
-              }
-            </span>
+            @if (c.defensivesAvailable.length) {
+              <span class="available-list">Disponible sin usar: {{ availableDefensiveNames(c) }}</span>
+            }
           </button>
         }
       </div>
     }
+  }
+
+  @if (hiddenRowCount() > 0) {
+    <button type="button" class="show-more" (click)="expanded.set(true)">Ver {{ hiddenRowCount() }} registros más</button>
+  } @else if (expanded()) {
+    <button type="button" class="show-more" (click)="expanded.set(false)">Mostrar solo prioridades</button>
+  }
+
+  @if (positiveRows().length) {
+    <p class="positive-note">✓ {{ positiveRows().length }} patrón{{ positiveRows().length === 1 ? '' : 'es' }} previo{{ positiveRows().length === 1 ? '' : 's' }} no se repitió en este intento.</p>
   }
 </section>

@@ -10,7 +10,7 @@ import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { ReliabilityService, type PlayerReliability, type ReliabilityBreakdown, type ReliabilityInputRow } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
-import { PERSONAL_RESPONSIBILITY_CATEGORIES, PULL_SCORE_FAIL_PENALTY, mapBrief, mechanicScoreFor } from './pull-analysis.service';
+import { PULL_SCORE_FAIL_PENALTY, mapBrief, mechanicScoreFor } from './pull-analysis.service';
 import { loadMechanicNotesByName } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
 import type { DeathCause, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
@@ -18,6 +18,7 @@ import type { LlmPullAnalysis } from '../shared/models/ui';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 import { gearPreparationCounts } from '../shared/gear-preparation.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
+import { PERSONAL_RESPONSIBILITY_CATEGORIES } from '../shared/pull-consistency.util';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface NightPullSummary {

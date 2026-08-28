@@ -2,179 +2,266 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  // Centro de mando de verdad usa el ancho disponible en vez de quedarse en
-  // una columna estrecha centrada — 1080px dejaba la parrilla de dos
-  // columnas del live-pull prácticamente sin sitio en un monitor normal.
   max-width: 1600px;
   margin: 0 auto;
-  padding: 20px;
-  overflow-y: auto;
+  padding: 18px 20px 28px;
 }
 
-.import-bar {
+.sticky-raid-context {
+  position: sticky;
+  top: 66px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  pointer-events: none;
+
+  > * { pointer-events: auto; }
+}
+
+.report-context,
+.pull-picker,
+.import-panel,
+.recent-picker,
+.night-review {
+  background: linear-gradient(180deg, rgba(25, 20, 36, 0.98) 0%, rgba(18, 16, 28, 0.98) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  backdrop-filter: blur(14px);
+}
+
+.report-context {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 9px 12px;
 }
+
+.report-identity,
+.report-actions,
+.import-controls {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.report-identity { gap: 10px; }
+.report-actions { justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--neutral-soft);
+  color: var(--text-muted);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+
+  i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
+  &.live { background: var(--success-soft); color: var(--success); }
+  &.live i { background: var(--success); box-shadow: 0 0 0 4px rgba(95, 191, 130, 0.1); }
+}
+
+.report-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+
+  strong { overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+  span { overflow: hidden; color: var(--text-faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+  code { font-size: inherit; }
+}
+
+.sync-status { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
+
+.context-button,
+.context-link,
+.recent-toggle,
+.close-loader {
+  padding: 7px 10px;
+  border: 1px solid var(--card-border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:hover:not(:disabled) { border-color: var(--border-bright); background: var(--surface-hover); color: var(--text); }
+  &:disabled { opacity: 0.5; cursor: default; }
+}
+
+.context-link { color: var(--accent); }
+.context-button.subtle { background: transparent; }
+.live-button.active { border-color: rgba(95, 191, 130, 0.35); background: var(--success-soft); color: var(--success); }
+
+.import-panel {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.45fr) minmax(420px, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 16px;
+
+  > div:first-child { display: flex; flex-direction: column; }
+  strong { font-size: 13px; }
+}
+
+.import-eyebrow {
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.import-controls { gap: 8px; }
 
 .code-input {
   flex: 1;
-  padding: 10px 14px;
-  background: var(--surface-2);
+  min-width: 180px;
+  padding: 9px 12px;
   border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
+  background: var(--surface-2);
   color: var(--text);
-  font-size: 13px;
-  box-shadow: var(--shadow-inset-top);
+  font-size: 12px;
 
-  &::placeholder {
-    color: var(--text-faint);
-  }
-  &:focus-visible {
-    border-color: var(--accent);
-  }
+  &::placeholder { color: var(--text-faint); }
+  &:focus-visible { border-color: var(--accent); }
 }
 
 .import-btn {
-  padding: 10px 20px;
-  background: linear-gradient(135deg, var(--accent-solid) 0%, var(--accent-deep) 100%);
-  color: #fff;
+  padding: 9px 15px;
   border: 1px solid var(--border-bright);
   border-radius: var(--radius-sm);
-  font-weight: 600;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-  box-shadow: var(--shadow-card);
-  transition: filter 0.15s ease;
-
-  &:hover:not(:disabled) {
-    filter: brightness(1.12);
-  }
-  &:disabled {
-    opacity: 0.55;
-    cursor: default;
-  }
-}
-
-.progress {
+  background: linear-gradient(135deg, var(--accent-solid), var(--accent-deep));
+  color: #fff;
   font-size: 12px;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.auto-refresh {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-muted);
+  font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
+  &:disabled { opacity: 0.5; cursor: default; }
 }
 
-// §"cargar un log desde un historial (con fecha)... con acordarme del día
-// es suficiente" (feedback real): botón discreto junto al resto de la
-// barra + panel desplegable de reports recientes, sin salir de esta pantalla.
-.recent-toggle {
-  flex-shrink: 0;
-  padding: 9px 14px;
-  background: var(--surface-2);
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-
-  &:hover {
-    background: var(--surface-hover);
-    color: var(--text);
-  }
-}
+.close-loader { padding-inline: 10px; background: transparent; font-size: 17px; line-height: 1; }
 
 .recent-picker {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 260px;
-  overflow-y: auto;
-  overflow-x: hidden; // §bug real (feedback: "aparece un scroll horizontal en toda la pantalla") — contención de respaldo, ver min-width:0 de abajo para la causa real
+  max-height: 280px;
+  overflow: auto;
   padding: 6px;
-  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card), var(--shadow-inset-top);
 }
 
 .recent-item {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  width: 100%;
-  min-width: 0; // ítem flex de .recent-picker — sin esto, su ancho de contenido puede desbordar la columna y filtrarse hasta la página
-  padding: 7px 10px;
-  background: transparent;
-  border: none;
+  display: grid;
+  grid-template-columns: 100px minmax(140px, 0.55fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 0;
   border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text);
-  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
+  &:hover { background: var(--surface-hover); }
+}
+.recent-date { color: var(--text-faint); font-size: 11px; }
+.recent-title { overflow: hidden; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.recent-bosses { overflow: hidden; color: var(--text-faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 
-  &:hover {
-    background: var(--surface-hover);
-  }
-}
-.recent-date {
-  flex-shrink: 0;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  min-width: 80px;
-}
-.recent-title {
-  // §bug real (feedback: "scroll horizontal en toda la pantalla" al abrir
-  // este picker): flex-shrink:0 SIN min-width:0 hacía que un título largo
-  // (report de WCL con nombre extenso) forzara el ancho de la fila más allá
-  // de su contenedor — flex-shrink:1 + min-width:0 + elipsis, igual que
-  // .recent-bosses, en vez de asumir que el título siempre es corto.
-  flex-shrink: 1;
-  min-width: 0;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-}
-.recent-bosses {
-  flex: 1;
-  min-width: 0;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.pull-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 10px;
 }
 
-.error {
-  color: var(--danger);
-  font-size: 13px;
+.boss-pill-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.boss-pill {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: inherit;
+  cursor: pointer;
+  &:hover { background: var(--surface-hover); }
+  &.active { border-color: var(--border-bright); background: var(--accent-soft); }
+}
+.boss-pill-name { color: var(--text); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+.boss-pill-diff { padding: 1px 4px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 8.5px; font-weight: 700; text-transform: uppercase; }
+.boss-pill-summary { color: var(--text-faint); font-size: 9.5px; white-space: nowrap; }
+
+.pull-chip-row {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
   margin: 0;
+  padding: 5px 0 0;
+  border-top: 1px solid var(--surface-2);
+  list-style: none;
 }
 
-.duplicate-warning {
-  padding: 10px 14px;
-  background: var(--warning-soft);
-  border: 1px solid var(--warning);
-  border-radius: var(--radius-lg);
-  color: var(--text);
-  font-size: 12.5px;
-  margin: 0;
+.pull-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 42px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 3px solid var(--danger);
+  border-radius: 7px 7px 0 0;
+  background: var(--surface-2);
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  &.is-kill { border-bottom-color: var(--chart-positive); }
+  &.is-ninja-pull { border-bottom: 3px dashed var(--text-muted); opacity: 0.62; }
+  &.selected { background: var(--surface-hover); box-shadow: inset 0 0 0 1px var(--accent); }
+}
+.pull-name { font-size: 11.5px; font-weight: 800; }
+.pull-sub { color: var(--text-muted); font-size: 9.5px; }
+.history-link { justify-content: center; border: 1px dashed var(--border-bright); color: var(--accent); font-size: 11px; font-weight: 700; }
 
-  strong {
-    font-weight: 700;
+.error,
+.duplicate-warning { margin: 0; font-size: 12px; }
+.error { color: var(--danger); }
+.duplicate-warning { padding: 10px 12px; border: 1px solid var(--warning); border-radius: var(--radius-sm); background: var(--warning-soft); }
+
+.night-review {
+  overflow: hidden;
+
+  summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    color: var(--text-muted);
+    cursor: pointer;
+    list-style: none;
   }
+  summary::-webkit-details-marker { display: none; }
+  summary > span:first-child { display: flex; flex-direction: column; }
+  summary b { color: var(--text); font-size: 12.5px; }
+  summary small { color: var(--text-faint); font-size: 10.5px; }
 }
 
 .night-summary {
@@ -182,271 +269,60 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  padding: 11px 14px;
+  border-top: 1px solid var(--card-border);
+}
+.night-summary-stats, .night-summary-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
+.night-stat { color: var(--text-muted); font-size: 11.5px; }
+.night-stat strong { color: var(--text); }
+.night-hardest { color: var(--warning); }
+.report-link-btn, .copy-night-btn {
+  padding: 6px 10px;
   border: 1px solid var(--card-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card), var(--shadow-inset-top);
-}
-.night-summary-stats {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-.night-summary-label {
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.night-stat {
-  font-size: 12.5px;
+  border-radius: 7px;
+  background: var(--surface-2);
   color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+.report-link-btn { color: var(--accent); }
 
-  strong {
-    color: var(--text);
-    font-weight: 700;
-  }
-}
-.night-hardest {
-  color: var(--warning);
-}
 .night-players {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
-  flex-wrap: wrap;
-  padding: 8px 14px;
+  padding: 10px 14px 14px;
 }
-.night-players-label {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-.night-players-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
+.night-players-label { padding-top: 3px; color: var(--text-faint); font-size: 9.5px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
+.night-players-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .player-chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  background: var(--surface-2);
+  gap: 4px;
+  padding: 3px 8px;
   border: 1px solid var(--card-border);
-  border-radius: 20px;
-  color: var(--text-muted);
-  font-size: 11.5px;
-  text-decoration: none;
-
-  &:hover {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-}
-
-.night-summary-actions {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.report-link-btn {
-  padding: 6px 14px;
-  border-radius: 8px;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-
-  &:hover {
-    color: var(--accent);
-  }
-}
-
-.copy-night-btn {
-  flex-shrink: 0;
-  padding: 6px 14px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-bright);
-  border-radius: 8px;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-
-  &:hover {
-    background: var(--surface-hover);
-  }
-}
-
-.empty-state {
-  color: var(--text-muted);
-  text-align: center;
-  padding: 40px 0;
-}
-
-// Card ÚNICA para todo el picker (antes: una card entera por boss, apiladas
-// — el coste de gradiente/borde/sombra/padding se pagaba N veces). La altura
-// ahora depende de cuántas FILAS de pills hacen falta al envolver (wrap),
-// no de cuántos bosses tiene el report.
-.pull-picker {
-  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
-  border: 1px solid var(--card-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card), var(--shadow-inset-top);
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.boss-pill-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.boss-pill {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 5px 10px;
-  background: var(--surface-2);
-  border: 1px solid transparent;
   border-radius: 999px;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  transition:
-    background 0.15s ease,
-    border-color 0.15s ease;
-
-  &:hover {
-    background: var(--surface-hover);
-  }
-  &.active {
-    background: var(--accent-soft);
-    border-color: var(--border-bright);
-  }
-}
-
-.boss-pill-name {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text);
-  white-space: nowrap;
-}
-
-.boss-pill-diff {
-  font-size: 9.5px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 4px;
-  padding: 1px 5px;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  white-space: nowrap;
-
-  .boss-pill.active & {
-    background: var(--surface);
-  }
-}
-
-.boss-pill-summary {
-  font-size: 10.5px;
-  color: var(--text-faint);
-  white-space: nowrap;
-}
-
-.pull-chip-row {
-  display: flex;
-  gap: 8px;
-  list-style: none;
-  margin: 0;
-  padding: 4px 0 0;
-  // §mismo bug de CSS que las tablas del resto de la app: overflow-x:auto
-  // solo hace que overflow-y se compute como 'auto' también — explícito lo desactiva.
-  overflow-x: auto;
-  overflow-y: visible;
-  border-top: 1px solid var(--surface-2);
-}
-
-// §"un 'todos los pulls' que reúna datos": mismo tamaño/sitio que un chip de
-// pull normal, pero SIN el borde rojo/verde de kill/wipe (no es un intento,
-// es una vía de navegación) — texto de acento en vez de estado.
-.history-link {
-  display: flex;
-  align-items: center;
-  padding: 8px 14px;
-  background: transparent;
-  border: 1px dashed var(--border-bright);
-  border-radius: var(--radius-sm);
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-
-  &:hover {
-    background: var(--surface-2);
-  }
-}
-
-.pull-chip {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 14px;
   background: var(--surface-2);
-  border: none;
-  border-bottom: 3px solid var(--danger);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  cursor: pointer;
-  text-align: left;
-  transition:
-    background 0.15s ease,
-    transform 0.1s ease;
-
-  &:hover {
-    background: var(--surface-hover);
-    transform: translateY(-1px);
-  }
-  &.is-kill {
-    border-bottom-color: var(--chart-positive);
-  }
-  // §"un ninja pull... habría que clasificarlo de otra manera para
-  // saberlo" (feedback real): ni rojo (no fue un intento fallido) ni verde
-  // (no fue un kill) — discontinuo y atenuado, "esto no cuenta", mismo
-  // --text-muted que ya usa el resto del picker para lo secundario.
-  &.is-ninja-pull {
-    border-bottom-style: dashed;
-    border-bottom-color: var(--text-muted);
-    opacity: 0.65;
-  }
-  &.selected {
-    background: var(--surface-hover);
-    box-shadow: inset 0 0 0 1px var(--accent);
-  }
-}
-
-.pull-name {
-  font-size: 12.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.pull-sub {
-  font-size: 11px;
   color: var(--text-muted);
+  font-size: 10.5px;
+  text-decoration: none;
+  &:hover { border-color: var(--accent); color: var(--accent); }
+}
+
+@media (max-width: 1080px) {
+  .sticky-raid-context { position: static; }
+  .report-context, .import-panel { grid-template-columns: 1fr; align-items: flex-start; }
+  .report-context { flex-direction: column; }
+  .report-actions { justify-content: flex-start; }
+}
+
+@media (max-width: 700px) {
+  .raid-session { padding: 10px; }
+  .import-controls, .night-summary, .night-players { align-items: stretch; flex-direction: column; }
+  .code-input { width: 100%; }
+  .recent-item { grid-template-columns: 86px 1fr; }
+  .recent-bosses { grid-column: 1 / -1; }
+  .mode-pill { display: none; }
 }

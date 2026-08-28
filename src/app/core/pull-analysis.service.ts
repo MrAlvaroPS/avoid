@@ -18,11 +18,21 @@ import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { TrendBar } from '../shared/charts/trend-bars.component';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
+import {
+  PERSONAL_RESPONSIBILITY_CATEGORIES,
+  buildAttemptComparison,
+  summarizeExecutionIncidents,
+  type AttemptComparison,
+  type ExecutionIncidentSummary,
+} from '../shared/pull-consistency.util';
 
 export interface PullHeaderData {
   encounterName: string;
   difficulty: PullDifficulty;
-  attemptNumber: number;
+  /** Ordinal dentro de los intentos válidos de este report+boss+dificultad. Null cuando el pull está excluido como ninja pull. */
+  attemptNumber: number | null;
+  /** Numeración técnica persistida; solo se enseña para identificar un pull excluido. */
+  rawPullNumber: number;
   durationLabel: string;
   /** Mismo dato que durationLabel pero en ms crudos — hace falta para fijar el dominio del eje X de la gráfica de daño, no solo para leerlo en texto. Null en pulls sin duration_ms (no debería pasar en la práctica, pero WCL es la fuente y a veces no llega). */
   durationMs: number | null;
@@ -74,13 +84,13 @@ export interface PullDetail {
   callouts: CoachingCallout[];
   /** Mecánicas de responsabilidad individual falladas SIN morir — pestaña "Mecánicas" de A quién dirigir, separada de "Muertes" (callouts). */
   mechanicFails: MechanicFailRow[];
-  /** §"pone mecánicas fallidas y luego 'a quién dirigir' no tiene nada" (feedback real, verificado): fallos reales de categorías de GRUPO (raid-damage/tankbuster/interrupt/debuff-stack/healing-absorb) — cuentan en la tarjeta "Mecánicas falladas" pero nunca en esta pestaña (no son culpa de una persona). Se expone para poder explicar la diferencia en vez de dejarla como una contradicción muda. */
-  groupMechanicFailCount: number;
+  /** Una sola fuente para el total visible y todos sus desgloses; la unidad siempre es una instancia temporal. */
+  incidentSummary: ExecutionIncidentSummary;
   playerStats: PlayerStatRow[];
   brief: LlmPullAnalysis | null;
   isFirstPullOfNight: boolean; // sin comparación posible — las 4 tarjetas van sin delta
-  /** Score compuesto de §13 menos el del pull anterior — positivo = mejor intento. Null si no hay pull anterior con el que comparar. */
-  progressDeltaPct: number | null;
+  /** Comparación contra el intento válido anterior de este mismo report+boss+dificultad, conservando las unidades reales. */
+  attemptComparison: AttemptComparison | null;
   /** Reparto de las mecánicas de ESTE pull por categoría (pull_mechanic_events.category, confirmada o inferida) — de qué está hecho el pull, no solo cuántas fallaron. */
   mechanicCategoryBreakdown: DonutSegment[];
   /** Reparto de TODOS los defensivos evaluados en las muertes de este pull, por estado — cuánta "defensa desperdiciada" (available_unused) hubo en conjunto, no solo por jugador. */
@@ -157,11 +167,12 @@ export class PullAnalysisService {
       client
         .from('pulls')
         .select('*')
+        .eq('report_code', pull.report_code)
         .eq('boss_id', pull.boss_id)
         .eq('difficulty', pull.difficulty)
+        .eq('ninja_pull_excluded', false)
         .lt('pull_number', pull.pull_number)
-        .order('pull_number', { ascending: false })
-        .limit(6),
+        .order('pull_number', { ascending: false }),
       // §"a qué estamos llegando tarde": ritmo del mejor kill público del
       // mismo boss+dificultad (ver boss_reference_stats, poblado por
       // sync-boss-mechanics). Puede no existir todavía (raid nueva, o nadie
@@ -177,15 +188,20 @@ export class PullAnalysisService {
     const candidateRows = (candidatesRes.data ?? []) as { name: string; ai_classification: { notes: string } | null }[];
     const hasManifest = candidateRows.length > 0;
     const notesByMechanicName = new Map(candidateRows.filter((c) => c.ai_classification?.notes).map((c) => [c.name, c.ai_classification!.notes]));
+    // "Anterior" en una pantalla operativa significa el intento válido
+    // anterior de ESTA noche. Los pulls técnicos/ninja y otras noches no
+    // deben alterar deltas, rachas ni la gráfica del report abierto.
     const priorPulls = (priorPullsRes.data ?? []) as PullRow[];
-    const previousPull = priorPulls[0] ?? null;
+    const comparisonPriorPulls = pull.ninja_pull_excluded ? [] : priorPulls;
+    const previousPull = comparisonPriorPulls[0] ?? null;
     const pullByIdForEvaluation = new Map([pull, ...priorPulls].map((p) => [p.id, p]));
     const referenceStats = referenceStatsRes.data as BossReferenceStatsRow | null;
     const evaluatedMechEvents = mechEvents.filter((event) => !isMechanicExcludedByWipeCall(pull, event));
 
     let previousRecords: PlayerPullRecordRow[] = [];
-    let previousMechFailCount = 0;
+    let previousMechEvents: PullMechanicEventRow[] = [];
     const priorRecordsByPullId = new Map<string, PlayerPullRecordRow[]>();
+    const priorMechEventsByPullId = new Map<string, PullMechanicEventRow[]>();
     // §"en qué estamos fallando" a nivel de RAID, no solo de un jugador: la
     // misma mecánica fallando en pulls consecutivos DEL BOSS, cruzando
     // pull_mechanic_events de este pull + los anteriores ya traídos arriba —
@@ -202,38 +218,46 @@ export class PullAnalysisService {
         client.from('player_pull_records').select('*').in('pull_id', priorPullIds),
         withSupabaseRelationFallback(
           'applicable_pull_mechanic_events',
-          () => client.from('applicable_pull_mechanic_events').select('pull_id,ability_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
-          () => client.from('pull_mechanic_events').select('pull_id,ability_id,mechanic_name,outcome,trigger_time_ms').in('pull_id', priorPullIds),
+          () => client.from('applicable_pull_mechanic_events').select('*').in('pull_id', priorPullIds),
+          () => client.from('pull_mechanic_events').select('*').in('pull_id', priorPullIds),
         ),
       ]);
       for (const r of (priorRecordsRes.data ?? []) as PlayerPullRecordRow[]) {
         if (!priorRecordsByPullId.has(r.pull_id)) priorRecordsByPullId.set(r.pull_id, []);
         priorRecordsByPullId.get(r.pull_id)!.push(r);
       }
-      const priorMechanicEvents = (priorMechEventsRes.data ?? []) as { pull_id: string; ability_id: number; mechanic_name: string; outcome: string; trigger_time_ms: number }[];
+      const priorMechanicEvents = (priorMechEventsRes.data ?? []) as PullMechanicEventRow[];
+      for (const event of priorMechanicEvents) {
+        if (!priorMechEventsByPullId.has(event.pull_id)) priorMechEventsByPullId.set(event.pull_id, []);
+        priorMechEventsByPullId.get(event.pull_id)!.push(event);
+      }
       mechanicEventsAcrossPulls = mechanicEventsAcrossPulls.concat(
         priorMechanicEvents.filter((event) => {
           const eventPull = pullByIdForEvaluation.get(event.pull_id);
-          return eventPull != null && !isMechanicExcludedByWipeCall(eventPull, event as PullMechanicEventRow);
+          return eventPull != null && !isMechanicExcludedByWipeCall(eventPull, event);
         }),
       );
       if (previousPull) {
         previousRecords = priorRecordsByPullId.get(previousPull.id) ?? [];
-        previousMechFailCount = mechanicEventsAcrossPulls.filter((e) => e.pull_id === previousPull.id && e.outcome !== 'clean').length;
+        previousMechEvents = (priorMechEventsByPullId.get(previousPull.id) ?? []).filter(
+          (event) => !isMechanicExcludedByWipeCall(previousPull, event),
+        );
       }
     }
     const mechanicFailurePatterns = buildMechanicFailurePatterns(mechanicEventsAcrossPulls);
 
     const isKill = encounter?.kill ?? pull.wipe_pct === 0;
+    const referencePacing = buildReferencePacing(pull, referenceStats);
     const header: PullHeaderData = {
       encounterName: encounter?.boss_name ?? `Boss ${pull.boss_id}`,
       difficulty: normalizeDifficulty(pull.difficulty),
-      attemptNumber: pull.pull_number,
+      attemptNumber: pull.ninja_pull_excluded ? null : priorPulls.length + 1,
+      rawPullNumber: pull.pull_number,
       durationLabel: formatDuration(pull.duration_ms),
       durationMs: pull.duration_ms,
       bossHpRemainingPct: pull.wipe_pct ?? 0,
       result: isKill ? 'kill' : 'wipe',
-      referencePacing: buildReferencePacing(pull, referenceStats),
+      referencePacing,
       phaseLabel: formatPhaseReached(pull.phase_transitions, pull.last_phase_is_intermission, await bossPhasesPromise),
     };
 
@@ -254,46 +278,53 @@ export class PullAnalysisService {
       records.filter((r) => !isExcludedStatisticalDeath(pull, r)),
       evaluatedMechEvents,
     );
+    const incidentSummary = summarizeExecutionIncidents(
+      evaluatedMechEvents,
+      deathAttribution.uncoveredFailedMechanicCount,
+    );
+    let previousIncidentSummary: ExecutionIncidentSummary | null = null;
+    if (previousPull) {
+      const previousDeathAttribution = attributeDeaths(
+        previousRecords.filter((record) => !isExcludedStatisticalDeath(previousPull, record)),
+        previousMechEvents,
+      );
+      previousIncidentSummary = summarizeExecutionIncidents(
+        previousMechEvents,
+        previousDeathAttribution.uncoveredFailedMechanicCount,
+      );
+    }
     const metrics = buildMetrics(
       pull,
       records,
-      evaluatedMechEvents,
       previousPull,
       previousRecords,
-      previousMechFailCount,
-      priorPulls,
+      incidentSummary,
+      previousIncidentSummary,
+      comparisonPriorPulls,
       priorRecordsByPullId,
       mechanicFailurePatterns,
-      deathAttribution.uncoveredFailedMechanicCount,
     );
     const { chips: timeline, background: backgroundMechanics } = buildTimeline(pull, records, mechEvents, hasManifest, deathAttribution.coveredRecordIds);
-    const callouts = buildCallouts(pull, records, previousPull, previousRecords, priorPulls, priorRecordsByPullId, notesByMechanicName);
+    const callouts = buildCallouts(pull, records, previousPull, previousRecords, comparisonPriorPulls, priorRecordsByPullId, notesByMechanicName);
     const mechanicFails = buildMechanicFails(pull, records, evaluatedMechEvents, notesByMechanicName);
-    // §"pone mecánicas fallidas y luego 'a quién dirigir' no tiene nada"
-    // (feedback real): mismo criterio de exclusión que buildMechanicFails,
-    // pero contando lo EXCLUIDO en vez de lo incluido — para poder decir
-    // "hubo N fallos, pero son de grupo/tank/interrupción" en vez de dejar
-    // la pestaña vacía sin explicación cuando la tarjeta de arriba no es 0.
-    const groupMechanicFailCount = evaluatedMechEvents.filter((m) => m.outcome !== 'clean' && m.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(m.category)).length;
     const roleByName = await rosterByNamePromise;
     const playerStats = buildPlayerStats(pull, records, roleByName);
 
-    // §13: score compuesto, no solo la comparación campo a campo de las 4
-    // tarjetas — "¿este intento fue mejor que el anterior en conjunto?" en un
-    // solo número. bestKillDurationMs sale de los propios pulls ya traídos
-    // (priorPulls + el actual si es kill): el mejor kill visto hasta ahora de
-    // este boss+dificultad, no un dato aparte que haya que pedir.
-    let progressDeltaPct: number | null = null;
-    if (previousPull) {
-      const killDurations = [pull, ...priorPulls].filter((p) => p.wipe_pct === 0 && p.duration_ms != null).map((p) => p.duration_ms!);
-      const bestKillDurationMs = killDurations.length ? Math.min(...killDurations) : null;
-      const currentDeaths = records.filter((r) => r.died && !isExcludedStatisticalDeath(pull, r)).length;
-      const currentMechFails = evaluatedMechEvents.filter((m) => m.outcome !== 'clean').length;
-      const previousDeaths = previousRecords.filter((r) => r.died && !isExcludedStatisticalDeath(previousPull, r)).length;
-      const currentScore = progressScore(pull, currentDeaths, currentMechFails, bestKillDurationMs);
-      const previousScore = progressScore(previousPull, previousDeaths, previousMechFailCount, bestKillDurationMs);
-      progressDeltaPct = Math.round((currentScore - previousScore) * 10) / 10;
-    }
+    const currentDeaths = records.filter((record) => record.died && !isExcludedStatisticalDeath(pull, record)).length;
+    const previousDeaths = previousPull
+      ? previousRecords.filter((record) => record.died && !isExcludedStatisticalDeath(previousPull, record)).length
+      : 0;
+    const attemptComparison = previousPull && previousIncidentSummary
+      ? buildAttemptComparison({
+          previousAttemptNumber: Math.max(1, (header.attemptNumber ?? 1) - 1),
+          currentWipePct: pull.wipe_pct,
+          previousWipePct: previousPull.wipe_pct,
+          currentDeaths,
+          previousDeaths,
+          currentIncidents: incidentSummary.totalEvents,
+          previousIncidents: previousIncidentSummary.totalEvents,
+        })
+      : null;
 
     return {
       pullId,
@@ -306,14 +337,17 @@ export class PullAnalysisService {
       raidDamageSeries: pull.raid_damage_taken_series,
       callouts,
       mechanicFails,
-      groupMechanicFailCount,
+      incidentSummary,
       playerStats,
       brief: briefRow ? mapBrief(briefRow) : null,
       isFirstPullOfNight: !previousPull,
-      progressDeltaPct,
+      attemptComparison,
       mechanicCategoryBreakdown: buildMechanicCategoryBreakdown(evaluatedMechEvents),
       defensiveStatusBreakdown: buildDefensiveStatusBreakdown(records.filter((r) => !isExcludedStatisticalDeath(pull, r))),
-      progressTrend: buildProgressTrend(pull, priorPulls),
+      progressTrend:
+        pull.ninja_pull_excluded || header.attemptNumber == null
+          ? []
+          : buildProgressTrend(pull, comparisonPriorPulls.slice(0, 6), header.attemptNumber),
       wipeCall: pull.wipe_call_signals ? { confidence: pull.wipe_call_confidence ?? 0, excluded: pull.wipe_call_excluded, signals: pull.wipe_call_signals } : null,
       ninjaPull: pull.ninja_pull_signals ? { excluded: pull.ninja_pull_excluded, signals: pull.ninja_pull_signals } : null,
     };
@@ -338,18 +372,6 @@ export class PullAnalysisService {
     const result = await this.edgeFunctions.generatePullBrief(pullId, force);
     return mapBrief(result.brief as unknown as PullBriefRow);
   }
-}
-
-// §13: score = (100 - hp%) * 0.5 + max(0, duración/duración_estimada_kill) * 30
-//              - nº_muertes * 5 - nº_mecánicas_falladas * 3
-// La hoja de ruta lo deja explícito: "los pesos son un punto de partida, no
-// una ley — se pueden ajustar sin tocar el esquema". duración_estimada_kill
-// no es un dato aparte: se usa el mejor kill ya visto de este boss+dificultad
-// (null si todavía no hay ninguno — ese término del score queda en 0, no se inventa).
-function progressScore(pull: PullRow, deaths: number, mechFails: number, bestKillDurationMs: number | null): number {
-  const hpTerm = (100 - (pull.wipe_pct ?? 100)) * 0.5;
-  const durationTerm = bestKillDurationMs && pull.duration_ms ? Math.max(0, pull.duration_ms / bestKillDurationMs) * 30 : 0;
-  return hpTerm + durationTerm - deaths * 5 - mechFails * 3;
 }
 
 function buildPlayerStats(pull: PullRow, records: PlayerPullRecordRow[], roleByName: Map<string, string>): PlayerStatRow[] {
@@ -638,18 +660,20 @@ function buildDefensiveStatusBreakdown(records: PlayerPullRecordRow[]): DonutSeg
   }));
 }
 
-/** Últimos hasta-6 intentos anteriores + este, en orden cronológico (más reciente a la derecha) — reusa priorPulls, que ya viene ordenado pull_number desc. */
-function buildProgressTrend(pull: PullRow, priorPulls: PullRow[]): TrendBar[] {
+/** Intentos válidos de este report, en orden cronológico. */
+function buildProgressTrend(pull: PullRow, priorPulls: PullRow[], currentAttemptNumber: number): TrendBar[] {
   const chronological = [...priorPulls].reverse().concat(pull);
-  return chronological.map((p) => {
+  const firstAttemptNumber = Math.max(1, currentAttemptNumber - chronological.length + 1);
+  return chronological.map((p, index) => {
     const isKill = p.wipe_pct === 0;
     const progress = 100 - (p.wipe_pct ?? 100);
+    const attemptNumber = firstAttemptNumber + index;
     return {
-      label: `#${p.pull_number}`,
+      label: `#${attemptNumber}`,
       value: Math.round(progress),
       isKill,
       isCurrent: p.id === pull.id,
-      tooltip: `Intento #${p.pull_number}: ${isKill ? 'Kill' : `Wipe al ${formatPct(p.wipe_pct)}`}`,
+      tooltip: `Intento válido #${attemptNumber}: ${isKill ? 'Kill' : `Wipe al ${formatPct(p.wipe_pct)}`}`,
     };
   });
 }
@@ -657,27 +681,15 @@ function buildProgressTrend(pull: PullRow, priorPulls: PullRow[]): TrendBar[] {
 function buildMetrics(
   pull: PullRow,
   records: PlayerPullRecordRow[],
-  mechEvents: PullMechanicEventRow[],
   previousPull: PullRow | null,
   previousRecords: PlayerPullRecordRow[],
-  previousMechFailCount: number,
+  incidentSummary: ExecutionIncidentSummary,
+  previousIncidentSummary: ExecutionIncidentSummary | null,
   priorPulls: PullRow[],
   priorRecordsByPullId: Map<string, PlayerPullRecordRow[]>,
   mechanicFailurePatterns: MechanicFailurePattern[],
-  uncoveredFailedMechanicCount: number,
 ): MetricCardData[] {
   const deaths = records.filter((r) => r.died && !isExcludedStatisticalDeath(pull, r)).length;
-  // + uncoveredFailedMechanicCount: muertes reales cuya habilidad no generó
-  // un cast de boss reconocible — sin esto el número podía leer "0
-  // mecánicas falladas" con 7 muertes reales en el mismo pull (ver
-  // attributeDeaths).
-  const mechFails = mechEvents.filter((m) => m.outcome !== 'clean').length + uncoveredFailedMechanicCount;
-  // §"no estamos evaluando bien las mecánicas... no aparecen en dirección de
-  // personajes" (feedback real): cuántos de esos fallos SÍ cuentan aquí pero
-  // no tienen categoría — antes esto era invisible, ahora se explica en el
-  // propio detalle de la tarjeta en vez de dejar que el número no cuadre
-  // con "a quién dirigir" sin decir por qué.
-  const unclassifiedFailCount = mechEvents.filter((m) => m.outcome !== 'clean' && m.category == null).length;
 
   const hpCard: MetricCardData = {
     label: 'HP del boss restante',
@@ -704,21 +716,30 @@ function buildMetrics(
     iconTone: 'danger',
   };
 
-  const mechCard: MetricCardData = {
-    label: 'Mecánicas falladas',
-    value: String(mechFails),
-    delta: previousPull ? lowerIsBetterDelta(mechFails, previousMechFailCount, mechFails === 1 ? ' mecánica' : ' mecánicas', 0) : null,
+  const incidentCard: MetricCardData = {
+    label: 'Incidentes de ejecución',
+    value: String(incidentSummary.totalEvents),
+    delta:
+      previousPull && previousIncidentSummary
+        ? lowerIsBetterDelta(
+            incidentSummary.totalEvents,
+            previousIncidentSummary.totalEvents,
+            incidentSummary.totalEvents === 1 ? ' incidente' : ' incidentes',
+            0,
+          )
+        : null,
     provenance: {
       source: 'pull_mechanic_events + muertes sin cast de boss correlado',
       method:
-        "Casts del boss con outcome 'fail' o 'partial_fail' (mató a alguien, o golpeó a más raid del umbral del manifiesto) MÁS las muertes reales que no tenían un cast de boss reconocible en ±4s (agrupadas por mecánica+~2s, para no contar 7 muertes simultáneas a la misma mecánica como 7 fallos sueltos).",
+        "Instancias temporales con outcome 'fail' o 'partial_fail', más grupos de muertes sin cast correlacionado. Una instancia cuenta una vez aunque alcance a varios jugadores.",
       detail:
         [
-          uncoveredFailedMechanicCount
-            ? `${uncoveredFailedMechanicCount} de esos fallos son muertes sin un cast de boss correlado (ver "a quién dirigir" para el detalle de cada una).`
+          `Desglose que suma ${incidentSummary.totalEvents}: ${incidentSummary.personalEvents} personales · ${incidentSummary.groupEvents} colectivos · ${incidentSummary.unclassifiedEvents} sin clasificar · ${incidentSummary.uncoveredDeathEvents} muertes sin cast correlacionado.`,
+          incidentSummary.groupBreakdown.length
+            ? `Colectivos: ${incidentSummary.groupBreakdown.map((item) => `${item.label} ×${item.count}`).join(', ')}.`
             : null,
-          unclassifiedFailCount
-            ? `${unclassifiedFailCount} de esos fallos no tienen categoría confirmada en el manifiesto todavía — aparecen en "a quién dirigir" marcados "sin clasificar" (Ajustes para curarlos).`
+          incidentSummary.unclassifiedBreakdown.length
+            ? `Sin clasificar: ${incidentSummary.unclassifiedBreakdown.map((item) => `${item.label} ×${item.count}`).join(', ')}.`
             : null,
           mechanicFailurePatterns.length
             ? `Patrones repetidos (últimos ${Math.max(...mechanicFailurePatterns.map((p) => p.totalPulls))} intentos):\n${mechanicFailurePatterns
@@ -746,26 +767,23 @@ function buildMetrics(
       streakMechanic = r.death_cause.mechanicName;
     }
   }
-  const streakCard: MetricCardData = {
+  const streakCard: MetricCardData | null = maxStreak >= 2 ? {
     label: 'Racha del problema',
     // §"debería ser más descriptivo": antes el número solo se explicaba en
     // el drawer de provenance, un clic más allá — quién y a qué mecánica
     // ahora va en el propio valor de la tarjeta, visible de un vistazo.
-    value: maxStreak >= 2 ? `${maxStreak}× ${streakPlayer}` : String(maxStreak),
-    delta:
-      maxStreak >= 2
-        ? { label: streakMechanic ?? 'misma mecánica', tone: 'danger' }
-        : { label: maxStreak === 1 ? 'sin repetirse (aún)' : 'sin patrones', tone: 'neutral' },
+    value: `${maxStreak}× ${streakPlayer}`,
+    delta: { label: streakMechanic ?? 'misma mecánica', tone: 'danger' },
     provenance: {
       source: 'player_pull_records (pulls anteriores del mismo boss+dificultad)',
       method: 'Mismo jugador muriendo a la misma mecánica en pulls consecutivos, contando hacia atrás desde este pull.',
-      detail: maxStreak >= 2 ? `${streakPlayer} lleva ${maxStreak} intentos seguidos muriendo a ${streakMechanic ?? 'la misma mecánica'}.` : undefined,
+      detail: `${streakPlayer} lleva ${maxStreak} intentos válidos seguidos muriendo a ${streakMechanic ?? 'la misma mecánica'}.`,
     },
     icon: '🔥',
     iconTone: 'gold',
-  };
+  } : null;
 
-  return [hpCard, deathsCard, mechCard, streakCard];
+  return [hpCard, deathsCard, incidentCard, ...(streakCard ? [streakCard] : [])];
 }
 
 function lowerIsBetterDelta(current: number, previous: number, unitLabel: string, digits: number) {
@@ -952,17 +970,6 @@ function buildTimeline(
   return { chips: chips.map(({ ms, ...chip }) => ({ ...chip, timeMs: ms === Number.MAX_SAFE_INTEGER ? null : ms })), background };
 }
 
-
-// Categorías donde "estar en players_hit_names" es responsabilidad
-// individual del jugador (se posicionó mal / no se agrupó / no se separó /
-// le tocaba a él y no reaccionó) — NO incluye raid-damage/tankbuster/
-// debuff-stack/interrupt/healing-absorb, donde que te golpee es esperado o
-// no depende de tu posición. Sin esta lista, cualquier mecánica raid-wide
-// llenaría "a quién dirigir" de gente que hizo exactamente lo que tenía que hacer.
-// Exportado: night-player-summary.service.ts reutiliza EXACTAMENTE el mismo
-// criterio para la misma pregunta ("¿esta mecánica es responsabilidad
-// individual?") a nivel de una noche entera, no solo de un pull.
-export const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set(['avoidable-ground', 'spread', 'soak', 'personal-target']);
 
 // §"actualizar el binario de 'Mecánica' para que use este mismo conteo
 // graduado... así Fiabilidad hereda la precisión sin duplicar nada"
