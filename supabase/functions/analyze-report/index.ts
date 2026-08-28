@@ -808,11 +808,12 @@ Deno.serve(async (req: Request) => {
         // encima) y la sanación/el daño de la raid se desploman justo antes
         // (nadie sigue intentando). Solo se evalúa en wipes — un kill nunca
         // es un wipe call por definición.
-        const WIPE_CALL_CLUSTER_WINDOW_MS = 8000;
+        const WIPE_CALL_MAX_DEATH_GAP_MS = 4000; // §"si te vas a WCL puedes ver que es un wipecall y nadie se tiró defensivo" (caso real Pandokie, 2026-08-28): antes se probaba una ventana fija de 8s desde cada muerte candidata y se elegía la que cazase más gente — una ventana que arrancaba unos segundos más tarde podía cazar más muertes y dejar fuera a quien murió justo antes de que "ganase" esa ventana, aunque fuese la misma avalancha. Ahora se encadenan muertes consecutivas mientras el hueco con la anterior sea corto — sin ambigüedad de qué ventana gana (ver bestCluster más abajo).
         const WIPE_CALL_MIN_FRACTION = 0.6; // §"si somos 20 y mueren 16 en 6s" ≈ 0.8 de ejemplo — 0.6 de margen para no dejar escapar el caso real
         const WIPE_CALL_NEAR_END_MS = 15_000; // el cluster tiene que estar pegado al final del pull — un pico de muertes a mitad de pull que luego se recuperó no cuenta
         const EARLY_MASS_WIPE_MS = 10_000;
         const WIPE_CALL_CONFIDENCE_THRESHOLD = 55; // 0-100 — por debajo se guarda como "posible" visible en la UI, pero NO se auto-excluye
+        const WIPE_CALL_COLLAPSE_RATIO_THRESHOLD = 0.35; // sanación/daño de la raid por debajo de esta fracción de su media previa = "ya se ha desplomado" — mismo umbral para la señal de confianza y para decidir si una muerte temprana de la cadena es la causa o ya una víctima del desplome (ver triggerDeathCount más abajo)
         // §"aunque sea un wipe call los primeros 2-3-4 que mueren no suelen
         // ser parte de ese wipe call... es mecánica fallida seguramente, lo
         // que deriva en el wipe call" (feedback real): el cluster detecta
@@ -838,6 +839,7 @@ Deno.serve(async (req: Request) => {
             sustainedDeathFraction: number;
             unknownDeathFraction: number;
             triggerDeathsKept: number;
+            alreadyCollapsedBeforeCluster: boolean;
             wipeCallStartMs: number;
             earlyMassDeath: boolean;
           };
@@ -851,17 +853,27 @@ Deno.serve(async (req: Request) => {
             .sort((a, b) => a.timestamp - b.timestamp);
           if (deaths.length < 2) return null;
 
-          // Mayor cluster TERMINAL por ventana deslizante. Antes se elegía el
-          // mayor de todo el pull y solo después se comprobaba si estaba al
-          // final: un pico grande a mitad podía tapar un wipe call terminal
-          // algo menor y hacer que no se detectara ninguno.
-          let bestCluster: typeof deaths = [];
-          for (const start of deaths) {
-            const cluster = deaths.filter((d) => d.timestamp >= start.timestamp && d.timestamp <= start.timestamp + WIPE_CALL_CLUSTER_WINDOW_MS);
-            if (!cluster.length || fight.endTime - cluster.at(-1)!.timestamp > WIPE_CALL_NEAR_END_MS) continue;
-            if (cluster.length > bestCluster.length || (cluster.length === bestCluster.length && cluster.at(-1)!.timestamp > (bestCluster.at(-1)?.timestamp ?? 0))) {
-              bestCluster = cluster;
+          // Mayor cadena TERMINAL de muertes consecutivas con hueco corto
+          // entre ellas (ver WIPE_CALL_MAX_DEATH_GAP_MS). Antes se elegía el
+          // mayor cluster de todo el pull y solo después se comprobaba si
+          // estaba al final: un pico grande a mitad podía tapar un wipe
+          // call terminal algo menor y hacer que no se detectara ninguno —
+          // ese criterio se conserva, solo cambia cómo se agrupan las
+          // muertes candidatas.
+          const chains: typeof deaths[] = [];
+          for (const death of deaths) {
+            const lastChain = chains.at(-1);
+            const lastDeath = lastChain?.at(-1);
+            if (lastChain && lastDeath && death.timestamp - lastDeath.timestamp <= WIPE_CALL_MAX_DEATH_GAP_MS) {
+              lastChain.push(death);
+            } else {
+              chains.push([death]);
             }
+          }
+          let bestCluster: typeof deaths = [];
+          for (const chain of chains) {
+            if (chain.length < 2 || fight.endTime - chain.at(-1)!.timestamp > WIPE_CALL_NEAR_END_MS) continue;
+            if (chain.length > bestCluster.length) bestCluster = chain;
           }
           if (bestCluster.length < 2) return null;
 
@@ -882,11 +894,52 @@ Deno.serve(async (req: Request) => {
           const abilityDiversity = knownAbilities.length > 1 ? Math.min(1, (distinctAbilities - 1) / (knownAbilities.length - 1)) : 0;
           const unknownDeathFraction = bestCluster.filter((d) => d.killingAbilityGameID === 0).length / bestCluster.length;
 
-          // Las primeras muertes suelen ser la causa real. El límite explícito
-          // permite conservar toda mecánica anterior y excluir solo el pile-on.
-          // En una muerte masiva durante los primeros 10s no hay fase previa
-          // evaluable: se considera reset/wipe call desde el inicio.
-          const triggerDeathCount = earlyMassDeath ? 0 : Math.min(WIPE_CALL_TRIGGER_DEATHS, Math.max(1, Math.floor(bestCluster.length * 0.2)));
+          // §"solo si la muerte precede a la caída de sanación/daño"
+          // (criterio elegido, 2026-08-28): las primeras muertes de la
+          // cadena solo se dan por "causa real" si la raid todavía sanaba/
+          // hacía daño con normalidad justo antes de morir la primera. Si
+          // sanación o daño YA estaban desplomados en los 5s previos (p.ej.
+          // un healer que muere cuando la sanación llevaba rato cayendo —
+          // caso real Pandokie, healing ya caído desde antes de las 3:00 en
+          // WCL) esa primera muerte es una víctima más del mismo desplome,
+          // no su causa: el recorte no se aplica y el límite pasa a ser la
+          // propia primera muerte de la cadena.
+          const PRE_COLLAPSE_WINDOW_MS = 5000;
+          const preCollapseWindowStart = Math.max(fight.startTime, clusterStart - PRE_COLLAPSE_WINDOW_MS);
+          const preCollapseBaselineMs = Math.max(1, preCollapseWindowStart - fight.startTime);
+          const preCollapseSpanMs = Math.max(1, clusterStart - preCollapseWindowStart);
+          const allHealingForPreCheck = [...healingEventsByTarget.values()].flat();
+          const avgHealingBeforePreCheck =
+            (allHealingForPreCheck.filter((h) => h.timestamp < preCollapseWindowStart).reduce((s, h) => s + h.amount, 0) / preCollapseBaselineMs) * 10_000;
+          const preCollapseHealingPer10s =
+            (allHealingForPreCheck.filter((h) => h.timestamp >= preCollapseWindowStart && h.timestamp < clusterStart).reduce((s, h) => s + h.amount, 0) / preCollapseSpanMs) * 10_000;
+          const preCollapseHealingRatio = avgHealingBeforePreCheck > 0 ? preCollapseHealingPer10s / avgHealingBeforePreCheck : null;
+
+          const friendlyIdsForPreCheck = new Set(fight.friendlyPlayers);
+          const priorFriendlyDamageForPreCheck = (damageDoneEvents as ThroughputEvent[]).filter(
+            (e) => typeof e.sourceID === 'number' && friendlyIdsForPreCheck.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp < preCollapseWindowStart,
+          );
+          const avgDamageBeforePreCheck = (priorFriendlyDamageForPreCheck.reduce((s, e) => s + (e.amount ?? 0), 0) / preCollapseBaselineMs) * 10_000;
+          const preCollapseDamagePer10s =
+            ((damageDoneEvents as ThroughputEvent[])
+              .filter((e) => typeof e.sourceID === 'number' && friendlyIdsForPreCheck.has(e.sourceID) && typeof e.timestamp === 'number' && e.timestamp >= preCollapseWindowStart && e.timestamp < clusterStart)
+              .reduce((s, e) => s + (e.amount ?? 0), 0) /
+              preCollapseSpanMs) *
+            10_000;
+          const preCollapseDamageRatio = avgDamageBeforePreCheck > 0 ? preCollapseDamagePer10s / avgDamageBeforePreCheck : null;
+
+          const alreadyCollapsedBeforeCluster =
+            (preCollapseHealingRatio != null && preCollapseHealingRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD) ||
+            (preCollapseDamageRatio != null && preCollapseDamageRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD);
+
+          // Las primeras muertes suelen ser la causa real — salvo que el
+          // desplome ya viniera de antes (ver arriba). El límite explícito
+          // permite conservar toda mecánica anterior y excluir solo el
+          // pile-on. En una muerte masiva durante los primeros 10s no hay
+          // fase previa evaluable: se considera reset/wipe call desde el
+          // inicio.
+          const triggerDeathCount =
+            earlyMassDeath || alreadyCollapsedBeforeCluster ? 0 : Math.min(WIPE_CALL_TRIGGER_DEATHS, Math.max(1, Math.floor(bestCluster.length * 0.2)));
           const pileOnDeaths = bestCluster.slice(triggerDeathCount);
           const wipeCallStartTimestamp = earlyMassDeath ? fight.startTime : pileOnDeaths[0].timestamp;
 
@@ -932,8 +985,8 @@ Deno.serve(async (req: Request) => {
 
           const evidenceCount = [
             abilityDiversity >= 0.2 || unknownDeathFraction >= 0.3,
-            healingCollapseRatio != null && healingCollapseRatio <= 0.35,
-            damageCollapseRatio != null && damageCollapseRatio <= 0.35,
+            healingCollapseRatio != null && healingCollapseRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD,
+            damageCollapseRatio != null && damageCollapseRatio <= WIPE_CALL_COLLAPSE_RATIO_THRESHOLD,
             sustainedDeathFraction >= 0.5,
           ].filter(Boolean).length;
           if (!earlyMassDeath && evidenceCount < 2) return null;
@@ -946,10 +999,11 @@ Deno.serve(async (req: Request) => {
           const confidence = earlyMassDeath ? Math.max(85, calculatedConfidence) : calculatedConfidence;
 
           return {
-            // El cluster corto sirve para DETECTAR el call; una vez fijado el
+            // La cadena corta sirve para DETECTAR el call; una vez fijado el
             // límite, cualquier muerte posterior pertenece al cierre del try.
-            // Así un rezagado que cae >8 s después no reaparece como fallo
-            // mecánico, mientras todo lo anterior al límite sigue evaluándose.
+            // Así un rezagado que cae varios segundos después no reaparece
+            // como fallo mecánico, mientras todo lo anterior al límite sigue
+            // evaluándose.
             clusterActorIds: new Set(deaths.filter((d) => d.timestamp >= wipeCallStartTimestamp).map((d) => d.actorId)),
             confidence,
             signals: {
@@ -967,6 +1021,13 @@ Deno.serve(async (req: Request) => {
               // "ver evidencia" del banner para que quede claro que no TODO
               // el cluster se excluyó.
               triggerDeathsKept: triggerDeathCount,
+              // §"solo si la muerte precede a la caída de sanación/daño":
+              // true = la sanación o el daño de la raid YA estaban
+              // desplomados antes de la primera muerte de la cadena, así
+              // que triggerDeathsKept se forzó a 0 (ninguna muerte de la
+              // cadena se dio por "causa real") — visible en el banner para
+              // explicar por qué no hay muertes "protegidas" en este caso.
+              alreadyCollapsedBeforeCluster,
               wipeCallStartMs: Math.max(0, wipeCallStartTimestamp - fight.startTime),
               earlyMassDeath,
             },
