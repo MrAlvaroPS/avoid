@@ -34,6 +34,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
+  flex-wrap: wrap;
 }
 .avatar {
   width: 64px;
@@ -99,19 +100,26 @@
 // .page-header — ahora vive junto al botón/enlace de Discord dentro de este
 // wrapper, para que los tres (copiar / enviar / abrir canal) se agrupen y
 // envuelvan juntos en pantallas estrechas sin descuadrar el resto de la cabecera.
+// §"ordena los botones de la cabecera del dosier, están muy caóticos y
+// desordenados" (feedback real, 2026-08-28): antes eran anchos ad-hoc que
+// envolvían en fila de forma irregular (el link de Discord y el error
+// colgando junto al botón). Ahora es una columna fija de acciones del mismo
+// ancho, ordenadas por qué tan a menudo se usan — enviar (la más habitual),
+// infografía, copiar manual — con el enlace al canal y el error como una
+// línea secundaria debajo, no compitiendo con los botones.
 .header-actions {
   flex-shrink: 0;
   align-self: flex-start;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  max-width: 220px;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 216px;
 }
 
 .copy-btn {
   flex-shrink: 0;
+  width: 100%;
   padding: 8px 14px;
   background: var(--surface-2);
   border: 1px solid var(--border-bright);
@@ -119,6 +127,7 @@
   color: var(--text);
   font-size: 12.5px;
   font-weight: 600;
+  text-align: center;
   cursor: pointer;
   white-space: nowrap;
 
@@ -131,6 +140,14 @@
   }
 }
 
+.header-actions-footnote {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 2px;
+}
+
 .discord-send-btn {
   background: var(--accent-solid);
   border-color: transparent;
@@ -138,6 +155,16 @@
 
   &:hover:not(:disabled) {
     filter: brightness(1.08);
+  }
+}
+
+.infographic-open-btn {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent-solid), #65437f);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+
+  &:hover:not(:disabled) {
+    background: linear-gradient(135deg, #9a6fba, #714b8d);
   }
 }
 
@@ -154,7 +181,6 @@
 }
 
 .discord-send-error {
-  flex-basis: 100%;
   font-size: 11px;
   color: var(--danger);
   text-align: right;

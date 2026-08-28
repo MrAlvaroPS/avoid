@@ -6,7 +6,7 @@
 import { Component, computed, effect, HostListener, inject, input, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { NightPlayerSummaryService, PULL_SCORE_FAIL_PENALTY, type NightMechanicFailRow, type NightPlayerSummary, type NightPullSummary, type PullScoreBreakdown } from '../../core/night-player-summary.service';
+import { DEFENSIVE_MISS_PENALTY, DEFENSIVE_MISS_PENALTY_NON_LETHAL, NightPlayerSummaryService, PULL_SCORE_FAIL_PENALTY, type NightMechanicFailRow, type NightPlayerSummary, type NightPullSummary, type PullScoreBreakdown } from '../../core/night-player-summary.service';
 import type { PlayerReliability, ReliabilityBreakdown } from '../../core/reliability.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { mapBrief } from '../../core/pull-analysis.service';
@@ -20,6 +20,7 @@ import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-tex
 import type { DeathCause, MechanicCategory } from '../../shared/models/domain';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
 import { errorMessage } from '../../shared/error-message.util';
+import { NightPlayerInfographicComponent } from './night-player-infographic.component';
 
 // §"preparar la vinculación de ese ID... con el dosier de ese raider, para
 // eventualmente automatizar enviar la infografía" (feedback real,
@@ -52,7 +53,7 @@ interface ExplanationContent {
 @Component({
   selector: 'app-night-player-dossier',
   standalone: true,
-  imports: [DatePipe, DecimalPipe, RouterLink, RoleIconComponent, WowheadLinkComponent, EmptyPanelComponent, MechanicInfoIconComponent, LlmAnalysisCardComponent],
+  imports: [DatePipe, DecimalPipe, RouterLink, RoleIconComponent, WowheadLinkComponent, EmptyPanelComponent, MechanicInfoIconComponent, LlmAnalysisCardComponent, NightPlayerInfographicComponent],
   templateUrl: './night-player-dossier.component.html',
   styleUrl: './night-player-dossier.component.scss',
 })
@@ -86,6 +87,8 @@ export class NightPlayerDossierComponent {
   }
 
   copyStatus = signal<'idle' | 'copied' | 'error'>('idle');
+  infographicOpen = signal(false);
+  refreshingInfographic = signal(false);
 
   // §"preparar la vinculación de ese ID... con el dosier de ese raider, para
   // eventualmente automatizar enviar la infografía" (feedback real,
@@ -191,19 +194,46 @@ export class NightPlayerDossierComponent {
     );
     if (!b.died) {
       lines.push('Consumibles: 100% — no murió, se aprueba automático (igual que con piedra/poción, solo importa si mueres).');
+      // §"si ponemos que ha empeorado en defensivo bajo presión, ¿cómo tiene
+      // un 90%?" (feedback real, 2026-08-29): antes esta rama nunca
+      // penalizaba nada — sobrevivir una presión sin lanzar ningún
+      // defensivo salía gratis en la puntuación aunque
+      // pressurePullsWithCast/pressurePulls se hundiera.
+      lines.push(
+        b.defensiveMissKind === 'pressure'
+          ? `⚠ Presión detectada (daño evitable anómalo) con el catálogo libre y ningún defensivo lanzado en todo el intento: ×${this.formatPct(DEFENSIVE_MISS_PENALTY_NON_LETHAL * 100)} sobre toda la puntuación.`
+          : 'Sin presión detectada que exigiera un defensivo que no lanzara.',
+      );
     } else {
       lines.push(`Consumibles: ${this.formatPct(b.consumableScore * 100)} — murió ${b.usedConsumable ? 'con' : 'sin'} piedra de brujo o poción usada en el intento.`);
       if (b.deathTimeMs != null && durationMs) {
         lines.push(`Murió a los ${this.formatDuration(b.deathTimeMs)} de ${this.formatDuration(durationMs)} (${this.formatPct(b.deathMultiplier * 100)} del intento) — penaliza toda la puntuación, no solo el punto de consumibles.`);
       }
+      lines.push(
+        b.defensiveMissKind === 'death'
+          ? `⚠ Defensivo disponible y sin usar: ×${this.formatPct(DEFENSIVE_MISS_PENALTY * 100)} adicional sobre toda la puntuación del intento — tenía un botón de su catálogo libre en ese momento y no lo lanzó.`
+          : 'Sin defensivo disponible marcado como sin usar en el momento de morir (o no tenía ninguno libre en ese instante).',
+      );
     }
-    lines.push('Fórmula: (mecánica×70% + consumibles×30%) × % del intento vivo.');
+    lines.push(
+      `Fórmula: (mecánica×70% + consumibles×30%) × % del intento vivo${
+        b.defensiveMissKind === 'death'
+          ? ` × ${this.formatPct(DEFENSIVE_MISS_PENALTY * 100)} (defensivo disponible sin usar al morir)`
+          : b.defensiveMissKind === 'pressure'
+            ? ` × ${this.formatPct(DEFENSIVE_MISS_PENALTY_NON_LETHAL * 100)} (presión sobrevivida sin defensivo)`
+            : ''
+      }.`,
+    );
     const fails = mechanicFails.filter((f) => f.pullId === pull.pullId);
     return { title: `Puntuación del pull — ${this.formatPct(pullScore * 100)}`, lines, mechanics: fails.length ? fails : undefined };
   }
 
   /** Mismo texto que antes tenía el tooltip de "puntuación de la noche" — el modal añade el desglose pull a pull, que antes solo se veía pasando el ratón por cada fila una a una. */
-  nightScoreExplanation(nightScore: number, pulls: NightPullSummary[]): ExplanationContent {
+  nightScoreExplanation(
+    nightScore: number,
+    pulls: NightPullSummary[],
+    consistency: NightPlayerSummary['nightDefensiveConsistency'],
+  ): ExplanationContent {
     const scoredCount = pulls.filter((p) => p.pullScore != null).length;
     const excludedCount = pulls.length - scoredCount;
     return {
@@ -213,6 +243,14 @@ export class NightPlayerDossierComponent {
         excludedCount
           ? `${scoredCount} pull${scoredCount === 1 ? '' : 's'} evaluados esta noche (${excludedCount} más excluido${excludedCount === 1 ? '' : 's'} — ninja pull o wipe call temprano, no cuentan).`
           : `${scoredCount} pull${scoredCount === 1 ? '' : 's'} evaluados esta noche.`,
+        // §"no puedes tener una ejecución buenísima si no has usado NINGÚN
+        // defensivo en algún pull" (feedback real, 2026-08-29): la media de
+        // arriba ya diluye un pull sin defensivo si el resto fue limpio —
+        // este factor aparte castiga la noche completa y escala con cuántos
+        // pulls distintos lo hicieron, para que no se pierda en el promedio.
+        consistency.missPullCount === 0
+          ? 'Consistencia defensiva: ×100% — ningún pull con un defensivo libre y sin usar esta noche.'
+          : `Consistencia defensiva: ×${this.formatPct(consistency.multiplier * 100)} — ${consistency.missPullCount} pull${consistency.missPullCount === 1 ? '' : 's'} distinto${consistency.missPullCount === 1 ? '' : 's'} con un defensivo libre y sin usar (muerte o presión); de ${this.formatPct((consistency.rawScore ?? 0) * 100)} media de pulls a ${this.formatPct(nightScore * 100)} tras aplicarlo.`,
       ],
       // §"no debería contar para ninguna estadística ni métrica" (feedback
       // real, 2026-08-27): los excluidos se listan igual (contexto de qué
@@ -275,6 +313,30 @@ export class NightPlayerDossierComponent {
     }
   }
 
+  /**
+   * La lámina se abre sobre el resumen ya cargado y persistido en las tablas
+   * de la noche; no llama a IA ni recalcula al abrir. Este botón es la salida
+   * explícita para releer Supabase si el report, una exclusión o el manifiesto
+   * han cambiado desde que se abrió el dosier. §"tiene sentido que actualice
+   * una única vez cuando termina la raid" (feedback real, 2026-08-29):
+   * summaryService.load() ahora sirve un snapshot cacheado por defecto — este
+   * botón es la vía explícita para saltárselo (forceRefresh) y dejar el
+   * caché puesto al día con el resultado fresco.
+   */
+  async refreshInfographic(): Promise<void> {
+    if (this.refreshingInfographic()) return;
+    this.refreshingInfographic.set(true);
+    this.error.set(null);
+    try {
+      this.data.set(await this.summaryService.load(this.reportCode(), this.playerName(), true, true));
+    } catch (err) {
+      this.error.set(errorMessage(err));
+      this.infographicOpen.set(false);
+    } finally {
+      this.refreshingInfographic.set(false);
+    }
+  }
+
   // §"limpiar todo eso que pone 'sin clasificar' y que de hecho, esté
   // clasificado" (feedback real): rootCause y categoría son dos ejes
   // distintos a propósito — rootCause 'unclassified' es honesto sobre no
@@ -297,7 +359,13 @@ export class NightPlayerDossierComponent {
     this.briefError.set(null);
     try {
       const res = await this.edgeFunctions.generateNightPlayerBrief(d.reportCode, d.playerName);
-      this.data.set({ ...d, brief: mapBrief(res.brief) });
+      const brief = mapBrief(res.brief);
+      this.data.set({ ...d, brief });
+      // §"tiene sentido que actualice... no lo dejes fijo ni permanente"
+      // (feedback real, 2026-08-29): esta mutación no pasa por
+      // summaryService.load() (el único sitio que recalcula y cachea) — sin
+      // esto, el snapshot cacheado se quedaría con el brief viejo.
+      this.summaryService.updateCachedBrief(d.reportCode, d.playerName, brief);
     } catch (err) {
       this.briefError.set(errorMessage(err));
     } finally {
@@ -309,6 +377,7 @@ export class NightPlayerDossierComponent {
     const d = this.data();
     if (!d) return;
     this.data.set({ ...d, brief });
+    this.summaryService.updateCachedBrief(d.reportCode, d.playerName, brief);
   }
 
   async copySummary(): Promise<void> {

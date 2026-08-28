@@ -35,17 +35,24 @@
         </div>
       </div>
       <div class="header-actions">
-        <button type="button" class="copy-btn" (click)="copySummary()">
-          {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord →' }}
-        </button>
         @if (discordChannelUrl(); as channelUrl) {
           <button type="button" class="copy-btn discord-send-btn" [disabled]="sendToDiscordStatus() === 'sending'" (click)="sendSummaryToDiscord()">
             {{ sendToDiscordStatus() === 'sending' ? 'Enviando…' : sendToDiscordStatus() === 'sent' ? '✓ Enviado' : 'Enviar a su canal →' }}
           </button>
-          <a [href]="channelUrl" target="_blank" rel="noopener" class="discord-channel-link" title="Abrir el canal privado de este raider en Discord">🔗 Canal</a>
-          @if (sendToDiscordError(); as e) {
-            <span class="discord-send-error">{{ e }}</span>
-          }
+        }
+        <button type="button" class="copy-btn infographic-open-btn" (click)="infographicOpen.set(true)">
+          Infografía del jugador · 4.6K
+        </button>
+        <button type="button" class="copy-btn" (click)="copySummary()">
+          {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord →' }}
+        </button>
+        @if (discordChannelUrl(); as channelUrl) {
+          <div class="header-actions-footnote">
+            <a [href]="channelUrl" target="_blank" rel="noopener" class="discord-channel-link" title="Abrir el canal privado de este raider en Discord">🔗 Ver canal</a>
+            @if (sendToDiscordError(); as e) {
+              <span class="discord-send-error">{{ e }}</span>
+            }
+          </div>
         }
       </div>
     </header>
@@ -78,11 +85,11 @@
       @if (d.nightScore != null) {
         <div class="score-card">
           <span class="eyebrow">Ejecución de esta noche</span>
-          <button type="button" class="score-trigger" (click)="openExplanation(nightScoreExplanation(d.nightScore, d.pulls))">
+          <button type="button" class="score-trigger" (click)="openExplanation(nightScoreExplanation(d.nightScore, d.pulls, d.nightDefensiveConsistency))">
             <span class="stat-value tabular" [class]="'tone-' + nightScoreTone(d.nightScore)">{{ formatPct(d.nightScore * 100) }}</span>
             <span class="stat-label">puntuación de la noche</span>
           </button>
-          <p class="score-card-note">Mecánica (70%) + consumibles al morir (30%) × cuánto sobreviviste. Por pull, ponderada por duración.</p>
+          <p class="score-card-note">Mecánica (70%) + consumibles al morir (30%) × cuánto sobreviviste, por pull ponderada por duración — y ×{{ formatPct(d.nightDefensiveConsistency.multiplier * 100) }} si hubo pulls sin ningún defensivo disponible usado.</p>
         </div>
       }
       @if (d.reliability || d.nightReliability) {
@@ -183,7 +190,15 @@
                    morir al final); hadWipeCall es solo informativo, no
                    atenúa la fila ni quita la puntuación. -->
               <tr [class.row-excluded]="p.excludedFromStats">
-                <td class="death-col">{{ p.died ? '💀' : '' }}</td>
+                <td class="death-col">
+                  @if (p.died) {
+                    <span [title]="p.scoreBreakdown.defensiveMissKind === 'death' ? 'Murió con un defensivo de su catálogo libre y sin usar — penalización adicional en la puntuación.' : 'Muerte evaluable'">
+                      {{ p.scoreBreakdown.defensiveMissKind === 'death' ? '💀⚠' : '💀' }}
+                    </span>
+                  } @else if (p.scoreBreakdown.defensiveMissKind === 'pressure') {
+                    <span title="Sobrevivió una presión (daño evitable anómalo) con el catálogo libre y no lanzó ningún defensivo en todo el intento — penalización adicional en la puntuación.">⚠</span>
+                  }
+                </td>
                 <td class="cell-boss">
                   <a [routerLink]="['/boss', p.bossId, p.difficulty]">{{ p.bossName }}</a>
                   <span class="difficulty-tag">{{ p.difficulty }}</span>
@@ -450,5 +465,14 @@
         }
       </div>
     </div>
+  }
+
+  @if (infographicOpen()) {
+    <app-night-player-infographic
+      [summary]="d"
+      [refreshing]="refreshingInfographic()"
+      (refreshRequested)="refreshInfographic()"
+      (closed)="infographicOpen.set(false)"
+    />
   }
 }

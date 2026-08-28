@@ -10,8 +10,13 @@ import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { ReliabilityService, type PlayerReliability, type ReliabilityBreakdown, type ReliabilityInputRow } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
+import { NightPlayerSummaryCacheService } from './night-player-summary-cache.service';
 import { PULL_SCORE_FAIL_PENALTY, mapBrief, mechanicScoreFor } from './pull-analysis.service';
-import { loadMechanicNotesByName } from './mechanic-notes';
+import {
+  loadMechanicCoachingByKey,
+  mechanicCoachingKey,
+  type MechanicCoaching,
+} from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
 import type { DeathCause, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
 import type { LlmPullAnalysis } from '../shared/models/ui';
@@ -76,11 +81,18 @@ export interface PullScoreBreakdown {
   /** 1.0 si no murió; si murió, fracción del pull que estuvo vivo (0-1). */
   deathMultiplier: number;
   deathTimeMs: number | null;
+  /** §"el hecho de no usar un defensivo debería ser penalización grande — siempre hay un motivo para usarlo" (feedback real, 2026-08-29): true si murió con un defensivo real de su catálogo libre y no lo lanzó (defensiveMissKind='death'), O si sobrevivió un pull de presión con el catálogo libre y no lanzó nada (defensiveMissKind='pressure'). */
+  defensiveMissed: boolean;
+  /** Multiplicador aplicado sobre toda la puntuación del intento cuando defensiveMissed=true — DEFENSIVE_MISS_PENALTY si murió, DEFENSIVE_MISS_PENALTY_NON_LETHAL si sobrevivió. 1 si no aplica. */
+  defensiveMissMultiplier: number;
+  defensiveMissKind: 'death' | 'pressure' | null;
 }
 
 export interface NightDeathRow {
   pullId: string;
+  bossId: string;
   bossName: string;
+  difficulty: string;
   pullNumber: number;
   timeMs: number;
   mechanicName: string | null;
@@ -99,11 +111,25 @@ export interface NightDeathRow {
   usedHealthPotionInPull: boolean;
   /** §"poner una 'I' de información junto a la mecánica con la nota descriptiva que haya traído la IA" (feedback real): solo la nota, cruzada por nombre — null si esta mecánica no tiene ai_classification en el manifiesto. */
   aiNote: string | null;
+  /** Resolución revisada en Ajustes para este boss+dificultad exactos. */
+  resolution: string | null;
+  /** Perfil temporal del daño final calculado sobre eventos reales de WCL. */
+  damageProfile: DeathCause['damageProfile'];
+  burstHealthPct: number | null;
+  killingBlowAmount: number | null;
+  /** Ventana de 5 s anterior a la muerte; null si WCL no aportó eventos. */
+  damageWindowTotal: number | null;
+  damageWindowHits: number | null;
+  /** Ventana de 6 s anterior a la muerte; null si no existe muestra temporal. */
+  healingWindowTotal: number | null;
+  healingWindowHits: number | null;
 }
 
 export interface NightMechanicFailRow {
   pullId: string;
+  bossId: string;
   bossName: string;
+  difficulty: string;
   pullNumber: number;
   mechanicName: string;
   mechanicId: number;
@@ -115,6 +141,8 @@ export interface NightMechanicFailRow {
   /** §"muestra el percentil + fuente" (feedback real, 2026-08-27): de dónde salió el umbral que marcó este fallo — ver resolveSeverity en _shared/mechanic-severity.ts. */
   comparisonSource: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
   comparisonPercentile: number | null;
+  /** Resolución revisada en Ajustes para este boss+dificultad exactos. */
+  resolution: string | null;
 }
 
 // §"informe de mejora por jugador... wipefest para mejorar en el boss
@@ -125,7 +153,9 @@ export interface NightMechanicFailRow {
 // datos que había — ver analyze-report/index.ts, InterruptEvent.sourceID.
 export interface NightInterruptRow {
   pullId: string;
+  bossId: string;
   bossName: string;
+  difficulty: string;
   pullNumber: number;
   mechanicName: string;
   mechanicId: number;
@@ -158,6 +188,92 @@ export interface NightGearSnapshot {
   gemCount: number;
 }
 
+export interface NightDefensiveCast {
+  pullId: string;
+  pullNumber: number;
+  bossName: string;
+  difficulty: string;
+  spellId: number;
+  spellName: string;
+  /** Milisegundos desde el inicio del pull, tal como los registra WCL. */
+  timeMs: number;
+}
+
+export interface NightDefensiveSpellSummary {
+  spellId: number;
+  spellName: string;
+  castCount: number;
+  pullCount: number;
+  casts: NightDefensiveCast[];
+}
+
+export interface NightDefensiveSummary {
+  totalCasts: number;
+  pullsWithCasts: number;
+  /** Pulls con presión verificable: daño evitable anómalo o muerte con catálogo defensivo. */
+  pressurePulls: number;
+  /** De esos pulls con presión, cuántos tuvieron al menos un cast defensivo antes del wipe call. */
+  pressurePullsWithCast: number;
+  deathsWithDefensiveAvailable: number;
+  spells: NightDefensiveSpellSummary[];
+}
+
+export interface NightExecutionSnapshot {
+  evaluatedPulls: number;
+  cleanPulls: number;
+  cleanPullRate: number | null;
+  /** Instancias avoidable-ground/spread en las que seguía vivo y podía responder. */
+  avoidableEligible: number;
+  avoidableFailed: number;
+  avoidableSucceeded: number;
+  avoidableSuccessRate: number | null;
+  /** Fallos individuales no letales + muertes de responsabilidad individual verificable. */
+  actionableIncidents: number;
+  actionableIncidentRatePer10: number | null;
+  deathRatePer10: number | null;
+  emergencyConsumableOpportunities: number;
+  emergencyConsumableUses: number;
+  emergencyConsumableUseRate: number | null;
+}
+
+export type NightEvolutionDirection = 'improved' | 'worsened' | 'stable';
+
+export interface NightEvolutionMetric {
+  key: 'execution' | 'clean-pulls' | 'avoidable-success' | 'personal-incidents' | 'deaths' | 'defensive-response' | 'consumables';
+  label: string;
+  current: number;
+  previous: number;
+  delta: number;
+  direction: NightEvolutionDirection;
+  unit: 'percent' | 'per10';
+  /** Texto exacto del denominador para que el cambio pueda auditarse. */
+  evidence: string;
+}
+
+export interface NightEvolutionMechanic {
+  bossId: string;
+  bossName: string;
+  difficulty: string;
+  mechanicId: number;
+  mechanicName: string;
+  previousCount: number;
+  currentCount: number;
+  previousPulls: number;
+  currentPulls: number;
+  direction: Exclude<NightEvolutionDirection, 'stable'>;
+  resolution: string | null;
+}
+
+export interface NightEvolution {
+  previousReportCode: string;
+  previousReportTitle: string;
+  previousReportDate: string;
+  currentEvaluatedPulls: number;
+  previousEvaluatedPulls: number;
+  metrics: NightEvolutionMetric[];
+  mechanics: NightEvolutionMechanic[];
+}
+
 export interface NightPlayerSummary {
   playerName: string;
   reportCode: string;
@@ -168,8 +284,15 @@ export interface NightPlayerSummary {
   /** §"fiabilidad debería tener 2 valores: 60 días y de la noche" (feedback real): misma fórmula, acotada a los pulls de ESTE report_code. sampleSize=0 = sin ningún pull evaluable esa noche (no debería pasar si llegó hasta aquí, pero por si acaso). */
   nightReliability: (ReliabilityBreakdown & { sampleSize: number }) | null;
   pulls: NightPullSummary[];
-  /** §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27): media de pullScore ponderada por duración de pull — null solo si pulls está vacío (no debería pasar si llegó hasta aquí). */
+  /** §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27): media de pullScore ponderada por duración de pull, YA con nightDefensiveConsistency.multiplier aplicado — null solo si pulls está vacío (no debería pasar si llegó hasta aquí). */
   nightScore: number | null;
+  /** §"debería escalar cuanto más pulls sin nada usado — no puedes tener una ejecución buenísima si no has usado NINGÚN defensivo en algún pull" (feedback real, 2026-08-29): la media ponderada por duración diluye un pull sin ningún cast si el resto de la noche fue limpia — este factor castiga la NOCHE completa, no el pull, y escala con cuántos pulls distintos tuvieron un defensivo libre sin usar (muerte o presión, cualquiera de los dos cuenta igual aquí — la severidad por tipo ya vive en el multiplicador de cada pull). */
+  nightDefensiveConsistency: {
+    missPullCount: number;
+    multiplier: number;
+    /** nightScore antes de aplicar multiplier — para poder explicar "de X% a Y%" en el tooltip. */
+    rawScore: number | null;
+  };
   totalDeaths: number;
   totalMechanicFails: number;
   deaths: NightDeathRow[];
@@ -177,6 +300,12 @@ export interface NightPlayerSummary {
   interrupts: NightInterruptRow[];
   repeatedPatterns: NightRepeatedPattern[];
   gearSnapshot: NightGearSnapshot | null;
+  /** Preparación al entrar a raid; evita penalizar un objeto equipado a mitad de noche. */
+  startingPreparation: NightGearSnapshot | null;
+  defensiveSummary: NightDefensiveSummary;
+  execution: NightExecutionSnapshot;
+  /** Comparación determinista con la noche anterior del jugador, si existe. */
+  evolution: NightEvolution | null;
   battleNetUrl: string | null;
   raiderIoUrl: string | null;
   /** §"meter en el dosier de un jugador... la consulta de IA" (feedback real): cacheado desde night_player_briefs, null si nunca se ha generado. */
@@ -193,6 +322,15 @@ const REGION = 'eu';
 /** Re-exportado tal cual (ahora vive en pull-analysis.service.ts, ver el comentario ahí — reliability.service.ts también lo consume desde allí y no puede importarlo de aquí sin crear un ciclo) para no tocar el import existente en night-player-dossier.component.ts. */
 export { PULL_SCORE_FAIL_PENALTY } from './pull-analysis.service';
 const FAIL_PENALTY = PULL_SCORE_FAIL_PENALTY;
+
+/** §"el hecho de no usar un defensivo debería ser penalización grande — siempre hay un motivo para usarlo" (feedback real, 2026-08-29): corta la puntuación del intento a la mitad, encima de mecánica/consumibles/deathMultiplier — no sustituye al resto de la fórmula, se apila sobre ella. Mismo dato verificado (status==='available_unused') que ya usa Fiabilidad para su eje defensiva; aquí se aplica directo al pull en vez de a un promedio de 60 días. */
+export const DEFENSIVE_MISS_PENALTY = 0.5;
+/** Pull de presión (daño evitable anómalo) sobrevivido sin ningún cast defensivo, sin llegar a morir — señal real pero menos concluyente que morir con el botón libre en la mano, así que pesa menos que DEFENSIVE_MISS_PENALTY. */
+export const DEFENSIVE_MISS_PENALTY_NON_LETHAL = 0.75;
+/** §"debería escalar cuanto más pulls sin nada usado" (feedback real, 2026-08-29): −8 puntos porcentuales sobre nightScore por cada pull distinto (muerte o presión) con un defensivo libre y sin usar esa noche — 1 ya se nota, varios se acumulan. */
+export const NIGHT_DEFENSIVE_ESCALATION_STEP = 0.08;
+/** Suelo del factor de consistencia defensiva: por muchos pulls sin defensivo que acumule, este factor solo no baja de aquí (los multiplicadores por pull ya hacen su parte además de este). */
+export const NIGHT_DEFENSIVE_ESCALATION_FLOOR = 0.5;
 
 const MECHANIC_EVENT_FIELDS = 'pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms, player_hit_details, comparison_source, comparison_percentile';
 
@@ -251,8 +389,33 @@ export class NightPlayerSummaryService {
   private supabase = inject(SupabaseService);
   private reliability = inject(ReliabilityService);
   private wowauditRoster = inject(WowauditRosterService);
+  private summaryCache = inject(NightPlayerSummaryCacheService);
 
-  async load(reportCode: string, playerName: string): Promise<NightPlayerSummary> {
+  /**
+   * §"no todos los días tenemos raid... tiene sentido que actualice una
+   * única vez cuando termina la raid" (feedback real, 2026-08-29): antes de
+   * recalcular todo (fiabilidad de 60 días, mecánicas de la noche, y la
+   * recursión de Evolución que repite todo esto para la noche anterior),
+   * comprueba si ya hay un snapshot guardado con el mismo fingerprint que
+   * Roster (último pull, último pull corregido, último report, roster) — si
+   * nada de eso cambió desde que se guardó, el resultado es idéntico y se
+   * devuelve tal cual, sin tocar Supabase. `forceRefresh` (botón
+   * "Actualizar" del dosier) se salta la lectura de caché pero SIGUE
+   * escribiendo el resultado fresco al final, para que la próxima visita
+   * normal ya lo encuentre.
+   */
+  async load(
+    reportCode: string,
+    playerName: string,
+    includeEvolution = true,
+    forceRefresh = false,
+  ): Promise<NightPlayerSummary> {
+    const fingerprint = await this.summaryCache.fingerprint().catch(() => null);
+    if (!forceRefresh && fingerprint) {
+      const cached = this.summaryCache.read(reportCode, playerName);
+      if (cached && cached.fingerprint === fingerprint) return cached.summary;
+    }
+
     const client = this.supabase.client;
 
     const [{ data: reportRow }, { data: pullsData, error: pullsErr }, { data: encounters }] = await Promise.all([
@@ -266,7 +429,7 @@ export class NightPlayerSummaryService {
     const allPulls = (pullsData ?? []) as (PullRowLite & { fight_id: number })[];
     const pullIds = allPulls.map((p) => p.id);
 
-    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, { data: interruptEventsData, error: interruptErr }, roster, reliabilityList, notesByMechanicName, { data: briefRow }, reliabilityInputRows] = await Promise.all([
+    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, { data: interruptEventsData, error: interruptErr }, roster, reliabilityEntry, coachingByMechanicKey, { data: briefRow }, reliabilityInputRows, nightReliability] = await Promise.all([
       pullIds.length
         ? client.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName)
         : Promise.resolve({ data: [] as PlayerPullRecordRow[], error: null }),
@@ -277,8 +440,16 @@ export class NightPlayerSummaryService {
         ? loadPlayerInterrupts(client, pullIds, playerName)
         : Promise.resolve({ data: [] as InterruptEventRowLite[], error: null }),
       this.wowauditRoster.listRoster().catch(() => []),
-      this.reliability.listPlayerReliability().catch(() => []),
-      loadMechanicNotesByName(client, allPulls.map((p) => p.boss_id)).catch(() => new Map<string, string>()),
+      // §rendimiento (2026-08-29): "el dosier tarda muchísimo" (feedback
+      // real) — antes listPlayerReliability() calculaba la fiabilidad de
+      // TODA la guild (60 días + su evidencia completa: player_pull_records/
+      // pulls/known_raid_bosses de todos los raiders) solo para quedarse con
+      // .find(playerName). getPlayerReliability sale ya filtrado por
+      // jugador en el propio SQL, misma fórmula (ver reliability.service.ts).
+      this.reliability.getPlayerReliability(playerName).catch(() => null),
+      loadMechanicCoachingByKey(client, allPulls.map((p) => p.boss_id)).catch(
+        () => new Map<string, MechanicCoaching>(),
+      ),
       client.from('night_player_briefs').select('*').eq('report_code', reportCode).eq('player_name', playerName).maybeSingle(),
       // §"consistente... contemplar muchas posibilidades distintas"
       // (feedback real, 2026-08-28): MISMAS filas que ya usa Fiabilidad
@@ -287,8 +458,11 @@ export class NightPlayerSummaryService {
       // mechanicScoreFor en vez de re-derivar el ratio con su propia
       // lógica, así los dos sistemas nunca pueden divergir en "Mecánica".
       this.reliability.getPlayerPullReliabilityInputsForReport(reportCode, playerName).catch(() => []),
+      // §rendimiento (2026-08-29): antes se esperaba SECUENCIALMENTE después
+      // de este Promise.all sin motivo — no depende de nada de aquí, solo de
+      // reportCode/playerName, así que corre en paralelo con todo lo demás.
+      this.reliability.getNightReliability(reportCode, playerName).catch(() => null),
     ]);
-    const nightReliability = await this.reliability.getNightReliability(reportCode, playerName).catch(() => null);
     const reliabilityInputByPullId = new Map(reliabilityInputRows.map((r) => [r.pull_id, r]));
     if (recordsErr) throw recordsErr;
     if (mechErr) throw mechErr;
@@ -297,6 +471,15 @@ export class NightPlayerSummaryService {
     const records = (recordsData ?? []) as PlayerPullRecordRow[];
     const recordByPullId = new Map(records.map((r) => [r.pull_id, r]));
     const pullById = new Map(allPulls.map((p) => [p.id, p]));
+    const coachingFor = (
+      pull: Pick<PullRowLite, 'boss_id' | 'difficulty'>,
+      mechanicName: string | null | undefined,
+    ): MechanicCoaching =>
+      mechanicName
+        ? (coachingByMechanicKey.get(
+            mechanicCoachingKey(pull.boss_id, pull.difficulty, mechanicName),
+          ) ?? { note: null, resolution: null })
+        : { note: null, resolution: null };
     const bossOrder = new Map<string, number>();
     for (const pull of allPulls) {
       if (!bossOrder.has(pull.boss_id)) bossOrder.set(pull.boss_id, bossOrder.size);
@@ -367,12 +550,15 @@ export class NightPlayerSummaryService {
       .map((r) => {
         const pull = pullById.get(r.pull_id)!;
         const dc = r.death_cause!;
+        const coaching = coachingFor(pull, dc.mechanicName);
         const isWipeCall = r.wipe_call_cluster && pull.wipe_call_excluded;
         const isNinjaPull = pull.ninja_pull_excluded;
         const excludedFromStatistics = isDeathExcludedFromStatistics(pull as PullRow, r);
         return {
           pullId: r.pull_id,
+          bossId: pull.boss_id,
           bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
+          difficulty: pull.difficulty,
           pullNumber: pull.pull_number,
           timeMs: dc.timeMs,
           // §"unknown ability pon: unknown cause - WC" (feedback real):
@@ -391,7 +577,15 @@ export class NightPlayerSummaryService {
           statisticalExclusionReason: dc.statisticalExclusionReason ?? null,
           usedHealthstoneInPull: r.consumables?.healthstone?.used === true || (r.consumables?.healthstone?.timestampsMs?.length ?? 0) > 0,
           usedHealthPotionInPull: r.consumables?.healthPotion?.used === true || (r.consumables?.healthPotion?.timestampsMs?.length ?? 0) > 0,
-          aiNote: (dc.mechanicName && notesByMechanicName.get(dc.mechanicName)) || null,
+          aiNote: coaching.note,
+          resolution: coaching.resolution,
+          damageProfile: dc.damageProfile,
+          burstHealthPct: dc.burstHealthPct ?? null,
+          killingBlowAmount: dc.killingBlowAmount,
+          damageWindowTotal: dc.damageProfile === 'unknown' ? null : dc.damageWindowTotal,
+          damageWindowHits: dc.damageProfile === 'unknown' ? null : dc.damageWindowHits,
+          healingWindowTotal: dc.damageProfile === 'unknown' ? null : dc.healingWindowTotal,
+          healingWindowHits: dc.damageProfile === 'unknown' ? null : dc.healingWindowHits,
         };
       })
       .sort((a, b) => {
@@ -414,9 +608,12 @@ export class NightPlayerSummaryService {
       .map((ev) => {
         const pull = pullById.get(ev.pull_id)!;
         const detail = ev.player_hit_details.find((d) => d.name === playerName);
+        const coaching = coachingFor(pull, ev.mechanic_name);
         return {
           pullId: ev.pull_id,
+          bossId: pull.boss_id,
           bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
+          difficulty: pull.difficulty,
           pullNumber: pull.pull_number,
           mechanicName: ev.mechanic_name,
           mechanicId: ev.ability_id,
@@ -426,7 +623,8 @@ export class NightPlayerSummaryService {
           damageTaken: detail?.damage_taken ?? 0,
           comparisonSource: ev.comparison_source,
           comparisonPercentile: ev.comparison_percentile,
-          aiNote: notesByMechanicName.get(ev.mechanic_name) ?? null,
+          aiNote: coaching.note,
+          resolution: coaching.resolution,
         };
       })
       .filter((row) => !evaluatedDeaths.some((death) => death.pullId === row.pullId && death.mechanicId === row.mechanicId && Math.abs(death.timeMs - row.timeMs) <= 4000))
@@ -480,7 +678,34 @@ export class NightPlayerSummaryService {
       const usedConsumable = death ? death.usedHealthstoneInPull || death.usedHealthPotionInPull : false;
       const consumableScore = !death ? 1 : usedConsumable ? 1 : 0;
       const deathMultiplier = death && pull.durationMs ? Math.min(1, Math.max(0, death.timeMs / pull.durationMs)) : 1;
-      const score = Math.round((mechanicScore * 0.7 + consumableScore * 0.3) * deathMultiplier * 1000) / 1000;
+      // §"siempre hay un motivo para usarlo" (feedback real, 2026-08-29):
+      // defensivesAvailable ya es exactamente status==='available_unused'
+      // (catálogo real de la clase, sin cooldown, sin estar ya activo) — no
+      // "podría haber usado algo", sino "tenía el botón libre y no lo tocó".
+      const deathDefensiveMissed = !!death && death.defensivesAvailable.length > 0;
+      // §CORRECCIÓN (feedback real, 2026-08-29): "si ponemos que ha
+      // empeorado en defensivo bajo presión, ¿cómo tiene un 90%?" — la
+      // primera versión de este penalizador solo miraba muertes, así que un
+      // jugador que sobrevive TODOS sus pulls de presión sin lanzar un solo
+      // defensivo salía gratis (0 muertes = 0 penalización), aunque
+      // pressurePullsWithCast/pressurePulls (ver defensiveSummary más abajo)
+      // se hundiera. Mismas columnas que ya usa Fiabilidad para su eje
+      // defensiva (defensive_use_opportunity/used_defensive_in_pull) — aquí
+      // solo cuando NO hubo muerte en el pull, para no evaluar dos veces la
+      // misma ventana con dos criterios distintos.
+      const nonLethalDefensiveMissed =
+        !death && reliabilityRow?.defensive_use_opportunity === true && reliabilityRow?.used_defensive_in_pull !== true;
+      const defensiveMissed = deathDefensiveMissed || nonLethalDefensiveMissed;
+      // Sobrevivir una presión sin defensivo pesa menos que morir con uno
+      // libre en la mano: la muerte es el fallo verificado más grave, esto
+      // es "presión detectada + catálogo libre" sin la confirmación final.
+      const defensiveMissMultiplier = deathDefensiveMissed
+        ? DEFENSIVE_MISS_PENALTY
+        : nonLethalDefensiveMissed
+          ? DEFENSIVE_MISS_PENALTY_NON_LETHAL
+          : 1;
+      const score =
+        Math.round((mechanicScore * 0.7 + consumableScore * 0.3) * deathMultiplier * defensiveMissMultiplier * 1000) / 1000;
       return {
         score,
         breakdown: {
@@ -493,6 +718,9 @@ export class NightPlayerSummaryService {
           consumableScore,
           deathMultiplier,
           deathTimeMs: death?.timeMs ?? null,
+          defensiveMissed,
+          defensiveMissMultiplier,
+          defensiveMissKind: deathDefensiveMissed ? 'death' : nonLethalDefensiveMissed ? 'pressure' : null,
         },
       };
     }
@@ -509,11 +737,28 @@ export class NightPlayerSummaryService {
     // no tiene duración registrada, mejor que sesgar la media ignorándolo en silencio.
     const scoredPulls = pullsWithScore.filter((p): p is NightPullSummary & { pullScore: number } => p.pullScore != null);
     const totalDurationMs = scoredPulls.reduce((sum, p) => sum + (p.durationMs ?? 0), 0);
-    const nightScore = scoredPulls.length
+    const rawNightScore = scoredPulls.length
       ? totalDurationMs > 0
         ? Math.round((scoredPulls.reduce((sum, p) => sum + p.pullScore * (p.durationMs ?? 0), 0) / totalDurationMs) * 1000) / 1000
         : Math.round((scoredPulls.reduce((sum, p) => sum + p.pullScore, 0) / scoredPulls.length) * 1000) / 1000
       : null;
+    // §"no puedes tener una ejecución buenísima si no has usado NINGÚN
+    // defensivo en algún pull" (feedback real, 2026-08-29): sin esto, un
+    // jugador con 8 pulls perfectos y 2 sin ningún defensivo seguía saliendo
+    // "excelente" en la media ponderada — el multiplicador de cada pull
+    // castiga ESE pull, esto castiga la noche entera y escala con cuántos
+    // pulls distintos lo hicieron.
+    const defensiveMissPullCount = scoredPulls.filter((p) => p.scoreBreakdown.defensiveMissed).length;
+    const nightDefensiveConsistencyMultiplier = Math.max(
+      NIGHT_DEFENSIVE_ESCALATION_FLOOR,
+      1 - defensiveMissPullCount * NIGHT_DEFENSIVE_ESCALATION_STEP,
+    );
+    const nightScore = rawNightScore == null ? null : Math.round(rawNightScore * nightDefensiveConsistencyMultiplier * 1000) / 1000;
+    const nightDefensiveConsistency = {
+      missPullCount: defensiveMissPullCount,
+      multiplier: nightDefensiveConsistencyMultiplier,
+      rawScore: rawNightScore,
+    };
 
     // §"informe de mejora por jugador... wipefest para mejorar en el boss
     // concreto" (feedback real, 2026-08-27): lo que SÍ cortó, no solo lo que
@@ -524,14 +769,17 @@ export class NightPlayerSummaryService {
       .filter((ev) => !pullById.get(ev.pull_id)?.ninja_pull_excluded)
       .map((ev) => {
         const pull = pullById.get(ev.pull_id)!;
+        const coaching = coachingFor(pull, ev.mechanic_name);
         return {
           pullId: ev.pull_id,
+          bossId: pull.boss_id,
           bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
+          difficulty: pull.difficulty,
           pullNumber: pull.pull_number,
           mechanicName: ev.mechanic_name,
           mechanicId: ev.ability_id,
           timeMs: ev.trigger_time_ms,
-          aiNote: notesByMechanicName.get(ev.mechanic_name) ?? null,
+          aiNote: coaching.note,
         };
       })
       .sort((a, b) => {
@@ -566,7 +814,17 @@ export class NightPlayerSummaryService {
         instanceCount: e.count,
         distinctBossCount: e.bosses.size,
         bossNames: [...e.bosses],
-        aiNote: notesByMechanicName.get(mechanicName) ?? null,
+        // El patrón puede cruzar bosses/dificultades. Solo reutilizamos una
+        // nota si todas las instancias verificables que lo forman coinciden;
+        // mezclar la resolución de otro ámbito sería peor que no mostrarla.
+        aiNote: (() => {
+          const notes = new Set(
+            [...evaluatedDeaths, ...mechanicFails]
+              .filter((row) => row.mechanicName === mechanicName && row.aiNote)
+              .map((row) => row.aiNote as string),
+          );
+          return notes.size === 1 ? [...notes][0] : null;
+        })(),
       }))
       .filter((p) => p.instanceCount >= 2) // un fallo suelto no es un "patrón" de la noche
       .sort((a, b) => b.instanceCount - a.instanceCount);
@@ -577,9 +835,129 @@ export class NightPlayerSummaryService {
     const lastPull = [...pulls].sort((a, b) => b.closedAt.localeCompare(a.closedAt))[0] ?? null;
     const lastRecord = lastPull ? recordByPullId.get(lastPull.pullId) : null;
     const gearSnapshot: NightGearSnapshot | null = lastPull && lastRecord ? this.buildGearSnapshot(lastPull, lastRecord) : null;
+    const firstPull = pulls[0] ?? null;
+    const firstRecord = firstPull ? recordByPullId.get(firstPull.pullId) : null;
+    const startingPreparation =
+      firstPull && firstRecord ? this.buildGearSnapshot(firstPull, firstRecord) : null;
+
+    // Casts defensivos con timing exacto. Igual que la vista SQL de
+    // fiabilidad: un ninja pull no aporta evidencia y nada posterior al
+    // inicio confirmado del wipe call se presenta como ejecución real.
+    const defensiveCasts: NightDefensiveCast[] = [];
+    for (const record of records) {
+      const pull = pullById.get(record.pull_id);
+      if (!pull || pull.ninja_pull_excluded) continue;
+      const wipeCallStartMs =
+        pull.wipe_call_excluded &&
+        typeof pull.wipe_call_signals?.['wipeCallStartMs'] === 'number'
+          ? (pull.wipe_call_signals['wipeCallStartMs'] as number)
+          : null;
+      for (const defensive of record.defensive_casts ?? []) {
+        for (const timeMs of defensive.timestampsMs ?? []) {
+          if (!Number.isFinite(timeMs) || timeMs < 0) continue;
+          if (wipeCallStartMs != null && timeMs >= wipeCallStartMs) continue;
+          defensiveCasts.push({
+            pullId: record.pull_id,
+            pullNumber: pull.pull_number,
+            bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
+            difficulty: pull.difficulty,
+            spellId: defensive.spellId,
+            spellName: defensive.name,
+            timeMs,
+          });
+        }
+      }
+    }
+    defensiveCasts.sort(
+      (a, b) =>
+        (bossOrder.get(pullById.get(a.pullId)!.boss_id) ?? 0) -
+          (bossOrder.get(pullById.get(b.pullId)!.boss_id) ?? 0) ||
+        a.pullNumber - b.pullNumber ||
+        a.timeMs - b.timeMs,
+    );
+    const defensiveBySpell = new Map<
+      string,
+      { spellId: number; spellName: string; casts: NightDefensiveCast[]; pulls: Set<string> }
+    >();
+    for (const cast of defensiveCasts) {
+      const key = `${cast.spellId}|${cast.spellName}`;
+      const entry = defensiveBySpell.get(key) ?? {
+        spellId: cast.spellId,
+        spellName: cast.spellName,
+        casts: [],
+        pulls: new Set<string>(),
+      };
+      entry.casts.push(cast);
+      entry.pulls.add(cast.pullId);
+      defensiveBySpell.set(key, entry);
+    }
+    const pressureRows = reliabilityInputRows.filter(
+      (row) => row.had_avoidable_damage || row.used_defensive_when_died != null,
+    );
+    const defensiveSummary: NightDefensiveSummary = {
+      totalCasts: defensiveCasts.length,
+      pullsWithCasts: new Set(defensiveCasts.map((cast) => cast.pullId)).size,
+      pressurePulls: pressureRows.length,
+      pressurePullsWithCast: pressureRows.filter((row) => row.used_defensive_in_pull).length,
+      deathsWithDefensiveAvailable: evaluatedDeaths.filter(
+        (death) => death.defensivesAvailable.length > 0,
+      ).length,
+      spells: [...defensiveBySpell.values()]
+        .map((entry) => ({
+          spellId: entry.spellId,
+          spellName: entry.spellName,
+          castCount: entry.casts.length,
+          pullCount: entry.pulls.size,
+          casts: entry.casts,
+        }))
+        .sort((a, b) => b.castCount - a.castCount || a.spellName.localeCompare(b.spellName)),
+    };
+
+    const avoidableEligible = reliabilityInputRows.reduce(
+      (sum, row) => sum + (row.avoidable_mechanic_eligible_count ?? 0),
+      0,
+    );
+    const avoidableFailed = reliabilityInputRows.reduce(
+      (sum, row) => sum + (row.avoidable_mechanic_fail_count ?? 0),
+      0,
+    );
+    const avoidableSucceeded = Math.max(0, avoidableEligible - avoidableFailed);
+    const cleanPulls = scoredPulls.filter(
+      (pull) =>
+        pull.scoreBreakdown.mechanicFailCount === 0 &&
+        !evaluatedDeathByPullId.has(pull.pullId),
+    ).length;
+    const actionableDeaths = evaluatedDeaths.filter(
+      (death) =>
+        death.category != null && PERSONAL_RESPONSIBILITY_CATEGORIES.has(death.category),
+    );
+    const actionableIncidents = mechanicFails.length + actionableDeaths.length;
+    const emergencyConsumableUses = evaluatedDeaths.filter(
+      (death) => death.usedHealthstoneInPull || death.usedHealthPotionInPull,
+    ).length;
+    const execution: NightExecutionSnapshot = {
+      evaluatedPulls: scoredPulls.length,
+      cleanPulls,
+      cleanPullRate: scoredPulls.length ? (cleanPulls / scoredPulls.length) * 100 : null,
+      avoidableEligible,
+      avoidableFailed,
+      avoidableSucceeded,
+      avoidableSuccessRate:
+        avoidableEligible > 0 ? (avoidableSucceeded / avoidableEligible) * 100 : null,
+      actionableIncidents,
+      actionableIncidentRatePer10:
+        scoredPulls.length > 0 ? (actionableIncidents / scoredPulls.length) * 10 : null,
+      deathRatePer10:
+        scoredPulls.length > 0 ? (evaluatedDeaths.length / scoredPulls.length) * 10 : null,
+      emergencyConsumableOpportunities: evaluatedDeaths.length,
+      emergencyConsumableUses,
+      emergencyConsumableUseRate:
+        evaluatedDeaths.length > 0
+          ? (emergencyConsumableUses / evaluatedDeaths.length) * 100
+          : null,
+    };
 
     const rosterEntry = roster.find((r) => r.name === playerName) ?? null;
-    const reliabilityEntry = reliabilityList.find((r) => r.playerName === playerName) ?? null;
 
     // §"preparar la vinculación de ese ID... con el dosier de ese raider"
     // (feedback real, 2026-08-28): no puede ir en el Promise.all de arriba —
@@ -607,7 +985,7 @@ export class NightPlayerSummaryService {
     const battleNetUrl = realmSlug ? `https://worldofwarcraft.blizzard.com/en-us/character/${REGION}/${realmSlug}/${nameSlug}` : null;
     const raiderIoUrl = realmSlug ? `https://raider.io/characters/${REGION}/${realmSlug}/${nameSlug}` : null;
 
-    return {
+    const summary: NightPlayerSummary = {
       playerName,
       reportCode,
       reportTitle: (reportRow as { title: string } | null)?.title ?? reportCode,
@@ -617,6 +995,7 @@ export class NightPlayerSummaryService {
       nightReliability,
       pulls: pullsWithScore,
       nightScore,
+      nightDefensiveConsistency,
       totalDeaths: evaluatedDeaths.length,
       totalMechanicFails: mechanicFails.length,
       deaths,
@@ -624,6 +1003,10 @@ export class NightPlayerSummaryService {
       interrupts,
       repeatedPatterns,
       gearSnapshot,
+      startingPreparation,
+      defensiveSummary,
+      execution,
+      evolution: null,
       battleNetUrl,
       raiderIoUrl,
       brief: briefRow ? mapBrief(briefRow as unknown as Parameters<typeof mapBrief>[0]) : null,
@@ -631,6 +1014,75 @@ export class NightPlayerSummaryService {
         ? { discordChannelId: discordChannel.discord_channel_id, discordUserId: discordChannel.discord_user_id, isOfficer: discordChannel.is_officer }
         : null,
     };
+
+    if (includeEvolution) {
+      const previousReport = await this.findPreviousReport(
+        reportCode,
+        playerName,
+        (reportRow as { start_time: number } | null)?.start_time ?? null,
+      );
+      if (previousReport) {
+        // Recursión — ver el comentario junto a `load` arriba: esta llamada
+        // también pasa por la comprobación de caché, así que una noche
+        // anterior ya visitada (por este mismo jugador o por cualquier otro
+        // cuya "noche anterior" sea el mismo report) se sirve de localStorage
+        // en vez de recalcularse otra vez.
+        const previousSummary = await this.load(previousReport.code, playerName, false);
+        summary.evolution = buildNightEvolution(summary, previousSummary);
+      }
+    }
+
+    if (fingerprint) this.summaryCache.write(reportCode, playerName, fingerprint, summary);
+    return summary;
+  }
+
+  /**
+   * §mismo motivo que el comentario junto a `load`: generar/editar el brief
+   * de IA (night-player-dossier.component.ts, onGenerateBrief/
+   * onManualBriefSaved) muta `brief` en el signal del componente sin volver
+   * a pasar por `load` — sin esto, el snapshot cacheado se quedaría sirviendo
+   * el brief viejo (o "sin generar todavía") hasta que cambiara el
+   * fingerprint global (un pull nuevo), que puede tardar semanas en llegar.
+   * No-op si todavía no hay nada cacheado para este dosier (nunca se llegó a
+   * escribir, o el fingerprint ya había cambiado entre medias) — el
+   * siguiente `load()` normal recalculará y cacheará todo de cero.
+   */
+  updateCachedBrief(reportCode: string, playerName: string, brief: LlmPullAnalysis): void {
+    const cached = this.summaryCache.read(reportCode, playerName);
+    if (!cached) return;
+    this.summaryCache.write(reportCode, playerName, cached.fingerprint, { ...cached.summary, brief });
+  }
+
+  private async findPreviousReport(
+    reportCode: string,
+    playerName: string,
+    currentStartTime: number | null,
+  ): Promise<{ code: string; title: string; start_time: number } | null> {
+    if (currentStartTime == null) return null;
+    const client = this.supabase.client;
+    const { data: recordRows, error: recordsError } = await client
+      .from('player_pull_records')
+      .select('pulls!inner(report_code)')
+      .eq('player_name', playerName);
+    if (recordsError) throw recordsError;
+    const reportCodes = [
+      ...new Set(
+        ((recordRows ?? []) as unknown as { pulls: { report_code: string } }[])
+          .map((row) => row.pulls.report_code)
+          .filter((code) => code !== reportCode),
+      ),
+    ];
+    if (!reportCodes.length) return null;
+    const { data, error } = await client
+      .from('reports')
+      .select('code, title, start_time')
+      .in('code', reportCodes)
+      .lt('start_time', currentStartTime)
+      .order('start_time', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return (data ?? null) as { code: string; title: string; start_time: number } | null;
   }
 
   private buildGearSnapshot(pull: Pick<NightPullSummary, 'pullNumber' | 'bossName'>, record: PlayerPullRecordRow): NightGearSnapshot {
@@ -647,6 +1099,248 @@ export class NightPlayerSummaryService {
       ...preparation,
     };
   }
+}
+
+function evolutionDirection(
+  current: number,
+  previous: number,
+  higherIsBetter: boolean,
+  threshold: number,
+): NightEvolutionDirection {
+  const delta = current - previous;
+  if (Math.abs(delta) < threshold) return 'stable';
+  const movedUp = delta > 0;
+  return movedUp === higherIsBetter ? 'improved' : 'worsened';
+}
+
+function isVerifiableMechanicName(name: string | null | undefined): name is string {
+  if (!name) return false;
+  const normalized = name.toLocaleLowerCase('es-ES');
+  return !(
+    normalized.includes('unknown') ||
+    normalized.includes('sin identificar') ||
+    normalized.includes('causa desconocida')
+  );
+}
+
+/**
+ * Comparación pura y auditable entre dos noches. Las métricas globales se
+ * normalizan por pull. Una mecánica concreta solo se compara si el jugador
+ * participó en el mismo boss+dificultad en ambas noches, evitando convertir
+ * en "mejora" un encuentro que sencillamente no se jugó.
+ */
+export function buildNightEvolution(
+  current: NightPlayerSummary,
+  previous: NightPlayerSummary,
+): NightEvolution {
+  const metrics: NightEvolutionMetric[] = [];
+  const addMetric = (params: {
+    key: NightEvolutionMetric['key'];
+    label: string;
+    current: number | null;
+    previous: number | null;
+    higherIsBetter: boolean;
+    unit: NightEvolutionMetric['unit'];
+    evidence: string;
+  }): void => {
+    if (params.current == null || params.previous == null) return;
+    const threshold = params.unit === 'percent' ? 3 : 0.5;
+    metrics.push({
+      key: params.key,
+      label: params.label,
+      current: params.current,
+      previous: params.previous,
+      delta: params.current - params.previous,
+      direction: evolutionDirection(
+        params.current,
+        params.previous,
+        params.higherIsBetter,
+        threshold,
+      ),
+      unit: params.unit,
+      evidence: params.evidence,
+    });
+  };
+
+  addMetric({
+    key: 'execution',
+    label: 'Ejecución de la noche',
+    current: current.nightScore == null ? null : current.nightScore * 100,
+    previous: previous.nightScore == null ? null : previous.nightScore * 100,
+    higherIsBetter: true,
+    unit: 'percent',
+    evidence: `${previous.execution.evaluatedPulls} pulls anteriores → ${current.execution.evaluatedPulls} actuales`,
+  });
+  addMetric({
+    key: 'clean-pulls',
+    label: 'Pulls sin fallo personal ni muerte',
+    current: current.execution.cleanPullRate,
+    previous: previous.execution.cleanPullRate,
+    higherIsBetter: true,
+    unit: 'percent',
+    evidence: `${previous.execution.cleanPulls}/${previous.execution.evaluatedPulls} → ${current.execution.cleanPulls}/${current.execution.evaluatedPulls}`,
+  });
+  addMetric({
+    key: 'avoidable-success',
+    label: 'Zonas/spread evitados',
+    current: current.execution.avoidableSuccessRate,
+    previous: previous.execution.avoidableSuccessRate,
+    higherIsBetter: true,
+    unit: 'percent',
+    evidence: `${previous.execution.avoidableSucceeded}/${previous.execution.avoidableEligible} → ${current.execution.avoidableSucceeded}/${current.execution.avoidableEligible} oportunidades`,
+  });
+  addMetric({
+    key: 'personal-incidents',
+    label: 'Incidencias personales / 10 pulls',
+    current: current.execution.actionableIncidentRatePer10,
+    previous: previous.execution.actionableIncidentRatePer10,
+    higherIsBetter: false,
+    unit: 'per10',
+    evidence: `${previous.execution.actionableIncidents} en ${previous.execution.evaluatedPulls} → ${current.execution.actionableIncidents} en ${current.execution.evaluatedPulls}`,
+  });
+  addMetric({
+    key: 'deaths',
+    label: 'Muertes evaluables / 10 pulls',
+    current: current.execution.deathRatePer10,
+    previous: previous.execution.deathRatePer10,
+    higherIsBetter: false,
+    unit: 'per10',
+    evidence: `${previous.totalDeaths} en ${previous.execution.evaluatedPulls} → ${current.totalDeaths} en ${current.execution.evaluatedPulls}`,
+  });
+  addMetric({
+    key: 'defensive-response',
+    label: 'Defensivo en pulls con presión',
+    current:
+      current.defensiveSummary.pressurePulls > 0
+        ? (current.defensiveSummary.pressurePullsWithCast /
+            current.defensiveSummary.pressurePulls) *
+          100
+        : null,
+    previous:
+      previous.defensiveSummary.pressurePulls > 0
+        ? (previous.defensiveSummary.pressurePullsWithCast /
+            previous.defensiveSummary.pressurePulls) *
+          100
+        : null,
+    higherIsBetter: true,
+    unit: 'percent',
+    evidence: `${previous.defensiveSummary.pressurePullsWithCast}/${previous.defensiveSummary.pressurePulls} → ${current.defensiveSummary.pressurePullsWithCast}/${current.defensiveSummary.pressurePulls} pulls`,
+  });
+  addMetric({
+    key: 'consumables',
+    label: 'Piedra/poción en muerte evaluable',
+    current: current.execution.emergencyConsumableUseRate,
+    previous: previous.execution.emergencyConsumableUseRate,
+    higherIsBetter: true,
+    unit: 'percent',
+    evidence: `${previous.execution.emergencyConsumableUses}/${previous.execution.emergencyConsumableOpportunities} → ${current.execution.emergencyConsumableUses}/${current.execution.emergencyConsumableOpportunities} muertes`,
+  });
+
+  type Incident = {
+    bossId: string;
+    bossName: string;
+    difficulty: string;
+    mechanicId: number;
+    mechanicName: string;
+    resolution: string | null;
+  };
+  const incidents = (summary: NightPlayerSummary): Incident[] => [
+    ...summary.mechanicFails
+      .filter((row) => row.mechanicId > 0 && isVerifiableMechanicName(row.mechanicName))
+      .map((row) => ({
+        bossId: row.bossId,
+        bossName: row.bossName,
+        difficulty: row.difficulty,
+        mechanicId: row.mechanicId,
+        mechanicName: row.mechanicName,
+        resolution: row.resolution,
+      })),
+    ...summary.deaths
+      .filter(
+        (row) =>
+          !row.isWipeCall &&
+          !row.isNinjaPull &&
+          !row.statisticalExclusionReason &&
+          row.mechanicId != null &&
+          row.mechanicId > 0 &&
+          row.category != null &&
+          PERSONAL_RESPONSIBILITY_CATEGORIES.has(row.category) &&
+          isVerifiableMechanicName(row.mechanicName),
+      )
+      .map((row) => ({
+        bossId: row.bossId,
+        bossName: row.bossName,
+        difficulty: row.difficulty,
+        mechanicId: row.mechanicId!,
+        mechanicName: row.mechanicName!,
+        resolution: row.resolution,
+      })),
+  ];
+  const scopePullCounts = (summary: NightPlayerSummary): Map<string, number> => {
+    const map = new Map<string, number>();
+    for (const pull of summary.pulls.filter((row) => row.pullScore != null)) {
+      const key = `${pull.bossId}|${pull.difficulty}`;
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return map;
+  };
+  const groupIncidents = (rows: Incident[]): Map<string, Incident & { count: number }> => {
+    const map = new Map<string, Incident & { count: number }>();
+    for (const row of rows) {
+      const key = `${row.bossId}|${row.difficulty}|${row.mechanicId}`;
+      const existing = map.get(key);
+      if (existing) existing.count++;
+      else map.set(key, { ...row, count: 1 });
+    }
+    return map;
+  };
+  const currentScopes = scopePullCounts(current);
+  const previousScopes = scopePullCounts(previous);
+  const currentIncidents = groupIncidents(incidents(current));
+  const previousIncidents = groupIncidents(incidents(previous));
+  const mechanicKeys = new Set([...currentIncidents.keys(), ...previousIncidents.keys()]);
+  const mechanics: NightEvolutionMechanic[] = [];
+  for (const key of mechanicKeys) {
+    const currentIncident = currentIncidents.get(key);
+    const previousIncident = previousIncidents.get(key);
+    const source = currentIncident ?? previousIncident!;
+    const scopeKey = `${source.bossId}|${source.difficulty}`;
+    const currentPulls = currentScopes.get(scopeKey) ?? 0;
+    const previousPulls = previousScopes.get(scopeKey) ?? 0;
+    if (!currentPulls || !previousPulls) continue;
+    const currentCount = currentIncident?.count ?? 0;
+    const previousCount = previousIncident?.count ?? 0;
+    const rateDelta = currentCount / currentPulls - previousCount / previousPulls;
+    if (Math.abs(rateDelta) < 0.05) continue;
+    mechanics.push({
+      bossId: source.bossId,
+      bossName: source.bossName,
+      difficulty: source.difficulty,
+      mechanicId: source.mechanicId,
+      mechanicName: source.mechanicName,
+      previousCount,
+      currentCount,
+      previousPulls,
+      currentPulls,
+      direction: rateDelta < 0 ? 'improved' : 'worsened',
+      resolution: currentIncident?.resolution ?? previousIncident?.resolution ?? null,
+    });
+  }
+  mechanics.sort((a, b) => {
+    const aChange = Math.abs(a.currentCount / a.currentPulls - a.previousCount / a.previousPulls);
+    const bChange = Math.abs(b.currentCount / b.currentPulls - b.previousCount / b.previousPulls);
+    return bChange - aChange;
+  });
+
+  return {
+    previousReportCode: previous.reportCode,
+    previousReportTitle: previous.reportTitle,
+    previousReportDate: previous.reportDate,
+    currentEvaluatedPulls: current.execution.evaluatedPulls,
+    previousEvaluatedPulls: previous.execution.evaluatedPulls,
+    metrics,
+    mechanics,
+  };
 }
 
 interface PullRowLite {

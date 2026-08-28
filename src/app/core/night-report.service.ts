@@ -7,7 +7,7 @@
 // entero en vez de por jugador o por pull.
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
-import { WowauditRosterService } from './wowaudit-roster.service';
+import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
 import { loadMechanicNotesByName } from './mechanic-notes';
 import { mapBrief } from './pull-analysis.service';
 import { mechanicCategoryMeta, mechanicDisplayName } from '../shared/format.util';
@@ -18,6 +18,9 @@ import type { LlmPullAnalysis } from '../shared/models/ui';
 import type { NightFullReport, StoredNightFullReport } from '../shared/models/night-full-report';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
+
+/** Tanks primero, luego healers, luego dps (melee y ranged juntos). */
+const ROLE_SORT_ORDER: WowauditRosterEntry['role'][] = ['Tank', 'Heal', 'Melee', 'Ranged'];
 
 export interface NightBossSummary {
   bossId: string;
@@ -51,6 +54,13 @@ export interface NightWipeCallPull {
   confidence: number;
 }
 
+/** §"ponles el icono de clase al lado y colorea el nombre... primero tanks, luego healers y luego dps" (feedback real). */
+export interface NightAttendee {
+  name: string;
+  class: string | null;
+  role: WowauditRosterEntry['role'] | null;
+}
+
 export interface NightReport {
   reportCode: string;
   reportTitle: string;
@@ -60,10 +70,11 @@ export interface NightReport {
   totalKills: number;
   totalWipes: number;
   totalDurationMs: number;
-  attendingMain: string[];
-  attendingTrial: string[];
+  /** Ordenados tanks → healers → dps, como se pide para "identificarlos rápido" en el roster de la noche. */
+  attendingMain: NightAttendee[];
+  attendingTrial: NightAttendee[];
   /** Miembros Main del roster de wowaudit que NO aparecen en ningún pull de esta noche — "quién faltó". Vacío si el roster de wowaudit no está sincronizado todavía. */
-  absentMain: string[];
+  absentMain: NightAttendee[];
   totalDeaths: number;
   totalWipeCallDeathsExcluded: number;
   wipeCallPulls: NightWipeCallPull[];
@@ -241,9 +252,12 @@ export class NightReportService {
     // CANÓNICO de wowaudit (Main), no contra "quién ha aparecido alguna
     // vez" — mismo principio que el resto de la app.
     const attendedNames = new Set(records.map((r) => r.player_name));
-    const attendingMain = roster.filter((r) => r.rank === 'Main' && attendedNames.has(r.name)).map((r) => r.name);
-    const attendingTrial = roster.filter((r) => r.rank === 'Trial' && attendedNames.has(r.name)).map((r) => r.name);
-    const absentMain = roster.filter((r) => r.rank === 'Main' && !attendedNames.has(r.name)).map((r) => r.name);
+    const toAttendee = (r: WowauditRosterEntry): NightAttendee => ({ name: r.name, class: r.class, role: r.role });
+    const byRoleThenName = (a: NightAttendee, b: NightAttendee) =>
+      ROLE_SORT_ORDER.indexOf(a.role ?? 'Ranged') - ROLE_SORT_ORDER.indexOf(b.role ?? 'Ranged') || a.name.localeCompare(b.name);
+    const attendingMain = roster.filter((r) => r.rank === 'Main' && attendedNames.has(r.name)).map(toAttendee).sort(byRoleThenName);
+    const attendingTrial = roster.filter((r) => r.rank === 'Trial' && attendedNames.has(r.name)).map(toAttendee).sort(byRoleThenName);
+    const absentMain = roster.filter((r) => r.rank === 'Main' && !attendedNames.has(r.name)).map(toAttendee).sort(byRoleThenName);
     const playerClasses = new Map(roster.filter((r) => attendedNames.has(r.name)).map((r) => [r.name, r.class]));
 
     return {

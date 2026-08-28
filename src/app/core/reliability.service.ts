@@ -26,8 +26,8 @@
 // quitarla de las dos, vuelven a ser comparables de verdad.
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
-import { WowauditRosterService } from './wowaudit-roster.service';
-import { AttendanceService } from './attendance.service';
+import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
+import { AttendanceService, type RealAttendanceEntry } from './attendance.service';
 import { mechanicScoreFor } from './pull-analysis.service';
 import { gearPreparationDetails } from '../shared/gear-preparation.util';
 import type { DeathCause, WclGearItem } from '../shared/models/domain';
@@ -577,200 +577,19 @@ export class ReliabilityService {
     const midpoint = now - (WINDOW_DAYS / 2) * 86_400_000;
     const results: PlayerReliability[] = [];
     for (const [playerName, rows] of byPlayer) {
-      // Para la pantalla operativa importa cómo llegó a la última noche,
-      // no el objeto sin encantar que pudo equipar a mitad de raid. Se toma
-      // la primera aparición del jugador por fecha (dos uploads del mismo día
-      // siguen siendo una noche) y, de ellas, la fecha más reciente.
-      let latestGemCount: number | null = null;
-      let latestGemmedSlotCount: number | null = null;
-      let latestGemmableSlotCount: number | null = null;
-      let latestEnchantedSlotCount: number | null = null;
-      let latestEnchantableSlotCount: number | null = null;
-      let latestMissingEnchantSlots: string[] = [];
-      let latestMissingGemSlots: string[] = [];
-      let latestPreparationObservedAt: string | null = null;
-      let lastObservedAt: string | null = null;
-      const firstRowByNight = new Map<string, ReliabilityInputRow>();
-      for (const r of rows) {
-        if (lastObservedAt == null || r.closed_at > lastObservedAt) lastObservedAt = r.closed_at;
-        const nightKey = r.closed_at.slice(0, 10);
-        const first = firstRowByNight.get(nightKey);
-        if (!first || r.closed_at < first.closed_at) firstRowByNight.set(nightKey, r);
-      }
-      let latestPreparationRow: ReliabilityInputRow | null = null;
-      for (const row of firstRowByNight.values()) {
-        if (!latestPreparationRow || row.closed_at > latestPreparationRow.closed_at)
-          latestPreparationRow = row;
-      }
-      if (latestPreparationRow) {
-        latestGemCount = latestPreparationRow.gem_count;
-        latestGemmedSlotCount = latestPreparationRow.gemmed_slot_count;
-        latestGemmableSlotCount = latestPreparationRow.gemmable_slot_count;
-        latestEnchantedSlotCount = latestPreparationRow.enchanted_slot_count;
-        latestEnchantableSlotCount = latestPreparationRow.enchantable_slot_count;
-        latestPreparationObservedAt = latestPreparationRow.closed_at;
-        const preparationRecord = evidenceRecordByPlayerPull.get(
-          `${playerName}|${latestPreparationRow.pull_id}`,
-        );
-        if (preparationRecord?.equipped_items) {
-          const preparation = gearPreparationDetails(preparationRecord.equipped_items);
-          latestMissingEnchantSlots = preparation.missingEnchantSlots;
-          latestMissingGemSlots = preparation.missingGemSlots;
-        }
-      }
-
-      // §"rotar en un boss por tema de specs no tiene por qué afectar a la
-      // fiabilidad" (feedback real, 2026-08-28): asistencia ya no puntúa
-      // dentro de Fiabilidad (ver comentario junto a AXIS_WEIGHTS) — sigue
-      // calculándose y mostrándose (attendanceNightsAttended/
-      // attendanceNightsTotal más abajo, informativo) a partir de reports
-      // REALMENTE importados en Avoid desde el inicio de season
-      // (attendance.service.ts), no del calendario propio de wowaudit.
-      const rosterEntry = rosterByName.get(playerName);
-      const attendance = realAttendance.get(playerName) ?? null;
-      const result = computeReliabilityBreakdown(rows, now);
-      const overall = result?.overall ?? 0;
-      const { mecanica, defensiva, preparacion } = result?.breakdown ?? {
-        mecanica: null,
-        defensiva: null,
-        preparacion: null,
-      };
-      const observedAxisCount = result
-        ? Object.values(result.breakdown).filter((value) => value != null).length
-        : 0;
-      // Antes se sumaban `defensive_use_opportunity` y la evaluación al
-      // morir como si fueran oportunidades independientes. Una misma fila
-      // podía aportar 2 y la UI llegaba a enseñar más oportunidades que
-      // pulls. Son dos muestras distintas y así se conservan desde aquí.
-      const defensiveOpportunityCount = rows.filter((row) => row.defensive_use_opportunity).length;
-      const defensiveUseCount = rows.filter(
-        (row) => row.defensive_use_opportunity && row.used_defensive_in_pull,
-      ).length;
-      const defensiveDeathOpportunityCount = rows.filter(
-        (row) => row.used_defensive_when_died != null,
-      ).length;
-      const defensiveDeathUseCount = rows.filter(
-        (row) => row.used_defensive_when_died === true,
-      ).length;
-
-      const spellUsage = new Map<
-        string,
-        { spellId: number; name: string; castCount: number; pullIds: Set<string> }
-      >();
-      const defensiveDeathEvidence: DefensiveDeathEvidence[] = [];
-      for (const row of rows) {
-        const record = evidenceRecordByPlayerPull.get(`${playerName}|${row.pull_id}`);
-        const pull = evidencePullById.get(row.pull_id);
-        if (!record || !pull) continue;
-        const wipeCallStartMs =
-          pull.wipe_call_excluded && typeof pull.wipe_call_signals?.wipeCallStartMs === 'number'
-            ? pull.wipe_call_signals.wipeCallStartMs
-            : null;
-        for (const defensive of record.defensive_casts ?? []) {
-          const castCount = (defensive.timestampsMs ?? []).filter(
-            (timestamp) => wipeCallStartMs == null || timestamp < wipeCallStartMs,
-          ).length;
-          if (!castCount) continue;
-          const key = `${defensive.spellId}|${defensive.name}`;
-          const current = spellUsage.get(key) ?? {
-            spellId: defensive.spellId,
-            name: defensive.name,
-            castCount: 0,
-            pullIds: new Set<string>(),
-          };
-          current.castCount += castCount;
-          current.pullIds.add(row.pull_id);
-          spellUsage.set(key, current);
-        }
-
-        if (row.used_defensive_when_died == null) continue;
-        const cause = record.death_cause;
-        const options = cause?.defensiveOptions ?? [];
-        defensiveDeathEvidence.push({
-          pullId: row.pull_id,
-          bossId: row.boss_id,
-          bossName: bossNames.get(row.boss_id) ?? `Boss ${row.boss_id}`,
-          difficulty: row.difficulty,
-          reportCode: pull.report_code,
-          fightId: pull.fight_id,
-          pullNumber: pull.pull_number,
-          closedAt: pull.closed_at,
-          mechanicId: cause?.mechanicId ?? null,
-          mechanicName: cause?.mechanicName ?? 'Causa sin identificar',
-          usedDefensive: row.used_defensive_when_died === true,
-          availableUnused: options
-            .filter((option) => option.status === 'available_unused')
-            .map((option) => ({ spellId: option.spellId, name: option.name })),
-          active: options
-            .filter((option) => option.status === 'active')
-            .map((option) => ({ spellId: option.spellId, name: option.name })),
-          onCooldown: options
-            .filter((option) => option.status === 'on_cooldown')
-            .map((option) => ({
-              spellId: option.spellId,
-              name: option.name,
-              cooldownRemainingMs: option.cooldownRemainingMs ?? null,
-            })),
-        });
-      }
-      const defensiveSpellUsage: DefensiveSpellUsage[] = [...spellUsage.values()]
-        .map((usage) => ({
-          spellId: usage.spellId,
-          name: usage.name,
-          castCount: usage.castCount,
-          pullCount: usage.pullIds.size,
-        }))
-        .sort((a, b) => b.castCount - a.castCount || a.name.localeCompare(b.name, 'es'));
-      defensiveDeathEvidence.sort((a, b) => b.closedAt.localeCompare(a.closedAt));
-
-      // §12.5 "flecha de tendencia": mismo cálculo aplicado a cada mitad
-      // cronológica de la ventana — sin recalcular nada nuevo, solo
-      // particionando las filas que ya se trajeron. Si alguna mitad se
-      // queda sin pulls (jugador nuevo en la guild, o hueco real sin
-      // asistir), trend queda null — no es lo mismo "sin dato" que "estable".
-      const olderScore = computeOverall(
-        rows.filter((r) => new Date(r.closed_at).getTime() < midpoint),
-        now,
+      results.push(
+        this.buildReliabilityEntry(
+          playerName,
+          rows,
+          rosterByName.get(playerName),
+          realAttendance.get(playerName) ?? null,
+          evidenceRecordByPlayerPull,
+          evidencePullById,
+          bossNames,
+          now,
+          midpoint,
+        ),
       );
-      const newerScore = computeOverall(
-        rows.filter((r) => new Date(r.closed_at).getTime() >= midpoint),
-        now,
-      );
-      let trend: PlayerReliability['trend'] = null;
-      if (olderScore != null && newerScore != null) {
-        const delta = newerScore - olderScore;
-        trend = delta >= TREND_THRESHOLD ? 'up' : delta <= -TREND_THRESHOLD ? 'down' : 'flat';
-      }
-
-      results.push({
-        playerName,
-        overall,
-        breakdown: { mecanica, defensiva, preparacion },
-        consistency: result?.consistency ?? null,
-        latestGemCount,
-        latestGemmedSlotCount,
-        latestGemmableSlotCount,
-        latestEnchantedSlotCount,
-        latestEnchantableSlotCount,
-        latestMissingEnchantSlots,
-        latestMissingGemSlots,
-        latestPreparationObservedAt,
-        sampleSize: rows.length,
-        sampleNightCount: firstRowByNight.size,
-        lastObservedAt,
-        defensiveOpportunityCount,
-        defensiveUseCount,
-        defensiveDeathOpportunityCount,
-        defensiveDeathUseCount,
-        defensiveSpellUsage,
-        defensiveDeathEvidence,
-        observedAxisCount,
-        attendanceNightsAttended: attendance?.attended ?? null,
-        attendanceNightsTotal: attendance?.total ?? null,
-        trend,
-        role: rosterEntry?.role ?? null,
-        rank: rosterEntry?.rank ?? null,
-      });
     }
 
     // §"clasifícalos tanks primero, luego healers y luego DPS": orden de rol
@@ -781,6 +600,295 @@ export class ReliabilityService {
       const roleDelta = ROLE_SORT_ORDER[a.role ?? 'unknown'] - ROLE_SORT_ORDER[b.role ?? 'unknown'];
       return roleDelta !== 0 ? roleDelta : b.overall - a.overall;
     });
+  }
+
+  /**
+   * §rendimiento (2026-08-29): "el dosier de un jugador tarda muchísimo en
+   * cargar" (feedback real) — investigado: night-player-summary.service.ts
+   * llamaba a listPlayerReliability() (fiabilidad de TODA la guild, 60 días,
+   * con SU evidencia completa — player_pull_records/pulls/known_raid_bosses
+   * de todos los raiders) solo para quedarse con
+   * .find(r => r.playerName === playerName). Esta variante calcula
+   * EXACTAMENTE la misma fórmula (buildReliabilityEntry, factorizado de
+   * listPlayerReliability) pero cada query ya sale filtrada por jugador en
+   * el propio SQL — de "toda la guild × 60 días" a "un jugador × 60 días".
+   * null si el roster está sincronizado y este nombre no está en él (mismo
+   * criterio de exclusión que listPlayerReliability sin scope).
+   */
+  async getPlayerReliability(playerName: string): Promise<PlayerReliability | null> {
+    const since = new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString();
+    const [rows, roster, attendance] = await Promise.all([
+      this.fetchReliabilityInputs({ playerName, since }),
+      this.wowauditRoster.listRoster().catch(() => []),
+      this.attendanceService.getPlayerRealAttendance(playerName).catch(() => null),
+    ]);
+    const rosterEntry = roster.find((r) => r.name === playerName);
+    if (roster.length && !rosterEntry) return null;
+
+    let evidenceRecords: RawReliabilityEvidenceRecord[] = [];
+    let evidencePulls: ReliabilityEvidencePull[] = [];
+    let bossNames = new Map<string, string>();
+    if (rows.length) {
+      const pullIds = [...new Set(rows.map((row) => row.pull_id))];
+      const bossIds = [...new Set(rows.map((row) => row.boss_id))];
+      const [recordsResponse, pullsResponse, bossesResponse] = await Promise.all([
+        this.supabase.client
+          .from('player_pull_records')
+          .select('pull_id, player_name, death_cause, defensive_casts, equipped_items')
+          .eq('player_name', playerName)
+          .in('pull_id', pullIds),
+        this.supabase.client
+          .from('pulls')
+          .select(
+            'id, report_code, fight_id, boss_id, difficulty, pull_number, closed_at, wipe_call_excluded, wipe_call_signals',
+          )
+          .in('id', pullIds),
+        this.supabase.client
+          .from('known_raid_bosses')
+          .select('encounter_id, boss_name')
+          .in('encounter_id', bossIds.map(Number).filter(Number.isFinite)),
+      ]);
+      if (!recordsResponse.error)
+        evidenceRecords = (recordsResponse.data ?? []) as RawReliabilityEvidenceRecord[];
+      if (!pullsResponse.error)
+        evidencePulls = (pullsResponse.data ?? []) as ReliabilityEvidencePull[];
+      if (!bossesResponse.error) {
+        bossNames = new Map(
+          (
+            (bossesResponse.data ?? []) as { encounter_id: number | string; boss_name: string }[]
+          ).map((boss) => [String(boss.encounter_id), boss.boss_name]),
+        );
+      }
+    }
+    const evidenceRecordByPlayerPull = new Map(
+      evidenceRecords.map((record) => [`${record.player_name}|${record.pull_id}`, record]),
+    );
+    const evidencePullById = new Map(evidencePulls.map((pull) => [pull.id, pull]));
+
+    const now = Date.now();
+    const midpoint = now - (WINDOW_DAYS / 2) * 86_400_000;
+    return this.buildReliabilityEntry(
+      playerName,
+      rows,
+      rosterEntry,
+      attendance,
+      evidenceRecordByPlayerPull,
+      evidencePullById,
+      bossNames,
+      now,
+      midpoint,
+    );
+  }
+
+  /**
+   * Fórmula compuesta para UN jugador dadas sus filas de
+   * player_pull_reliability_inputs — factorizado de listPlayerReliability
+   * para que getPlayerReliability (un solo jugador) pueda reutilizar
+   * exactamente el mismo cálculo sin duplicarlo.
+   */
+  private buildReliabilityEntry(
+    playerName: string,
+    rows: ReliabilityInputRow[],
+    rosterEntry: WowauditRosterEntry | undefined,
+    attendance: RealAttendanceEntry | null,
+    evidenceRecordByPlayerPull: Map<string, RawReliabilityEvidenceRecord>,
+    evidencePullById: Map<string, ReliabilityEvidencePull>,
+    bossNames: Map<string, string>,
+    now: number,
+    midpoint: number,
+  ): PlayerReliability {
+    // Para la pantalla operativa importa cómo llegó a la última noche,
+    // no el objeto sin encantar que pudo equipar a mitad de raid. Se toma
+    // la primera aparición del jugador por fecha (dos uploads del mismo día
+    // siguen siendo una noche) y, de ellas, la fecha más reciente.
+    let latestGemCount: number | null = null;
+    let latestGemmedSlotCount: number | null = null;
+    let latestGemmableSlotCount: number | null = null;
+    let latestEnchantedSlotCount: number | null = null;
+    let latestEnchantableSlotCount: number | null = null;
+    let latestMissingEnchantSlots: string[] = [];
+    let latestMissingGemSlots: string[] = [];
+    let latestPreparationObservedAt: string | null = null;
+    let lastObservedAt: string | null = null;
+    const firstRowByNight = new Map<string, ReliabilityInputRow>();
+    for (const r of rows) {
+      if (lastObservedAt == null || r.closed_at > lastObservedAt) lastObservedAt = r.closed_at;
+      const nightKey = r.closed_at.slice(0, 10);
+      const first = firstRowByNight.get(nightKey);
+      if (!first || r.closed_at < first.closed_at) firstRowByNight.set(nightKey, r);
+    }
+    let latestPreparationRow: ReliabilityInputRow | null = null;
+    for (const row of firstRowByNight.values()) {
+      if (!latestPreparationRow || row.closed_at > latestPreparationRow.closed_at)
+        latestPreparationRow = row;
+    }
+    if (latestPreparationRow) {
+      latestGemCount = latestPreparationRow.gem_count;
+      latestGemmedSlotCount = latestPreparationRow.gemmed_slot_count;
+      latestGemmableSlotCount = latestPreparationRow.gemmable_slot_count;
+      latestEnchantedSlotCount = latestPreparationRow.enchanted_slot_count;
+      latestEnchantableSlotCount = latestPreparationRow.enchantable_slot_count;
+      latestPreparationObservedAt = latestPreparationRow.closed_at;
+      const preparationRecord = evidenceRecordByPlayerPull.get(
+        `${playerName}|${latestPreparationRow.pull_id}`,
+      );
+      if (preparationRecord?.equipped_items) {
+        const preparation = gearPreparationDetails(preparationRecord.equipped_items);
+        latestMissingEnchantSlots = preparation.missingEnchantSlots;
+        latestMissingGemSlots = preparation.missingGemSlots;
+      }
+    }
+
+    // §"rotar en un boss por tema de specs no tiene por qué afectar a la
+    // fiabilidad" (feedback real, 2026-08-28): asistencia ya no puntúa
+    // dentro de Fiabilidad (ver comentario junto a AXIS_WEIGHTS) — sigue
+    // calculándose y mostrándose (attendanceNightsAttended/
+    // attendanceNightsTotal más abajo, informativo) a partir de reports
+    // REALMENTE importados en Avoid desde el inicio de season
+    // (attendance.service.ts), no del calendario propio de wowaudit.
+    const result = computeReliabilityBreakdown(rows, now);
+    const overall = result?.overall ?? 0;
+    const { mecanica, defensiva, preparacion } = result?.breakdown ?? {
+      mecanica: null,
+      defensiva: null,
+      preparacion: null,
+    };
+    const observedAxisCount = result
+      ? Object.values(result.breakdown).filter((value) => value != null).length
+      : 0;
+    // Antes se sumaban `defensive_use_opportunity` y la evaluación al
+    // morir como si fueran oportunidades independientes. Una misma fila
+    // podía aportar 2 y la UI llegaba a enseñar más oportunidades que
+    // pulls. Son dos muestras distintas y así se conservan desde aquí.
+    const defensiveOpportunityCount = rows.filter((row) => row.defensive_use_opportunity).length;
+    const defensiveUseCount = rows.filter(
+      (row) => row.defensive_use_opportunity && row.used_defensive_in_pull,
+    ).length;
+    const defensiveDeathOpportunityCount = rows.filter(
+      (row) => row.used_defensive_when_died != null,
+    ).length;
+    const defensiveDeathUseCount = rows.filter(
+      (row) => row.used_defensive_when_died === true,
+    ).length;
+
+    const spellUsage = new Map<
+      string,
+      { spellId: number; name: string; castCount: number; pullIds: Set<string> }
+    >();
+    const defensiveDeathEvidence: DefensiveDeathEvidence[] = [];
+    for (const row of rows) {
+      const record = evidenceRecordByPlayerPull.get(`${playerName}|${row.pull_id}`);
+      const pull = evidencePullById.get(row.pull_id);
+      if (!record || !pull) continue;
+      const wipeCallStartMs =
+        pull.wipe_call_excluded && typeof pull.wipe_call_signals?.wipeCallStartMs === 'number'
+          ? pull.wipe_call_signals.wipeCallStartMs
+          : null;
+      for (const defensive of record.defensive_casts ?? []) {
+        const castCount = (defensive.timestampsMs ?? []).filter(
+          (timestamp) => wipeCallStartMs == null || timestamp < wipeCallStartMs,
+        ).length;
+        if (!castCount) continue;
+        const key = `${defensive.spellId}|${defensive.name}`;
+        const current = spellUsage.get(key) ?? {
+          spellId: defensive.spellId,
+          name: defensive.name,
+          castCount: 0,
+          pullIds: new Set<string>(),
+        };
+        current.castCount += castCount;
+        current.pullIds.add(row.pull_id);
+        spellUsage.set(key, current);
+      }
+
+      if (row.used_defensive_when_died == null) continue;
+      const cause = record.death_cause;
+      const options = cause?.defensiveOptions ?? [];
+      defensiveDeathEvidence.push({
+        pullId: row.pull_id,
+        bossId: row.boss_id,
+        bossName: bossNames.get(row.boss_id) ?? `Boss ${row.boss_id}`,
+        difficulty: row.difficulty,
+        reportCode: pull.report_code,
+        fightId: pull.fight_id,
+        pullNumber: pull.pull_number,
+        closedAt: pull.closed_at,
+        mechanicId: cause?.mechanicId ?? null,
+        mechanicName: cause?.mechanicName ?? 'Causa sin identificar',
+        usedDefensive: row.used_defensive_when_died === true,
+        availableUnused: options
+          .filter((option) => option.status === 'available_unused')
+          .map((option) => ({ spellId: option.spellId, name: option.name })),
+        active: options
+          .filter((option) => option.status === 'active')
+          .map((option) => ({ spellId: option.spellId, name: option.name })),
+        onCooldown: options
+          .filter((option) => option.status === 'on_cooldown')
+          .map((option) => ({
+            spellId: option.spellId,
+            name: option.name,
+            cooldownRemainingMs: option.cooldownRemainingMs ?? null,
+          })),
+      });
+    }
+    const defensiveSpellUsage: DefensiveSpellUsage[] = [...spellUsage.values()]
+      .map((usage) => ({
+        spellId: usage.spellId,
+        name: usage.name,
+        castCount: usage.castCount,
+        pullCount: usage.pullIds.size,
+      }))
+      .sort((a, b) => b.castCount - a.castCount || a.name.localeCompare(b.name, 'es'));
+    defensiveDeathEvidence.sort((a, b) => b.closedAt.localeCompare(a.closedAt));
+
+    // §12.5 "flecha de tendencia": mismo cálculo aplicado a cada mitad
+    // cronológica de la ventana — sin recalcular nada nuevo, solo
+    // particionando las filas que ya se trajeron. Si alguna mitad se
+    // queda sin pulls (jugador nuevo en la guild, o hueco real sin
+    // asistir), trend queda null — no es lo mismo "sin dato" que "estable".
+    const olderScore = computeOverall(
+      rows.filter((r) => new Date(r.closed_at).getTime() < midpoint),
+      now,
+    );
+    const newerScore = computeOverall(
+      rows.filter((r) => new Date(r.closed_at).getTime() >= midpoint),
+      now,
+    );
+    let trend: PlayerReliability['trend'] = null;
+    if (olderScore != null && newerScore != null) {
+      const delta = newerScore - olderScore;
+      trend = delta >= TREND_THRESHOLD ? 'up' : delta <= -TREND_THRESHOLD ? 'down' : 'flat';
+    }
+
+    return {
+      playerName,
+      overall,
+      breakdown: { mecanica, defensiva, preparacion },
+      consistency: result?.consistency ?? null,
+      latestGemCount,
+      latestGemmedSlotCount,
+      latestGemmableSlotCount,
+      latestEnchantedSlotCount,
+      latestEnchantableSlotCount,
+      latestMissingEnchantSlots,
+      latestMissingGemSlots,
+      latestPreparationObservedAt,
+      sampleSize: rows.length,
+      sampleNightCount: firstRowByNight.size,
+      lastObservedAt,
+      defensiveOpportunityCount,
+      defensiveUseCount,
+      defensiveDeathOpportunityCount,
+      defensiveDeathUseCount,
+      defensiveSpellUsage,
+      defensiveDeathEvidence,
+      observedAxisCount,
+      attendanceNightsAttended: attendance?.attended ?? null,
+      attendanceNightsTotal: attendance?.total ?? null,
+      trend,
+      role: rosterEntry?.role ?? null,
+      rank: rosterEntry?.rank ?? null,
+    };
   }
 
   /**

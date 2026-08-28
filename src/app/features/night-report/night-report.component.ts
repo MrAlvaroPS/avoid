@@ -26,8 +26,9 @@ import { toBlob } from 'html-to-image';
 import { NightReportService, type NightReport } from '../../core/night-report.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { mapBrief } from '../../core/pull-analysis.service';
-import { comparisonLabel, formatDuration, formatPct } from '../../shared/format.util';
+import { classColor, comparisonLabel, formatDuration, formatPct } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
+import { ClassIconComponent } from '../../shared/class-icon.component';
 import { TrendBarsComponent } from '../../shared/charts/trend-bars.component';
 import { LlmAnalysisCardComponent } from '../live-pull/llm-analysis-card.component';
 import { NightReportInfographicComponent } from './night-report-infographic.component';
@@ -42,7 +43,7 @@ const SCHEMA_VERSION = 15;
 @Component({
   selector: 'app-night-report',
   standalone: true,
-  imports: [DatePipe, RouterLink, WowheadLinkComponent, TrendBarsComponent, LlmAnalysisCardComponent, NightReportInfographicComponent],
+  imports: [DatePipe, RouterLink, WowheadLinkComponent, TrendBarsComponent, LlmAnalysisCardComponent, NightReportInfographicComponent, ClassIconComponent],
   templateUrl: './night-report.component.html',
   styleUrl: './night-report.component.scss',
 })
@@ -70,6 +71,7 @@ export class NightReportComponent {
   formatPct = formatPct;
   bilingualName = bilingualName;
   comparisonLabel = comparisonLabel;
+  classColor = classColor;
 
   // §"un resumen de una noche... la consulta de IA" — se mantiene igual que
   // informe 1, nunca lo cubrió informe 2 (es cualitativo/manual, no
@@ -89,7 +91,13 @@ export class NightReportComponent {
 
   private attendanceExtras = computed<NightReportAttendanceExtras | undefined>(() => {
     const d = this.data();
-    return d ? { attendingMain: d.attendingMain, attendingTrial: d.attendingTrial, absentMain: d.absentMain } : undefined;
+    return d
+      ? {
+          attendingMain: d.attendingMain.map((p) => p.name),
+          attendingTrial: d.attendingTrial.map((p) => p.name),
+          absentMain: d.absentMain.map((p) => p.name),
+        }
+      : undefined;
   });
 
   // §"el informe ahora mismo es un poco caos y necesita orden y síntesis...

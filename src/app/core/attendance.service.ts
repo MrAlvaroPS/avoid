@@ -81,4 +81,44 @@ export class AttendanceService {
     }
     return result;
   }
+
+  /**
+   * §rendimiento (2026-08-29): misma fórmula que listRealAttendance (noches
+   * reales distintas por FECHA, no por report_code), pero el escaneo de
+   * player_pull_records queda acotado a UN jugador — listRealAttendance trae
+   * esa tabla para TODA la guild, útil para el Roster (§12) pero
+   * desproporcionado cuando el dosier de un jugador (night-player-summary.
+   * service.ts) solo necesita attended/total de una persona concreta.
+   */
+  async getPlayerRealAttendance(playerName: string): Promise<RealAttendanceEntry | null> {
+    const seasonStart = await this.getSeasonStartDate();
+    if (!seasonStart) return null;
+    const seasonStartMs = new Date(seasonStart).getTime();
+
+    const { data: reportsData, error: reportsErr } = await this.supabase.client.from('reports').select('code, start_time').gte('start_time', seasonStartMs);
+    if (reportsErr) throw reportsErr;
+    const reportRows = (reportsData ?? []) as { code: string; start_time: number }[];
+    if (!reportRows.length) return null;
+
+    const dateByCode = new Map(reportRows.map((r) => [r.code, new Date(r.start_time).toISOString().slice(0, 10)]));
+    const total = new Set(dateByCode.values()).size;
+
+    const { data: recordsData, error: recordsErr } = await this.supabase.client
+      .from('player_pull_records')
+      .select('pulls!inner(report_code)')
+      .eq('player_name', playerName)
+      .in('pulls.report_code', [...dateByCode.keys()]);
+    if (recordsErr) throw recordsErr;
+
+    const attendedNights = new Set<string>();
+    for (const row of (recordsData ?? []) as unknown as { pulls: { report_code: string } }[]) {
+      const night = dateByCode.get(row.pulls.report_code);
+      if (night) attendedNights.add(night);
+    }
+    return {
+      attended: attendedNights.size,
+      total,
+      pct: total > 0 ? Math.round((attendedNights.size / total) * 1000) / 10 : null,
+    };
+  }
 }

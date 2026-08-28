@@ -12,6 +12,69 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
 
+export interface MechanicCoaching {
+  /** Nota descriptiva procedente de la clasificación revisada. */
+  note: string | null;
+  /** Instrucción práctica persistida en Ajustes; null si aún no se ha contrastado. */
+  resolution: string | null;
+}
+
+/**
+ * Clave exacta de coaching. A diferencia del mapa histórico por nombre, esta
+ * incluye boss+dificultad: una habilidad homónima puede resolverse de forma
+ * distinta en otro encuentro o dificultad y la infografía no puede mezclarla.
+ */
+export function mechanicCoachingKey(
+  bossId: string,
+  difficulty: string,
+  mechanicName: string,
+): string {
+  return `${bossId}|${difficulty}|${mechanicName.trim().toLocaleLowerCase('en-US')}`;
+}
+
+/**
+ * Variante estricta para superficies de coaching (en especial la infografía
+ * que recibe el raider). Solo devuelve texto realmente guardado en el
+ * manifiesto y conserva el ámbito boss+dificultad; nunca rellena una
+ * resolución ausente con consejos genéricos.
+ */
+export async function loadMechanicCoachingByKey(
+  client: SupabaseClient,
+  bossIds: string[],
+): Promise<Map<string, MechanicCoaching>> {
+  const uniqueBossIds = [...new Set(bossIds)];
+  const map = new Map<string, MechanicCoaching>();
+  if (!uniqueBossIds.length) return map;
+
+  const query = (relation: string) =>
+    client
+      .from(relation)
+      .select('boss_id, difficulty, name, ai_classification, resolution')
+      .in('boss_id', uniqueBossIds);
+  const { data, error } = await withSupabaseRelationFallback(
+    'applicable_boss_mechanics_candidates',
+    () => query('applicable_boss_mechanics_candidates'),
+    () => query('boss_mechanics_candidates'),
+  );
+  if (error) throw error;
+
+  for (const row of (data ?? []) as {
+    boss_id: string;
+    difficulty: string;
+    name: string;
+    ai_classification: { notes?: string } | null;
+    resolution: string | null;
+  }[]) {
+    const note = row.ai_classification?.notes?.trim() || null;
+    const resolution = row.resolution?.trim() || null;
+    map.set(mechanicCoachingKey(row.boss_id, row.difficulty, row.name), {
+      note,
+      resolution,
+    });
+  }
+  return map;
+}
+
 export async function loadMechanicNotesByName(client: SupabaseClient, bossIds: string[]): Promise<Map<string, string>> {
   const uniqueBossIds = [...new Set(bossIds)];
   const map = new Map<string, string>();

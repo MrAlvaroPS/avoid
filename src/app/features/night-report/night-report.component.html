@@ -115,8 +115,10 @@
           <div class="attendance-col">
             <span class="attendance-label tone-success">Presentes — Main ({{ d.attendingMain.length }})</span>
             <div class="chip-row">
-              @for (name of d.attendingMain; track name) {
-                <a class="player-chip" [routerLink]="['/report', d.reportCode, 'player', name]">{{ name }}</a>
+              @for (player of d.attendingMain; track player.name) {
+                <a class="player-chip" [style.color]="classColor(player.class)" [routerLink]="['/report', d.reportCode, 'player', player.name]">
+                  <app-class-icon [wclClass]="player.class" />{{ player.name }}
+                </a>
               }
             </div>
           </div>
@@ -124,8 +126,10 @@
             <div class="attendance-col">
               <span class="attendance-label">Presentes — Trial ({{ d.attendingTrial.length }})</span>
               <div class="chip-row">
-                @for (name of d.attendingTrial; track name) {
-                  <a class="player-chip" [routerLink]="['/report', d.reportCode, 'player', name]">{{ name }}</a>
+                @for (player of d.attendingTrial; track player.name) {
+                  <a class="player-chip" [style.color]="classColor(player.class)" [routerLink]="['/report', d.reportCode, 'player', player.name]">
+                    <app-class-icon [wclClass]="player.class" />{{ player.name }}
+                  </a>
                 }
               </div>
             </div>
@@ -134,8 +138,10 @@
             <div class="attendance-col">
               <span class="attendance-label tone-danger">Ausentes — Main ({{ d.absentMain.length }})</span>
               <div class="chip-row">
-                @for (name of d.absentMain; track name) {
-                  <span class="player-chip chip-absent">{{ name }}</span>
+                @for (player of d.absentMain; track player.name) {
+                  <span class="player-chip chip-absent" [style.color]="classColor(player.class)">
+                    <app-class-icon [wclClass]="player.class" />{{ player.name }}
+                  </span>
                 }
               </div>
             </div>

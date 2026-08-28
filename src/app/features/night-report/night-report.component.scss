@@ -294,21 +294,25 @@ h4 {
   gap: 6px;
 }
 .player-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 10px;
   background: rgb(0 0 0 / 17%);
   border: 1px solid rgb(255 255 255 / 8%);
   border-radius: 20px;
   color: var(--text-muted);
   font-size: 11px;
+  font-weight: 600;
   text-decoration: none;
   &:hover {
-    color: var(--accent);
-    border-color: var(--accent);
+    border-color: currentColor;
+    filter: brightness(1.2);
   }
 }
 .chip-absent {
-  color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  opacity: 0.75;
   cursor: default;
 }
 .tone-success {
