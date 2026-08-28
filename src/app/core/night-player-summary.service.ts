@@ -180,6 +180,8 @@ export interface NightPlayerSummary {
   raiderIoUrl: string | null;
   /** §"meter en el dosier de un jugador... la consulta de IA" (feedback real): cacheado desde night_player_briefs, null si nunca se ha generado. */
   brief: LlmPullAnalysis | null;
+  /** §"preparar la vinculación de ese ID... con el dosier de ese raider" (feedback real, 2026-08-28): de discord_roster_channels (Ajustes → Discord), cruzado por wowaudit character_id — null = ese personaje no tiene ninguna vinculación de Discord guardada todavía. discordChannelId puede ser null aunque SÍ haya vinculación (Trial/oficial/pendiente del próximo "Sincronizar"), eso no es un error. */
+  discordChannel: { discordChannelId: string | null; discordUserId: string; isOfficer: boolean } | null;
 }
 
 // §"región... viene en wowaudit" — wowaudit no da región, pero esta guild es
@@ -578,6 +580,27 @@ export class NightPlayerSummaryService {
     const rosterEntry = roster.find((r) => r.name === playerName) ?? null;
     const reliabilityEntry = reliabilityList.find((r) => r.playerName === playerName) ?? null;
 
+    // §"preparar la vinculación de ese ID... con el dosier de ese raider"
+    // (feedback real, 2026-08-28): no puede ir en el Promise.all de arriba —
+    // depende de rosterEntry.characterId, que solo se conoce una vez
+    // resuelto `roster` (que SÍ vive en ese Promise.all). Best-effort: un
+    // fallo aquí no debe tirar todo el dosier abajo, la vinculación de
+    // Discord es un extra, no el contenido principal.
+    type DiscordChannelRow = { discord_channel_id: string | null; discord_user_id: string; is_officer: boolean };
+    let discordChannel: DiscordChannelRow | null = null;
+    if (rosterEntry) {
+      try {
+        const { data } = await client
+          .from('discord_roster_channels')
+          .select('discord_channel_id, discord_user_id, is_officer')
+          .eq('character_id', rosterEntry.characterId)
+          .maybeSingle();
+        discordChannel = (data ?? null) as DiscordChannelRow | null;
+      } catch {
+        // best-effort — un fallo aquí no debe tirar todo el dosier abajo (ver comentario de arriba)
+      }
+    }
+
     const realmSlug = rosterEntry ? slugifyRealm(rosterEntry.realm) : null;
     const nameSlug = playerName.toLowerCase();
     const battleNetUrl = realmSlug ? `https://worldofwarcraft.blizzard.com/en-us/character/${REGION}/${realmSlug}/${nameSlug}` : null;
@@ -603,6 +626,9 @@ export class NightPlayerSummaryService {
       battleNetUrl,
       raiderIoUrl,
       brief: briefRow ? mapBrief(briefRow as unknown as Parameters<typeof mapBrief>[0]) : null,
+      discordChannel: discordChannel
+        ? { discordChannelId: discordChannel.discord_channel_id, discordUserId: discordChannel.discord_user_id, isOfficer: discordChannel.is_officer }
+        : null,
     };
   }
 

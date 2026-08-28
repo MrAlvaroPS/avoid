@@ -21,6 +21,14 @@ import type { DeathCause, MechanicCategory } from '../../shared/models/domain';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
 import { errorMessage } from '../../shared/error-message.util';
 
+// §"preparar la vinculación de ese ID... con el dosier de ese raider, para
+// eventualmente automatizar enviar la infografía" (feedback real,
+// 2026-08-28): mismo guild que ya usa DEFAULT_DISCORD_CHANNEL_ID en
+// night-report-infographic.component.ts — un guild ID no es secreto
+// (visible en cualquier URL de canal de este servidor), así que vive aquí
+// igual que cualquier otra constante de config del frontend.
+const DISCORD_GUILD_ID = '1377655547121242132';
+
 function toneForScore(score: number | null): 'danger' | 'warning' | 'success' | null {
   if (score == null) return null;
   return score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
@@ -78,6 +86,18 @@ export class NightPlayerDossierComponent {
   }
 
   copyStatus = signal<'idle' | 'copied' | 'error'>('idle');
+
+  // §"preparar la vinculación de ese ID... con el dosier de ese raider, para
+  // eventualmente automatizar enviar la infografía" (feedback real,
+  // 2026-08-28): la infografía visual por raider todavía no existe (solo la
+  // de la noche completa, ver NightReportInfographicComponent) — esto envía
+  // el mismo resumen de texto que ya construye copySummary() a través del
+  // canal privado ya vinculado en Ajustes → Discord (discord_roster_channels,
+  // resuelto en night-player-summary.service.ts). Mismo sendDiscordMessage
+  // que usa la infografía de la noche — cuando exista una infografía visual
+  // por raider, apuntarla a este mismo channelId es un cambio trivial.
+  sendToDiscordStatus = signal<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  sendToDiscordError = signal<string | null>(null);
 
   // §"que dentro del dosier pueda hacer consulta IA con informe completo...
   // orientado a mejorar como RL" (feedback real): mismo patrón que el brief
@@ -294,6 +314,39 @@ export class NightPlayerDossierComponent {
   async copySummary(): Promise<void> {
     const d = this.data();
     if (!d) return;
+    try {
+      await navigator.clipboard.writeText(this.buildSummaryText(d));
+      this.copyStatus.set('copied');
+      setTimeout(() => this.copyStatus.set('idle'), 2000);
+    } catch {
+      this.copyStatus.set('error');
+      setTimeout(() => this.copyStatus.set('idle'), 2000);
+    }
+  }
+
+  /** URL "abrir en Discord" del canal privado de este raider (Ajustes → Discord) — null si todavía no tiene canal (sin vincular, Trial, oficial, o pendiente del próximo "Sincronizar"). */
+  discordChannelUrl(): string | null {
+    const channelId = this.data()?.discordChannel?.discordChannelId;
+    return channelId ? `https://discord.com/channels/${DISCORD_GUILD_ID}/${channelId}` : null;
+  }
+
+  async sendSummaryToDiscord(): Promise<void> {
+    const d = this.data();
+    const channelId = d?.discordChannel?.discordChannelId;
+    if (!d || !channelId) return;
+    this.sendToDiscordStatus.set('sending');
+    this.sendToDiscordError.set(null);
+    try {
+      await this.edgeFunctions.sendDiscordMessage({ channelId, content: this.buildSummaryText(d) });
+      this.sendToDiscordStatus.set('sent');
+      setTimeout(() => this.sendToDiscordStatus.set('idle'), 2500);
+    } catch (err) {
+      this.sendToDiscordError.set(errorMessage(err));
+      this.sendToDiscordStatus.set('error');
+    }
+  }
+
+  private buildSummaryText(d: NightPlayerSummary): string {
     const dateLabel = d.reportDate ? new Date(d.reportDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }) : d.reportTitle;
     const lines = [
       `📋 Dosier de ${d.playerName} — ${dateLabel}`,
@@ -314,13 +367,6 @@ export class NightPlayerDossierComponent {
       );
     }
 
-    try {
-      await navigator.clipboard.writeText(lines.join('\n').trim());
-      this.copyStatus.set('copied');
-      setTimeout(() => this.copyStatus.set('idle'), 2000);
-    } catch {
-      this.copyStatus.set('error');
-      setTimeout(() => this.copyStatus.set('idle'), 2000);
-    }
+    return lines.join('\n').trim();
   }
 }

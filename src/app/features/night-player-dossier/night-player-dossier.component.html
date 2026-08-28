@@ -34,9 +34,20 @@
           }
         </div>
       </div>
-      <button type="button" class="copy-btn" (click)="copySummary()">
-        {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord →' }}
-      </button>
+      <div class="header-actions">
+        <button type="button" class="copy-btn" (click)="copySummary()">
+          {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord →' }}
+        </button>
+        @if (discordChannelUrl(); as channelUrl) {
+          <button type="button" class="copy-btn discord-send-btn" [disabled]="sendToDiscordStatus() === 'sending'" (click)="sendSummaryToDiscord()">
+            {{ sendToDiscordStatus() === 'sending' ? 'Enviando…' : sendToDiscordStatus() === 'sent' ? '✓ Enviado' : 'Enviar a su canal →' }}
+          </button>
+          <a [href]="channelUrl" target="_blank" rel="noopener" class="discord-channel-link" title="Abrir el canal privado de este raider en Discord">🔗 Canal</a>
+          @if (sendToDiscordError(); as e) {
+            <span class="discord-send-error">{{ e }}</span>
+          }
+        }
+      </div>
     </header>
 
     <!-- §"parece que es calcular lo mismo de 3 formas distintas... hace que

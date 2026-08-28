@@ -13,10 +13,17 @@
     <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'defensivos'" [class.selected]="activeTab() === 'defensivos'" (click)="activeTab.set('defensivos')">
       Defensivos
     </button>
+    <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'discord'" [class.selected]="activeTab() === 'discord'" (click)="activeTab.set('discord')">
+      Discord
+    </button>
   </div>
 
   @if (activeTab() === 'defensivos') {
     <app-defensive-catalog />
+  }
+
+  @if (activeTab() === 'discord') {
+    <app-discord-settings />
   }
 
   @if (activeTab() === 'mecanicas') {

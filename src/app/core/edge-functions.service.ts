@@ -71,6 +71,17 @@ export interface SyncBossMechanicsResult {
   }[];
 }
 
+export interface DiscordRosterLink {
+  character_id: number;
+  character_name: string;
+  discord_user_id: string;
+  discord_display_name: string | null;
+  discord_channel_id: string | null;
+  is_officer: boolean;
+  linked_at: string;
+  channel_synced_at: string | null;
+}
+
 export interface SyncReportsResult {
   ok: true;
   reportsScanned: number;
@@ -286,6 +297,51 @@ export class EdgeFunctionsService {
     referenceStatsUpserts: number;
   }> {
     return this.invoke('sync-season-bosses', zoneId ? { zoneId } : {});
+  }
+
+  /**
+   * §"un bot que crea canales privados dentro de una categoría... solo para
+   * rango Raider, ni trial ni oficial. Esas personas concretas las podemos
+   * traer de wowaudit" (feedback real, 2026-08-28): una función, varias
+   * `action` — mismo patrón que classify-mechanics/manual-pull-brief.
+   * WoWAudit no expone Discord ID (comprobado empíricamente), así que la
+   * vinculación personaje↔Discord es manual (saveDiscordRosterLink).
+   */
+  async getDiscordRosterConfig(): Promise<{
+    ok: true;
+    guildId: string;
+    settings: { category_id: string | null; officers_role_id: string | null };
+    links: DiscordRosterLink[];
+    roster: { character_id: number; name: string; rank: string }[];
+  }> {
+    return this.invoke('discord-roster-channels', { action: 'get-config' });
+  }
+
+  async listDiscordCategories(): Promise<{ ok: true; categories: { id: string; name: string }[] }> {
+    return this.invoke('discord-roster-channels', { action: 'list-guild-categories' });
+  }
+
+  async listDiscordRoles(): Promise<{ ok: true; roles: { id: string; name: string }[] }> {
+    return this.invoke('discord-roster-channels', { action: 'list-guild-roles' });
+  }
+
+  async saveDiscordRosterConfig(categoryId: string, officersRoleId: string): Promise<{ ok: true }> {
+    return this.invoke('discord-roster-channels', { action: 'save-config', categoryId, officersRoleId });
+  }
+
+  /** Pega el Discord User ID (número largo, con el modo desarrollador de Discord activado: clic derecho sobre la persona → Copiar ID de usuario). */
+  async saveDiscordRosterLink(characterId: number, characterName: string, discordUserId: string): Promise<{ ok: true; displayName: string; isOfficer: boolean }> {
+    return this.invoke('discord-roster-channels', { action: 'save-link', characterId, characterName, discordUserId });
+  }
+
+  /** Desvincula y borra el canal de Discord (si existe) ya mismo, sin esperar a la próxima sincronización. */
+  async removeDiscordRosterLink(characterId: number): Promise<{ ok: true }> {
+    return this.invoke('discord-roster-channels', { action: 'remove-link', characterId });
+  }
+
+  /** Reconciliación: crea/actualiza/borra canales para que Discord refleje el roster (rank=Main, sin el rol de Oficiales) tal cual está AHORA. Idempotente. */
+  async syncDiscordRosterChannels(): Promise<{ ok: true; created: string[]; updated: string[]; deleted: string[]; unlinked: string[]; skippedNoDiscordMember: string[] }> {
+    return this.invoke('discord-roster-channels', { action: 'sync' });
   }
 
   private async invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> {

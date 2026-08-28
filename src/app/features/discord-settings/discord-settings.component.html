@@ -1,0 +1,159 @@
+<div class="discord-settings">
+  <p class="intro">
+    Un canal privado por raider (rango <strong>Main</strong> en WoWAudit, sin el rol de Oficiales) dentro de la
+    categoría elegida abajo — visible solo para esa persona y para Oficiales. WoWAudit no expone el Discord ID de
+    nadie, así que la vinculación personaje↔Discord se hace a mano una vez; a partir de ahí, "Sincronizar" crea los
+    canales que falten, borra los de quien ya no sea elegible y repara los permisos si alguien los tocó a mano en
+    Discord.
+  </p>
+
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  @if (loading()) {
+    <p class="muted">Cargando…</p>
+  } @else {
+    <section class="config-card">
+      <h2>Configuración</h2>
+      @if (discordOptionsError(); as e) {
+        <p class="error" role="alert">No se pudo consultar Discord: {{ e }} — comprueba que el bot esté en el servidor con permiso para ver canales/roles.</p>
+      }
+      <div class="config-row">
+        <label>
+          Categoría destino
+          <select [disabled]="loadingDiscordOptions()" (change)="selectedCategoryId.set($any($event.target).value)">
+            <option value="" [selected]="!selectedCategoryId()">— elige una categoría —</option>
+            @for (c of categories(); track c.id) {
+              <option [value]="c.id" [selected]="c.id === selectedCategoryId()">{{ c.name }}</option>
+            }
+          </select>
+        </label>
+        <label>
+          Rol de Oficiales
+          <select [disabled]="loadingDiscordOptions()" (change)="selectedOfficersRoleId.set($any($event.target).value)">
+            <option value="" [selected]="!selectedOfficersRoleId()">— elige un rol —</option>
+            @for (r of roles(); track r.id) {
+              <option [value]="r.id" [selected]="r.id === selectedOfficersRoleId()">{{ r.name }}</option>
+            }
+          </select>
+        </label>
+        <button type="button" class="save-btn" [disabled]="savingConfig() || !selectedCategoryId() || !selectedOfficersRoleId()" (click)="onSaveConfig()">
+          {{ savingConfig() ? 'Guardando…' : 'Guardar' }}
+        </button>
+        @if (configSaved()) {
+          <span class="result-ok">Guardado ✓</span>
+        }
+      </div>
+      <p class="hint">
+        El bot necesita permiso "Gestionar canales" y "Gestionar roles" en este servidor — se concede una vez desde
+        Ajustes del servidor de Discord, no desde aquí.
+      </p>
+    </section>
+
+    <section class="sync-card">
+      <div class="sync-bar">
+        <button type="button" class="sync-btn" [disabled]="syncing() || !configReady()" (click)="onSync()">
+          {{ syncing() ? 'Sincronizando…' : 'Sincronizar canales ahora' }}
+        </button>
+        @if (!configReady()) {
+          <span class="hint">Elige categoría y rol de Oficiales arriba primero.</span>
+        }
+      </div>
+      @if (lastSyncResult(); as r) {
+        <div class="sync-result">
+          @if (r.created.length) {
+            <p class="result-line result-ok">Creados: {{ r.created.join(', ') }}</p>
+          }
+          @if (r.updated.length) {
+            <p class="result-line muted">Actualizados: {{ r.updated.join(', ') }}</p>
+          }
+          @if (r.deleted.length) {
+            <p class="result-line result-warn">Borrados (ya no elegibles): {{ r.deleted.join(', ') }}</p>
+          }
+          @if (r.unlinked.length) {
+            <p class="result-line result-warn">Sin vincular todavía: {{ r.unlinked.join(', ') }}</p>
+          }
+          @if (r.skippedNoDiscordMember.length) {
+            <p class="result-line result-error">Con problemas: {{ r.skippedNoDiscordMember.join(', ') }}</p>
+          }
+          @if (!r.created.length && !r.updated.length && !r.deleted.length && !r.unlinked.length && !r.skippedNoDiscordMember.length) {
+            <p class="result-line muted">Nada que hacer — Discord ya coincide con el roster.</p>
+          }
+        </div>
+      }
+    </section>
+
+    <section class="roster-link-table">
+      <h2>Raiders (rango Main) — {{ mainRoster().length }}</h2>
+      @if (mainRoster().length === 0) {
+        <p class="muted">Todavía no hay nadie con rango Main en el roster de WoWAudit.</p>
+      } @else {
+        <table>
+          <thead>
+            <tr>
+              <th>Personaje</th>
+              <th>Discord</th>
+              <th>Canal</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (member of mainRoster(); track member.character_id) {
+              <tr>
+                <td class="name">{{ member.name }}</td>
+                <td>
+                  @if (linkFor(member.character_id); as link) {
+                    <span class="linked-name">{{ link.discord_display_name ?? link.discord_user_id }}</span>
+                    @if (link.is_officer) {
+                      <span class="badge officer">Oficial — sin canal</span>
+                    }
+                  } @else {
+                    <div class="link-form">
+                      <input
+                        type="text"
+                        placeholder="Discord User ID"
+                        [value]="draftFor(member.character_id)"
+                        (input)="setDraft(member.character_id, $any($event.target).value)"
+                      />
+                      <button type="button" class="link-btn" [disabled]="savingLinkFor() === member.character_id || !draftFor(member.character_id).trim()" (click)="onSaveLink(member.character_id, member.name)">
+                        {{ savingLinkFor() === member.character_id ? 'Vinculando…' : 'Vincular' }}
+                      </button>
+                    </div>
+                    @if (linkErrorFor(); as le) {
+                      @if (le.characterId === member.character_id) {
+                        <p class="result-line result-error">{{ le.message }}</p>
+                      }
+                    }
+                  }
+                </td>
+                <td>
+                  @if (linkFor(member.character_id)?.discord_channel_id; as channelId) {
+                    <a class="channel-link" [href]="discordChannelUrl(channelId)" target="_blank" rel="noopener">Abrir canal ↗</a>
+                  } @else if (linkFor(member.character_id)) {
+                    <span class="muted">pendiente de sincronizar</span>
+                  } @else {
+                    <span class="muted">—</span>
+                  }
+                </td>
+                <td>
+                  @if (linkFor(member.character_id)) {
+                    <button type="button" class="unlink-btn" [class.confirming]="confirmingRemoveId() === member.character_id" [disabled]="removingId() === member.character_id" (click)="onRequestRemoveLink(member.character_id)">
+                      @if (removingId() === member.character_id) {
+                        Borrando…
+                      } @else if (confirmingRemoveId() === member.character_id) {
+                        ¿Seguro? Borra el canal
+                      } @else {
+                        Desvincular
+                      }
+                    </button>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </section>
+  }
+</div>

@@ -15,6 +15,7 @@ import type { BossMechanicCandidateRow } from '../../shared/models/domain';
 import { difficultyRank, hasExactDifficultyEvidence, isContradictedByOtherDifficulty, type OtherDifficultyEvidence } from '../../shared/difficulty-evidence.util';
 import { errorMessage } from '../../shared/error-message.util';
 import { DefensiveCatalogComponent } from '../defensive-catalog/defensive-catalog.component';
+import { DiscordSettingsComponent } from '../discord-settings/discord-settings.component';
 
 const CATEGORIES = ['tankbuster', 'raid-damage', 'avoidable-ground', 'debuff-stack', 'interrupt', 'soak', 'spread', 'healing-absorb', 'personal-target', 'enrage'] as const;
 const RESPONSIBILITIES = ['tank', 'dps', 'healer', 'raid', 'personal'] as const;
@@ -27,7 +28,10 @@ const RESPONSIBILITIES = ['tank', 'dps', 'healer', 'raid', 'personal'] as const;
 // aquí dentro) — mismo criterio que difficulty-tabs ya usaba: signal, no
 // una ruta nueva, para no complicar el deep-linking de algo que es un modo
 // de vista, no una entidad con URL propia.
-type AjustesTab = 'mecanicas' | 'defensivos';
+// §"debe estar en la pestaña de ajustes, crear un nuevo submenu llamado
+// Discord" (feedback real, 2026-08-28): tercera pestaña, mismo patrón que
+// 'defensivos' — DiscordSettingsComponent embebido, sin ruta propia.
+type AjustesTab = 'mecanicas' | 'defensivos' | 'discord';
 
 // §9.1: un boss sembrado por sync-season-bosses pero nunca pulleado no tiene
 // dificultades "vistas" que ofrecer (difficulties queda vacío) — se ofrecen
@@ -38,7 +42,7 @@ type AjustesTab = 'mecanicas' | 'defensivos';
 @Component({
   selector: 'app-manifest',
   standalone: true,
-  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent, DefensiveCatalogComponent],
+  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent, DefensiveCatalogComponent, DiscordSettingsComponent],
   templateUrl: './manifest.component.html',
   styleUrl: './manifest.component.scss',
 })

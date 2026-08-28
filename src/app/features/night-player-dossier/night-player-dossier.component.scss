@@ -94,9 +94,24 @@
   color: var(--warning);
 }
 
-.copy-btn {
+// §"preparar la vinculación de ese ID... con el dosier de ese raider"
+// (feedback real, 2026-08-28): antes .copy-btn era hijo directo de
+// .page-header — ahora vive junto al botón/enlace de Discord dentro de este
+// wrapper, para que los tres (copiar / enviar / abrir canal) se agrupen y
+// envuelvan juntos en pantallas estrechas sin descuadrar el resto de la cabecera.
+.header-actions {
   flex-shrink: 0;
   align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  max-width: 220px;
+  justify-content: flex-end;
+}
+
+.copy-btn {
+  flex-shrink: 0;
   padding: 8px 14px;
   background: var(--surface-2);
   border: 1px solid var(--border-bright);
@@ -110,6 +125,39 @@
   &:hover {
     background: var(--surface-hover);
   }
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
+.discord-send-btn {
+  background: var(--accent-solid);
+  border-color: transparent;
+  color: #fff;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+}
+
+.discord-channel-link {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.discord-send-error {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--danger);
+  text-align: right;
 }
 
 // §"parece que es calcular lo mismo de 3 formas distintas... hace que sea
