@@ -16,6 +16,7 @@ import { difficultyRank, hasExactDifficultyEvidence, isContradictedByOtherDiffic
 import { errorMessage } from '../../shared/error-message.util';
 import { DefensiveCatalogComponent } from '../defensive-catalog/defensive-catalog.component';
 import { DiscordSettingsComponent } from '../discord-settings/discord-settings.component';
+import { UnassignedMechanicsCatalogComponent } from '../unassigned-mechanics-catalog/unassigned-mechanics-catalog.component';
 
 const CATEGORIES = ['tankbuster', 'raid-damage', 'avoidable-ground', 'debuff-stack', 'interrupt', 'soak', 'spread', 'healing-absorb', 'personal-target', 'enrage'] as const;
 const RESPONSIBILITIES = ['tank', 'dps', 'healer', 'raid', 'personal'] as const;
@@ -31,7 +32,10 @@ const RESPONSIBILITIES = ['tank', 'dps', 'healer', 'raid', 'personal'] as const;
 // §"debe estar en la pestaña de ajustes, crear un nuevo submenu llamado
 // Discord" (feedback real, 2026-08-28): tercera pestaña, mismo patrón que
 // 'defensivos' — DiscordSettingsComponent embebido, sin ruta propia.
-type AjustesTab = 'mecanicas' | 'defensivos' | 'discord';
+// §"UI en Ajustes para gestionar el catálogo a mano" (feedback real,
+// 2026-08-29): cuarta pestaña, mismo patrón que 'defensivos' —
+// UnassignedMechanicsCatalogComponent embebido, sin ruta propia.
+type AjustesTab = 'mecanicas' | 'sin-asignar' | 'defensivos' | 'discord';
 
 // §9.1: un boss sembrado por sync-season-bosses pero nunca pulleado no tiene
 // dificultades "vistas" que ofrecer (difficulties queda vacío) — se ofrecen
@@ -42,7 +46,7 @@ type AjustesTab = 'mecanicas' | 'defensivos' | 'discord';
 @Component({
   selector: 'app-manifest',
   standalone: true,
-  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent, DefensiveCatalogComponent, DiscordSettingsComponent],
+  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent, DefensiveCatalogComponent, DiscordSettingsComponent, UnassignedMechanicsCatalogComponent],
   templateUrl: './manifest.component.html',
   styleUrl: './manifest.component.scss',
 })

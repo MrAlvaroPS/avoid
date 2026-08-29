@@ -62,6 +62,30 @@ export interface NightAttendee {
   role: WowauditRosterEntry['role'] | null;
 }
 
+/** §"stat de cobertura a nivel de raid" (feedback real, 2026-08-29): cuántos
+ * intentos de este boss+dificultad tuvieron a ALGUIEN resolviendo esta
+ * mecánica sin asignar, esta noche. Solo catálogo con
+ * has_confirmed_detection=true entra aquí (mismo gate que analyze-report/
+ * reanalyze-unassigned-mechanics) — nunca puede decir "0/3" por falta de
+ * detección real, solo por falta real de alguien haciéndolo.
+ * §CORRECCIÓN (feedback real, 2026-08-29 — "eso de que no afecta a
+ * puntuación individual no es correcto no?"): lo único "puramente
+ * informativo" es este AGREGADO en sí (el X/Y de cobertura de raid no es la
+ * puntuación de nadie) — cada ocurrencia individual que resume SÍ sube el %
+ * de Mecánica de quien la hizo (ver UNASSIGNED_MECHANIC_BONUS_PER_OCCURRENCE
+ * en pull-analysis.service.ts). No decir lo contrario en la UI. */
+export interface NightUnassignedMechanicCoverage {
+  bossId: string;
+  bossName: string;
+  difficulty: string;
+  mechanicName: string;
+  /** Intentos válidos de este boss+dificultad esta noche (excluye ninja pulls, igual criterio que el resto de la app). */
+  totalPulls: number;
+  pullsWithAnyOccurrence: number;
+  totalOccurrences: number;
+  uniqueResolvers: number;
+}
+
 export interface NightReport {
   reportCode: string;
   reportTitle: string;
@@ -87,6 +111,8 @@ export interface NightReport {
   playerClasses: Map<string, string>;
   /** §"un resumen de una noche... la consulta de IA" (feedback real): cacheado desde night_briefs, null si nunca se ha generado. */
   brief: LlmPullAnalysis | null;
+  /** §"stat de cobertura a nivel de raid" (feedback real, 2026-08-29): solo bosses de esta noche con al menos una fila confirmada en unassigned_mechanic_catalog — vacío si ninguno de los bosses pulleados esta noche tiene todavía una mecánica sin asignar confirmada. */
+  unassignedMechanicCoverage: NightUnassignedMechanicCoverage[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -123,7 +149,7 @@ export class NightReportService {
     const pullIds = pulls.map((p) => p.id);
     const pullById = new Map(pulls.map((p) => [p.id, p]));
 
-    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, notesByMechanicName, { data: briefRow }] = await Promise.all([
+    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, notesByMechanicName, { data: briefRow }, { data: unassignedCatalogData }] = await Promise.all([
       pullIds.length
         ? client.from('player_pull_records').select('pull_id, player_name, died, death_cause, wipe_call_cluster').in('pull_id', pullIds)
         : Promise.resolve({ data: [] as RecordLite[], error: null }),
@@ -136,6 +162,17 @@ export class NightReportService {
         : Promise.resolve({ data: [] as MechEventLite[], error: null }),
       loadMechanicNotesByName(client, pulls.map((p) => p.boss_id)).catch(() => new Map<string, string>()),
       client.from('night_briefs').select('*').eq('report_code', reportCode).maybeSingle(),
+      // §"stat de cobertura a nivel de raid" (feedback real, 2026-08-29):
+      // solo catálogo confirmado (mismo gate que analyze-report), acotado a
+      // los bosses que de verdad se pullearon esta noche — no trae la tabla
+      // entera para descartar el resto en cliente.
+      pulls.length
+        ? client
+            .from('unassigned_mechanic_catalog')
+            .select('id,boss_id,difficulty,name')
+            .in('boss_id', [...new Set(pulls.map((p) => p.boss_id))])
+            .eq('has_confirmed_detection', true)
+        : Promise.resolve({ data: [] as { id: string; boss_id: string; difficulty: string; name: string }[] }),
     ]);
     if (recordsErr) throw recordsErr;
     if (mechErr) throw mechErr;
@@ -277,6 +314,41 @@ export class NightReportService {
     const absentMain = roster.filter((r) => r.rank === 'Main' && !attendedNames.has(r.name)).map(toAttendee).sort(byRoleThenName);
     const playerClasses = new Map(roster.filter((r) => attendedNames.has(r.name)).map((r) => [r.name, r.class]));
 
+    // §"stat de cobertura a nivel de raid" (feedback real, 2026-08-29): una
+    // fila del catálogo -> una fila de cobertura, agregando SOLO los pulls
+    // de esta noche que casan boss+dificultad. Sin exclusión por wipe call
+    // a propósito (mismo criterio que unassignedMechanicCredits en
+    // night-player-summary.service.ts — resolverla es mérito real aunque el
+    // intento acabe en wipe); sí se excluyen ninja pulls, igual que el
+    // resto de esta pantalla.
+    const unassignedMechanicCoverage: NightUnassignedMechanicCoverage[] = ((unassignedCatalogData ?? []) as { id: string; boss_id: string; difficulty: string; name: string }[])
+      .map((catalogRow) => {
+        const scopedPulls = pulls.filter((p) => p.boss_id === catalogRow.boss_id && p.difficulty === catalogRow.difficulty && !p.ninja_pull_excluded);
+        let pullsWithAnyOccurrence = 0;
+        let totalOccurrences = 0;
+        const resolvers = new Set<string>();
+        for (const pull of scopedPulls) {
+          const occurrences = (pull.unassigned_mechanic_occurrences ?? []).filter((occ) => occ.catalogId === catalogRow.id);
+          if (occurrences.length) pullsWithAnyOccurrence++;
+          totalOccurrences += occurrences.length;
+          for (const occ of occurrences) resolvers.add(occ.actorName);
+        }
+        return {
+          bossId: catalogRow.boss_id,
+          bossName: bossNameByFightId.get(scopedPulls[0]?.fight_id ?? -1) ?? `Boss ${catalogRow.boss_id}`,
+          difficulty: catalogRow.difficulty,
+          mechanicName: catalogRow.name,
+          totalPulls: scopedPulls.length,
+          pullsWithAnyOccurrence,
+          totalOccurrences,
+          uniqueResolvers: resolvers.size,
+        };
+      })
+      // Sin ningún intento de este boss+dificultad esta noche (catálogo de
+      // otra noche/otra season vista de refilón por el filtro de boss_id) —
+      // no aporta nada mostrar un "0/0".
+      .filter((row) => row.totalPulls > 0);
+
     return {
       reportCode,
       reportTitle: (reportRow as { title: string } | null)?.title ?? reportCode,
@@ -298,6 +370,7 @@ export class NightReportService {
       defensiveStatusBreakdown,
       playerClasses,
       brief: briefRow ? mapBrief(briefRow as unknown as Parameters<typeof mapBrief>[0]) : null,
+      unassignedMechanicCoverage,
     };
   }
 }

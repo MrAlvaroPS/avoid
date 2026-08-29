@@ -47,7 +47,14 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // ninguna respuesta utilizable ya no se cachea como si fuera un fallo. El
 // shape no cambia, pero mantener v3 serviría ratios antiguos hasta que
 // cambiara el fingerprint global.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v4:';
+// v5 (2026-08-29): campo nuevo unassignedMechanicCredits — mismo motivo que
+// el bump de v4, un caché v4 servido tal cual no tendría este campo.
+// v6 (2026-08-29): mismo shape, pero pullScore/nightScore/mecanica cambian
+// de VALOR (mechanicScoreFor ahora suma un bonus por mecánica sin asignar
+// resuelta con éxito — ver pull-analysis.service.ts) — un caché v5 seguiría
+// sirviendo el número de antes del bonus hasta que algo más lo invalidara,
+// mismo motivo exacto que el bump de v4.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v6:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;

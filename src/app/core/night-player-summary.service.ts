@@ -16,7 +16,13 @@ import {
 } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
 import { NightPlayerSummaryCacheService } from './night-player-summary-cache.service';
-import { PULL_SCORE_FAIL_PENALTY, mapBrief, mechanicScoreFor } from './pull-analysis.service';
+import {
+  PULL_SCORE_FAIL_PENALTY,
+  UNASSIGNED_MECHANIC_BONUS_CAP,
+  UNASSIGNED_MECHANIC_BONUS_PER_OCCURRENCE,
+  mapBrief,
+  mechanicScoreFor,
+} from './pull-analysis.service';
 import {
   loadMechanicCoachingByKey,
   mechanicCoachingKey,
@@ -115,6 +121,15 @@ export interface PullScoreBreakdown {
    * tooltip de puntuación pueda mostrar "dónde y por qué", no solo el
    * multiplicador. Vacío salvo que defensiveMissKind sea 'never_touched'/'mistimed'. */
   defensiveMissedWindows: NightPressureWindowMiss[];
+  /** §"vamos a decirlo y subir su porcentaje de mecanicas por haberlo hecho
+   * con éxito" (feedback real, 2026-08-29): cuántas mecánicas sin asignar
+   * resolvió en ESTE pull y el bonus que eso metió en mechanicScore (ya
+   * capado, ver UNASSIGNED_MECHANIC_BONUS_CAP) — para que el tooltip pueda
+   * decir explícitamente "por qué" subió, no solo mostrar el número ya
+   * mezclado. 0/0 si no resolvió ninguna, nunca null (misma columna que
+   * garantiza 0 real en la vista). */
+  unassignedMechanicSuccessCount: number;
+  unassignedMechanicBonus: number;
 }
 
 export interface NightDeathRow {
@@ -190,6 +205,23 @@ export interface NightInterruptRow {
   mechanicId: number;
   timeMs: number;
   aiNote: string | null;
+}
+
+/** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
+ * 2026-08-29): SUMA, nunca resta — ver unassigned_mechanic_catalog y
+ * _shared/unassigned-mechanics.ts. Mismo shape de fila que
+ * NightInterruptRow/NightDeathRow a propósito (pullId/bossId/bossName/
+ * difficulty/pullNumber/timeMs), sin mechanicId/category porque este
+ * catálogo es aparte de MechanicCategory (no clasifica peligro, clasifica
+ * "quién resolvió algo que le tocaba a cualquiera"). */
+export interface NightUnassignedMechanicCredit {
+  pullId: string;
+  bossId: string;
+  bossName: string;
+  difficulty: string;
+  pullNumber: number;
+  mechanicName: string;
+  timeMs: number;
 }
 
 export interface NightRepeatedPattern {
@@ -460,6 +492,14 @@ export interface NightPlayerSummary {
   deaths: NightDeathRow[];
   mechanicFails: NightMechanicFailRow[];
   interrupts: NightInterruptRow[];
+  /** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
+   * 2026-08-29): mecánicas sin asignación fija (huevos, orbes, ítems) que
+   * ESTE jugador resolvió esa noche — solo catálogo con
+   * has_confirmed_detection=true llega aquí (ver analyze-report/
+   * reanalyze-unassigned-mechanics), así que puede salir vacío tanto por
+   * "no había ninguna mecánica de este tipo esa noche" como por "sí había,
+   * nadie de la raid la resolvió" — nunca por falta de detección real. */
+  unassignedMechanicCredits: NightUnassignedMechanicCredit[];
   repeatedPatterns: NightRepeatedPattern[];
   gearSnapshot: NightGearSnapshot | null;
   /** Preparación al entrar a raid; evita penalizar un objeto equipado a mitad de noche. */
@@ -911,7 +951,7 @@ export class NightPlayerSummaryService {
         const coaching = coachingFor(pull, dc.mechanicName);
         const isWipeCall = r.wipe_call_cluster && pull.wipe_call_excluded;
         const isNinjaPull = pull.ninja_pull_excluded;
-        const excludedFromStatistics = isDeathExcludedFromStatistics(pull as PullRow, r);
+        const excludedFromStatistics = isDeathExcludedFromStatistics(pull as unknown as PullRow, r);
         return {
           pullId: r.pull_id,
           bossId: pull.boss_id,
@@ -977,7 +1017,7 @@ export class NightPlayerSummaryService {
         return (
           pull != null &&
           !pull.ninja_pull_excluded &&
-          !isMechanicExcludedByWipeCall(pull as PullRow, ev as PullMechanicEventRow)
+          !isMechanicExcludedByWipeCall(pull as unknown as PullRow, ev as PullMechanicEventRow)
         );
       })
       .filter((ev) => ev.category == null || PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category))
@@ -1063,6 +1103,17 @@ export class NightPlayerSummaryService {
         reliabilityRow?.personal_mechanic_fail_count ??
         mechanicFailCountByPullId.get(pull.pullId) ??
         0;
+      // §"vamos a decirlo y subir su porcentaje de mecanicas" (feedback
+      // real, 2026-08-29): calculado aparte (no solo dentro de
+      // mechanicScoreFor) para poder exponerlo en el breakdown — el tooltip
+      // de pullScoreExplanation necesita el "por qué", no solo el mechanicScore
+      // ya mezclado. MISMOS constantes que usa mechanicScoreFor, para que el
+      // número mostrado nunca pueda divergir del que de verdad se aplicó.
+      const unassignedMechanicSuccessCount = reliabilityRow?.unassigned_mechanic_success_count ?? 0;
+      const unassignedMechanicBonus = Math.min(
+        UNASSIGNED_MECHANIC_BONUS_CAP,
+        Math.max(0, unassignedMechanicSuccessCount) * UNASSIGNED_MECHANIC_BONUS_PER_OCCURRENCE,
+      );
       const mechanicScore = reliabilityRow
         ? mechanicScoreFor({
             personalMechanicFailCount: reliabilityRow.personal_mechanic_fail_count,
@@ -1070,6 +1121,7 @@ export class NightPlayerSummaryService {
             avoidableMechanicFailCount: reliabilityRow.avoidable_mechanic_fail_count,
             hadAvoidableDamage: reliabilityRow.had_avoidable_damage,
             selfPositioningDeath: reliabilityRow.self_positioning_death,
+            unassignedMechanicSuccessCount: reliabilityRow.unassigned_mechanic_success_count,
           })
         : Math.max(0, 1 - mechanicFailCount * FAIL_PENALTY);
       const usedConsumable = death
@@ -1163,6 +1215,8 @@ export class NightPlayerSummaryService {
           defensiveMissMultiplier,
           defensiveMissKind,
           defensiveMissedWindows,
+          unassignedMechanicSuccessCount,
+          unassignedMechanicBonus,
         },
       };
     }
@@ -1251,6 +1305,36 @@ export class NightPlayerSummaryService {
           a.timeMs - b.timeMs
         );
       });
+
+    // §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
+    // 2026-08-29): unassigned_mechanic_occurrences vive EN el pull (a nivel
+    // de raid, ver comentario de la columna en la migración
+    // 20260829030000), no en player_pull_records — se filtra a este jugador
+    // por actorName aquí en vez de en la query. Mismo criterio que
+    // interrupts justo arriba: sin exclusión por wipe call (resolver la
+    // mecánica es un acierto real aunque el pull acabe en wipe), sí se
+    // descartan ninja pulls.
+    const unassignedMechanicCredits: NightUnassignedMechanicCredit[] = allPulls
+      .filter((p) => !p.ninja_pull_excluded)
+      .flatMap((p) =>
+        (p.unassigned_mechanic_occurrences ?? [])
+          .filter((occ) => occ.actorName === playerName)
+          .map((occ) => ({
+            pullId: p.id,
+            bossId: p.boss_id,
+            bossName: bossNameByFightId.get(p.fight_id) ?? `Boss ${p.boss_id}`,
+            difficulty: p.difficulty,
+            pullNumber: bossPullNumber(p),
+            mechanicName: occ.mechanicName,
+            timeMs: occ.timestampMs,
+          })),
+      )
+      .sort(
+        (a, b) =>
+          (bossOrder.get(a.bossId) ?? 0) - (bossOrder.get(b.bossId) ?? 0) ||
+          a.pullNumber - b.pullNumber ||
+          a.timeMs - b.timeMs,
+      );
 
     // §"patrones repetidos esa noche concreta... murió 3 veces a zona
     // evitable en 3 bosses distintos" — agrega muertes+fallos por mecánica,
@@ -1581,6 +1665,7 @@ export class NightPlayerSummaryService {
       deaths,
       mechanicFails,
       interrupts,
+      unassignedMechanicCredits,
       repeatedPatterns,
       gearSnapshot,
       startingPreparation,
@@ -2211,6 +2296,18 @@ interface PullRowLite {
   wipe_call_excluded: boolean;
   wipe_call_signals: Record<string, number | boolean | null> | null;
   ninja_pull_excluded: boolean;
+  unassigned_mechanic_occurrences: UnassignedMechanicOccurrenceLite[] | null;
+}
+
+/** Mismo shape que UnassignedMechanicOccurrence en
+ * supabase/functions/_shared/unassigned-mechanics.ts — es literalmente lo
+ * que ese módulo escribe en pulls.unassigned_mechanic_occurrences. */
+interface UnassignedMechanicOccurrenceLite {
+  catalogId: string;
+  mechanicName: string;
+  actorId: number;
+  actorName: string;
+  timestampMs: number;
 }
 
 interface MechEventRowLite {

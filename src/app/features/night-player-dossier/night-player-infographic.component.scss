@@ -522,12 +522,21 @@ app-night-player-infographic {
     border: 0;
     box-shadow: none;
   }
+  // §"mecánicas resueltas" (feedback real, 2026-08-29): positiveSignals pasó
+  // de 4 kinds fijos a "hasta 5" (unassigned-mechanics) — con
+  // grid-template-columns:repeat(4,...) fijo, un 5º elemento caía solo en
+  // una fila nueva, ocupando 1/4 del ancho y dejando 3/4 vacíos. flex-wrap +
+  // basis del 25% da EXACTAMENTE el mismo resultado que antes cuando hay 4
+  // (4×25% = 100%, ninguno crece), y cuando hay 5 el sobrante de la 2ª fila
+  // es el único elemento de su línea, así que flex-grow lo estira a ancho
+  // completo en vez de dejarlo huérfano — sin nth-child ni medir el DOM.
   .iris-player-positive-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: 16px;
   }
   .iris-player-positive-grid article {
+    flex: 1 1 calc(25% - 12px);
     min-width: 0;
     display: flex;
     align-items: center;

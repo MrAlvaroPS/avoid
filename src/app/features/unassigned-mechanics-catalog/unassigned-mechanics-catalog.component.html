@@ -1,0 +1,201 @@
+<div class="unassigned-catalog">
+  <p class="intro">
+    Mecánicas donde <b>cualquier jugador elegible puede actuar sin que nadie esté asignado a
+    propósito</b> (recoger un huevo, un orbe, usar un objeto) — la raid sufre si nadie lo hace,
+    pero no hay un responsable individual claro a quien penalizar si no se hace. Por eso este
+    catálogo SUMA (sube el % de Mecánica de quien la resuelve), nunca resta. Catálogo aparte del
+    de "Mecánicas de bosses": ese es 100% Journal (peligros a evitar/responder); este es acciones
+    de utilidad, casi siempre sin ningún hechizo en el Journal que las represente.
+  </p>
+
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  @if (lastReanalysis(); as r) {
+    <p class="result-line" [class.result-ok]="!r.running && !r.failed" [class.result-warn]="!r.running && r.failed > 0">
+      @if (r.running) {
+        ⏳ {{ r.mechanicName }}: recalculando pulls de este boss… {{ r.done }}/{{ r.total }}
+      } @else {
+        ✓ {{ r.mechanicName }}: {{ r.done }} pull{{ r.done === 1 ? '' : 's' }} recalculado{{ r.done === 1 ? '' : 's' }}
+        @if (r.failed) { · ⚠ {{ r.failed }} no se pudo{{ r.failed === 1 ? '' : 'ieron' }} reanalizar (reinténtalo en un rato) }
+      }
+    </p>
+  }
+
+  <div class="layout">
+    <nav class="boss-list" aria-label="Bosses de la season">
+      @if (loadingBosses()) {
+        <p class="muted">Cargando bosses…</p>
+      } @else if (bosses().length === 0) {
+        <p class="muted">Todavía no hay ningún boss.</p>
+      } @else {
+        <ul>
+          @for (boss of bosses(); track boss.encounterId) {
+            <li>
+              <button type="button" class="boss-btn" [class.selected]="boss.encounterId === selectedEncounterId()" (click)="selectBoss(boss.encounterId)">
+                {{ boss.bossName }}
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    </nav>
+
+    <section class="detail">
+      @if (selectedBoss(); as boss) {
+        <div class="detail-header">
+          <h2>{{ boss.bossName }}</h2>
+        </div>
+
+        <div class="difficulty-tabs" role="tablist">
+          @for (diffId of standardDifficultyIds; track diffId) {
+            <button type="button" role="tab" [class.selected]="diffId === selectedDifficultyId()" (click)="selectDifficulty(diffId)">
+              {{ difficultyLabel(diffId) }}
+            </button>
+          }
+        </div>
+
+        @if (loadingRows()) {
+          <p class="muted">Cargando catálogo…</p>
+        } @else {
+          @if (rows().length === 0 && !addFormOpen()) {
+            <p class="muted">Sin ninguna mecánica sin asignar catalogada todavía para {{ boss.bossName }} ({{ selectedDifficultyName() }}).</p>
+          }
+
+          @if (rows().length > 0) {
+            <table class="candidates">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th title="Cómo se detecta contra WCL">Detección</th>
+                  <th title="Roles que pueden hacerla — informativo, nunca filtra quién cuenta">Roles</th>
+                  <th title="Solo entra en analyze-report/reanalyze cuando esto está activo — una fila puede estar clasificada correctamente sin tener señal real todavía">Detección confirmada</th>
+                  <th>Revisado</th>
+                  <th>Notas / IA</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (row of rows(); track row.id) {
+                  <tr [class.saving]="savingId() === row.id" [class.reviewed]="row.reviewed" [class.confirmed]="row.has_confirmed_detection">
+                    <td>
+                      <input class="name-input" type="text" [value]="row.name" (change)="onEdit(row, { name: $any($event.target).value })" />
+                    </td>
+                    <td class="detection-cell">
+                      <select (change)="onEdit(row, { detection_type: $any($event.target).value })">
+                        @for (type of detectionTypes; track type) {
+                          <option [value]="type" [selected]="type === row.detection_type">{{ detectionTypeLabel[type] }}</option>
+                        }
+                      </select>
+                      @if (needsAbilityId(row.detection_type)) {
+                        <label class="inline-field">
+                          <span>ability_id</span>
+                          <input type="number" min="1" class="ability-input" placeholder="sin resolver" [value]="row.ability_id" (change)="onAbilityIdInput(row, $any($event.target).value)" />
+                          @if (row.ability_id) {
+                            <app-wowhead-link type="spell" [id]="row.ability_id">🔗</app-wowhead-link>
+                          }
+                        </label>
+                        <select class="inline-field" [value]="row.applied_by ?? ''" (change)="onEdit(row, { applied_by: $any($event.target).value || null })">
+                          <option value="">¿quién aplica? sin decidir</option>
+                          <option value="npc">lo aplica el boss/NPC</option>
+                          <option value="self">se lo aplica el propio jugador</option>
+                        </select>
+                      } @else {
+                        <label class="inline-field">
+                          <span>NPC objetivo</span>
+                          <input type="text" class="actor-input" placeholder="nombre exacto del NPC" [value]="row.actor_name_pattern" (change)="onEdit(row, { actor_name_pattern: $any($event.target).value || null })" />
+                        </label>
+                      }
+                    </td>
+                    <td>
+                      <div class="role-chips">
+                        @for (role of roleOptions; track role) {
+                          <button type="button" class="role-chip" [class.active]="(row.eligible_roles ?? []).includes(role)" (click)="toggleRole(row, role)">{{ role }}</button>
+                        }
+                      </div>
+                    </td>
+                    <td>
+                      <input type="checkbox" [checked]="row.has_confirmed_detection" (change)="onEdit(row, { has_confirmed_detection: $any($event.target).checked })" />
+                      @if (row.has_confirmed_detection) {
+                        <span class="confirmed-note">✓ en producción</span>
+                      } @else {
+                        <span class="meta">sin activar</span>
+                      }
+                    </td>
+                    <td>
+                      <input type="checkbox" [checked]="row.reviewed" (change)="onEdit(row, { reviewed: $any($event.target).checked })" />
+                    </td>
+                    <td>
+                      <textarea class="notes-input" rows="2" [value]="row.ai_notes" (change)="onEdit(row, { ai_notes: $any($event.target).value || null })"></textarea>
+                    </td>
+                    <td>
+                      <button type="button" class="delete-btn" [class.confirming]="confirmingDeleteId() === row.id" (click)="requestDelete(row.id)">
+                        {{ confirmingDeleteId() === row.id ? '¿Seguro? Clic otra vez' : 'Borrar' }}
+                      </button>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          }
+
+          @if (!addFormOpen()) {
+            <button type="button" class="classify-toggle" (click)="openAddForm()">+ Añadir mecánica sin asignar para {{ boss.bossName }} ({{ selectedDifficultyName() }})</button>
+          } @else if (draft(); as d) {
+            <div class="add-form">
+              <div class="add-form-grid">
+                <label>
+                  <span>Nombre</span>
+                  <input type="text" [value]="d.name" (input)="updateDraft({ name: $any($event.target).value })" placeholder="ej. Huevo de Ula'tek" />
+                </label>
+                <label>
+                  <span>Detección</span>
+                  <select [value]="d.detectionType" (change)="updateDraft({ detectionType: $any($event.target).value })">
+                    @for (type of detectionTypes; track type) {
+                      <option [value]="type">{{ detectionTypeLabel[type] }}</option>
+                    }
+                  </select>
+                </label>
+                @if (needsAbilityId(d.detectionType)) {
+                  <label>
+                    <span>ability_id (real de WCL, no del Journal)</span>
+                    <input type="number" min="1" [value]="d.abilityId" (input)="updateDraft({ abilityId: $any($event.target).value })" placeholder="ej. 1282419" />
+                  </label>
+                  <label>
+                    <span>¿Quién aplica?</span>
+                    <select [value]="d.appliedBy" (change)="updateDraft({ appliedBy: $any($event.target).value })">
+                      <option value="npc">lo aplica el boss/NPC</option>
+                      <option value="self">se lo aplica el propio jugador</option>
+                    </select>
+                  </label>
+                } @else {
+                  <label>
+                    <span>Nombre exacto del NPC-objeto (masterData.actors)</span>
+                    <input type="text" [value]="d.actorNamePattern" (input)="updateDraft({ actorNamePattern: $any($event.target).value })" placeholder="ej. Coalesced Venom Stalker" />
+                  </label>
+                }
+                <div class="role-chips">
+                  @for (role of roleOptions; track role) {
+                    <button type="button" class="role-chip" [class.active]="d.eligibleRoles.includes(role)" (click)="toggleDraftRole(role)">{{ role }}</button>
+                  }
+                </div>
+              </div>
+              <p class="meta">
+                Se crea con "detección confirmada" desactivada — actívala a mano solo después de comprobar contra un report real que de verdad genera ocurrencias (ver memoria del proyecto: el nombre/NPC puede existir sin dejar ningún rastro real en WCL).
+              </p>
+              <div class="add-form-actions">
+                <button type="button" class="sync-btn" [disabled]="savingId() === 'new' || !d.name.trim()" (click)="submitDraft()">
+                  {{ savingId() === 'new' ? 'Guardando…' : 'Crear' }}
+                </button>
+                <button type="button" class="classify-toggle" (click)="closeAddForm()">Cancelar</button>
+              </div>
+            </div>
+          }
+        }
+      } @else {
+        <p class="muted">Elige un boss de la lista.</p>
+      }
+    </section>
+  </div>
+</div>

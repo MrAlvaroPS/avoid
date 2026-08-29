@@ -74,7 +74,7 @@ interface PositiveSignal {
   label: string;
   value: string;
   detail: string;
-  kind: 'avoidance' | 'interrupt' | 'clean' | 'defensive';
+  kind: 'avoidance' | 'interrupt' | 'clean' | 'defensive' | 'credit';
 }
 
 // §"el hecho de no usar un defensivo debería ser penalización grande —
@@ -381,6 +381,34 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
         value: `${defensive.pressurePullsWithCast}/${defensive.pressurePulls}`,
         detail: 'Pulls con presión verificable y un defensivo registrado antes del wipe call.',
         kind: 'defensive',
+      });
+    }
+    // §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
+    // 2026-08-29): mecánicas sin asignación fija (huevos, orbes, ítems) que
+    // este jugador resolvió — SUMA, nunca aparece como fallo si nadie la
+    // hace (solo hay "quién sí la hizo", no "quién debía haberla hecho").
+    if (this.summary().unassignedMechanicCredits.length) {
+      // §"si ha resuelto algo de otros bosses no sale... podriamos poner
+      // los nombres de las mecánicas voluntarias que ha resuelto y el boss
+      // entre paréntesis" (feedback real, 2026-08-29): antes enseñaba las 3
+      // primeras OCURRENCIAS cronológicas (pull+hora) — con 17 resueltas en
+      // 2 bosses distintos, las 3 primeras podían ser las 3 del mismo boss
+      // (Nanis: orbe del Altar) y los huevos de Ula'tek quedaban invisibles
+      // aunque el "17" sí los contara. Ahora: un nombre por MECÁNICA
+      // distinta (deduplicado por mecánica+boss, no por ocurrencia), con el
+      // boss entre paréntesis — así ningún boss resuelto queda fuera del
+      // texto por mucho que se repita otro, sin agrandar la card (sigue
+      // siendo una sola línea de texto plano).
+      const uniqueMechanics = new Map<string, string>();
+      for (const c of this.summary().unassignedMechanicCredits) {
+        const key = `${c.mechanicName}|${c.bossName}`;
+        if (!uniqueMechanics.has(key)) uniqueMechanics.set(key, `${c.mechanicName} (${c.bossName})`);
+      }
+      result.push({
+        label: 'Mecánicas resueltas',
+        value: String(this.summary().unassignedMechanicCredits.length),
+        detail: [...uniqueMechanics.values()].join(', '),
+        kind: 'credit',
       });
     }
     return result;

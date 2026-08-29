@@ -220,6 +220,34 @@
         </section>
       }
 
+      <!-- §"stat de cobertura a nivel de raid" (feedback real, 2026-08-29):
+           quién resolvió qué mecánica sin asignar (huevos, orbes, ítems) esta
+           noche. §CORRECCIÓN (feedback real, 2026-08-29 — "lo de que no
+           afecta a puntuación individual no es correcto no?"): el texto
+           original decía "no afecta a ninguna puntuación individual", que
+           era cierto cuando se escribió el diseño pero quedó desactualizado
+           en cuanto se añadió el bonus de mechanicScoreFor (pull-analysis.
+           service.ts) — CADA ocurrencia de aquí SÍ sube el % de Mecánica de
+           quien la hizo. Lo único que de verdad es "solo informativo" es
+           este AGREGADO de cobertura de raid en sí (el X/Y, no es una
+           puntuación de nadie) — nunca la mecánica individual que resume.
+           Vacío hasta que haya al menos un boss de esta noche con una fila
+           con has_confirmed_detection=true en el catálogo. -->
+      @if (d.unassignedMechanicCoverage.length) {
+        <section class="report-section" aria-labelledby="unassigned-coverage-heading">
+          <div class="section-kicker">Vista de raid — cada ocurrencia sí sube el % de Mecánica de quien la hizo (ver su dosier)</div>
+          <h3 id="unassigned-coverage-heading">🥚 Mecánicas sin asignar</h3>
+          <ul class="plain-list">
+            @for (c of d.unassignedMechanicCoverage; track c.bossId + c.difficulty + c.mechanicName) {
+              <li>
+                {{ c.mechanicName }} — {{ c.bossName }} ({{ c.difficulty }}): {{ c.pullsWithAnyOccurrence }}/{{ c.totalPulls }} intento{{ c.totalPulls === 1 ? '' : 's' }} con
+                alguien resolviéndola · {{ c.totalOccurrences }} {{ c.totalOccurrences === 1 ? 'vez' : 'veces' }} en total · {{ c.uniqueResolvers }} jugador{{ c.uniqueResolvers === 1 ? '' : 'es' }} distinto{{ c.uniqueResolvers === 1 ? '' : 's' }}
+              </li>
+            }
+          </ul>
+        </section>
+      }
+
       <!-- §"el informe ahora mismo es un poco caos y necesita orden y
            síntesis... que sean desplegables los bosses de la noche y ahí
            aparezca en detalle qué defensivo se ha tirado quién y en qué

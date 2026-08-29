@@ -60,6 +60,8 @@ export interface PullRow {
   last_phase_absolute_index: number | null;
   /** true = el pull terminó durante un intermedio, no una fase de daño normal. */
   last_phase_is_intermission: boolean | null;
+  /** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real, 2026-08-29): array de {catalogId, mechanicName, actorId, actorName, timestampMs} — quién resolvió cada mecánica sin asignar de este pull (ver unassigned_mechanic_catalog). null = boss+dificultad sin ninguna fila con has_confirmed_detection=true (nunca evaluado), array vacío = evaluado y nadie la resolvió — dos cosas distintas, no colapsar. */
+  unassigned_mechanic_occurrences: { catalogId: string; mechanicName: string; actorId: number; actorName: string; timestampMs: number }[] | null;
 }
 
 /** Nombre legible + metadata de cada fase de un boss — sincronizado desde WCL en analyze-report, referencia de solo lectura. */
@@ -366,4 +368,31 @@ export interface CooldownCatalogRow {
   inferred_survival_type: DefensiveSurvivalType | null;
   ai_classification: { confidence: 'high' | 'medium'; sources: string[]; notes: string; classifiedAt: string } | null;
   reviewed: boolean;
+}
+
+/** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
+ * 2026-08-29): mecánicas de un boss donde cualquier jugador elegible puede
+ * actuar sin asignación fija (huevos, orbes, ítems) — ver unassigned_mechanic_catalog
+ * en supabase/migrations/20260829030000_unassigned_mechanics.sql. Catálogo
+ * aparte de BossMechanicCandidateRow (esa es 100% Journal — peligros a
+ * evitar/responder; esta es acciones de utilidad que SUMAN, nunca restan). */
+export interface UnassignedMechanicCatalogRow {
+  id: string;
+  boss_id: string;
+  difficulty: string;
+  name: string;
+  detection_type: 'cast' | 'debuff_applied' | 'buff_applied' | 'npc_interaction';
+  /** Exactamente uno de estos dos según detection_type — ver constraint unassigned_mechanic_has_target. */
+  ability_id: number | null;
+  actor_name_pattern: string | null;
+  applied_by: 'npc' | 'self' | null;
+  eligible_roles: string[] | null;
+  consequence_ability_id: number | null;
+  /** §verificado 2026-08-29: gate real — solo entra en analyze-report/reanalyze-unassigned-mechanics cuando esto es true. Una fila puede estar `reviewed` (clasificación correcta) sin tener detección confirmada todavía (investigada, sin señal real en WCL). */
+  has_confirmed_detection: boolean;
+  reviewed: boolean;
+  ai_confidence: string | null;
+  ai_notes: string | null;
+  created_at: string;
+  updated_at: string;
 }

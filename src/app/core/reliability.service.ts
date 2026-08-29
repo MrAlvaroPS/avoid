@@ -171,6 +171,14 @@ export interface ReliabilityInputRow {
    * pull, sin mirar si acertó la ventana — distingue "nunca lo intentó" de
    * "lo intentó a destiempo" cuando covered_count sale en 0 en ambos casos. */
   defensive_window_used_anything: boolean | null;
+  /** §"subir su porcentaje de mecanicas por haberlo hecho con éxito"
+   * (feedback real, 2026-08-29): cuántas mecánicas sin asignar (huevos,
+   * orbes, ítems — unassigned_mechanic_catalog) resolvió este jugador en
+   * este pull — mechanicScoreFor lo suma como bonus, nunca lo resta. null
+   * solo en el escalón de fallback anterior a esta columna (despliegue en
+   * dos tiempos); 0 real (no "sin dato") en cuanto la columna existe, la
+   * vista ya lo garantiza con count(*) sobre un array posiblemente vacío. */
+  unassigned_mechanic_success_count: number | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -262,6 +270,7 @@ export function computeReliabilityBreakdown(
       avoidableMechanicFailCount: r.avoidable_mechanic_fail_count,
       hadAvoidableDamage: r.had_avoidable_damage,
       selfPositioningDeath: r.self_positioning_death,
+      unassignedMechanicSuccessCount: r.unassigned_mechanic_success_count,
     });
     mecSum += mecScore * w;
     mecWeight += w;
@@ -401,6 +410,12 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
 // avoidable_mechanic_fail_count son las más nuevas de la vista — escalón
 // propio por encima de RELIABILITY_COLUMNS para el mismo despliegue en dos
 // tiempos de siempre (frontend puede llegar antes que la migración).
+// §"subir su porcentaje de mecanicas" (feedback real, 2026-08-29):
+// unassigned_mechanic_success_count es la más nueva de la vista — escalón
+// propio por encima de WINDOW_RELIABILITY_COLUMNS, mismo motivo de siempre
+// (frontend puede llegar antes que la migración).
+const UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS =
+  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count';
 const WINDOW_RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything';
 const RATIO_RELIABILITY_COLUMNS =
@@ -447,7 +462,7 @@ function isReliabilitySchemaTransitionError(
   return (
     error.code === '42703' ||
     error.code === 'PGRST204' ||
-    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything/i.test(
+    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count/i.test(
       message,
     )
   );
@@ -481,8 +496,13 @@ export class ReliabilityService {
       return await query;
     };
 
-    let response = await run(WINDOW_RELIABILITY_COLUMNS);
-    let schemaLevel: 'window' | 'ratio' | 'current' | 'defensive' | 'legacy' = 'window';
+    let response = await run(UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS);
+    let schemaLevel: 'unassigned' | 'window' | 'ratio' | 'current' | 'defensive' | 'legacy' =
+      'unassigned';
+    if (response.error && isReliabilitySchemaTransitionError(response.error)) {
+      response = await run(WINDOW_RELIABILITY_COLUMNS);
+      schemaLevel = 'window';
+    }
     if (response.error && isReliabilitySchemaTransitionError(response.error)) {
       response = await run(RATIO_RELIABILITY_COLUMNS);
       schemaLevel = 'ratio';
@@ -506,37 +526,45 @@ export class ReliabilityService {
         schemaLevel === 'legacy' ? false : row.used_defensive_in_pull === true,
       defensive_use_opportunity:
         schemaLevel === 'legacy' ? false : row.defensive_use_opportunity === true,
-      gemmed_slot_count: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmed_slot_count ?? 0) : 0,
-      gemmable_slot_count: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmable_slot_count ?? 0) : 0,
+      gemmed_slot_count: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmed_slot_count ?? 0) : 0,
+      gemmable_slot_count: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmable_slot_count ?? 0) : 0,
       // null (no 0) en los escalones de fallback a propósito —
       // computeReliabilityBreakdown/mechanicScoreFor lo leen como "sin dato
       // todavía" en vez de "0 fallos"/"0 elegibles" (ver el comentario ahí).
       personal_mechanic_fail_count:
-        schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.personal_mechanic_fail_count ?? 0) : null,
+        schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.personal_mechanic_fail_count ?? 0) : null,
       // null en fallback (igual criterio): isFirstPullOfNight trata
       // cualquier fila como "primera" cuando no hay report_code/pull_number.
-      report_code: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.report_code ?? null) : null,
-      pull_number: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.pull_number ?? null) : null,
+      report_code: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.report_code ?? null) : null,
+      pull_number: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.pull_number ?? null) : null,
       // §"consistente... contemplar muchas posibilidades distintas"
       // (feedback real, 2026-08-28): null en los 3 escalones de fallback
       // más antiguos — mechanicScoreFor cae al conteo plano de siempre
       // (personal_mechanic_fail_count) en vez de asumir "sin oportunidades
       // ratio" silenciosamente.
       avoidable_mechanic_eligible_count:
-        schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
+        schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
       avoidable_mechanic_fail_count:
-        schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
+        schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
       // §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback
       // real, 2026-08-29): null en TODOS los escalones de fallback anteriores
       // a WINDOW_RELIABILITY_COLUMNS — computeReliabilityBreakdown cae al
       // booleano de siempre (defensive_use_opportunity/used_defensive_in_pull)
       // en vez de asumir "sin ventanas" silenciosamente.
       defensive_window_coverable_count:
-        schemaLevel === 'window' ? Number(row.defensive_window_coverable_count ?? 0) : null,
+        schemaLevel === 'unassigned' || schemaLevel === 'window' ? Number(row.defensive_window_coverable_count ?? 0) : null,
       defensive_window_covered_count:
-        schemaLevel === 'window' ? Number(row.defensive_window_covered_count ?? 0) : null,
+        schemaLevel === 'unassigned' || schemaLevel === 'window' ? Number(row.defensive_window_covered_count ?? 0) : null,
       defensive_window_used_anything:
-        schemaLevel === 'window' ? row.defensive_window_used_anything === true : null,
+        schemaLevel === 'unassigned' || schemaLevel === 'window' ? row.defensive_window_used_anything === true : null,
+      // §"subir su porcentaje de mecanicas por haberlo hecho con éxito"
+      // (feedback real, 2026-08-29): null SOLO en el escalón anterior a esta
+      // columna — a diferencia de avoidable_mechanic_*, no depende de ningún
+      // backfill aparte (unassigned_mechanic_occurrences ya vive en pulls
+      // desde que se creó la tabla), así que en cuanto la columna existe
+      // siempre es un número real, nunca "sin dato todavía".
+      unassigned_mechanic_success_count:
+        schemaLevel === 'unassigned' ? Number(row.unassigned_mechanic_success_count ?? 0) : null,
     }));
   }
 

@@ -1011,6 +1011,18 @@ function buildTimeline(
 // pull-analysis.service.ts no depende de ninguno de los dos.
 export const PULL_SCORE_FAIL_PENALTY = 0.25;
 
+// §"si un jugador hace una mecanica 'voluntaria' [...] vamos a decirlo y
+// subir su porcentaje de mecanicas por haberlo hecho con éxito" (feedback
+// real, 2026-08-29): bonus pequeño y capado, nunca mayor que lo que cuesta
+// UN fallo normal (PULL_SCORE_FAIL_PENALTY=0.25) — esto es una tarea
+// opcional que "suma", no el trabajo principal del pull, así que no debe
+// poder dominar el eje Mecánica. Capado por pull (no por noche): un jugador
+// que recoge 10 huevos en un mismo pull no debe valer 10x más que uno que
+// recoge 3 — a partir de UNASSIGNED_MECHANIC_BONUS_CAP el mérito ya quedó
+// demostrado, seguir sumando infla el número sin decir nada nuevo.
+export const UNASSIGNED_MECHANIC_BONUS_PER_OCCURRENCE = 0.05;
+export const UNASSIGNED_MECHANIC_BONUS_CAP = 0.15;
+
 // §"quiero que la puntuación que traigas, parecida a wipefest, sea
 // consistente en realidad, más que intentar calcarlo... contemplar muchas
 // posibilidades distintas" (feedback real, 2026-08-28): de las 4 categorías
@@ -1031,6 +1043,13 @@ export interface MechanicScoreInputs {
   /** Solo para el escalón de fallback más antiguo (ni personal_mechanic_fail_count existe todavía). */
   hadAvoidableDamage: boolean;
   selfPositioningDeath: boolean;
+  /** player_pull_reliability_inputs.unassigned_mechanic_success_count —
+   * cuántas mecánicas sin asignar (huevos, orbes, ítems — ver
+   * unassigned_mechanic_catalog) resolvió este jugador en este pull. null
+   * solo en el escalón de fallback anterior a esta columna (despliegue en
+   * dos tiempos, igual criterio que el resto de columnas nuevas de esta
+   * vista) — no participa en absoluto, en vez de asumir 0 silenciosamente. */
+  unassignedMechanicSuccessCount?: number | null;
 }
 
 /**
@@ -1043,8 +1062,8 @@ export interface MechanicScoreInputs {
  * sincronizado a mano (el bug real que llevó a "un 77% de puntuación de
  * noche pero un 44 de fiabilidad" — feedback real, 2026-08-27).
  *
- * Dos señales que se combinan multiplicando (asumiendo independencia,
- * ninguna "vale más" que la otra a priori):
+ * Tres señales: dos se combinan MULTIPLICANDO (asumiendo independencia,
+ * ninguna "vale más" que la otra a priori), la tercera se SUMA encima:
  *  - ratioScore: instancias-esquivadas/instancias-elegibles de
  *    avoidable-ground/spread — ahí que te golpee es sin ambigüedad un
  *    fallo, así que fallar tu ÚNICA oportunidad ya no puntúa igual que
@@ -1054,6 +1073,12 @@ export interface MechanicScoreInputs {
  *    personal-target — ahí que te golpee suele ser lo CORRECTO (alguien
  *    asignado tiene que absorberlo) y no sabemos quién estaba asignado;
  *    fingir un ratio culparía a quien hizo lo que tenía que hacer.
+ *  - unassignedBonus (§"subir su porcentaje de mecanicas por haberlo hecho
+ *    con éxito", feedback real, 2026-08-29): ADITIVO, no multiplicado — una
+ *    mecánica sin asignar resuelta con éxito es mérito aparte, no debe
+ *    diluirse ni verse anulado por un fallo de otra categoría en el mismo
+ *    pull. Capado (UNASSIGNED_MECHANIC_BONUS_CAP) y puede llevar el
+ *    resultado por encima de 1 a propósito — ver el propio bonus más abajo.
  */
 export function mechanicScoreFor(inputs: MechanicScoreInputs): number {
   // El conteo de soak/personal-target es "las 4 categorías menos las 2 de
@@ -1072,7 +1097,23 @@ export function mechanicScoreFor(inputs: MechanicScoreInputs): number {
     inputs.avoidableMechanicEligibleCount != null && inputs.avoidableMechanicEligibleCount > 0
       ? Math.max(0, (inputs.avoidableMechanicEligibleCount - (inputs.avoidableMechanicFailCount ?? 0)) / inputs.avoidableMechanicEligibleCount)
       : null;
-  return ratioScore != null ? ratioScore * countScore : countScore;
+  const base = ratioScore != null ? ratioScore * countScore : countScore;
+  // §"subir su porcentaje de mecanicas por haberlo hecho con éxito"
+  // (feedback real, 2026-08-29): ADITIVO tras el ratio/conteo de fallos, no
+  // multiplicado — un fallo real sigue penalizando exactamente igual que
+  // antes, esto solo puede sumar por encima. Capado (ver
+  // UNASSIGNED_MECHANIC_BONUS_CAP): el resultado puede superar 1 a
+  // propósito (un pull ya perfecto SÍ puede subir de 100% — si no pudiera,
+  // hacer la mecánica extra solo tendría efecto en pulls donde YA fallaste
+  // algo, un incentivo al revés de lo que pide el usuario). Los
+  // consumidores (nightScore/breakdown.mecanica) no necesitan capar esto:
+  // ya se comprobó que ningún sitio de la UI rompe por encima de 100
+  // (número plano, sin barra de progreso).
+  const unassignedBonus = Math.min(
+    UNASSIGNED_MECHANIC_BONUS_CAP,
+    Math.max(0, inputs.unassignedMechanicSuccessCount ?? 0) * UNASSIGNED_MECHANIC_BONUS_PER_OCCURRENCE,
+  );
+  return base + unassignedBonus;
 }
 
 function toDefensiveRefs(options: DefensiveOption[], status: DefensiveOption['status'], deathTimeMs?: number, castTimestamps?: Map<number, number[]>): import('../shared/models/ui').DefensiveRef[] {

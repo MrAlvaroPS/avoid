@@ -192,6 +192,17 @@ export class NightPlayerDossierComponent {
         ? `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — sin fallos de soak/objetivo personal.`
         : `Mecánica: ${this.formatPct(b.mechanicScore * 100)} — ${countCategoryFailCount} fallo${countCategoryFailCount === 1 ? '' : 's'} de soak/objetivo personal (−${this.formatPct(PULL_SCORE_FAIL_PENALTY * 100)} cada uno):`,
     );
+    // §"vamos a decirlo y subir su porcentaje de mecanicas por haberlo
+    // hecho con éxito" (feedback real, 2026-08-29): línea explícita — el
+    // bonus ya está DENTRO del "Mecánica: X%" de arriba, esto es el "por
+    // qué" para que nunca sea un número que sube sin que se sepa de dónde
+    // viene. Solo aparece si de verdad resolvió alguna (0 = no añade nada,
+    // no hay nada que explicar).
+    if (b.unassignedMechanicSuccessCount > 0) {
+      lines.push(
+        `✓ ${b.unassignedMechanicSuccessCount} mecánica${b.unassignedMechanicSuccessCount === 1 ? '' : 's'} sin asignar resuelta${b.unassignedMechanicSuccessCount === 1 ? '' : 's'} (huevo/orbe/ítem — nadie estaba marcado a hacerlo, lo hizo igual): +${this.formatPct(b.unassignedMechanicBonus * 100)} sobre Mecánica.`,
+      );
+    }
     if (!b.died) {
       lines.push('Consumibles: 100% — no murió, se aprueba automático (igual que con piedra/poción, solo importa si mueres).');
       // §"no es lo mismo usar 0 defensivos que usarlo a destiempo, lo

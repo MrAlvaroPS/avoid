@@ -315,6 +315,46 @@ export class EdgeFunctionsService {
     return this.invoke('reanalyze-defensive-pressure', { pullId });
   }
 
+  /**
+   * §"UI en Ajustes para gestionar el catálogo a mano" (feedback real,
+   * 2026-08-29): recalcula unassigned_mechanic_occurrences de UN pull ya
+   * importado contra el catálogo actual — mismo patrón que
+   * reanalyzeDefensivePressure, llamado en secuencia (nunca en bucle server-
+   * side) tras editar una fila desde unassigned-mechanics-catalog.component.ts.
+   */
+  async reanalyzeUnassignedMechanics(pullId: string): Promise<{
+    ok: true;
+    pullId: string;
+    skipped?: boolean;
+    reason?: string;
+    catalogSize?: number;
+    before?: number;
+    after?: number;
+  }> {
+    return this.invoke('reanalyze-unassigned-mechanics', { pullId });
+  }
+
+  /** Crear/editar/borrar una fila de unassigned_mechanic_catalog — única puerta de escritura (RLS de solo-lectura en la tabla, ver migración 20260829080000). `pullIds` viene relleno solo si el campo tocado afecta a la detección (ver save-unassigned-mechanic-edit/index.ts), para poder reanalizar en secuencia igual que saveDefensiveEdit. */
+  async saveUnassignedMechanicEdit(edit: {
+    id?: string;
+    delete?: boolean;
+    bossId?: string;
+    difficulty?: string;
+    name?: string;
+    detectionType?: 'cast' | 'debuff_applied' | 'buff_applied' | 'npc_interaction';
+    abilityId?: number | null;
+    actorNamePattern?: string | null;
+    appliedBy?: 'npc' | 'self' | null;
+    eligibleRoles?: string[] | null;
+    consequenceAbilityId?: number | null;
+    hasConfirmedDetection?: boolean;
+    reviewed?: boolean;
+    aiConfidence?: string | null;
+    aiNotes?: string | null;
+  }): Promise<{ ok: true; id?: string; pullIds: string[] }> {
+    return this.invoke('save-unassigned-mechanic-edit', edit);
+  }
+
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */
   async syncReports(params: { guildName: string; serverSlug: string; serverRegion: string; sinceMs?: number }): Promise<SyncReportsResult> {
     return this.invoke<SyncReportsResult>('sync-reports', params);

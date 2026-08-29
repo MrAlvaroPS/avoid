@@ -22,6 +22,7 @@ import { upsertReportEncounters } from '../_shared/report-encounters.ts';
 import { resolveSeverity } from '../_shared/mechanic-severity.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { detectWipeCall as detectWipeCallShared, WIPE_CALL_CONFIDENCE_THRESHOLD, type WipeCallDetection } from '../_shared/wipe-call-detection.ts';
+import { detectUnassignedMechanicOccurrences, type UnassignedMechanicCatalogEntry, type ActorLite, type GenericEvent } from '../_shared/unassigned-mechanics.ts';
 
 // "Engancharse a los pulls": trae fights nuevos de WCL y genera `pulls` +
 // `player_pull_records` reales. A PROPÓSITO no llama al LLM aquí — eso es
@@ -441,6 +442,43 @@ Deno.serve(async (req: Request) => {
           .eq('difficulty', difficulty)
           .returns<MechanicRow[]>();
 
+        // §"la raid debe hacerlo... no marca a nadie a propósito" (feedback
+        // real, 2026-08-29): catálogo de mecánicas SIN asignación fija de
+        // este boss+dificultad — ver _shared/unassigned-mechanics.ts. Mismo
+        // patrón que `mechanics` justo arriba (tabla pequeña, filtrada por
+        // boss+dificultad en la propia query en vez de traer todo el
+        // catálogo y filtrar a mano).
+        // §verificado 2026-08-29 contra Lvp1VCbzmwTRHdQ7 (ver migración
+        // 20260829040000): una fila puede estar "investigada" (NPC/ability
+        // real, guía de Wowhead real) sin que WCL registre NUNCA un evento
+        // real de esa interacción — comprobado contra TODOS los pulls reales
+        // de dos bosses, kill incluido, cero eventos. has_confirmed_detection
+        // solo es true una vez visto al menos una ocurrencia real, para que
+        // una fila sin señal no aparente funcionar en silencio.
+        const { data: unassignedMechanicRows } = await supabase
+          .from('unassigned_mechanic_catalog')
+          .select('id,ability_id,actor_name_pattern,name,detection_type,applied_by')
+          .eq('boss_id', bossId)
+          .eq('difficulty', difficulty)
+          .eq('has_confirmed_detection', true)
+          .returns<
+            { id: string; ability_id: number | null; actor_name_pattern: string | null; name: string; detection_type: UnassignedMechanicCatalogEntry['detectionType']; applied_by: UnassignedMechanicCatalogEntry['appliedBy'] }[]
+          >();
+        const unassignedMechanicCatalog: UnassignedMechanicCatalogEntry[] = (unassignedMechanicRows ?? []).map((r) => ({
+          id: r.id,
+          abilityId: r.ability_id,
+          actorNamePattern: r.actor_name_pattern,
+          name: r.name,
+          detectionType: r.detection_type,
+          appliedBy: r.applied_by,
+        }));
+        // Solo se piden Debuffs/Buffs (dataTypes que HOY no se piden nunca en
+        // esta función, ver nota en unassigned-mechanics.ts) si el catálogo
+        // de ESTE boss+dificultad de verdad los necesita — no gastar cuota
+        // de páginas de WCL en los bosses que solo usan npc_interaction/cast.
+        const needsUnassignedDebuffEvents = unassignedMechanicCatalog.some((e) => e.detectionType === 'debuff_applied');
+        const needsUnassignedBuffEvents = unassignedMechanicCatalog.some((e) => e.detectionType === 'buff_applied');
+
         // §"variable como wipefest" (feedback real, 2026-08-27): nivel 1 de
         // resolveSeverity — ratios de kills PROPIOS de Avoid en este boss+
         // dificultad, agrupados por ability_id. Una consulta por fight
@@ -500,6 +538,36 @@ Deno.serve(async (req: Request) => {
           // verificado en real contra un pull propio.
           getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Dispels', startTime: fight.startTime, endTime: fight.endTime }),
         ]);
+
+        // §unassigned-mechanics: Debuffs/Buffs condicionales (ver
+        // needsUnassignedDebuffEvents/needsUnassignedBuffEvents arriba) —
+        // fuera del Promise.all grande de arriba a propósito, para no tocar
+        // ese bloque ya verificado y para que quede claro que son dos
+        // dataTypes nuevos, pedidos solo cuando hacen falta.
+        const [unassignedDebuffEvents, unassignedBuffEvents] = await Promise.all([
+          needsUnassignedDebuffEvents
+            ? getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Debuffs', startTime: fight.startTime, endTime: fight.endTime })
+            : Promise.resolve([] as Record<string, unknown>[]),
+          needsUnassignedBuffEvents
+            ? getFightEvents({ code: reportCode, fightId: fight.id, dataType: 'Buffs', startTime: fight.startTime, endTime: fight.endTime })
+            : Promise.resolve([] as Record<string, unknown>[]),
+        ]);
+        // Verificado empíricamente contra Lvp1VCbzmwTRHdQ7 antes de escribir
+        // esta llamada (huevos de Ula'tek y orbe del Altar son NPC-actors
+        // reales golpeados/casteados por jugadores — ver migración
+        // 20260829030000 y unassigned-mechanics.ts). fight.friendlyPlayers
+        // es la misma fuente que ya usa detectNinjaPull/playerRecords más
+        // abajo para "quién es jugador en este fight".
+        const unassignedMechanicOccurrences = detectUnassignedMechanicOccurrences({
+          catalog: unassignedMechanicCatalog,
+          fightStartTime: fight.startTime,
+          castEvents: friendlyCastEvents as GenericEvent[],
+          damageDoneEvents: damageDoneEvents as GenericEvent[],
+          debuffEvents: unassignedDebuffEvents as GenericEvent[],
+          buffEvents: unassignedBuffEvents as GenericEvent[],
+          actorById: actorById as unknown as Map<number, ActorLite>,
+          playerActorIds: new Set(fight.friendlyPlayers),
+        });
 
         // §3/§7: dps/hps (simplificación: duración total del pull, no el
         // "active time" que usa la propia web de WCL — puede quedar algo por
@@ -920,6 +988,14 @@ Deno.serve(async (req: Request) => {
           pullUpdatePatch.is_ninja_pull = true;
           pullUpdatePatch.ninja_pull_signals = ninjaPullDetection.signals;
           pullUpdatePatch.ninja_pull_excluded = ninjaPullDetection.excluded;
+        }
+        // §unassigned-mechanics: se guarda siempre que el catálogo de este
+        // boss+dificultad tenga alguna fila, aunque el resultado sea un
+        // array vacío (nadie la resolvió este pull) — un array vacío real es
+        // información distinta de "nunca se calculó" (null, bosses sin
+        // catálogo todavía).
+        if (unassignedMechanicCatalog.length) {
+          pullUpdatePatch.unassigned_mechanic_occurrences = unassignedMechanicOccurrences;
         }
         if (Object.keys(pullUpdatePatch).length) {
           await supabase.from('pulls').update(pullUpdatePatch).eq('id', insertedPull.id);

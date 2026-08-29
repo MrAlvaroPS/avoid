@@ -11,6 +11,9 @@
       <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'mecanicas'" [class.selected]="activeTab() === 'mecanicas'" (click)="activeTab.set('mecanicas')">
         Mecánicas de bosses
       </button>
+      <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'sin-asignar'" [class.selected]="activeTab() === 'sin-asignar'" (click)="activeTab.set('sin-asignar')">
+        Mecánicas sin asignar
+      </button>
       <button type="button" role="tab" [attr.aria-selected]="activeTab() === 'defensivos'" [class.selected]="activeTab() === 'defensivos'" (click)="activeTab.set('defensivos')">
         Defensivos
       </button>
@@ -33,6 +36,10 @@
       @if (rosterSyncError(); as e) { <span class="roster-sync-error">{{ e }}</span> }
     </div>
   </div>
+
+  @if (activeTab() === 'sin-asignar') {
+    <app-unassigned-mechanics-catalog />
+  }
 
   @if (activeTab() === 'defensivos') {
     <app-defensive-catalog />
