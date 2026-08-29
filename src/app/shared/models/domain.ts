@@ -133,6 +133,40 @@ export interface DefensiveEvent {
   name: string;
 }
 
+/** Ver supabase/functions/_shared/damage-pressure-windows.ts para el diseño completo. */
+export interface DefensivePressureWindowOption {
+  spellId: number;
+  name: string;
+  survivalType: string | null;
+  status: 'active' | 'available_unused' | 'on_cooldown' | 'unknown' | 'used_during_window';
+  cooldownRemainingMs?: number;
+}
+
+export interface DefensivePressureWindow {
+  /** Ms desde el inicio del pull — mismo espacio de tiempo que trigger_time_ms/timeMs en el resto de la app. */
+  startMs: number;
+  endMs: number;
+  peakMs: number;
+  peakValue: number;
+  covered: boolean;
+  /** Solo tiene sentido cuando !covered — había algo disponible (excluyendo 'emergency' sin usar) y no se cubrió. */
+  coverable: boolean;
+  options: DefensivePressureWindowOption[];
+  /** §"relacionar 'pico de daño recibido' con una habilidad del boss, de
+   * forma veraz" (feedback real, 2026-08-29): abilityGameID con más daño
+   * real dentro de la ventana (±2s de margen) — nombre curado si es una
+   * mecánica clasificada del manifiesto, nombre real de WCL si no. null si
+   * no hubo ningún evento de daño en el rango (rarísimo). */
+  mechanicId: number | null;
+  mechanicName: string | null;
+}
+
+export interface DefensivePressureWindows {
+  /** Mediana de los buckets de daño>0 de este jugador en este pull — línea base propia usada para el umbral. */
+  baselineValue: number;
+  windows: DefensivePressureWindow[];
+}
+
 export interface PlayerPullRecordRow {
   id: string;
   pull_id: string;
@@ -163,6 +197,8 @@ export interface PlayerPullRecordRow {
   world_total_parses: number | null;
   /** TODOS los casts de cada defensivo de su clase durante el pull completo (no solo el estado al morir). */
   defensive_casts: { spellId: number; name: string; timestampsMs: number[] }[];
+  /** §"picos de daño... juntando ventanas de daño sufrido + defensivos" (feedback real, 2026-08-29): null solo en pulls procesados antes de este campo y aún sin backfill (ver reanalyze-defensive-pressure). */
+  defensive_pressure_windows: DefensivePressureWindows | null;
   // Los dos campos internos son opcionales de verdad, no solo por si acaso:
   // los pulls procesados con una versión de analyze-report anterior a que
   // existiera esta columna tienen consumables:{} tal cual en la base de

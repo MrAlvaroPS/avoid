@@ -6,7 +6,7 @@
 import { Component, computed, effect, HostListener, inject, input, signal } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { DEFENSIVE_MISS_PENALTY, DEFENSIVE_MISS_PENALTY_NON_LETHAL, NightPlayerSummaryService, PULL_SCORE_FAIL_PENALTY, type NightMechanicFailRow, type NightPlayerSummary, type NightPullSummary, type PullScoreBreakdown } from '../../core/night-player-summary.service';
+import { DEFENSIVE_MISS_PENALTY, DEFENSIVE_MISTIMED_PENALTY, DEFENSIVE_NEVER_TOUCHED_PENALTY, NightPlayerSummaryService, PULL_SCORE_FAIL_PENALTY, type NightMechanicFailRow, type NightPlayerSummary, type NightPullSummary, type PullScoreBreakdown } from '../../core/night-player-summary.service';
 import type { PlayerReliability, ReliabilityBreakdown } from '../../core/reliability.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { mapBrief } from '../../core/pull-analysis.service';
@@ -194,15 +194,18 @@ export class NightPlayerDossierComponent {
     );
     if (!b.died) {
       lines.push('Consumibles: 100% — no murió, se aprueba automático (igual que con piedra/poción, solo importa si mueres).');
-      // §"si ponemos que ha empeorado en defensivo bajo presión, ¿cómo tiene
-      // un 90%?" (feedback real, 2026-08-29): antes esta rama nunca
-      // penalizaba nada — sobrevivir una presión sin lanzar ningún
-      // defensivo salía gratis en la puntuación aunque
-      // pressurePullsWithCast/pressurePulls se hundiera.
+      // §"no es lo mismo usar 0 defensivos que usarlo a destiempo, lo
+      // primero debe penalizar mucho y lo segundo un poco" (feedback real,
+      // 2026-08-29): ventanas de presión reales (ver damage-pressure-
+      // windows.ts), no el booleano de antes — never_touched (cero casts en
+      // todo el pull) penaliza más que mistimed (sí usó algo, mal
+      // sincronizado). Las ventanas concretas van en `items`, abajo.
       lines.push(
-        b.defensiveMissKind === 'pressure'
-          ? `⚠ Presión detectada (daño evitable anómalo) con el catálogo libre y ningún defensivo lanzado en todo el intento: ×${this.formatPct(DEFENSIVE_MISS_PENALTY_NON_LETHAL * 100)} sobre toda la puntuación.`
-          : 'Sin presión detectada que exigiera un defensivo que no lanzara.',
+        b.defensiveMissKind === 'never_touched'
+          ? `⚠ ${b.defensiveMissedWindows.length} ventana${b.defensiveMissedWindows.length === 1 ? '' : 's'} de presión real con el catálogo libre y CERO casts defensivos en todo el intento: ×${this.formatPct(DEFENSIVE_NEVER_TOUCHED_PENALTY * 100)} sobre toda la puntuación.`
+          : b.defensiveMissKind === 'mistimed'
+            ? `⚠ ${b.defensiveMissedWindows.length} ventana${b.defensiveMissedWindows.length === 1 ? '' : 's'} de presión sin cubrir, pero sí lanzó defensivos en otro momento del pull — a destiempo: ×${this.formatPct(DEFENSIVE_MISTIMED_PENALTY * 100)}, penaliza poco porque sí hay intento, ver abajo dónde y por qué.`
+            : 'Sin ventana de presión real sin cubrir.',
       );
     } else {
       lines.push(`Consumibles: ${this.formatPct(b.consumableScore * 100)} — murió ${b.usedConsumable ? 'con' : 'sin'} piedra de brujo o poción usada en el intento.`);
@@ -219,13 +222,29 @@ export class NightPlayerDossierComponent {
       `Fórmula: (mecánica×70% + consumibles×30%) × % del intento vivo${
         b.defensiveMissKind === 'death'
           ? ` × ${this.formatPct(DEFENSIVE_MISS_PENALTY * 100)} (defensivo disponible sin usar al morir)`
-          : b.defensiveMissKind === 'pressure'
-            ? ` × ${this.formatPct(DEFENSIVE_MISS_PENALTY_NON_LETHAL * 100)} (presión sobrevivida sin defensivo)`
-            : ''
+          : b.defensiveMissKind === 'never_touched'
+            ? ` × ${this.formatPct(DEFENSIVE_NEVER_TOUCHED_PENALTY * 100)} (presión sobrevivida sin ningún defensivo)`
+            : b.defensiveMissKind === 'mistimed'
+              ? ` × ${this.formatPct(DEFENSIVE_MISTIMED_PENALTY * 100)} (defensivo usado a destiempo)`
+              : ''
       }.`,
     );
+    // §"esa información debe ser verificable... tooltip o panel lateral"
+    // (feedback real, 2026-08-29): mismo dato que ya alimenta la infografía
+    // (pressureWindowEvaluation, night-player-summary.service.ts) — el
+    // momento exacto, la magnitud del pico, y qué tenía disponible en cada
+    // ventana fallada, no solo el multiplicador aplicado.
+    const windowItems = b.defensiveMissedWindows.map((w) => {
+      const options = w.availableOptions.map((o) => o.name).join(' / ') || 'catálogo sin resolver en ese instante';
+      return `${this.formatDuration(w.peakMs)} — pico de ${Math.round(w.peakValue).toLocaleString('es-ES')} de daño sobre su línea base — tenía disponible: ${options}`;
+    });
     const fails = mechanicFails.filter((f) => f.pullId === pull.pullId);
-    return { title: `Puntuación del pull — ${this.formatPct(pullScore * 100)}`, lines, mechanics: fails.length ? fails : undefined };
+    return {
+      title: `Puntuación del pull — ${this.formatPct(pullScore * 100)}`,
+      lines,
+      items: windowItems.length ? windowItems : undefined,
+      mechanics: fails.length ? fails : undefined,
+    };
   }
 
   /** Mismo texto que antes tenía el tooltip de "puntuación de la noche" — el modal añade el desglose pull a pull, que antes solo se veía pasando el ratón por cada fila una a una. */

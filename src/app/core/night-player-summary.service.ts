@@ -18,7 +18,7 @@ import {
   type MechanicCoaching,
 } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
-import type { DeathCause, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
+import type { DeathCause, DefensivePressureWindow, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
 import type { LlmPullAnalysis } from '../shared/models/ui';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 import { gearPreparationCounts } from '../shared/gear-preparation.util';
@@ -81,11 +81,23 @@ export interface PullScoreBreakdown {
   /** 1.0 si no murió; si murió, fracción del pull que estuvo vivo (0-1). */
   deathMultiplier: number;
   deathTimeMs: number | null;
-  /** §"el hecho de no usar un defensivo debería ser penalización grande — siempre hay un motivo para usarlo" (feedback real, 2026-08-29): true si murió con un defensivo real de su catálogo libre y no lo lanzó (defensiveMissKind='death'), O si sobrevivió un pull de presión con el catálogo libre y no lanzó nada (defensiveMissKind='pressure'). */
+  /** §"el hecho de no usar un defensivo debería ser penalización grande — siempre hay un motivo para usarlo" (feedback real, 2026-08-29): true si murió con un defensivo real de su catálogo libre y no lo lanzó (defensiveMissKind='death'), o si sobrevivió con ventanas de presión reales sin cubrir ('never_touched'/'mistimed', ver damage-pressure-windows.ts). */
   defensiveMissed: boolean;
-  /** Multiplicador aplicado sobre toda la puntuación del intento cuando defensiveMissed=true — DEFENSIVE_MISS_PENALTY si murió, DEFENSIVE_MISS_PENALTY_NON_LETHAL si sobrevivió. 1 si no aplica. */
+  /** Multiplicador aplicado sobre toda la puntuación del intento cuando defensiveMissed=true — DEFENSIVE_MISS_PENALTY si murió, DEFENSIVE_NEVER_TOUCHED_PENALTY o DEFENSIVE_MISTIMED_PENALTY si sobrevivió. 1 si no aplica. */
   defensiveMissMultiplier: number;
-  defensiveMissKind: 'death' | 'pressure' | null;
+  /** §"no es lo mismo usar 0 defensivos que usarlo a destiempo, lo primero
+   * debe penalizar mucho y lo segundo debe penalizar un poco" (feedback
+   * real, 2026-08-29): 'never_touched' = ninguna ventana cubierta Y cero
+   * casts de su catálogo en todo el pull (penalización fuerte);
+   * 'mistimed' = ninguna ventana cubierta pero SÍ hubo algún cast en el
+   * pull, solo desincronizado (penalización ligera). */
+  defensiveMissKind: 'death' | 'never_touched' | 'mistimed' | null;
+  /** §"esa información debe ser verificable... tooltip o panel lateral"
+   * (feedback real, 2026-08-29): las ventanas concretas que se fallaron —
+   * momento, magnitud del pico, y qué tenía disponible — para que el
+   * tooltip de puntuación pueda mostrar "dónde y por qué", no solo el
+   * multiplicador. Vacío salvo que defensiveMissKind sea 'never_touched'/'mistimed'. */
+  defensiveMissedWindows: NightPressureWindowMiss[];
 }
 
 export interface NightDeathRow {
@@ -216,6 +228,104 @@ export interface NightDefensiveSummary {
   pressurePullsWithCast: number;
   deathsWithDefensiveAvailable: number;
   spells: NightDefensiveSpellSummary[];
+  /** §"no es lo mismo usar 0 defensivos que usarlo a destiempo... guiar
+   * indicando dónde hay que usarlo y por qué" (feedback real, 2026-08-29):
+   * un elemento por pull evaluable con ventanas reales de presión (ver
+   * damage-pressure-windows.ts) — excluye ninja pulls; las ventanas después
+   * del wipe call ya no cuentan (mismo criterio que el resto de la app).
+   */
+  pressurePullBreakdown: NightPressurePullSummary[];
+  /** §"agrupar por mecánica... una fila que se lea fácil... nada por el
+   * camino" (feedback real, 2026-08-29): una fila por mecánica real del
+   * boss (agregada de TODA la noche, no por pull) — sustituye a la tarjeta
+   * por ventana. Incluye TODAS las ocurrencias (cubiertas y falladas,
+   * también las de pulls con muerte — a diferencia de pressurePullBreakdown,
+   * esto es informativo/patrón, no puntuación, así que no aplica la misma
+   * exclusión).
+   */
+  mechanicPressureBreakdown: NightMechanicPressureSummary[];
+}
+
+export interface NightMechanicOccurrence {
+  pullId: string;
+  pullNumber: number;
+  timeMs: number;
+  covered: boolean;
+  /** Qué defensivo concreto cubrió esta ocurrencia — null si no se cubrió, o si se cubrió pero no se pudo identificar cuál de varios activos a la vez fue. */
+  coveredBySpellId: number | null;
+  coveredBySpellName: string | null;
+}
+
+export interface NightMechanicDefensiveStat {
+  spellId: number;
+  name: string;
+  /** Veces que este defensivo (no-emergencia) estaba libre cuando ocurrió esta mecánica. */
+  timesAvailable: number;
+  /** De esas, veces que fue el que de verdad la cubrió. */
+  timesUsed: number;
+}
+
+export interface NightMechanicPressureSummary {
+  mechanicId: number;
+  mechanicName: string;
+  bossId: string;
+  bossName: string;
+  difficulty: string;
+  /** Cruce contra el histórico de este boss+dificultad — ver computeMechanicTimingPattern. null si no hay patrón fiable que enseñar. */
+  timingPattern: NightMechanicTimingPattern | null;
+  /** TODAS las ocurrencias de esta mecánica esta noche, en orden cronológico — la base de la cuadrícula de estado. */
+  occurrences: NightMechanicOccurrence[];
+  coveredCount: number;
+  totalCount: number;
+  /** Solo defensivos no-emergencia — mismo criterio que el resto de esta sección (ver evaluateWindowCoverage). */
+  defensives: NightMechanicDefensiveStat[];
+}
+
+export interface NightPressureWindowMiss {
+  startMs: number;
+  peakMs: number;
+  peakValue: number;
+  /** Solo las opciones `available_unused` que de verdad podía haber pulsado — 'emergency' sin usar queda fuera aunque estuviera disponible (no cuenta como el motivo del fallo, ver evaluateWindowCoverage). */
+  availableOptions: { spellId: number; name: string; survivalType: string | null }[];
+  /** §"relacionar 'pico de daño recibido' con una habilidad del boss, de forma veraz" (feedback real, 2026-08-29): la abilityGameID con más daño real dentro de la ventana — null si WCL no dio ningún evento en rango. */
+  mechanicId: number | null;
+  mechanicName: string | null;
+  /** §"si el boss lanza la habilidad siempre en el mismo momento... o cada
+   * X tiempo, podemos ponerlo también ahí para preparar el defensivo"
+   * (feedback real, 2026-08-29): solo en pressurePullBreakdown (la lista de
+   * la infografía) — el tooltip de puntuación no lo rellena, no hace falta
+   * ahí. undefined = todavía no calculado (computePullScore no lo toca),
+   * null = sí se calculó pero no hay patrón fiable que enseñar.
+   */
+  timingPattern?: NightMechanicTimingPattern | null;
+}
+
+export type NightMechanicTimingKind = 'fixed' | 'periodic';
+
+export interface NightMechanicTimingPattern {
+  kind: NightMechanicTimingKind;
+  /** 'fixed': momento medio (ms desde el inicio del pull) en el que suele ocurrir. 'periodic': intervalo medio (ms) entre repeticiones. */
+  ms: number;
+  sampleSize: number;
+}
+
+export type NightPressurePullClassification = 'never_touched' | 'mistimed' | 'covered' | 'no_pressure';
+
+export interface NightPressurePullSummary {
+  pullId: string;
+  pullNumber: number;
+  bossId: string;
+  bossName: string;
+  difficulty: string;
+  durationMs: number | null;
+  /** Ventanas FALLADAS (coverable=true) de este pull — no el total de ventanas. Para el total, sumar con coveredCount. */
+  missedCount: number;
+  coveredCount: number;
+  /** true = lanzó algo de su catálogo en algún momento del pull, aunque no cubriera ninguna ventana. */
+  usedAnything: boolean;
+  classification: NightPressurePullClassification;
+  /** Solo las ventanas realmente falladas (coverable=true) — la evidencia concreta para "dónde y por qué". Vacío si classification no es 'never_touched'/'mistimed'. */
+  missedWindows: NightPressureWindowMiss[];
 }
 
 export interface NightExecutionSnapshot {
@@ -325,9 +435,24 @@ const FAIL_PENALTY = PULL_SCORE_FAIL_PENALTY;
 
 /** §"el hecho de no usar un defensivo debería ser penalización grande — siempre hay un motivo para usarlo" (feedback real, 2026-08-29): corta la puntuación del intento a la mitad, encima de mecánica/consumibles/deathMultiplier — no sustituye al resto de la fórmula, se apila sobre ella. Mismo dato verificado (status==='available_unused') que ya usa Fiabilidad para su eje defensiva; aquí se aplica directo al pull en vez de a un promedio de 60 días. */
 export const DEFENSIVE_MISS_PENALTY = 0.5;
-/** Pull de presión (daño evitable anómalo) sobrevivido sin ningún cast defensivo, sin llegar a morir — señal real pero menos concluyente que morir con el botón libre en la mano, así que pesa menos que DEFENSIVE_MISS_PENALTY. */
-export const DEFENSIVE_MISS_PENALTY_NON_LETHAL = 0.75;
-/** §"debería escalar cuanto más pulls sin nada usado" (feedback real, 2026-08-29): −8 puntos porcentuales sobre nightScore por cada pull distinto (muerte o presión) con un defensivo libre y sin usar esa noche — 1 ya se nota, varios se acumulan. */
+/** §"no es lo mismo usar 0 defensivos que usarlo a destiempo, lo primero
+ * debe penalizar mucho" (feedback real, 2026-08-29): ventana(s) de presión
+ * real (ver damage-pressure-windows.ts) sin cubrir Y cero casts de su
+ * catálogo en TODO el pull — señal real pero menos concluyente que morir
+ * con el botón libre en la mano, así que pesa menos que DEFENSIVE_MISS_PENALTY. */
+export const DEFENSIVE_NEVER_TOUCHED_PENALTY = 0.75;
+/** §"...y lo segundo debe penalizar un poco pero guiar para corregirlo"
+ * (feedback real, 2026-08-29): ventana(s) sin cubrir, pero SÍ hubo algún
+ * cast de su catálogo en el pull — lo intentó, solo desincronizado. La
+ * corrección real vive en el tooltip (defensiveMissedWindows), no en el
+ * multiplicador — deliberadamente el más suave de los tres. */
+export const DEFENSIVE_MISTIMED_PENALTY = 0.9;
+/** §"debería escalar cuanto más pulls sin nada usado" (feedback real,
+ * 2026-08-29): −8 puntos porcentuales sobre nightScore por cada pull
+ * distinto (muerte o CERO defensivos tocados) con presión real sin cubrir
+ * esa noche — 1 ya se nota, varios se acumulan. 'mistimed' NO escala aquí a
+ * propósito: ya mostró que lo intenta, la noche entera no debe hundirse por
+ * timing imperfecto igual que por desconexión total. */
 export const NIGHT_DEFENSIVE_ESCALATION_STEP = 0.08;
 /** Suelo del factor de consistencia defensiva: por muchos pulls sin defensivo que acumule, este factor solo no baja de aquí (los multiplicadores por pull ya hacen su parte además de este). */
 export const NIGHT_DEFENSIVE_ESCALATION_FLOOR = 0.5;
@@ -382,6 +507,15 @@ function slugifyRealm(realm: string): string {
     .replace(/'/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+/** Media y coeficiente de variación (desviación típica / media) — null si la media es 0 (evita una división por cero, no una mecánica real). Ver enrichTimingPatterns más abajo. */
+function meanAndCv(values: number[]): { mean: number; cv: number } | null {
+  if (!values.length) return null;
+  const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+  if (mean <= 0) return null;
+  const variance = values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / values.length;
+  return { mean, cv: Math.sqrt(variance) / mean };
 }
 
 @Injectable({ providedIn: 'root' })
@@ -480,6 +614,51 @@ export class NightPlayerSummaryService {
             mechanicCoachingKey(pull.boss_id, pull.difficulty, mechanicName),
           ) ?? { note: null, resolution: null })
         : { note: null, resolution: null };
+
+    // §"no es lo mismo usar 0 defensivos que usarlo a destiempo... esa
+    // información debe ser verificable" (feedback real, 2026-08-29): UN
+    // único sitio evalúa las ventanas de presión reales de este jugador en
+    // un pull — computePullScore lo usa para el multiplicador (con tooltip
+    // verificable, ver dossier.component.ts), y defensiveSummary más abajo
+    // reutiliza EXACTAMENTE el mismo resultado para el desglose de la
+    // infografía. Misma fuente, mismo resultado — no pueden divergir.
+    // Factorizado de pressureWindowEvaluation para que buildMechanicPressureBreakdown
+    // (agregado por MECÁNICA, toda la noche) reutilice el mismo recorte de
+    // wipe call que ya usa la evaluación por pull — un cast/ventana después
+    // del wipe call no cuenta como evaluable en ningún sitio de esta app.
+    function evaluableWindowsForPull(pullId: string): DefensivePressureWindow[] {
+      const record = recordByPullId.get(pullId);
+      const pull = pullById.get(pullId);
+      const wipeCallStartMs =
+        pull?.wipe_call_excluded && typeof pull.wipe_call_signals?.['wipeCallStartMs'] === 'number'
+          ? (pull.wipe_call_signals['wipeCallStartMs'] as number)
+          : null;
+      return (record?.defensive_pressure_windows?.windows ?? []).filter(
+        (w) => wipeCallStartMs == null || w.startMs < wipeCallStartMs,
+      );
+    }
+
+    function pressureWindowEvaluation(pullId: string): {
+      coverableWindows: DefensivePressureWindow[];
+      coveredCount: number;
+      usedAnything: boolean;
+    } {
+      const record = recordByPullId.get(pullId);
+      const pull = pullById.get(pullId);
+      const wipeCallStartMs =
+        pull?.wipe_call_excluded && typeof pull.wipe_call_signals?.['wipeCallStartMs'] === 'number'
+          ? (pull.wipe_call_signals['wipeCallStartMs'] as number)
+          : null;
+      const evaluableWindows = evaluableWindowsForPull(pullId);
+      const usedAnything = (record?.defensive_casts ?? []).some((d) =>
+        d.timestampsMs.some((t) => wipeCallStartMs == null || t < wipeCallStartMs),
+      );
+      return {
+        coverableWindows: evaluableWindows.filter((w) => w.coverable),
+        coveredCount: evaluableWindows.filter((w) => w.covered).length,
+        usedAnything,
+      };
+    }
     const bossOrder = new Map<string, number>();
     for (const pull of allPulls) {
       if (!bossOrder.has(pull.boss_id)) bossOrder.set(pull.boss_id, bossOrder.size);
@@ -687,23 +866,55 @@ export class NightPlayerSummaryService {
       // empeorado en defensivo bajo presión, ¿cómo tiene un 90%?" — la
       // primera versión de este penalizador solo miraba muertes, así que un
       // jugador que sobrevive TODOS sus pulls de presión sin lanzar un solo
-      // defensivo salía gratis (0 muertes = 0 penalización), aunque
-      // pressurePullsWithCast/pressurePulls (ver defensiveSummary más abajo)
-      // se hundiera. Mismas columnas que ya usa Fiabilidad para su eje
-      // defensiva (defensive_use_opportunity/used_defensive_in_pull) — aquí
-      // solo cuando NO hubo muerte en el pull, para no evaluar dos veces la
-      // misma ventana con dos criterios distintos.
-      const nonLethalDefensiveMissed =
-        !death && reliabilityRow?.defensive_use_opportunity === true && reliabilityRow?.used_defensive_in_pull !== true;
-      const defensiveMissed = deathDefensiveMissed || nonLethalDefensiveMissed;
-      // Sobrevivir una presión sin defensivo pesa menos que morir con uno
-      // libre en la mano: la muerte es el fallo verificado más grave, esto
-      // es "presión detectada + catálogo libre" sin la confirmación final.
+      // defensivo salía gratis. §"no es lo mismo usar 0 defensivos que
+      // usarlo a destiempo" (feedback real, 2026-08-29): ventanas de presión
+      // reales (pressureWindowEvaluation, arriba) en vez del booleano
+      // defensive_use_opportunity/used_defensive_in_pull — solo cuando NO
+      // hubo muerte en el pull, para no evaluar dos veces la misma ventana
+      // con dos criterios distintos.
+      const pressureEval = death ? null : pressureWindowEvaluation(pull.pullId);
+      const neverTouchedMissed = !!pressureEval && pressureEval.coverableWindows.length > 0 && !pressureEval.usedAnything;
+      const mistimedMissed = !!pressureEval && pressureEval.coverableWindows.length > 0 && pressureEval.usedAnything;
+      const defensiveMissed = deathDefensiveMissed || neverTouchedMissed || mistimedMissed;
+      // Tres niveles de severidad, no dos: morir con uno libre en la mano es
+      // el fallo verificado más grave; no tocar NADA en todo un pull con
+      // presión real pesa bastante también; ir a destiempo (sí lo intentó,
+      // mal sincronizado) es la señal más débil de las tres — penaliza poco
+      // a propósito, la corrección real vive en defensiveMissedWindows
+      // (tooltip), no en un multiplicador grande.
       const defensiveMissMultiplier = deathDefensiveMissed
         ? DEFENSIVE_MISS_PENALTY
-        : nonLethalDefensiveMissed
-          ? DEFENSIVE_MISS_PENALTY_NON_LETHAL
-          : 1;
+        : neverTouchedMissed
+          ? DEFENSIVE_NEVER_TOUCHED_PENALTY
+          : mistimedMissed
+            ? DEFENSIVE_MISTIMED_PENALTY
+            : 1;
+      const defensiveMissKind: PullScoreBreakdown['defensiveMissKind'] = deathDefensiveMissed
+        ? 'death'
+        : neverTouchedMissed
+          ? 'never_touched'
+          : mistimedMissed
+            ? 'mistimed'
+            : null;
+      const defensiveMissedWindows: NightPressureWindowMiss[] = (pressureEval?.coverableWindows ?? []).map((w) => ({
+        startMs: w.startMs,
+        peakMs: w.peakMs,
+        peakValue: w.peakValue,
+        mechanicId: w.mechanicId,
+        mechanicName: w.mechanicName,
+        // §bug real encontrado en auditoría (2026-08-29): esta ventana solo
+        // es "coverable" (un fallo real) porque había una opción NO
+        // emergencia disponible — evaluateWindowCoverage excluye
+        // deliberadamente 'emergency' de esa cuenta (guardarlo suele ser lo
+        // correcto). Si aquí se listaban también las emergencia sin
+        // distinguir, el tooltip podía mezclar "Lay on Hands disponible"
+        // (no cuenta) junto a la opción real que sí causó el fallo — y
+        // survivalTypeLabel(options[0]) podía coger justo la de emergencia y
+        // decir "vale guardarlo" sobre una ventana que SÍ era un fallo real.
+        availableOptions: w.options
+          .filter((o) => o.status === 'available_unused' && o.survivalType !== 'emergency')
+          .map((o) => ({ spellId: o.spellId, name: o.name, survivalType: o.survivalType })),
+      }));
       const score =
         Math.round((mechanicScore * 0.7 + consumableScore * 0.3) * deathMultiplier * defensiveMissMultiplier * 1000) / 1000;
       return {
@@ -720,7 +931,8 @@ export class NightPlayerSummaryService {
           deathTimeMs: death?.timeMs ?? null,
           defensiveMissed,
           defensiveMissMultiplier,
-          defensiveMissKind: deathDefensiveMissed ? 'death' : nonLethalDefensiveMissed ? 'pressure' : null,
+          defensiveMissKind,
+          defensiveMissedWindows,
         },
       };
     }
@@ -747,8 +959,13 @@ export class NightPlayerSummaryService {
     // jugador con 8 pulls perfectos y 2 sin ningún defensivo seguía saliendo
     // "excelente" en la media ponderada — el multiplicador de cada pull
     // castiga ESE pull, esto castiga la noche entera y escala con cuántos
-    // pulls distintos lo hicieron.
-    const defensiveMissPullCount = scoredPulls.filter((p) => p.scoreBreakdown.defensiveMissed).length;
+    // pulls distintos lo hicieron. §"lo segundo debe penalizar un poco"
+    // (feedback real, 2026-08-29): 'mistimed' queda fuera a propósito — ya
+    // demostró que lo intenta, no debe compuesto contra la noche entera
+    // igual que morir o no tocar nada.
+    const defensiveMissPullCount = scoredPulls.filter(
+      (p) => p.scoreBreakdown.defensiveMissKind === 'death' || p.scoreBreakdown.defensiveMissKind === 'never_touched',
+    ).length;
     const nightDefensiveConsistencyMultiplier = Math.max(
       NIGHT_DEFENSIVE_ESCALATION_FLOOR,
       1 - defensiveMissPullCount * NIGHT_DEFENSIVE_ESCALATION_STEP,
@@ -894,6 +1111,83 @@ export class NightPlayerSummaryService {
     const pressureRows = reliabilityInputRows.filter(
       (row) => row.had_avoidable_damage || row.used_defensive_when_died != null,
     );
+    // §"no es lo mismo usar 0 defensivos que usarlo a destiempo... guiar
+    // indicando dónde hay que usarlo y por qué" (feedback real, 2026-08-29):
+    // por cada pull evaluable (sin ninja pulls, ver `pulls` — ya filtrado más
+    // arriba), las ventanas de presión REALES de ese pull concreto, con las
+    // del tramo posterior al wipe call descartadas (mismo criterio que el
+    // resto de la app: nada después de ese instante cuenta como evaluable).
+    // §"esa información debe ser verificable... consistente" (feedback real,
+    // 2026-08-29): pressureWindowEvaluation (arriba) es LA MISMA función que
+    // ya usa computePullScore para el multiplicador — el desglose que ve el
+    // RL aquí y el tooltip de puntuación del pull no pueden divergir en los
+    // NÚMEROS, porque leen del mismo cálculo. §bug real encontrado en
+    // auditoría (2026-08-29): SÍ podían divergir en qué PULLS se enseñan —
+    // computePullScore nunca evalúa ventanas de un pull con muerte evaluable
+    // (evita puntuar dos veces la misma ventana con dos criterios, ver
+    // `death` más abajo), pero esta lista no tenía ese mismo filtro: un pull
+    // con muerte podía salir aquí como "never_touched"/"mistimed" mientras
+    // el tooltip de ESE MISMO pull decía 'death' con cero ventanas listadas
+    // — dos superficies de la misma pantalla contradiciéndose sobre el
+    // mismo pull. Mismo filtro que `death` en computePullScore.
+    const pressurePullBreakdown: NightPressurePullSummary[] = pulls
+      .filter((p) => !p.excludedFromStats && !evaluatedDeathByPullId.has(p.pullId))
+      .map((p) => {
+        const { coverableWindows, coveredCount, usedAnything } = pressureWindowEvaluation(p.pullId);
+        const classification: NightPressurePullClassification = !coverableWindows.length
+          ? coveredCount > 0
+            ? 'covered'
+            : 'no_pressure'
+          : usedAnything
+            ? 'mistimed'
+            : 'never_touched';
+        return {
+          pullId: p.pullId,
+          pullNumber: p.pullNumber,
+          bossId: p.bossId,
+          bossName: p.bossName,
+          difficulty: p.difficulty,
+          durationMs: p.durationMs,
+          missedCount: coverableWindows.length,
+          coveredCount,
+          usedAnything,
+          classification,
+          missedWindows: coverableWindows.map((w) => ({
+            startMs: w.startMs,
+            peakMs: w.peakMs,
+            peakValue: w.peakValue,
+            mechanicId: w.mechanicId,
+            mechanicName: w.mechanicName,
+            // §bug real encontrado en auditoría (2026-08-29): mismo criterio
+            // que computePullScore (arriba) — excluir 'emergency' aquí
+            // también, si no la infografía podía mostrar una emergencia
+            // como "disponible" en una ventana que solo es un fallo real
+            // por OTRA opción no-emergencia.
+            availableOptions: w.options
+              .filter((o) => o.status === 'available_unused' && o.survivalType !== 'emergency')
+              .map((o) => ({ spellId: o.spellId, name: o.name, survivalType: o.survivalType })),
+          })),
+        };
+      })
+      .sort((a, b) => a.pullNumber - b.pullNumber);
+    // §"si el boss lanza la habilidad siempre en el mismo momento... o cada
+    // X tiempo podemos ponerlo también ahí para preparar el defensivo"
+    // (feedback real, 2026-08-29): cruce contra el histórico de
+    // pull_mechanic_events de ESTE boss+dificultad (todas las noches, no
+    // solo esta) — validado empíricamente contra datos reales antes de
+    // escribir esto (ver conversación real): mecánicas con intervalo muy
+    // regular entre repeticiones (p.ej. Mark of Acid, cv≈0.03 en 55
+    // muestras) sí dan patrón fiable; mecánicas disparadas por vida/azar
+    // (Hollowing Strikes, cv≈2.2) correctamente no dan ninguno — mejor
+    // ausencia de dato que un patrón inventado.
+    await this.enrichTimingPatterns(client, pressurePullBreakdown);
+    // §"agrupar por mecánica... que sea información que no deje nada por el
+    // camino... y así podemos aprender: en esta mecánica sí o sí me tengo
+    // que preparar un defensivo" (feedback real, 2026-08-29): agregado de
+    // TODA la noche, no por pull — a diferencia de pressurePullBreakdown NO
+    // excluye pulls con muerte (esto es un patrón para aprender, no una
+    // superficie de puntuación, así que no aplica esa misma exclusión).
+    const mechanicPressureBreakdown = await this.buildMechanicPressureBreakdown(client, pulls, evaluableWindowsForPull);
     const defensiveSummary: NightDefensiveSummary = {
       totalCasts: defensiveCasts.length,
       pullsWithCasts: new Set(defensiveCasts.map((cast) => cast.pullId)).size,
@@ -911,6 +1205,8 @@ export class NightPlayerSummaryService {
           casts: entry.casts,
         }))
         .sort((a, b) => b.castCount - a.castCount || a.spellName.localeCompare(b.spellName)),
+      pressurePullBreakdown,
+      mechanicPressureBreakdown,
     };
 
     const avoidableEligible = reliabilityInputRows.reduce(
@@ -1051,6 +1347,194 @@ export class NightPlayerSummaryService {
     const cached = this.summaryCache.read(reportCode, playerName);
     if (!cached) return;
     this.summaryCache.write(reportCode, playerName, cached.fingerprint, { ...cached.summary, brief });
+  }
+
+  // §"si el boss lanza la habilidad siempre en el mismo momento... o cada X
+  // tiempo podemos ponerlo también ahí para preparar el defensivo" (feedback
+  // real, 2026-08-29): calcula UNA vez por mecánica única (no por ventana)
+  // y muta directamente los objetos ya construidos en pressurePullBreakdown
+  // — evita N consultas repetidas cuando la misma mecánica falla en varias
+  // ventanas/pulls de la misma noche.
+  private async enrichTimingPatterns(
+    client: SupabaseClient,
+    pressurePullBreakdown: NightPressurePullSummary[],
+  ): Promise<void> {
+    const uniqueKeys = new Map<string, { bossId: string; difficulty: string; mechanicId: number }>();
+    for (const pull of pressurePullBreakdown) {
+      for (const win of pull.missedWindows) {
+        if (win.mechanicId == null) continue;
+        const key = `${pull.bossId}|${pull.difficulty}|${win.mechanicId}`;
+        if (!uniqueKeys.has(key)) uniqueKeys.set(key, { bossId: pull.bossId, difficulty: pull.difficulty, mechanicId: win.mechanicId });
+      }
+    }
+    if (!uniqueKeys.size) return;
+    const entries = await Promise.all(
+      [...uniqueKeys.entries()].map(async ([key, { bossId, difficulty, mechanicId }]) => {
+        const pattern = await this.computeMechanicTimingPattern(client, bossId, difficulty, mechanicId).catch(() => null);
+        return [key, pattern] as const;
+      }),
+    );
+    const patternByKey = new Map(entries);
+    for (const pull of pressurePullBreakdown) {
+      for (const win of pull.missedWindows) {
+        win.timingPattern = win.mechanicId == null ? null : (patternByKey.get(`${pull.bossId}|${pull.difficulty}|${win.mechanicId}`) ?? null);
+      }
+    }
+  }
+
+  // §"agrupar por mecánica... que no deje nada por el camino... una mecánica
+  // se puede fallar más de una vez en el mismo pull" (feedback real,
+  // 2026-08-29): una fila por mecánica real (boss+dificultad+abilityGameID),
+  // agregada de TODA la noche — cada ocurrencia (cubierta o no) queda como
+  // un elemento propio en `occurrences`, así que dos fallos del mismo pull
+  // salen como dos entradas distintas, no se funden en una.
+  private async buildMechanicPressureBreakdown(
+    client: SupabaseClient,
+    pulls: Pick<NightPullSummary, 'pullId' | 'pullNumber' | 'bossId' | 'bossName' | 'difficulty' | 'excludedFromStats'>[],
+    evaluableWindowsForPull: (pullId: string) => DefensivePressureWindow[],
+  ): Promise<NightMechanicPressureSummary[]> {
+    interface Group {
+      mechanicId: number;
+      mechanicName: string;
+      bossId: string;
+      bossName: string;
+      difficulty: string;
+      occurrences: NightMechanicOccurrence[];
+      defensiveStats: Map<number, { name: string; timesAvailable: number; timesUsed: number }>;
+    }
+    const groups = new Map<string, Group>();
+    for (const p of pulls) {
+      if (p.excludedFromStats) continue;
+      for (const w of evaluableWindowsForPull(p.pullId)) {
+        if (w.mechanicId == null || !w.mechanicName) continue;
+        const key = `${p.bossId}|${p.difficulty}|${w.mechanicId}`;
+        let group = groups.get(key);
+        if (!group) {
+          group = {
+            mechanicId: w.mechanicId,
+            mechanicName: w.mechanicName,
+            bossId: p.bossId,
+            bossName: p.bossName,
+            difficulty: p.difficulty,
+            occurrences: [],
+            defensiveStats: new Map(),
+          };
+          groups.set(key, group);
+        }
+        const coveringOption = w.options.find((o) => o.status === 'active' || o.status === 'used_during_window') ?? null;
+        group.occurrences.push({
+          pullId: p.pullId,
+          pullNumber: p.pullNumber,
+          timeMs: w.peakMs,
+          covered: w.covered,
+          coveredBySpellId: coveringOption?.spellId ?? null,
+          coveredBySpellName: coveringOption?.name ?? null,
+        });
+        // Mismo criterio que el resto de la sección: 'emergency' nunca entra
+        // en el desglose por defensivo (guardarlo suele ser lo correcto, no
+        // es "disponible sin usar" en el mismo sentido que el resto).
+        for (const o of w.options) {
+          if (o.survivalType === 'emergency') continue;
+          const isActive = o.status === 'active' || o.status === 'used_during_window';
+          if (o.status !== 'available_unused' && !isActive) continue;
+          const stat = group.defensiveStats.get(o.spellId) ?? { name: o.name, timesAvailable: 0, timesUsed: 0 };
+          stat.timesAvailable++;
+          if (isActive) stat.timesUsed++;
+          group.defensiveStats.set(o.spellId, stat);
+        }
+      }
+    }
+    if (!groups.size) return [];
+
+    const entries = await Promise.all(
+      [...groups.values()].map(async (group) => {
+        const timingPattern = await this.computeMechanicTimingPattern(client, group.bossId, group.difficulty, group.mechanicId).catch(
+          () => null,
+        );
+        const occurrences = group.occurrences.sort((a, b) => a.pullNumber - b.pullNumber || a.timeMs - b.timeMs);
+        return {
+          mechanicId: group.mechanicId,
+          mechanicName: group.mechanicName,
+          bossId: group.bossId,
+          bossName: group.bossName,
+          difficulty: group.difficulty,
+          timingPattern,
+          occurrences,
+          coveredCount: occurrences.filter((o) => o.covered).length,
+          totalCount: occurrences.length,
+          defensives: [...group.defensiveStats.entries()]
+            .map(([spellId, stat]) => ({ spellId, name: stat.name, timesAvailable: stat.timesAvailable, timesUsed: stat.timesUsed }))
+            .sort((a, b) => b.timesUsed - a.timesUsed || b.timesAvailable - a.timesAvailable),
+        };
+      }),
+    );
+    // Más fallos primero — es lo que más le urge revisar al raider.
+    return entries.sort((a, b) => (b.totalCount - b.coveredCount) - (a.totalCount - a.coveredCount));
+  }
+
+  // §umbrales validados empíricamente contra datos reales (2026-08-29): un
+  // barrido de todas las mecánicas del histórico mostró un salto claro entre
+  // "patrón real" (cv de 0.01-0.05, p.ej. Mark of Acid cada ~20,4s en 55
+  // muestras) y "sin patrón" (cv por encima de 2, p.ej. Hollowing Strikes,
+  // disparada por vida/azar) — 0.15 deja margen de sobra sin colar ruido.
+  private static readonly TIMING_CV_THRESHOLD = 0.15;
+  private static readonly TIMING_MIN_SAMPLES = 5;
+
+  private async computeMechanicTimingPattern(
+    client: SupabaseClient,
+    bossId: string,
+    difficulty: string,
+    mechanicId: number,
+  ): Promise<NightMechanicTimingPattern | null> {
+    const query = (relation: string) =>
+      client
+        .from(relation)
+        .select('pull_id, trigger_time_ms, pulls!inner(boss_id, difficulty, ninja_pull_excluded)')
+        .eq('ability_id', mechanicId)
+        .eq('pulls.boss_id', bossId)
+        .eq('pulls.difficulty', difficulty)
+        .eq('pulls.ninja_pull_excluded', false);
+    const { data, error } = await withSupabaseRelationFallback(
+      'applicable_pull_mechanic_events',
+      () => query('applicable_pull_mechanic_events'),
+      () => query('pull_mechanic_events'),
+    );
+    if (error) return null;
+    const rows = (data ?? []) as { pull_id: string; trigger_time_ms: number }[];
+    if (rows.length < NightPlayerSummaryService.TIMING_MIN_SAMPLES) return null;
+
+    const timesByPull = new Map<string, number[]>();
+    for (const row of rows) {
+      if (!timesByPull.has(row.pull_id)) timesByPull.set(row.pull_id, []);
+      timesByPull.get(row.pull_id)!.push(row.trigger_time_ms);
+    }
+
+    // Periódico primero: intervalo entre repeticiones DENTRO del mismo
+    // pull — más informativo que el momento absoluto cuando la mecánica se
+    // repite varias veces por intento.
+    const deltas: number[] = [];
+    for (const times of timesByPull.values()) {
+      times.sort((a, b) => a - b);
+      for (let i = 1; i < times.length; i++) deltas.push(times[i] - times[i - 1]);
+    }
+    if (deltas.length >= NightPlayerSummaryService.TIMING_MIN_SAMPLES) {
+      const stats = meanAndCv(deltas);
+      if (stats && stats.cv <= NightPlayerSummaryService.TIMING_CV_THRESHOLD) {
+        return { kind: 'periodic', ms: Math.round(stats.mean), sampleSize: deltas.length };
+      }
+    }
+
+    // Fijo: mismo instante entre pulls DISTINTOS — solo tiene sentido si la
+    // mecánica ocurre ~1 vez por pull (si se repite varias veces, "el
+    // momento absoluto" ya no es una pregunta con una sola respuesta).
+    const avgOccurrencesPerPull = rows.length / timesByPull.size;
+    if (timesByPull.size >= NightPlayerSummaryService.TIMING_MIN_SAMPLES && avgOccurrencesPerPull <= 1.3) {
+      const stats = meanAndCv(rows.map((r) => r.trigger_time_ms));
+      if (stats && stats.cv <= NightPlayerSummaryService.TIMING_CV_THRESHOLD) {
+        return { kind: 'fixed', ms: Math.round(stats.mean), sampleSize: rows.length };
+      }
+    }
+    return null;
   }
 
   private async findPreviousReport(

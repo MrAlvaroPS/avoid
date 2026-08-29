@@ -16,11 +16,12 @@ import {
 } from '@angular/core';
 import { toBlob, toCanvas } from 'html-to-image';
 import {
-  DEFENSIVE_MISS_PENALTY_NON_LETHAL,
   type NightDefensiveCast,
   type NightDeathRow,
   type NightMechanicFailRow,
+  type NightMechanicPressureSummary,
   type NightPlayerSummary,
+  type NightPressurePullSummary,
 } from '../../core/night-player-summary.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { errorMessage } from '../../shared/error-message.util';
@@ -101,27 +102,6 @@ interface DefensiveMissDeath {
   usedHealthPotionInPull: boolean;
 }
 
-// §"en txerokee... en el resumen de la noche que NO ha usado NINGÚN
-// defensivo, y en la infografía no viene reflejada esa penalización tan
-// grande" (feedback real, 2026-08-29): defensiveMissDeaths solo cubre
-// muertes — un pull sobrevivido con daño evitable anómalo, catálogo libre
-// (defensive_use_opportunity) y CERO casts en todo el intento nunca
-// aparecía aunque ya llevaba su propia penalización en la puntuación (ver
-// DEFENSIVE_MISS_PENALTY_NON_LETHAL en night-player-summary.service.ts) —
-// esto lo hace visible. No hay una lista de "qué estaba disponible" para
-// este caso (defensive_use_opportunity es un booleano de pull, no un
-// catálogo por hechizo como en una muerte), así que la tarjeta es más simple
-// a propósito, no un hueco de datos.
-interface PressureMissPull {
-  key: string;
-  pullId: string;
-  pullNumber: number;
-  bossId: string;
-  bossName: string;
-  difficulty: string;
-  durationMs: number | null;
-}
-
 const SHEET_WIDTH = 2880;
 const MIN_SHEET_HEIGHT = 1890;
 // 2880 × 1.6 = 4608 px de ancho: igual que la infografía general. Una
@@ -179,6 +159,20 @@ export class NightPlayerInfographicComponent
   );
   readonly executionTone = computed(() => {
     const score = this.executionScore();
+    return score == null ? 'neutral' : score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
+  });
+
+  // §"otro nuevo de defensivos más en detalle... hay que montar un sistema
+  // de puntuación de defensivo no usado, usado fuera de tiempo, bien usado,
+  // para normalizar los datos" (feedback real, 2026-08-29): NO se inventa
+  // una fórmula nueva — nightReliability.breakdown.defensiva YA es
+  // exactamente eso (computeReliabilityBreakdown, reliability.service.ts):
+  // ratio real cubiertas/cubribles con el mismo never_touched=0/mistimed=
+  // crédito parcial/covered=ratio que ya vimos y arreglamos hoy. Reutilizarlo
+  // aquí evita una segunda fórmula que pudiera divergir de la de Fiabilidad.
+  readonly defensiveScore = computed(() => this.summary().nightReliability?.breakdown.defensiva ?? null);
+  readonly defensiveTone = computed(() => {
+    const score = this.defensiveScore();
     return score == null ? 'neutral' : score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
   });
 
@@ -377,29 +371,42 @@ export class NightPlayerInfographicComponent
       );
   });
 
-  /** Ver comentario junto a PressureMissPull — el mismo pull que ya recibe DEFENSIVE_MISS_PENALTY_NON_LETHAL en la puntuación, mostrado aquí. */
-  readonly pressureMissPulls = computed<PressureMissPull[]>(() =>
-    this.summary()
-      .pulls.filter((pull) => !pull.excludedFromStats && pull.scoreBreakdown.defensiveMissKind === 'pressure')
-      .map((pull) => ({
-        key: `pressure|${pull.pullId}`,
-        pullId: pull.pullId,
-        pullNumber: pull.pullNumber,
-        bossId: pull.bossId,
-        bossName: pull.bossName,
-        difficulty: pull.difficulty,
-        durationMs: pull.durationMs,
-      })),
+  // §"debe mezclarse el punto 4 y 5 que hablan de defensivos... poner los
+  // casts del pull y los pulls (que no sean wipecall o ninja pull) donde no
+  // se ha usado nada. Además de guiar en el buen uso y por qué" (feedback
+  // real, 2026-08-29): pressurePullBreakdown ya excluye ninja pulls y el
+  // tramo posterior al wipe call (ver night-player-summary.service.ts) —
+  // aquí solo se separan las dos categorías que hay que enseñar distinto.
+  // §bug real encontrado en auditoría (2026-08-29): `?? []` como red de
+  // seguridad — el caché de localStorage ya se versionó (ver
+  // night-player-summary-cache.service.ts) para que esto no vuelva a pasar,
+  // pero un objeto sin este campo no debe volver a tumbar TODA la carga de
+  // iconos de la infografía solo por leerlo sin guardia.
+  readonly neverTouchedPulls = computed<NightPressurePullSummary[]>(() =>
+    (this.summary().defensiveSummary.pressurePullBreakdown ?? []).filter((p) => p.classification === 'never_touched'),
   );
-
-  readonly totalDefensiveMisses = computed(() => this.defensiveMissDeaths().length + this.pressureMissPulls().length);
+  // §"agrupar por mecánica... que se lea fácil... nada por el camino"
+  // (feedback real, 2026-08-29): sustituye a la vieja lista de tarjetas por
+  // ventana fallada (mistimedPulls) — una fila por mecánica real, agregada
+  // de toda la noche, con TODAS sus ocurrencias (cubiertas y falladas).
+  readonly mechanicPressureBreakdown = computed<NightMechanicPressureSummary[]>(
+    () => this.summary().defensiveSummary.mechanicPressureBreakdown ?? [],
+  );
+  readonly windowCoverageTotals = computed(() => {
+    const rows = this.summary().defensiveSummary.pressurePullBreakdown ?? [];
+    const missed = rows.reduce((sum, p) => sum + p.missedCount, 0);
+    const covered = rows.reduce((sum, p) => sum + p.coveredCount, 0);
+    // `coverable` aquí SÍ es el total (cubiertas + falladas) — distinto de
+    // missedCount (solo las falladas) en NightPressurePullSummary. Nombres
+    // distintos a propósito para no repetir la ambigüedad que tenía antes.
+    return { coverable: missed + covered, covered };
+  });
 
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
   formatDuration = formatDuration;
   formatPct = formatPct;
-  nonLethalMissPenaltyPct = DEFENSIVE_MISS_PENALTY_NON_LETHAL * 100;
   categoryMeta = mechanicCategoryMeta;
   rootCauseLabel = (death: NightDeathRow): string =>
     rootCauseMeta(death.rootCause)?.label ?? mechanicCategoryMeta(death.category)?.label ?? 'Causa no clasificada';
@@ -580,6 +587,61 @@ export class NightPlayerInfographicComponent
     return `${seconds} s ${offsetMs < 0 ? 'antes' : 'después'}`;
   }
 
+  // §"guiar en el buen uso y por qué" (feedback real, 2026-08-29): etiqueta
+  // legible del survival_type ya clasificado en el catálogo (cooldown-
+  // catalog.ts). §"esta diciendo que el barkskin es mitigacion pero no dice
+  // nada del frenzied" (feedback real, 2026-08-29): se llama una vez POR
+  // OPCIÓN ahora (antes una sola vez para toda la lista) — compacta a
+  // propósito para caber en una lista de 1 línea por habilidad.
+  survivalTypeLabel(survivalType: string | null): string {
+    switch (survivalType) {
+      case 'emergency':
+        return 'emergencia';
+      case 'mitigation':
+        return 'mitigación';
+      case 'absorption':
+        return 'absorción';
+      case 'sustain':
+        return 'autocuración';
+      default:
+        return 'defensivo';
+    }
+  }
+
+  // §"si el boss lanza la habilidad siempre en el mismo momento... o cada X
+  // tiempo podemos ponerlo también ahí para preparar el defensivo" (feedback
+  // real, 2026-08-29): night-player-summary.service.ts ya decide SI hay
+  // patrón fiable (validado empíricamente, umbral de variación real) — este
+  // método solo da forma de texto a lo que ya viene calculado, null cuando
+  // no hay nada que enseñar (no se inventa un patrón sin evidencia).
+  timingPatternLabel(mechanic: NightMechanicPressureSummary): string | null {
+    const pattern = mechanic.timingPattern;
+    if (!pattern) return null;
+    const time = this.formatDuration(pattern.ms);
+    return pattern.kind === 'fixed'
+      ? `Suele ocurrir sobre los ${time} (${pattern.sampleSize} pulls históricos)`
+      : `Se repite cada ~${time} (${pattern.sampleSize} repeticiones históricas)`;
+  }
+
+  // §"usa el icono del boss o de la mecánica que ha fallado (si la tenemos
+  // relacionada, si no, el del boss), no el icono de la habilidad defensiva
+  // disponible" (feedback real, 2026-08-29): null cuando no hay mecánica
+  // verificable (isVerifiableName descarta "Unknown Ability"/null) — el
+  // llamador cae al icono del boss en ese caso.
+  mechanicIconUrl(mechanic: NightMechanicPressureSummary): string | null {
+    if (!this.isVerifiableName(mechanic.mechanicName)) return null;
+    return this.iconUrl(mechanic.mechanicId);
+  }
+
+  mechanicRatioPct(mechanic: NightMechanicPressureSummary): number {
+    return mechanic.totalCount > 0 ? Math.round((mechanic.coveredCount / mechanic.totalCount) * 100) : 0;
+  }
+
+  mechanicTone(mechanic: NightMechanicPressureSummary): 'danger' | 'warning' | 'success' {
+    const pct = this.mechanicRatioPct(mechanic);
+    return pct < 40 ? 'danger' : pct < 75 ? 'warning' : 'success';
+  }
+
   consumableResponseLabel(death: DefensiveMissDeath): string {
     if (death.usedHealthstoneInPull && death.usedHealthPotionInPull) {
       return 'Piedra + poción registradas en el try';
@@ -724,6 +786,10 @@ export class NightPlayerInfographicComponent
     for (const death of this.verifiableDeaths())
       for (const defensive of death.defensivesAvailable) ids.add(defensive.spellId);
     for (const mechanic of this.summary().evolution?.mechanics ?? []) ids.add(mechanic.mechanicId);
+    for (const mechanic of this.mechanicPressureBreakdown()) {
+      ids.add(mechanic.mechanicId);
+      for (const defensive of mechanic.defensives) ids.add(defensive.spellId);
+    }
 
     const entries = await Promise.all(
       [...ids].map(async (spellId): Promise<[number, string] | null> => {

@@ -35,15 +35,28 @@ Regla rápida para desambiguar: mitigation evita PARTE del daño antes de que ll
 // catálogo entero en una sola pasada; cada entrada de la lista lleva su
 // propia "class" para que la IA investigue cada una en su clase real aunque
 // vayan mezcladas.
+// §"no poner el cd de un defensivo falsea muchísimo los datos, medias y
+// baremos... eso debería automatizarse... cuando sincronizamos los
+// defensivos o hacemos un prompt para traer los datos" (feedback real,
+// 2026-08-29): verificado en real — Fortifying Brew (Monk) tenía
+// base_cooldown_ms null pese a un cooldown de 3 min bien documentado en
+// Wowhead (captura real aportada por el usuario, con el tooltip completo).
+// El extractor de WoWAnalyzer deja null cuando el código fuente no trae un
+// número fijo (talentos/haste variable) — pero el TOOLTIP de Wowhead sí lo
+// da como número concreto para el caso base sin talentos, que es
+// justo lo que necesita esta columna. Mismo prompt, mismo flujo de
+// pegar/aplicar que ya existía para survival_type — no una pantalla nueva.
 function buildSystemPrompt(className: string | null): string {
   const scope = className
     ? `de la clase "${className}"`
     : `de TODAS las clases de World of Warcraft retail (la lista trae defensivos de varias clases a la vez — cada entrada indica su "class"; investiga cada habilidad en el contexto de SU clase real, no asumas que todas comparten mecanismo)`;
-  return `Eres un investigador experto en World of Warcraft retail. Tu tarea es clasificar defensivos/cooldowns de supervivencia ${scope} según qué le hacen al daño entrante durante una mecánica de raid, investigando en fuentes reales (Wowhead —tooltip y comentarios—, Icy Veins, Warcraft Logs, la documentación oficial de Blizzard). Busca por el NOMBRE de la habilidad (y su "class") — el spellId solo sirve para identificarla en tu respuesta.
+  return `Eres un investigador experto en World of Warcraft retail. Tu tarea es, para cada defensivo/cooldown de supervivencia ${scope}: (1) clasificar qué le hace al daño entrante durante una mecánica de raid, y (2) resolver su cooldown base y duración del efecto en segundos — investigando en fuentes reales (Wowhead —tooltip, que trae "Cooldown" y "Lasts X sec" como números concretos—, Icy Veins, Warcraft Logs, la documentación oficial de Blizzard). Busca por el NOMBRE de la habilidad (y su "class") — el spellId solo sirve para identificarla en tu respuesta.
 
-Para CADA habilidad, contrasta al menos una fuente real (idealmente el tooltip de Wowhead, que ya describe el efecto exacto). Si el efecto es ambiguo o mezcla varios mecanismos sin que ninguno domine, marca confidence:"low" (o survivalType:null si de verdad no puedes decidir) — un humano revisará cualquier respuesta con confidence "low".
+Para CADA habilidad, contrasta al menos una fuente real (idealmente el tooltip de Wowhead, que ya trae el cooldown y la duración como números literales cuando existen). Si el efecto de supervivencia es ambiguo o mezcla varios mecanismos sin que ninguno domine, marca confidence:"low" (o survivalType:null si de verdad no puedes decidir) — un humano revisará cualquier respuesta con confidence "low".
 
-Categorías válidas (usa EXACTAMENTE uno de estos cuatro valores, o null si no puedes determinarlo ni con baja confianza):
+Sobre baseCooldownSeconds/baseDurationSeconds: usa el número BASE del tooltip (sin contar talentos que lo reduzcan/aumenten — ese ajuste ya se calcula aparte). null si la habilidad no tiene cooldown propio (ej. un recurso que se genera pasivamente) o si de verdad varía sin un valor base fijo (ej. depende 100% de haste sin ningún número de referencia). No inventes un número si no lo encontraste en una fuente real — currentBaseCooldownMs/currentBaseDurationMs en la lista de abajo ya te dicen qué campos siguen sin resolver (null) en nuestra base de datos, priorízalos, pero también corrige un valor existente si contrastando la fuente ves que está mal.
+
+Categorías válidas para survivalType (usa EXACTAMENTE uno de estos cuatro valores, o null si no puedes determinarlo ni con baja confianza):
 ${SURVIVAL_TYPE_GLOSSARY}
 
 Responde ÚNICAMENTE con JSON válido (sin texto, sin markdown, sin backticks): un array con un objeto por CADA habilidad de la lista recibida, sin omitir ninguna, en esta forma exacta:
@@ -53,11 +66,13 @@ Responde ÚNICAMENTE con JSON válido (sin texto, sin markdown, sin backticks): 
     "survivalType": "mitigation" | "absorption" | "sustain" | "emergency" | null,
     "confidence": "high" | "medium" | "low",
     "sources": string[],
-    "notes": "string breve explicando el mecanismo concreto (qué le hace al daño, no solo qué hace la habilidad)"
+    "notes": "string breve explicando el mecanismo concreto (qué le hace al daño, no solo qué hace la habilidad)",
+    "baseCooldownSeconds": number | null,
+    "baseDurationSeconds": number | null
   }
 ]
 
-Antes de responder, comprueba habilidad por habilidad que cada objeto contiene literalmente las cinco claves. Responde solo con el array JSON.`;
+Antes de responder, comprueba habilidad por habilidad que cada objeto contiene literalmente las siete claves. Responde solo con el array JSON.`;
 }
 
 interface DefensiveForPrompt {

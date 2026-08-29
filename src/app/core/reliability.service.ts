@@ -35,6 +35,13 @@ import type { DeathCause, WclGearItem } from '../shared/models/domain';
 const WINDOW_DAYS = 60; // "varias noches o semanas", no los 21 días de una versión anterior
 const HALF_LIFE_DAYS = 10; // un pull de hace 10 días pesa la mitad que uno de hoy
 const AXIS_WEIGHTS = { mecanica: 0.4, defensiva: 0.3, preparacion: 0.2 } as const;
+// §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback real,
+// 2026-08-29): crédito parcial cuando un pull tiene 0 ventanas cubiertas
+// PERO sí hubo algún cast de su catálogo en algún momento — evidencia de que
+// lo intenta, aunque mal sincronizado. 0 (nunca tocó nada) sigue puntuando
+// como fallo completo. Deliberadamente por debajo de 0.5 — sigue siendo un
+// problema real de ejecución, solo que menos grave que la desconexión total.
+const DEFENSIVE_MISTIMED_CREDIT = 0.3;
 
 export interface PlayerReliability {
   playerName: string;
@@ -150,6 +157,20 @@ export interface ReliabilityInputRow {
    * de fallback más antiguos (columna todavía sin migrar). */
   avoidable_mechanic_eligible_count: number | null;
   avoidable_mechanic_fail_count: number | null;
+  /** §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback
+   * real, 2026-08-29): conteo REAL de ventanas de presión (ver
+   * damage-pressure-windows.ts), no el booleano defensive_use_opportunity —
+   * cuántas de esas ventanas tenían algo disponible y NO se cubrieron.
+   * null en los escalones de fallback anteriores a WINDOW_RELIABILITY_COLUMNS
+   * (pull sin backfill de ventanas todavía) — ahí computeReliabilityBreakdown
+   * cae al booleano de siempre (defensive_use_opportunity/used_defensive_in_pull). */
+  defensive_window_coverable_count: number | null;
+  /** De esas mismas ventanas, cuántas SÍ se cubrieron (activo o casteado dentro). */
+  defensive_window_covered_count: number | null;
+  /** true = lanzó CUALQUIER defensivo de su catálogo en algún momento del
+   * pull, sin mirar si acertó la ventana — distingue "nunca lo intentó" de
+   * "lo intentó a destiempo" cuando covered_count sale en 0 en ambos casos. */
+  defensive_window_used_anything: boolean | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -256,7 +277,43 @@ export function computeReliabilityBreakdown(
       pullDefensiveSum += (r.used_defensive_when_died ? 1 : 0) * 2;
       pullDefensiveWeight += 2;
     }
-    if (r.defensive_use_opportunity) {
+    // §"no es lo mismo usar 0 defensivos que usarlo a destiempo, lo primero
+    // debe penalizar mucho y lo segundo debe penalizar un poco pero guiar
+    // para corregirlo" (feedback real, 2026-08-29): con ventanas reales
+    // disponibles (ver damage-pressure-windows.ts), el ratio
+    // cubiertas/cubribles YA distingue casi todo por sí solo — 0 ventanas
+    // cubiertas de N puntúa peor que 1 de N. El único caso que el ratio NO
+    // distingue es "0 de N por no haber tocado nada en todo el pull" vs "0
+    // de N por haber usado algo, pero desincronizado con la presión real" —
+    // ambos dan ratio 0. defensive_window_used_anything es la señal que
+    // separa esos dos casos: nunca lo intentó (0, penalización completa) vs
+    // lo intentó a destiempo (crédito parcial, penalización ligera — la
+    // guía de CUÁNDO y POR QUÉ vive en la UI del dosier, no en el número).
+    // §bug real encontrado en auditoría (2026-08-29): la condición original
+    // era `!= null && windowTotal > 0` — un pull CON columnas de ventana
+    // (schema 'window') pero SIN ninguna ventana real esta vez (windowTotal
+    // === 0, ni una presión detectada) caía al `else if` de abajo y
+    // resucitaba el booleano legacy, que puede seguir siendo `true` por una
+    // vía que las ventanas no capturan (p.ej. death_cause.defensiveOptions
+    // de una muerte excluida de las ventanas) — dos fuentes de verdad
+    // contradiciéndose para la misma fila. El fallback SOLO debe disparar
+    // cuando la columna en sí no existe (`== null`, schema anterior a
+    // WINDOW_RELIABILITY_COLUMNS) — un windowTotal de 0 con columna presente
+    // es "sin presión real esta vez", no "sin dato": no debe sumar nada.
+    if (r.defensive_window_coverable_count != null) {
+      const windowTotal = (r.defensive_window_covered_count ?? 0) + r.defensive_window_coverable_count;
+      if (windowTotal > 0) {
+        const covered = r.defensive_window_covered_count ?? 0;
+        const executionValue =
+          covered > 0 ? covered / windowTotal : r.defensive_window_used_anything ? DEFENSIVE_MISTIMED_CREDIT : 0;
+        defSum += executionValue * w;
+        defWeight += w;
+        pullDefensiveSum += executionValue;
+        pullDefensiveWeight += 1;
+      }
+    } else if (r.defensive_use_opportunity) {
+      // Fallback: pull sin backfill de ventanas todavía, o schema anterior a
+      // WINDOW_RELIABILITY_COLUMNS — mismo booleano de siempre.
       defSum += (r.used_defensive_in_pull ? 1 : 0) * w;
       defWeight += w;
       pullDefensiveSum += r.used_defensive_in_pull ? 1 : 0;
@@ -344,6 +401,8 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
 // avoidable_mechanic_fail_count son las más nuevas de la vista — escalón
 // propio por encima de RELIABILITY_COLUMNS para el mismo despliegue en dos
 // tiempos de siempre (frontend puede llegar antes que la migración).
+const WINDOW_RELIABILITY_COLUMNS =
+  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything';
 const RATIO_RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count';
 const RELIABILITY_COLUMNS =
@@ -388,7 +447,7 @@ function isReliabilitySchemaTransitionError(
   return (
     error.code === '42703' ||
     error.code === 'PGRST204' ||
-    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count/i.test(
+    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything/i.test(
       message,
     )
   );
@@ -422,8 +481,12 @@ export class ReliabilityService {
       return await query;
     };
 
-    let response = await run(RATIO_RELIABILITY_COLUMNS);
-    let schemaLevel: 'ratio' | 'current' | 'defensive' | 'legacy' = 'ratio';
+    let response = await run(WINDOW_RELIABILITY_COLUMNS);
+    let schemaLevel: 'window' | 'ratio' | 'current' | 'defensive' | 'legacy' = 'window';
+    if (response.error && isReliabilitySchemaTransitionError(response.error)) {
+      response = await run(RATIO_RELIABILITY_COLUMNS);
+      schemaLevel = 'ratio';
+    }
     if (response.error && isReliabilitySchemaTransitionError(response.error)) {
       response = await run(RELIABILITY_COLUMNS);
       schemaLevel = 'current';
@@ -443,26 +506,37 @@ export class ReliabilityService {
         schemaLevel === 'legacy' ? false : row.used_defensive_in_pull === true,
       defensive_use_opportunity:
         schemaLevel === 'legacy' ? false : row.defensive_use_opportunity === true,
-      gemmed_slot_count: schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmed_slot_count ?? 0) : 0,
-      gemmable_slot_count: schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmable_slot_count ?? 0) : 0,
+      gemmed_slot_count: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmed_slot_count ?? 0) : 0,
+      gemmable_slot_count: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmable_slot_count ?? 0) : 0,
       // null (no 0) en los escalones de fallback a propósito —
       // computeReliabilityBreakdown/mechanicScoreFor lo leen como "sin dato
       // todavía" en vez de "0 fallos"/"0 elegibles" (ver el comentario ahí).
       personal_mechanic_fail_count:
-        schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.personal_mechanic_fail_count ?? 0) : null,
+        schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.personal_mechanic_fail_count ?? 0) : null,
       // null en fallback (igual criterio): isFirstPullOfNight trata
       // cualquier fila como "primera" cuando no hay report_code/pull_number.
-      report_code: schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.report_code ?? null) : null,
-      pull_number: schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.pull_number ?? null) : null,
+      report_code: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.report_code ?? null) : null,
+      pull_number: schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.pull_number ?? null) : null,
       // §"consistente... contemplar muchas posibilidades distintas"
       // (feedback real, 2026-08-28): null en los 3 escalones de fallback
       // más antiguos — mechanicScoreFor cae al conteo plano de siempre
       // (personal_mechanic_fail_count) en vez de asumir "sin oportunidades
       // ratio" silenciosamente.
       avoidable_mechanic_eligible_count:
-        schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
+        schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
       avoidable_mechanic_fail_count:
-        schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
+        schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
+      // §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback
+      // real, 2026-08-29): null en TODOS los escalones de fallback anteriores
+      // a WINDOW_RELIABILITY_COLUMNS — computeReliabilityBreakdown cae al
+      // booleano de siempre (defensive_use_opportunity/used_defensive_in_pull)
+      // en vez de asumir "sin ventanas" silenciosamente.
+      defensive_window_coverable_count:
+        schemaLevel === 'window' ? Number(row.defensive_window_coverable_count ?? 0) : null,
+      defensive_window_covered_count:
+        schemaLevel === 'window' ? Number(row.defensive_window_covered_count ?? 0) : null,
+      defensive_window_used_anything:
+        schemaLevel === 'window' ? row.defensive_window_used_anything === true : null,
     }));
   }
 

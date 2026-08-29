@@ -276,9 +276,43 @@ export class EdgeFunctionsService {
     return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
   }
 
-  /** Persiste una edición humana de un defensivo del catálogo (survival_type, revisado). */
-  async saveDefensiveEdit(edit: { class: string; spellId: number; survivalType?: string | null; reviewed?: boolean }): Promise<{ ok: true }> {
+  /**
+   * Persiste una edición humana de un defensivo del catálogo (survival_type,
+   * cooldown/duración en ms, revisado). §"se calculan de nuevo... sale lo
+   * mismo en todos lados" (feedback real, 2026-08-29): al tocar cooldown/
+   * duración, defensive_pressure_windows de cada pull con algún jugador de
+   * esta clase queda desactualizado (se calculó con el CD/duración viejos) —
+   * pullIds es la lista completa a reanalizar.
+   *
+   * §bug real en producción (2026-08-29, verificado con Fortifying Brew/47
+   * pulls de Monk): reanalizarlos todos DENTRO de esta misma llamada (o
+   * encadenando invocaciones en el propio backend) agotaba la cuota de CPU
+   * del edge function (WORKER_RESOURCE_LIMIT) y la respuesta nunca llegaba.
+   * Por eso esta función ya NO reanaliza nada — solo devuelve la lista, y es
+   * quien la llama (ver reanalyzeDefensivePressure más abajo, usado en
+   * defensive-catalog.component.ts) quien la recorre en secuencia.
+   */
+  async saveDefensiveEdit(edit: {
+    class: string;
+    spellId: number;
+    survivalType?: string | null;
+    reviewed?: boolean;
+    baseCooldownMs?: number | null;
+    baseDurationMs?: number | null;
+  }): Promise<{ ok: true; pullIds?: string[] }> {
     return this.invoke('save-defensive-edit', edit);
+  }
+
+  /**
+   * Recalcula defensive_pressure_windows de UN pull ya importado contra el
+   * catálogo/talentos actuales — mismo patrón que reanalyzeWipeCall, pero
+   * para la ventana de presión defensiva (ver reanalyze-defensive-pressure/
+   * index.ts). Se llama una vez por pull, en secuencia, desde
+   * defensive-catalog.component.ts tras editar un cooldown/duración —
+   * nunca en bucle dentro de un edge function (ver saveDefensiveEdit).
+   */
+  async reanalyzeDefensivePressure(pullId: string): Promise<{ ok: true; pullId: string; updated: number; skipped: number }> {
+    return this.invoke('reanalyze-defensive-pressure', { pullId });
   }
 
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */

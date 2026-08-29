@@ -44,6 +44,20 @@ export class DefensiveCatalogComponent {
   loadingDefensives = signal(false);
   savingSpellId = signal<number | null>(null);
   error = signal<string | null>(null);
+  /** §"se calculan de nuevo?" (feedback real, 2026-08-29): resultado del
+   * reanálisis automático que dispara editar cooldown/duración — visible en
+   * vez de mudo, para que quede claro que sí se propaga. Progreso en vivo
+   * mientras corre (done/total) y resumen final (failed) cuando termina.
+   *
+   * §bug real en producción (2026-08-29, verificado con Fortifying
+   * Brew/47 pulls de Monk): reanalizar los pulls DENTRO de un edge function
+   * (bucle propio, o encadenando invocaciones vía fetch+waitUntil) agota su
+   * cuota de CPU a mitad de camino (WORKER_RESOURCE_LIMIT) y muere en
+   * silencio. Por eso la orquestación vive AQUÍ, en el cliente: se llama a
+   * reanalyzeDefensivePressure una vez por pull, en secuencia, esperando
+   * cada respuesta — el navegador no tiene ese límite de CPU por invocación,
+   * y de paso se puede enseñar el progreso real en vez de un número mudo. */
+  lastReanalysis = signal<{ spellName: string; total: number; done: number; failed: number; running: boolean } | null>(null);
 
   // §"un desplegable para poner el tipo de defensivo que es (que también
   // deberá rellenarse solo o a través de un prompt)" (feedback real): mismo
@@ -103,23 +117,81 @@ export class DefensiveCatalogComponent {
     }
   }
 
-  async onEdit(row: CooldownCatalogRow, patch: Partial<Pick<CooldownCatalogRow, 'survival_type' | 'reviewed'>>): Promise<void> {
+  async onEdit(
+    row: CooldownCatalogRow,
+    patch: Partial<Pick<CooldownCatalogRow, 'survival_type' | 'reviewed' | 'base_cooldown_ms' | 'base_duration_ms'>>,
+  ): Promise<void> {
     const className = this.selectedClass();
     if (!className) return;
     this.savingSpellId.set(row.spell_id);
+    const touchesTiming = 'base_cooldown_ms' in patch || 'base_duration_ms' in patch;
+    if (touchesTiming) this.lastReanalysis.set(null); // limpia el aviso anterior mientras se guarda el nuevo
     try {
-      await this.edgeFunctions.saveDefensiveEdit({
+      const res = await this.edgeFunctions.saveDefensiveEdit({
         class: className,
         spellId: row.spell_id,
         survivalType: 'survival_type' in patch ? patch.survival_type : row.survival_type,
         reviewed: patch.reviewed ?? true,
+        // Solo se mandan si de verdad se están editando — save-defensive-edit
+        // los deja tal cual cuando la clave no viene en el body, así una
+        // edición de solo survival_type/reviewed nunca borra un CD ya puesto.
+        ...('base_cooldown_ms' in patch ? { baseCooldownMs: patch.base_cooldown_ms } : {}),
+        ...('base_duration_ms' in patch ? { baseDurationMs: patch.base_duration_ms } : {}),
       });
       this.defensives.update((list) => list.map((d) => (d.spell_id === row.spell_id ? { ...d, ...patch, reviewed: patch.reviewed ?? true } : d)));
+      // §"se calculan de nuevo?" (feedback real, 2026-08-29): editar
+      // cooldown/duración deja desactualizado defensive_pressure_windows de
+      // cada pull con algún jugador de esta clase — se reanalizan uno a uno
+      // aquí mismo (ver comentario de lastReanalysis: no cabe hacerlo dentro
+      // de un edge function, agota su cuota de CPU), sin bloquear el guardado
+      // del catálogo en sí (el spinner de la fila ya se suelta en el finally
+      // de abajo; el progreso vive en su propio aviso).
+      if (touchesTiming && res.pullIds != null) {
+        void this.runReanalysisQueue(row.name, res.pullIds);
+      }
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
       this.savingSpellId.set(null);
     }
+  }
+
+  /** Recorre pullIds en secuencia (no en paralelo — mismo criterio de no ráfaga que el resto del pipeline contra WCL) reanalizando cada pull, con progreso en vivo en lastReanalysis. */
+  private async runReanalysisQueue(spellName: string, pullIds: string[]): Promise<void> {
+    this.lastReanalysis.set({ spellName, total: pullIds.length, done: 0, failed: 0, running: true });
+    let done = 0;
+    let failed = 0;
+    for (const pullId of pullIds) {
+      try {
+        await this.edgeFunctions.reanalyzeDefensivePressure(pullId);
+        done++;
+      } catch (err) {
+        failed++;
+        console.error(`No se pudo reanalizar el pull ${pullId} tras editar ${spellName}:`, err);
+      }
+      this.lastReanalysis.set({ spellName, total: pullIds.length, done, failed, running: true });
+    }
+    this.lastReanalysis.set({ spellName, total: pullIds.length, done, failed, running: false });
+  }
+
+  // §"no puedo editar el campo de cd (poder editarlo para que sea en
+  // segundos)" (feedback real, 2026-08-29): el input trabaja en segundos
+  // (más natural, así es como lo da Wowhead — "3 min cooldown", "Lasts 20
+  // sec"), la conversión a ms (unidad real de la columna) vive aquí, un
+  // único sitio. Cadena vacía = "sin resolver" (null), no 0 — un cooldown de
+  // 0 sería un dato falso, no "no lo sé".
+  onCooldownSecondsInput(row: CooldownCatalogRow, raw: string): void {
+    const trimmed = raw.trim();
+    const seconds = trimmed === '' ? null : Number(trimmed);
+    if (seconds != null && (!Number.isFinite(seconds) || seconds < 0)) return;
+    void this.onEdit(row, { base_cooldown_ms: seconds == null ? null : Math.round(seconds * 1000) });
+  }
+
+  onDurationSecondsInput(row: CooldownCatalogRow, raw: string): void {
+    const trimmed = raw.trim();
+    const seconds = trimmed === '' ? null : Number(trimmed);
+    if (seconds != null && (!Number.isFinite(seconds) || seconds < 0)) return;
+    void this.onEdit(row, { base_duration_ms: seconds == null ? null : Math.round(seconds * 1000) });
   }
 
   /** Confirma tal cual la sugerencia IA (inferred_survival_type) — mismo botón que confirmInferredCategory en manifest.component.ts. */

@@ -16,11 +16,21 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 
 const VALID_SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
 
+// §"no puedo editar el campo de cd... no poner el cd de un defensivo falsea
+// muchísimo los datos, medias y baremos" (feedback real, 2026-08-29):
+// verificado en real — Fortifying Brew (Monk) tenía base_cooldown_ms null
+// pese a tener un cooldown de 3 min bien documentado en Wowhead, y eso
+// dejaba al único defensivo de una healer en estado 'unknown' tras su
+// primer cast del pull en vez de "en cooldown"/"disponible", inflando su
+// eje de Fiabilidad defensiva. Mismo patrón que survivalType: editable a
+// mano aquí, o rellenable en bloque desde el prompt de classify-defensives.
 interface EditRequest {
   class: string;
   spellId: number;
   survivalType?: string | null;
   reviewed?: boolean;
+  baseCooldownMs?: number | null;
+  baseDurationMs?: number | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -45,12 +55,22 @@ Deno.serve(async (req: Request) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
 
+  // §"editarlo para que sea en segundos" (feedback real, 2026-08-29): el
+  // componente ya convierte segundos->ms antes de llamar aquí — esta
+  // función solo persiste ms, igual unidad que ya usa la columna real.
+  // Los dos campos son opcionales AQUÍ (a diferencia de survivalType, que
+  // siempre se manda): un guardado que solo toca survivalType no debe
+  // borrar un cooldown/duración ya puestos por no venir en el body.
+  const patch: Record<string, unknown> = {
+    survival_type: body.survivalType ?? null,
+    reviewed: body.reviewed ?? true,
+  };
+  if ('baseCooldownMs' in body) patch['base_cooldown_ms'] = body.baseCooldownMs;
+  if ('baseDurationMs' in body) patch['base_duration_ms'] = body.baseDurationMs;
+
   const { error } = await supabase
     .from('cooldown_catalog')
-    .update({
-      survival_type: body.survivalType ?? null,
-      reviewed: body.reviewed ?? true,
-    })
+    .update(patch)
     .eq('class', body.class)
     .eq('spell_id', body.spellId);
 
@@ -58,5 +78,43 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ ok: false, error: error.message }, 500);
   }
 
-  return jsonResponse({ ok: true });
+  // §"cuando cambio la duracion y cd de un defensivo... se calculan de
+  // nuevo? porque he puesto el fortifying brew y sale lo mismo en todos
+  // lados" (feedback real, 2026-08-29): confirmado, NO se recalculaba solo
+  // — defensive_pressure_windows (el estado active/on_cooldown/
+  // available_unused por ventana) se calcula UNA VEZ en analyze-report/
+  // reanalyze-defensive-pressure y se persiste tal cual; editar el catálogo
+  // después no tocaba ese JSON ya guardado, así que el dosier/infografía/
+  // Fiabilidad seguían leyendo el estado viejo ('unknown', calculado con el
+  // cooldown en null) indefinidamente. Solo cuando de verdad se edita
+  // cooldown/duración (no cuando solo se toca survival_type/reviewed, que
+  // no afecta a ese cálculo) se dispara un reanálisis de cada pull donde
+  // haya participado algún jugador de esta clase — mismo mecanismo que ya
+  // usa el backfill manual, pero automático en cada edición.
+  //
+  // §bug real encontrado en producción (2026-08-29, verificado con
+  // Fortifying Brew/47 pulls de Monk): reanalizar los pulls uno detrás de
+  // otro EN ESTE MISMO bucle agotaba la cuota de CPU del isolate a mitad de
+  // camino (WORKER_RESOURCE_LIMIT) — la función moría en silencio antes de
+  // reanalizar nada y esta respuesta nunca llegaba a devolverse. Se probó
+  // encadenar invocaciones en el propio backend (fire-and-forget +
+  // EdgeRuntime.waitUntil) pero, verificado empíricamente, el runtime mata
+  // el isolate al responder y el segundo eslabón nunca llega a salir. Así
+  // que esta función ya no reanaliza nada ella misma: solo devuelve la
+  // lista de pulls afectados, y es el CLIENTE (defensive-catalog.component)
+  // quien llama a reanalyze-defensive-pressure una vez por pull, en
+  // secuencia — cada llamada es una invocación de edge function limpia con
+  // su propia cuota de CPU, y el navegador no tiene ese límite.
+  let pullIds: string[] = [];
+  if ('baseCooldownMs' in body || 'baseDurationMs' in body) {
+    const { data: affectedRecords, error: affectedError } = await supabase
+      .from('player_pull_records')
+      .select('pull_id')
+      .eq('class', body.class);
+    if (!affectedError) {
+      pullIds = [...new Set((affectedRecords ?? []).map((r) => (r as { pull_id: string }).pull_id))];
+    }
+  }
+
+  return jsonResponse({ ok: true, pullIds });
 });

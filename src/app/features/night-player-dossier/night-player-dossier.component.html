@@ -195,8 +195,10 @@
                     <span [title]="p.scoreBreakdown.defensiveMissKind === 'death' ? 'Murió con un defensivo de su catálogo libre y sin usar — penalización adicional en la puntuación.' : 'Muerte evaluable'">
                       {{ p.scoreBreakdown.defensiveMissKind === 'death' ? '💀⚠' : '💀' }}
                     </span>
-                  } @else if (p.scoreBreakdown.defensiveMissKind === 'pressure') {
-                    <span title="Sobrevivió una presión (daño evitable anómalo) con el catálogo libre y no lanzó ningún defensivo en todo el intento — penalización adicional en la puntuación.">⚠</span>
+                  } @else if (p.scoreBreakdown.defensiveMissKind === 'never_touched') {
+                    <span title="Ventana de presión real con el catálogo libre y CERO defensivos lanzados en todo el intento — penalización adicional en la puntuación.">⚠</span>
+                  } @else if (p.scoreBreakdown.defensiveMissKind === 'mistimed') {
+                    <span title="Sí lanzó defensivos en el pull, pero no en la ventana de presión real — penalización ligera, ver el detalle de la puntuación para dónde y por qué.">⏱</span>
                   }
                 </td>
                 <td class="cell-boss">

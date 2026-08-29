@@ -23,6 +23,15 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 // editó a mano wipe_call_excluded vía set-wipe-call-status y la confianza
 // recalculada es LA MISMA, esa decisión manual se respeta — solo se toca
 // wipe_call_excluded cuando la detección en sí cambió.
+//
+// §"que todo sea consistente" (feedback real, 2026-08-29, sobre el backfill
+// de reanalyze-defensive-pressure): a diferencia de esa función hermana,
+// ESTA a propósito NO resuelve spec ni talentos — detectWipeCall trabaja
+// sobre daño/curación/muertes agregados del pull entero, nunca cruza contra
+// el catálogo de defensivos de una clase concreta, así que no hay ningún
+// resultado aquí que dependa de qué talentó cada jugador. No es un corte de
+// esquina por coste (talent_spell_lookup ya está cacheado por build, es
+// barato) — es que el dato no aplica a lo que calcula esta función.
 
 interface DeathEvent {
   timestamp?: number;

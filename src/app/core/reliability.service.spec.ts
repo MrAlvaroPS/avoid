@@ -36,6 +36,14 @@ function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow 
     // dedicado al ratio avoidable-ground/spread más abajo.
     avoidable_mechanic_eligible_count: null,
     avoidable_mechanic_fail_count: null,
+    // null por defecto (mismo criterio): sin esto, computeReliabilityBreakdown
+    // cae al booleano defensive_use_opportunity/used_defensive_in_pull de
+    // siempre — así los 4 tests del describe 'defensiva' de abajo, que no
+    // conocen ventanas, siguen ejercitando exactamente el mismo camino que
+    // antes. Ver el describe dedicado más abajo para las ventanas en sí.
+    defensive_window_coverable_count: null,
+    defensive_window_covered_count: null,
+    defensive_window_used_anything: null,
     ...overrides,
   };
 }
@@ -71,6 +79,89 @@ describe('computeReliabilityBreakdown defensiva', () => {
   it('penaliza no usar defensivo cuando hubo presión verificable', () => {
     const result = computeReliabilityBreakdown([row({ defensive_use_opportunity: true })], NOW);
     expect(result?.breakdown.defensiva).toBe(0);
+  });
+});
+
+// §"no es lo mismo usar 0 defensivos que usarlo a destiempo, lo primero debe
+// penalizar mucho y lo segundo debe penalizar un poco" (feedback real,
+// 2026-08-29): conteo real de ventanas (defensive_window_*), no el
+// booleano — validado contra 5 perfiles de clase reales antes de escribir
+// esto (ver conversación real). Con datos de ventana presentes, tienen
+// PRIORIDAD sobre el booleano antiguo (fallback solo si coverable_count es null).
+describe('computeReliabilityBreakdown defensiva — ventanas de presión', () => {
+  it('puntúa el ratio real cubiertas/cubribles, no solo sí/no', () => {
+    const result = computeReliabilityBreakdown(
+      [row({ defensive_window_covered_count: 2, defensive_window_coverable_count: 3 })],
+      NOW,
+    );
+    expect(result?.breakdown.defensiva).toBeCloseTo((2 / 5) * 100, 5);
+  });
+
+  it('nunca tocó nada en todo el pull: penalización completa (0)', () => {
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          defensive_window_covered_count: 0,
+          defensive_window_coverable_count: 3,
+          defensive_window_used_anything: false,
+        }),
+      ],
+      NOW,
+    );
+    expect(result?.breakdown.defensiva).toBe(0);
+  });
+
+  it('lo usó a destiempo (algo, pero desincronizado): penalización ligera, no completa', () => {
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          defensive_window_covered_count: 0,
+          defensive_window_coverable_count: 3,
+          defensive_window_used_anything: true,
+        }),
+      ],
+      NOW,
+    );
+    expect(result?.breakdown.defensiva).toBeGreaterThan(0);
+    expect(result?.breakdown.defensiva).toBeLessThan(50);
+  });
+
+  it('sin ventanas todavía (coverable_count null), cae al booleano de siempre', () => {
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          defensive_window_coverable_count: null,
+          defensive_use_opportunity: true,
+          used_defensive_in_pull: true,
+        }),
+      ],
+      NOW,
+    );
+    expect(result?.breakdown.defensiva).toBe(100);
+  });
+
+  // §bug real encontrado en auditoría (2026-08-29): un pull con la columna
+  // de ventanas YA presente (schema 'window') pero sin ninguna ventana real
+  // esa vez (0 cubribles + 0 cubiertas) caía al `else if` del booleano
+  // legacy en vez de no aportar nada — dos fuentes de verdad pudiendo
+  // contradecirse para la misma fila (el booleano puede seguir siendo
+  // `true` por una vía que las ventanas no capturan). 0 coverable_count con
+  // la columna presente es "sin presión real", no "sin dato".
+  it('con columna de ventanas presente pero 0 ventanas reales, no cae al booleano legacy', () => {
+    const result = computeReliabilityBreakdown(
+      [
+        row({
+          defensive_window_coverable_count: 0,
+          defensive_window_covered_count: 0,
+          defensive_window_used_anything: false,
+          // booleano legacy en `true` a propósito — si el bug reaparece, este test lo detecta.
+          defensive_use_opportunity: true,
+          used_defensive_in_pull: false,
+        }),
+      ],
+      NOW,
+    );
+    expect(result?.breakdown.defensiva).toBeNull();
   });
 });
 

@@ -328,6 +328,31 @@ select {
   font-size: 12px;
 }
 
+// §"poder editarlo para que sea en segundos" (feedback real, 2026-08-29):
+// dos campos compactos (CD/duración), mismo tratamiento visual que
+// `select` arriba para que no desentone en la fila.
+.cd-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 10px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+.cd-input {
+  width: 56px;
+  background: var(--surface-2);
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  padding: 3px 5px;
+  font-size: 12px;
+}
+.cd-input::placeholder {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
 .suggestion-btn {
   margin-top: 4px;
   padding: 3px 8px;

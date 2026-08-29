@@ -11,7 +11,8 @@ import {
   isEncounterFight,
   type WclActor,
 } from '../_shared/wcl-client.ts';
-import { activeDefensives, defensivesForClass, type CooldownCatalog, type TalentGate } from '../_shared/defensive-cooldowns.ts';
+import { activeDefensives, defensivesForClass, defensiveStatusAt, type CooldownCatalog, type TalentGate } from '../_shared/defensive-cooldowns.ts';
+import { attributeWindowAbility, detectDamageWindows, evaluateWindowCoverage } from '../_shared/damage-pressure-windows.ts';
 import { getItemName, getSpecName, getCurrentBuildNamespace } from '../_shared/blizzard-client.ts';
 import { buildFromBlizzardNamespace, fetchTalentSpellLookup } from '../_shared/wago-db2-client.ts';
 import { resolveConsumableAbilityIds, buildConsumableUsage } from '../_shared/consumables.ts';
@@ -297,7 +298,7 @@ Deno.serve(async (req: Request) => {
       // §12.1: catálogo real de defensivos, sincronizado desde WoWAnalyzer
       // (o la semilla manual mientras no se haya sincronizado nada aún).
       // Se carga UNA VEZ por report, no por fight ni por evento.
-      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spell_id,name,category,base_cooldown_ms,base_duration_ms');
+      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spell_id,name,category,base_cooldown_ms,base_duration_ms,survival_type');
       const cooldownCatalog: CooldownCatalog = (catalogRows ?? []).map((r) => ({
         spellId: r.spell_id,
         name: r.name,
@@ -306,6 +307,7 @@ Deno.serve(async (req: Request) => {
         category: r.category,
         baseCooldownMs: r.base_cooldown_ms,
         durationMs: r.base_duration_ms,
+        survivalType: r.survival_type ?? null,
       }));
 
       // Talentos → spell ID real, para tooltips de Wowhead (ver
@@ -370,9 +372,18 @@ Deno.serve(async (req: Request) => {
         // WCL (mismo endpoint que alimenta su propia gráfica) — best-effort,
         // si falla el pull se sigue guardando igual, solo sin gráfica.
         let raidDamageTakenSeries: { pointIntervalMs: number; points: number[] } | null = null;
+        // §"picos de daño... juntando ventanas de daño sufrido + defensivos"
+        // (feedback real, 2026-08-29): MISMA respuesta que raidDamageTakenSeries
+        // arriba, por actorId — sin llamada nueva a WCL. Ver damage-pressure-windows.ts.
+        const damageTakenSeriesByActorId = new Map<number, { pointStart: number; pointIntervalMs: number; points: number[] }>();
         try {
           const graph = await getFightGraph({ code: reportCode, fightId: fight.id, dataType: 'DamageTaken', hostilityType: 'Friendlies', startTime: fight.startTime, endTime: fight.endTime });
-          if (graph) raidDamageTakenSeries = sumGraphSeries(graph.series);
+          if (graph) {
+            raidDamageTakenSeries = sumGraphSeries(graph.series);
+            for (const s of graph.series) {
+              damageTakenSeriesByActorId.set(s.id, { pointStart: s.pointStart, pointIntervalMs: s.pointInterval, points: s.data });
+            }
+          }
         } catch (err) {
           console.error('analyze-report: no se pudo traer graph(DamageTaken) para el pull', fight.id, err);
         }
@@ -940,50 +951,67 @@ Deno.serve(async (req: Request) => {
           // cooldown base plano para esa spell — mejor decir "no lo sé" que
           // inventar un número).
           const activeSpellIds = new Set(defensivesAtDeath.map((d) => d.spellId));
+          // §refactor (2026-08-29): la fórmula en sí (próximo_disponible(t))
+          // vive ahora en defensiveStatusAt (defensive-cooldowns.ts) — un
+          // único sitio, reutilizado también por defensive_pressure_windows
+          // más abajo. buffActiveOverride reproduce EXACTO el fallback de
+          // siempre (snapshot de buffs de WCL a ≤2s de morir, solo cuando
+          // durationMs es null) — mismo comportamiento que antes del refactor.
           const defensiveOptions: DefensiveOption[] =
             death && actor
               ? defensivesForClass(actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)).map((cd) => {
                   const casts = defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? [];
-                  let lastCastBefore: number | undefined;
-                  for (const t of casts) {
-                    if (t <= death.timestamp) lastCastBefore = t;
-                    else break; // casts está ordenado cronológicamente, no hace falta seguir mirando
-                  }
-
-                  // §"para calcular bien si había defensivo activo tienes
-                  // que revisar lo que dura el defensivo con el momento de
-                  // uso y el momento de su muerte, no solo el CD": con
-                  // duración real conocida, esto se calcula SIEMPRE (cast +
-                  // duración vs. muerte), sin depender de que WCL trajera un
-                  // snapshot de buffs reciente — más fiable que el snapshot
-                  // cuando lo sabemos, así que gana sobre él.
-                  if (lastCastBefore !== undefined && cd.durationMs != null) {
-                    const elapsedSinceCast = death.timestamp - lastCastBefore;
-                    if (elapsedSinceCast <= cd.durationMs) {
-                      return { spellId: cd.spellId, name: cd.name, status: 'active' as const };
-                    }
-                    // Duración conocida y ya expiró: NO caer al snapshot de
-                    // buffs para este spell — sabemos que no está activo,
-                    // sería contradecir un dato más fiable con uno peor.
-                  } else if (buffsSnapshotIsFresh && activeSpellIds.has(cd.spellId)) {
-                    // Duración sin verificar todavía: mismo fallback de
-                    // siempre (snapshot de buffs de WCL a ≤2s de morir).
-                    return { spellId: cd.spellId, name: cd.name, status: 'active' as const };
-                  }
-
-                  if (lastCastBefore === undefined) {
-                    return { spellId: cd.spellId, name: cd.name, status: 'available_unused' as const };
-                  }
-                  if (cd.baseCooldownMs == null) {
-                    return { spellId: cd.spellId, name: cd.name, status: 'unknown' as const };
-                  }
-                  const elapsed = death.timestamp - lastCastBefore;
-                  if (elapsed >= cd.baseCooldownMs) {
-                    return { spellId: cd.spellId, name: cd.name, status: 'available_unused' as const };
-                  }
-                  return { spellId: cd.spellId, name: cd.name, status: 'on_cooldown' as const, cooldownRemainingMs: cd.baseCooldownMs - elapsed };
+                  const result = defensiveStatusAt(cd, casts, death.timestamp, buffsSnapshotIsFresh && activeSpellIds.has(cd.spellId));
+                  return { spellId: cd.spellId, name: cd.name, status: result.status, cooldownRemainingMs: result.cooldownRemainingMs };
                 })
               : [];
+
+          // §"picos de daño... juntando ventanas de daño sufrido + defensivos
+          // que usa y tiene disponible" (feedback real, 2026-08-29): ver
+          // damage-pressure-windows.ts para el diseño completo (validado
+          // empíricamente contra 3 pulls reales y 5 perfiles de clase antes
+          // de escribir esto). Best-effort — sin serie de daño para este
+          // actor (falló el graph() de arriba, o el jugador apenas recibió
+          // daño) se queda en [], no tumba el resto del pull.
+          const damageSeries = damageTakenSeriesByActorId.get(actorId);
+          const defensivePressureWindows =
+            damageSeries && actor
+              ? (() => {
+                  const catalog = defensivesForClass(actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId));
+                  const castsBySpellId = new Map(
+                    catalog.map((cd) => [cd.spellId, defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []]),
+                  );
+                  const { baselineValue, windows } = detectDamageWindows(damageSeries.points, damageSeries.pointStart, damageSeries.pointIntervalMs);
+                  const actorDamageEvents = damageEventsByTarget.get(actorId) ?? [];
+                  return {
+                    baselineValue,
+                    windows: windows.map((w) => {
+                      const coverage = evaluateWindowCoverage(w.startMs, w.endMs, catalog, castsBySpellId);
+                      // §"relacionar 'pico de daño recibido' con una
+                      // habilidad del boss, de forma veraz" (feedback real,
+                      // 2026-08-29): MISMA resolución de nombre que ya usa
+                      // death_cause.mechanicName — curado (mechanicById) si
+                      // esta abilityGameID es una mecánica clasificada,
+                      // nombre real de WCL si no, null solo si ninguna de
+                      // las dos lo tiene (rarísimo). Validado empíricamente
+                      // contra datos reales antes de escribir esto.
+                      const dominant = attributeWindowAbility(actorDamageEvents, w.startMs, w.endMs);
+                      const dominantMechanic = dominant ? mechanicById.get(dominant.abilityGameID) : undefined;
+                      return {
+                        startMs: w.startMs - fight.startTime,
+                        endMs: w.endMs - fight.startTime,
+                        peakMs: w.peakMs - fight.startTime,
+                        peakValue: w.peakValue,
+                        covered: coverage.covered,
+                        coverable: coverage.coverable,
+                        options: coverage.options,
+                        mechanicId: dominant?.abilityGameID ?? null,
+                        mechanicName: dominant ? (dominantMechanic?.name ?? abilityNameById.get(dominant.abilityGameID) ?? null) : null,
+                      };
+                    }),
+                  };
+                })()
+              : { baselineValue: 0, windows: [] };
           return {
             pull_id: insertedPull.id,
             player_name: actor?.name ?? `#${actorId}`,
@@ -1072,6 +1100,7 @@ Deno.serve(async (req: Request) => {
                 }))
               : [],
             consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent),
+            defensive_pressure_windows: defensivePressureWindows,
             talent_build:
               combatantInfoByActor.get(actorId)?.talentTree?.map((node) => {
                 const n = node as { id?: number; rank?: number; nodeID?: number };

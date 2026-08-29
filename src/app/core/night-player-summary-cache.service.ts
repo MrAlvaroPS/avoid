@@ -23,7 +23,27 @@ import { Injectable, inject } from '@angular/core';
 import { RosterSnapshotCacheService } from './roster-snapshot-cache.service';
 import type { NightPlayerSummary } from './night-player-summary.service';
 
-const STORAGE_PREFIX = 'avoid:night-player-summary:v1:';
+// §bug real encontrado en auditoría (2026-08-29): "hemos perdido todos los
+// iconos" — el caché no tenía versión de FORMA, solo de estado (fingerprint
+// de último pull/roster). Un dosier ya cacheado antes de que
+// defensiveSummary.pressurePullBreakdown existiera seguía sirviéndose tal
+// cual (el fingerprint no cambió), y `.filter()` sobre ese campo `undefined`
+// reventaba loadSpellIcons() ANTES de llegar a pedir ningún icono — no solo
+// los nuevos, todos. v1 -> v2 invalida de golpe cualquier entrada con la
+// forma antigua; sube este número cada vez que NightPlayerSummary cambie de
+// forma de un modo que un objeto viejo no pueda satisfacer en tiempo de
+// ejecución (campos nuevos leídos sin `?.`, nunca solo por añadir un campo
+// opcional).
+// §bug real REPETIDO (2026-08-29, mismo turno): "al final no hay nada de
+// eso" — añadí mechanicPressureBreakdown a NightDefensiveSummary DESPUÉS de
+// subir a v2, sin volver a subir la versión. Un caché guardado entre esa v2
+// y este cambio no tiene el campo nuevo — con `?? []` de seguridad la
+// sección entera de "Mecánicas que exigían respuesta" se queda vacía en
+// silencio, sin error visible, y lo único que se veía era la lista vieja de
+// "Pulls sin ningún defensivo usado" (que si acumula muchos pulls, sí puede
+// leerse como "una lista muy larga"). Lección: cada cambio de forma de
+// NightPlayerSummary necesita su propio bump, no solo el primero.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v3:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;

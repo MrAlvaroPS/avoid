@@ -21,6 +21,8 @@ export interface DefensiveCooldown {
   baseCooldownMs: number | null;
   /** Duración real del efecto en ms (cuánto dura activo tras lanzarlo) — distinto de baseCooldownMs. Null = sin verificar todavía. */
   durationMs: number | null;
+  /** §"ya estamos clasificando los defensivos... categoría de emergencia" (feedback real): 'emergency'/'mitigation'/'absorption'/'sustain', o null si aún no se ha clasificado. Ver damage-pressure-windows.ts — un 'emergency' nunca convierte una ventana de presión en "fallo" por no haberse guardado, solo suma crédito si de verdad se usó. */
+  survivalType: string | null;
 }
 
 export type CooldownCatalog = DefensiveCooldown[];
@@ -81,4 +83,56 @@ export function activeDefensives(buffsField: string | undefined | null, classNam
 /** Todo el catálogo de una clase+spec — para calcular "cuáles NO llegó a lanzar en todo el pull". */
 export function defensivesForClass(className: string, spec: string | null, catalog: CooldownCatalog, talentGate: TalentGate | null = null): DefensiveCooldown[] {
   return catalog.filter((cd) => cd.class === className && specApplies(cd.spec, spec) && talentAllows(cd.spellId, talentGate));
+}
+
+export type DefensiveCooldownStatus = 'active' | 'available_unused' | 'on_cooldown' | 'unknown';
+
+export interface DefensiveStatusResult {
+  status: DefensiveCooldownStatus;
+  cooldownRemainingMs?: number;
+}
+
+// §12: próximo_disponible(t) = último_cast_antes_de(t) + base_cooldown_ms.
+// Factorizado de analyze-report/index.ts (antes vivía inline, evaluado SOLO
+// en el instante de la muerte) — §"picos de daño... juntando ventanas de
+// daño sufrido + defensivos disponibles" (feedback real, 2026-08-29): la
+// MISMA fórmula, evaluada en CUALQUIER instante `atMs`, es lo que hace falta
+// para generalizar "¿tenía algo libre?" de un único momento (morir) a cada
+// ventana de presión detectada en damage-pressure-windows.ts. Un único sitio
+// calcula esto ahora — analyze-report la llama para death_cause.defensiveOptions
+// (con buffActiveOverride, ver abajo) y para defensive_pressure_windows (sin
+// override, no hay snapshot de buffs de WCL a instantes arbitrarios).
+//
+// `buffActiveOverride`: solo lo usa el cálculo en la muerte — snapshot de
+// buffs de WCL a ≤2s de morir, único caso donde hay una fuente independiente
+// de "estaba activo" además de la propia matemática de cast+duración. Se
+// aplica ÚNICAMENTE cuando durationMs es null (si se conoce la duración,
+// cast+duración ya es más fiable y gana siempre — ver el comentario original
+// en analyze-report).
+export function defensiveStatusAt(
+  cd: DefensiveCooldown,
+  castsForSpellMs: number[],
+  atMs: number,
+  buffActiveOverride = false,
+): DefensiveStatusResult {
+  let lastCastBefore: number | undefined;
+  for (const t of castsForSpellMs) {
+    if (t <= atMs) lastCastBefore = t;
+    else break; // se asume castsForSpellMs ordenado cronológicamente
+  }
+
+  if (lastCastBefore !== undefined && cd.durationMs != null) {
+    const elapsedSinceCast = atMs - lastCastBefore;
+    if (elapsedSinceCast <= cd.durationMs) return { status: 'active' };
+    // Duración conocida y ya expirada: no cae al override de buffs — sabemos
+    // que no está activo, sería contradecir un dato más fiable con uno peor.
+  } else if (buffActiveOverride) {
+    return { status: 'active' };
+  }
+
+  if (lastCastBefore === undefined) return { status: 'available_unused' };
+  if (cd.baseCooldownMs == null) return { status: 'unknown' };
+  const elapsed = atMs - lastCastBefore;
+  if (elapsed >= cd.baseCooldownMs) return { status: 'available_unused' };
+  return { status: 'on_cooldown', cooldownRemainingMs: cd.baseCooldownMs - elapsed };
 }
