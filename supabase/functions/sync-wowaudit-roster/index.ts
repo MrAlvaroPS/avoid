@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 import { getCharacterAvatarUrl } from '../_shared/blizzard-client.ts';
 
 // §"la API de wowaudit... roster de verdad en lugar de deducirlo" (feedback
@@ -53,6 +54,8 @@ function normalizeWclClassName(rawClass: string): string {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
 
   const apiKey = Deno.env.get('WOWAUDIT_API_KEY');
   if (!apiKey) return jsonResponse({ ok: false, error: 'Falta WOWAUDIT_API_KEY.' }, 500);

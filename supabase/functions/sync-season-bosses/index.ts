@@ -3,6 +3,7 @@ import { getZoneEncounters } from '../_shared/wcl-client.ts';
 import { findJournalInstanceByName, getJournalInstance } from '../_shared/blizzard-client.ts';
 import { fetchPublicRankings, summarizePublicRankings } from '../_shared/wcl-client.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // §9.1 de la hoja de ruta (auditoría v2): "los bosses solo se cargan si hay
 // un pull propio — un boss que todavía no habéis pulleado no existe en el
@@ -26,6 +27,8 @@ const WCL_DIFFICULTY_NAME_BY_ID: Record<number, string> = { 1: 'LFR', 3: 'Normal
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
 
   let body: SyncRequest = {};
   try {

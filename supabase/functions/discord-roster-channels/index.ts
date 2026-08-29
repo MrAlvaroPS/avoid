@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 import { errorMessage } from '../_shared/error-message.ts';
 
 // §"un bot que crea canales privados dentro de una categoría... solo para
@@ -132,6 +133,9 @@ function displayNameOf(member: DiscordGuildMember): string {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
+
   if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
 
   const botToken = Deno.env.get('DISCORD_BOT_TOKEN');

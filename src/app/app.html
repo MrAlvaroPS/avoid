@@ -1,42 +1,48 @@
+@if (isMobile()) {
+  <app-mobile-block />
+} @else {
 <div class="app-shell">
-  <nav class="top-nav" aria-label="Navegación principal">
-    <div class="brand">
-      <img class="brand-mark" src="/assets/avoid-guild-logo.png" alt="" aria-hidden="true" />
-      <span class="brand-name">Avoid</span>
-    </div>
-    <div class="nav-tabs">
-      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Raid</a>
-      <a routerLink="/roster" routerLinkActive="active">Roster</a>
-      <a routerLink="/historial" routerLinkActive="active">Histórico</a>
-      <a routerLink="/ajustes" routerLinkActive="active">Ajustes</a>
-    </div>
-    <div class="nav-spacer"></div>
-    <!-- §"quita la card de progreso de temporada de portada y pon el
-         progreso en la cabecera a la derecha junto con Sanguino EU"
-         (feedback real): visible en toda la app ahora, no solo en la
-         portada — por dificultad, ver season-progress.component.ts. Un
-         gap más corto que el resto del nav para que se lea agrupado con
-         el guild-tag, no como un item de navegación más. -->
-    <div class="header-progress-group">
-      <!-- @defer: app-season-progress tira de ReportsService -> Supabase
-           client igual que cualquier ruta, pero esto vive en app-root
-           (fuera del lazy-loading por ruta) — sin @defer, todo ese cliente
-           se cuela en el bundle inicial ANTES de la primera pintura por un
-           simple badge de cabecera (contrastado en real: +48KB sobre el
-           budget). `on idle` lo trae justo después del primer render, no
-           bloquea nada. -->
-      @defer (on idle) {
-        <app-season-progress />
-      }
-      <a class="documentation-link" routerLink="/documentacion" routerLinkActive="active">
-        <span class="documentation-label">Documentación</span>
-        <span class="documentation-label-short" aria-hidden="true">Docs</span>
-      </a>
-      <span class="guild-tag">Sanguino · EU</span>
-    </div>
-  </nav>
+  @if (auth.officerStatus() === 'officer') {
+    <nav class="top-nav" aria-label="Navegación principal">
+      <div class="brand">
+        <img class="brand-mark" src="/assets/avoid-guild-logo.png" alt="" aria-hidden="true" />
+        <span class="brand-name">Avoid</span>
+      </div>
+      <div class="nav-tabs">
+        <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Raid</a>
+        <a routerLink="/roster" routerLinkActive="active">Roster</a>
+        <a routerLink="/historial" routerLinkActive="active">Histórico</a>
+        <a routerLink="/ajustes" routerLinkActive="active">Ajustes</a>
+      </div>
+      <div class="nav-spacer"></div>
+      <!-- §"quita la card de progreso de temporada de portada y pon el
+           progreso en la cabecera a la derecha junto con Sanguino EU"
+           (feedback real): visible en toda la app ahora, no solo en la
+           portada — por dificultad, ver season-progress.component.ts. Un
+           gap más corto que el resto del nav para que se lea agrupado con
+           el guild-tag, no como un item de navegación más. -->
+      <div class="header-progress-group">
+        <!-- @defer: app-season-progress tira de ReportsService -> Supabase
+             client igual que cualquier ruta, pero esto vive en app-root
+             (fuera del lazy-loading por ruta) — sin @defer, todo ese cliente
+             se cuela en el bundle inicial ANTES de la primera pintura por un
+             simple badge de cabecera (contrastado en real: +48KB sobre el
+             budget). `on idle` lo trae justo después del primer render, no
+             bloquea nada. -->
+        @defer (on idle) {
+          <app-season-progress />
+        }
+        <a class="documentation-link" routerLink="/documentacion" routerLinkActive="active">
+          <span class="documentation-label">Documentación</span>
+          <span class="documentation-label-short" aria-hidden="true">Docs</span>
+        </a>
+        <span class="guild-tag">Sanguino · EU</span>
+      </div>
+    </nav>
+  }
 
   <main>
     <router-outlet />
   </main>
 </div>
+}

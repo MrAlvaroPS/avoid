@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // §"un ninja pull... también cuenta en la estadística de wipes... habría
 // que clasificarlo de otra manera para saberlo" (feedback real): mismo
@@ -20,6 +21,8 @@ interface Body {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
 
   let body: Body;
   try {

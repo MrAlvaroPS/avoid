@@ -156,11 +156,20 @@ max_indexes = 5
 enabled = true
 # The base URL of your website. Used as an allow-list for redirects and for constructing URLs used
 # in emails.
-site_url = "http://127.0.0.1:3000"
+# §"vamos a preparar el login en este proyecto con discord" (feedback real,
+# 2026-08-29): apunta al origen real donde vive la app desplegada —
+# "ojo el site URL que lo he desplegado como page al final es:
+# https://avoid-bab.pages.dev/" (feedback real, 2026-08-29: la app se sirve
+# desde Cloudflare Pages, no desde el Worker de wrangler.jsonc).
+# signInWithOAuth() usa window.location.origin como redirectTo (ver
+# auth.service.ts), así que ese origen y el de desarrollo local tienen que
+# estar en la allow-list o Supabase rechaza la redirección final tras el
+# login.
+site_url = "https://avoid-bab.pages.dev"
 # The public URL that Auth serves on. Defaults to the API external URL with `/auth/v1` appended.
 # external_url = ""
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+additional_redirect_urls = ["https://avoid-bab.pages.dev", "http://localhost:4200", "http://127.0.0.1:4200"]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to auth.external_url.
@@ -319,6 +328,17 @@ max_frequency = "5s"
 # Use an external OAuth provider. The full list of providers are: `apple`, `azure`, `bitbucket`,
 # `discord`, `facebook`, `github`, `gitlab`, `google`, `keycloak`, `linkedin_oidc`, `notion`, `twitch`,
 # `twitter`, `x`, `slack`, `spotify`, `workos`, `zoom`.
+# §"login... con discord" (feedback real, 2026-08-29): misma Application de
+# Discord que ya usa el bot (DISCORD_APP_ID) — solo se le activó OAuth2 y se
+# le añadió el redirect https://qiniulkhivpvbjoquvon.supabase.co/auth/v1/callback
+# en su Developer Portal. Client ID/Secret viven en .env.local (nunca en
+# git) y se referencian aquí por variable de entorno, mismo patrón que el
+# resto de credenciales de este proyecto (WCL_CLIENT_ID, BLIZZARD_CLIENT_ID...).
+[auth.external.discord]
+enabled = true
+client_id = "env(DISCORD_OAUTH_CLIENT_ID)"
+secret = "env(DISCORD_OAUTH_SECRET)"
+
 [auth.external.apple]
 enabled = false
 client_id = ""

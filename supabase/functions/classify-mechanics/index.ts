@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 import { invalidateNightFullReportsForBossDifficulty, resyncMechanicAvoidable, resyncMechanicCategory, resyncMechanicResponsibility } from '../_shared/resync-mechanic-category.ts';
 
 // §"un prompt para pasar a la IA y que investigue... los nombres de las
@@ -213,6 +214,8 @@ interface Body {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
 
   let body: Body;
   try {

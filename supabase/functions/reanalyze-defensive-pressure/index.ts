@@ -6,6 +6,7 @@ import { buildFromBlizzardNamespace, fetchTalentSpellLookup } from '../_shared/w
 import { attributeWindowAbility, detectDamageWindows, evaluateWindowCoverage } from '../_shared/damage-pressure-windows.ts';
 import { normalizeAbilityName, buildAbilityIdsByName } from '../_shared/ability-name-match.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // §"backfill completo del histórico" (feedback real, 2026-08-29): analyze-report
 // solo escribe defensive_pressure_windows para fights NUEVOS a partir de su
@@ -36,6 +37,9 @@ interface CombatantInfoEvent {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
+
   if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
 
   let body: { pullId?: string };

@@ -2,6 +2,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { generateNightPlayerBrief } from '../_shared/llm-brief.ts';
 import { buildNightPlayerBriefContext } from '../_shared/night-player-brief-context.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // Mismo patrón que generate-pull-brief, para el ámbito jugador×noche
 // (§"meter en el dosier de un jugador... la consulta de IA" — feedback
@@ -17,6 +18,9 @@ interface Body {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
+
   if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
 
   let body: Body;

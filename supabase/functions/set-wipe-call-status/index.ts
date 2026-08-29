@@ -1,5 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // §"que autoexcluya pero que permita también editarlo y decir que no lo
 // era, para restaurar los valores" (feedback real): analyze-report ya deja
@@ -17,6 +18,8 @@ interface Body {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
 
   let body: Body;
   try {

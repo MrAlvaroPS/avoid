@@ -3,6 +3,7 @@ import { getFightEvents, getReportActors, getReportFights, type WclActor } from 
 import { computeDamageProfile } from '../_shared/damage-profile.ts';
 import { detectWipeCall, WIPE_CALL_CONFIDENCE_THRESHOLD, type WipeCallThroughputEvent } from '../_shared/wipe-call-detection.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // §"Hay que ver la manera de centralizar esta información y, sobretodo, en
 // hacerla fiable" (feedback real, 2026-08-28): analyze-report solo procesa
@@ -59,6 +60,8 @@ interface Body {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
 
   if (req.method !== 'POST') {
     return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);

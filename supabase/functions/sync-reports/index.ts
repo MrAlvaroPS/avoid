@@ -2,6 +2,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { getGuildReportsSince, getReportFights, isRaidReport } from '../_shared/wcl-client.ts';
 import { upsertReportEncounters } from '../_shared/report-encounters.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // Catálogo de reports de la guild: recorre el histórico de WCL desde
 // `sinceMs` y hace upsert en `reports` + `report_encounters` para todos los
@@ -28,6 +29,8 @@ const MAX_REPORTS_PER_CALL = 40; // los reports viejos no se van a mover; de sob
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
 
   let body: SyncRequest;
   try {

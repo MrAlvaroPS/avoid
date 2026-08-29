@@ -2,6 +2,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { getFightEvents, getReportActors, getReportFights, type WclActor } from '../_shared/wcl-client.ts';
 import { detectUnassignedMechanicOccurrences, type UnassignedMechanicCatalogEntry, type ActorLite, type GenericEvent } from '../_shared/unassigned-mechanics.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
 // 2026-08-29): analyze-report solo calcula unassigned_mechanic_occurrences
@@ -29,6 +30,9 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
+
   if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
 
   let body: { pullId?: string };

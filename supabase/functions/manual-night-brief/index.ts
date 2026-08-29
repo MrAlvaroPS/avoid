@@ -2,6 +2,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { NIGHT_SYSTEM_PROMPT, parsePullBriefResponse } from '../_shared/llm-brief.ts';
 import { buildNightBriefContext } from '../_shared/night-brief-context.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { requireOfficer } from '../_shared/require-officer.ts';
 
 // Mismo patrón que manual-pull-brief, para el ámbito raid×noche completa.
 
@@ -14,6 +15,9 @@ interface Body {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  const guard = await requireOfficer(req);
+  if (guard instanceof Response) return guard;
+
   if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'Method not allowed' }, 405);
 
   let body: Body;
