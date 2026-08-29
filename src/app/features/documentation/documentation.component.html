@@ -1,0 +1,138 @@
+<div class="documentation">
+  <header class="doc-header">
+    <div>
+      <h1>Documentación</h1>
+      <p class="intro">
+        Manual funcional y técnico de IRIS. Cada cifra remite al cálculo real del código; cuando algo no puede
+        determinarse con certeza, se dice explícitamente en vez de inventarse.
+      </p>
+    </div>
+    <div class="search-box">
+      <input
+        type="search"
+        placeholder="Buscar en la documentación…"
+        [value]="searchTerm()"
+        (input)="searchTerm.set($any($event.target).value)"
+      />
+      @if (searchTerm()) {
+        <span class="result-count">{{ resultCount() }} resultado{{ resultCount() === 1 ? '' : 's' }}</span>
+      }
+    </div>
+  </header>
+
+  <div class="doc-body">
+    <nav class="toc" aria-label="Tabla de contenidos">
+      @for (item of filteredChapters(); track item.chapter.id) {
+        <div class="toc-chapter">
+          <span class="toc-chapter-title">{{ item.chapter.title }}</span>
+          <ul>
+            @for (section of item.sections; track section.id) {
+              <li>
+                <button type="button" (click)="goToSection(item.chapter.id, section.id)">
+                  {{ section.title }}
+                </button>
+              </li>
+            }
+          </ul>
+        </div>
+      }
+      @if (filteredChapters().length === 0) {
+        <p class="no-results">Sin coincidencias.</p>
+      }
+    </nav>
+
+    <article class="content" #content>
+      @for (item of filteredChapters(); track item.chapter.id) {
+        <section class="chapter">
+          <div class="chapter-heading">
+            <h2>{{ item.chapter.title }}</h2>
+            @if (item.chapter.route) {
+              <a class="chapter-route-link" [routerLink]="item.chapter.route">Ir a esta pantalla →</a>
+            }
+          </div>
+          <p class="chapter-intro">{{ item.chapter.intro }}</p>
+
+          @for (section of item.sections; track section.id) {
+            <div class="section" [id]="anchorId(item.chapter.id, section.id)">
+              <div class="section-heading">
+                <h3>{{ section.title }}</h3>
+                <button
+                  type="button"
+                  class="anchor-link"
+                  (click)="copyLink(item.chapter.id, section.id)"
+                  title="Copiar enlace a esta sección"
+                >
+                  {{ copiedAnchor() === anchorId(item.chapter.id, section.id) ? 'Copiado ✓' : '#' }}
+                </button>
+              </div>
+              <p class="section-summary">{{ section.summary }}</p>
+
+              @for (block of section.blocks; track $index) {
+                <div class="block" [class]="block.tone">
+                  @if (block.tone) {
+                    <span class="tone-label">{{ toneLabel(block.tone) }}</span>
+                  }
+                  @if (block.title) {
+                    <h4>{{ block.title }}</h4>
+                  }
+                  @if (block.paragraphs) {
+                    @for (p of block.paragraphs; track $index) {
+                      <p>{{ p }}</p>
+                    }
+                  }
+                  @if (block.items) {
+                    <ul class="block-items">
+                      @for (line of block.items; track $index) {
+                        <li>{{ line }}</li>
+                      }
+                    </ul>
+                  }
+                  @if (block.formula) {
+                    <code class="formula">{{ block.formula }}</code>
+                  }
+                  @if (block.table; as table) {
+                    <div class="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            @for (header of table.headers; track $index) {
+                              <th>{{ header }}</th>
+                            }
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (row of table.rows; track $index) {
+                            <tr>
+                              @for (cell of row; track $index) {
+                                <td>{{ cell }}</td>
+                              }
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                  }
+                </div>
+              }
+
+              @if (section.technicalRefs?.length) {
+                <details class="technical-refs">
+                  <summary>Referencias técnicas</summary>
+                  <ul>
+                    @for (ref of section.technicalRefs; track ref) {
+                      <li><code>{{ ref }}</code></li>
+                    }
+                  </ul>
+                </details>
+              }
+            </div>
+          }
+        </section>
+      }
+
+      @if (filteredChapters().length === 0) {
+        <p class="no-results">No hay secciones que coincidan con "{{ searchTerm() }}".</p>
+      }
+    </article>
+  </div>
+</div>

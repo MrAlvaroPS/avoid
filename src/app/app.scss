@@ -79,6 +79,35 @@
   gap: 14px;
 }
 
+.documentation-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+
+  &:hover {
+    color: var(--text);
+    background: var(--surface-hover);
+  }
+
+  &.active {
+    color: var(--text);
+    background: var(--accent-soft);
+    border-color: var(--border);
+  }
+}
+
+.documentation-label-short {
+  display: none;
+}
+
 .guild-tag {
   font-size: 11px;
   font-family: var(--font-mono);
@@ -98,7 +127,8 @@ main {
   }
 
   .brand-name,
-  .header-progress-group {
+  .header-progress-group app-season-progress,
+  .guild-tag {
     display: none;
   }
 
@@ -113,6 +143,23 @@ main {
   }
 
   .nav-spacer {
+    flex: 0;
+  }
+
+  .header-progress-group {
+    gap: 0;
+  }
+
+  .documentation-link {
+    padding: 6px 8px;
+    font-size: 11px;
+  }
+
+  .documentation-label {
     display: none;
+  }
+
+  .documentation-label-short {
+    display: inline;
   }
 }

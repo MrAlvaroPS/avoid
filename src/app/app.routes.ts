@@ -23,6 +23,13 @@ export const routes: Routes = [
     loadComponent: () => import('./features/history/history.component').then((m) => m.HistoryComponent),
   },
   {
+    path: 'documentacion',
+    loadComponent: () =>
+      import('./features/documentation/documentation.component').then(
+        (m) => m.DocumentationComponent,
+      ),
+  },
+  {
     // §"un 'todos los pulls' que reúna datos de los pulls de ese boss en esa
     // dificultad": inputs de ruta en vez de query params — es una URL con
     // identidad propia (compartible, bookmarkeable), no un modo/filtro de otra pantalla.
