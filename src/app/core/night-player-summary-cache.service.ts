@@ -61,7 +61,15 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // reliability.service.ts). Mismo motivo exacto que el bump de v6: sin esto,
 // un dosier ya cacheado sigue enseñando el overall de la fórmula vieja
 // hasta que algo más invalide el fingerprint.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v7:';
+// v8 (2026-08-30): mismo shape, pero mechanicFails[].resolution/note y
+// deaths[].resolution/note cambian de VALOR — 245 filas de
+// boss_mechanics_candidates (resolution + ai_classification.notes) tenían
+// un artefacto de markdown-link+JSON pegado delante del texto real (§"se ha
+// colado algo en la descripcion", feedback real — ver las migraciones
+// 20260830090000/20260830100000). Ya corregido en Supabase, pero un dosier
+// cacheado ANTES de esa corrección seguiría sirviendo el texto corrupto
+// hasta que algo más invalide el fingerprint — mismo motivo que v6/v7.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v8:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;

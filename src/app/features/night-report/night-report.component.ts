@@ -26,6 +26,11 @@ import { toBlob } from 'html-to-image';
 import { NightReportService, type NightAttendee, type NightReport } from '../../core/night-report.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { NightPlayerSummaryService } from '../../core/night-player-summary.service';
+import { ReliabilityService, type PlayerReliability } from '../../core/reliability.service';
+import { OffendersService, type RepeatOffenderRow } from '../../core/offenders.service';
+import { RosterSnapshotCacheService, type RosterSnapshot } from '../../core/roster-snapshot-cache.service';
+import { NightScoreCacheService } from '../../core/night-score-cache.service';
+import { buildRosterPlayerView, type RosterPlayerView } from '../roster/roster-view.util';
 import { mapBrief } from '../../core/pull-analysis.service';
 import { classColor, comparisonLabel, formatDuration, formatPct } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
@@ -42,6 +47,12 @@ import { errorMessage } from '../../shared/error-message.util';
 
 const SCHEMA_VERSION = 15;
 
+/** Mismos umbrales que night-player-dossier.component.ts (toneForScore) — nada nuevo, solo este componente no lo tenía todavía. */
+function scoreTone(score: number | null): 'danger' | 'warning' | 'success' | null {
+  if (score == null) return null;
+  return score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
+}
+
 @Component({
   selector: 'app-night-report',
   standalone: true,
@@ -53,7 +64,12 @@ export class NightReportComponent {
   private nightReportService = inject(NightReportService);
   private edgeFunctions = inject(EdgeFunctionsService);
   private nightPlayerSummaryService = inject(NightPlayerSummaryService);
+  private reliabilityService = inject(ReliabilityService);
+  private offendersService = inject(OffendersService);
+  private rosterSnapshotCache = inject(RosterSnapshotCacheService);
+  private nightScoreCache = inject(NightScoreCacheService);
   private viewContainerRef = inject(ViewContainerRef);
+  scoreTone = scoreTone;
 
   reportCode = input.required<string>();
 
@@ -208,6 +224,7 @@ export class NightReportComponent {
       const code = this.reportCode();
       void this.load(code);
     });
+    void this.loadRosterSnapshot();
   }
 
   private async load(code: string): Promise<void> {
@@ -223,6 +240,10 @@ export class NightReportComponent {
       this.loading.set(false);
       return;
     }
+    // Independiente del resto (informe completo, brief IA): no bloquea
+    // `loading` ni retrasa el resto de la pantalla — la tabla de asistencia
+    // rellena "Ejecución de esta noche" en cuanto cada jugador resuelve.
+    void this.loadNightScores(code, this.attendingPlayers());
     try {
       const existing = await this.nightReportService.loadFullReport(code);
       if (existing) this.applyFullReport(existing);
@@ -433,6 +454,115 @@ export class NightReportComponent {
   private attendingPlayers(): NightAttendee[] {
     const d = this.data();
     return d ? [...d.attendingMain, ...d.attendingTrial] : [];
+  }
+
+  // §"en lugar de ponerlo asi [chips de presentes/ausentes], podriamos
+  // ponerlo como un listado breve con puntuacion de 'EJECUCIÓN DE ESTA
+  // NOCHE' y 'FIABILIDAD'... 'estado' [...] la misma información que tiene
+  // en estado del roster para esa noche [...] si pulsas sobre el estado, te
+  // lleva a la pestaña de 'roster'" (feedback real, 2026-08-30): Fiabilidad
+  // y Estado reutilizan EXACTAMENTE lo que ya calcula /roster —
+  // ReliabilityService.listPlayerReliability() + OffendersService +
+  // buildRosterPlayerView (roster-view.util.ts), MISMA caché
+  // (RosterSnapshotCacheService — si el RL ya visitó /roster esta sesión,
+  // esto sale gratis) — nunca una fórmula de estado paralela que pueda
+  // divergir de lo que el roster real enseña. "Ejecución de esta noche" en
+  // cambio SÍ es específica de este report (nightScore no existe fuera de
+  // NightPlayerSummaryService) — se carga en paralelo por jugador asistente,
+  // sin forceRefresh (cache-first, igual que abrir su dosier), así que si
+  // "Actualizar infografías" ya se pulsó antes esto sale instantáneo.
+  readonly rosterPlayers = signal<PlayerReliability[]>([]);
+  readonly rosterOffenders = signal<RepeatOffenderRow[]>([]);
+  readonly nightScores = signal<Map<string, number | null>>(new Map());
+
+  private rosterViewByName = computed(() => {
+    const patternsByPlayer = new Map<string, RepeatOffenderRow[]>();
+    for (const pattern of this.rosterOffenders()) {
+      const patterns = patternsByPlayer.get(pattern.playerName) ?? [];
+      patterns.push(pattern);
+      patternsByPlayer.set(pattern.playerName, patterns);
+    }
+    const map = new Map<string, RosterPlayerView>();
+    for (const player of this.rosterPlayers()) {
+      map.set(player.playerName, buildRosterPlayerView(player, patternsByPlayer.get(player.playerName) ?? []));
+    }
+    return map;
+  });
+
+  attendanceRows = computed(() => {
+    const d = this.data();
+    if (!d) return [];
+    const scores = this.nightScores();
+    const views = this.rosterViewByName();
+    const build = (attendee: NightAttendee, isTrial: boolean) => ({
+      ...attendee,
+      isTrial,
+      nightScore: scores.get(attendee.name) ?? null,
+      view: views.get(attendee.name) ?? null,
+    });
+    return [...d.attendingMain.map((p) => build(p, false)), ...d.attendingTrial.map((p) => build(p, true))];
+  });
+
+  private async loadRosterSnapshot(): Promise<void> {
+    const cached = this.rosterSnapshotCache.read();
+    if (cached) {
+      this.rosterPlayers.set(cached.players);
+      this.rosterOffenders.set(cached.offenders);
+    }
+    try {
+      const fingerprint = await this.rosterSnapshotCache.fingerprint();
+      if (cached?.fingerprint === fingerprint) return;
+      const [players, offenders] = await Promise.all([
+        this.reliabilityService.listPlayerReliability(),
+        this.offendersService.listRepeatOffenders().catch(() => []),
+      ]);
+      this.rosterPlayers.set(players);
+      this.rosterOffenders.set(offenders);
+      const snapshot: RosterSnapshot = { fingerprint, savedAt: new Date().toISOString(), players, offenders };
+      this.rosterSnapshotCache.write(snapshot);
+    } catch {
+      // best-effort: si falla, la tabla sigue mostrando Ejecución de la noche sin Fiabilidad/Estado — nunca bloquea el resto del informe.
+    }
+  }
+
+  private async loadNightScores(code: string, players: NightAttendee[]): Promise<void> {
+    if (!players.length) {
+      this.nightScores.set(new Map());
+      return;
+    }
+    // §"una vez calculado para un informe debería cargarse al instante si no
+    // se modifica ningún baremo ni nada de ese informe" (feedback real,
+    // 2026-08-30): fingerprint acotado a ESTE report (ver
+    // NightScoreCacheService) — a diferencia del caché de
+    // NightPlayerSummaryService (fingerprint global, se invalida con
+    // cualquier pull de cualquier noche), este solo se invalida si cambian
+    // los pulls de este report concreto. Una vez la noche está cerrada, no
+    // vuelve a tocar Supabase para esto nunca más.
+    let fingerprint: string | null = null;
+    try {
+      fingerprint = await this.nightScoreCache.fingerprint(code);
+      const cached = this.nightScoreCache.read(code);
+      if (cached && cached.fingerprint === fingerprint) {
+        this.nightScores.set(new Map(Object.entries(cached.scores)));
+        return;
+      }
+    } catch {
+      // sigue al cálculo completo si el fingerprint ligero falla — nunca deja la tabla sin números por esto.
+    }
+    const entries = await Promise.all(
+      players.map(async (p): Promise<[string, number | null]> => {
+        try {
+          // includeEvolution=false: no hace falta la comparación con la
+          // noche anterior (que recalcula TODO otra vez) solo para leer nightScore.
+          const summary = await this.nightPlayerSummaryService.load(code, p.name, false);
+          return [p.name, summary.nightScore];
+        } catch {
+          return [p.name, null];
+        }
+      }),
+    );
+    this.nightScores.set(new Map(entries));
+    if (fingerprint) this.nightScoreCache.write(code, fingerprint, Object.fromEntries(entries));
   }
 
   readonly bulkUpdating = signal(false);

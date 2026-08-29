@@ -26,8 +26,16 @@ declare
 begin
   foreach t in array tables loop
     policy_name := 'read all - ' || t;
-    execute format('drop policy if exists %L on %I', policy_name, t);
-    execute format('create policy %L on %I for select using (is_officer())', policy_name, t);
+    -- §bug real encontrado en despliegue (2026-08-30): un nombre de
+    -- política no es un literal de texto, es un identificador — %L lo
+    -- entrecomillaba como cadena ('read all - boss_mechanics'), sintaxis
+    -- inválida en la posición de nombre de política. %I es el formato
+    -- correcto para identificadores (entrecomilla solo si hace falta, p.ej.
+    -- por el espacio/guion del nombre). Esta migración nunca había llegado
+    -- a aplicarse en remoto por este error — bloqueaba cualquier `db push`
+    -- posterior.
+    execute format('drop policy if exists %I on %I', policy_name, t);
+    execute format('create policy %I on %I for select using (is_officer())', policy_name, t);
   end loop;
 end $$;
 

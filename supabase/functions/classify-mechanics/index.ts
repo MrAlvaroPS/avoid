@@ -189,6 +189,20 @@ function validateResolution(entry: Partial<ClassificationEntry>):
   const resolution = entry.resolution.trim();
   if (resolution.length < 30) return { ok: false, reason: 'la resolución es demasiado breve para ser accionable' };
   if (resolution.length > 3_000) return { ok: false, reason: 'la resolución supera el máximo de 3000 caracteres' };
+  // §bug real encontrado en producción (2026-08-30): "se ha colado algo en
+  // la descripcion" (feedback real) — 12 filas de The Coiled Altar quedaron
+  // con un trozo de markdown-link+JSON pegado delante del texto real (algo
+  // como `El](https://...%22,%22https://...%22],%22notes%22:%22%22,
+  // %22resolution%22:%22El) tank activo orienta...`). rawResponseText llega
+  // ya como JSON desde el cliente (flujo manual: pegar la respuesta de un
+  // LLM externo) — JSON.parse lo aceptó sin más porque, como STRING, era
+  // válido; nada aquí comprobaba que el CONTENIDO no fuera basura de
+  // copy/paste. Estas tres señales no aparecen nunca en una instrucción real
+  // para un raider, así que cualquiera de ellas basta para rechazar la fila
+  // en vez de guardarla tal cual.
+  if (/%22|\]\(https?:\/\/|"resolution"\s*:/i.test(resolution)) {
+    return { ok: false, reason: 'la resolución contiene restos de markdown/JSON sin limpiar (posible copy/paste corrupto)' };
+  }
 
   const uniqueByUrl = new Map<string, { url: string; domain: string }>();
   for (const source of Array.isArray(entry.sources) ? entry.sources : []) {
@@ -329,6 +343,17 @@ Deno.serve(async (req: Request) => {
       const responsibilitiesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[] = [];
       const avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean | null }[] = [];
       const avoidablesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[] = [];
+      // §"aqui en la descripcion del informe de noche tambien se ha colado
+      // algo" (feedback real, 2026-08-30): 233 filas de notes quedaron con
+      // el mismo artefacto de markdown-link+JSON que ya afectaba a
+      // resolution (ver validateResolution) — a diferencia de resolution,
+      // notes nunca tuvo NINGUNA validación, se guardaba con `entry.notes ??
+      // ''` tal cual. No se rechaza la fila entera por esto (category/
+      // resolution/responsibility siguen siendo independientes y ya
+      // validados aparte) — solo se vacía la nota corrupta; notes='' ya es
+      // un estado normal en toda la app (mechanic-notes.ts lo trata como
+      // "sin nota", no como error).
+      const notesSanitized: { abilityId: number; difficulty: string; name: string }[] = [];
       const resolutionContractMissing = parsed.length > 0 && parsed.some((raw) => {
         if (raw == null || typeof raw !== 'object') return true;
         return !Object.hasOwn(raw, 'resolution');
@@ -354,6 +379,10 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         const { name, difficulty } = candidate;
+        const rawNotes = typeof entry.notes === 'string' ? entry.notes : '';
+        const notesCorrupted = /%22|\]\(https?:\/\/|"resolution"\s*:/i.test(rawNotes);
+        if (notesCorrupted) notesSanitized.push({ abilityId: entry.abilityId, difficulty, name });
+        entry.notes = notesCorrupted ? '' : rawNotes;
         const validatedResolution = validateResolution(entry);
         if (validatedResolution.ok) {
           resolutionsApplied.push({ abilityId: entry.abilityId, difficulty, name, resolution: validatedResolution.resolution });
@@ -521,6 +550,7 @@ Deno.serve(async (req: Request) => {
         avoidablesApplied,
         avoidablesSkipped,
         avoidableContractMissing,
+        notesSanitized,
       });
     }
 

@@ -170,30 +170,61 @@
             }
           </p>
         }
-        <div class="attendance-row">
-          <div class="attendance-col">
-            <span class="attendance-label tone-success">Presentes — Main ({{ d.attendingMain.length }})</span>
-            <div class="chip-row">
-              @for (player of d.attendingMain; track player.name) {
-                <a class="player-chip" [style.color]="classColor(player.class)" [routerLink]="['/report', d.reportCode, 'player', player.name]">
-                  <app-class-icon [wclClass]="player.class" />{{ player.name }}
-                </a>
+        <!-- §"en lugar de ponerlo asi, podriamos ponerlo como un listado
+             breve con puntuacion de 'EJECUCIÓN DE ESTA NOCHE' y
+             'FIABILIDAD'... y en otra columna tambien 'estado'... la misma
+             información que tiene en estado del roster para esa noche...
+             si pulsas sobre el estado, te lleva a la pestaña de 'roster'...
+             si pulsas sobre el nombre te lleva a su dosier como siempre"
+             (feedback real, 2026-08-30): reemplaza la rejilla de chips de
+             presentes por una tabla con el rendimiento de cada uno — desde
+             el propio informe se ve quién necesita revisión sin abrir 20
+             dosiers. Fiabilidad/Estado son el MISMO dato que /roster
+             (attendanceRows(), ver el .ts) — nunca un cálculo paralelo. -->
+        <div class="attendance-table-wrap">
+          <table class="attendance-table">
+            <thead>
+              <tr>
+                <th>Jugador</th>
+                <th>Ejecución de esta noche</th>
+                <th>Fiabilidad</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of attendanceRows(); track row.name) {
+                <tr>
+                  <td>
+                    <a class="player-chip" [style.color]="classColor(row.class)" [routerLink]="['/report', d.reportCode, 'player', row.name]">
+                      <app-class-icon [wclClass]="row.class" />{{ row.name }}
+                      @if (row.isTrial) {
+                        <small class="trial-badge">Trial</small>
+                      }
+                    </a>
+                  </td>
+                  <td class="tabular" [class]="'tone-' + (scoreTone(row.nightScore == null ? null : row.nightScore * 100) ?? '')">
+                    {{ row.nightScore == null ? '…' : formatPct(row.nightScore * 100) }}
+                  </td>
+                  <td class="tabular" [class]="'tone-' + (row.view ? scoreTone(row.view.player.overall) ?? '' : '')">
+                    {{ row.view ? row.view.player.overall + '/100' : '—' }}
+                  </td>
+                  <td>
+                    <a
+                      class="status-pill"
+                      [class]="'status-pill status-' + (row.view?.status ?? 'no-data')"
+                      routerLink="/roster"
+                      [title]="'Ver ' + row.name + ' en el roster'"
+                    >
+                      <i aria-hidden="true"></i>{{ row.view?.statusLabel ?? 'Sin datos' }}
+                    </a>
+                  </td>
+                </tr>
               }
-            </div>
-          </div>
-          @if (d.attendingTrial.length) {
-            <div class="attendance-col">
-              <span class="attendance-label">Presentes — Trial ({{ d.attendingTrial.length }})</span>
-              <div class="chip-row">
-                @for (player of d.attendingTrial; track player.name) {
-                  <a class="player-chip" [style.color]="classColor(player.class)" [routerLink]="['/report', d.reportCode, 'player', player.name]">
-                    <app-class-icon [wclClass]="player.class" />{{ player.name }}
-                  </a>
-                }
-              </div>
-            </div>
-          }
-          @if (d.absentMain.length) {
+            </tbody>
+          </table>
+        </div>
+        @if (d.absentMain.length) {
+          <div class="attendance-row">
             <div class="attendance-col">
               <span class="attendance-label tone-danger">Ausentes — Main ({{ d.absentMain.length }})</span>
               <div class="chip-row">
@@ -204,8 +235,8 @@
                 }
               </div>
             </div>
-          }
-        </div>
+          </div>
+        }
       </section>
 
       @if (d.wipeCallPulls.length) {
