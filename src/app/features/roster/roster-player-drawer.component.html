@@ -323,7 +323,7 @@
                   ? '—'
                   : (view.player.breakdown.mecanica | number: '1.0-0')
               }}</strong
-              ><small>44% del compuesto</small>
+              ><small>{{ axisWeights().mecanica ?? '—' }}% del compuesto</small>
             </article>
             <article [class]="'axis-card tone-' + axisTone(view.player.breakdown.defensiva)">
               <span>Defensivos</span
@@ -349,7 +349,11 @@
                   ? '—'
                   : (view.player.breakdown.preparacion | number: '1.0-0')
               }}</strong
-              ><small>inicio de cada noche</small>
+              ><small>{{
+                view.player.breakdown.preparacion != null && view.player.breakdown.preparacion >= 100
+                  ? 'completa, no suma al compuesto'
+                  : 'inicio de cada noche'
+              }}</small>
             </article>
           </div>
           <!-- §"rotar en un boss por tema de specs no tiene por qué afectar

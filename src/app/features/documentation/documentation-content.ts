@@ -502,9 +502,9 @@ export const DOCUMENTATION_CHAPTERS: DocChapter[] = [
             table: {
               headers: ['Eje', 'Peso base', 'Dato'],
               rows: [
-                ['Mecánica', '0,40 (44,44% si están los 3 ejes)', 'mechanicScoreFor por pull, ponderado por recencia'],
-                ['Defensivos', '0,30 (33,33%)', 'Respuesta al morir (peso doble) y ventanas cubiertas/cubribles'],
-                ['Preparación', '0,20 (22,22%)', 'Enchants+slots con gema del primer pull de cada noche'],
+                ['Mecánica', '0,40 (44,44% si cuentan los 3 ejes)', 'mechanicScoreFor por pull, ponderado por recencia'],
+                ['Defensivos', '0,30 (33,33% si cuentan los 3 ejes)', 'Respuesta al morir (peso doble) y ventanas cubiertas/cubribles'],
+                ['Preparación', '0,20 — solo cuenta si sale < 100', 'Enchants+slots con gema del primer pull de cada noche'],
               ],
             },
           },
@@ -515,6 +515,7 @@ export const DOCUMENTATION_CHAPTERS: DocChapter[] = [
               'La respuesta defensiva en una muerte evaluable pesa 2; una ventana normal pesa 1.',
               'Si cubre C de N ventanas, la muestra vale C/N. Si cubre 0 pero lanzó algo fuera de tiempo, obtiene crédito 0,30; si no lanzó nada, 0.',
               'Preparación solo evalúa el primer pull por report para no castigar loot equipado durante la raid.',
+              'Preparación es asimétrica: llegar completo (100) es la línea base esperada y queda fuera del blend — solo entra a penalizar cuando sale incompleta. Mecánica/Defensiva se renormalizan entre ellos ese caso (0,4/0,7 y 0,3/0,7).',
               'La UI redondea overall al entero; los ejes se conservan como decimales y se muestran redondeados.',
             ],
           },

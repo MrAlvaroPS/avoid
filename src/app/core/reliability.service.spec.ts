@@ -44,6 +44,9 @@ function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow 
     defensive_window_coverable_count: null,
     defensive_window_covered_count: null,
     defensive_window_used_anything: null,
+    // null por defecto (mismo criterio): mechanicScoreFor no suma ningún
+    // bonus de mecánica sin asignar salvo que un test lo pida explícitamente.
+    unassigned_mechanic_success_count: null,
     ...overrides,
   };
 }
@@ -320,6 +323,57 @@ describe('computeReliabilityBreakdown preparación — primer pull de la noche',
     );
     expect(result?.breakdown.preparacion).toBeLessThan(100);
     expect(result?.breakdown.preparacion).toBeGreaterThan(0);
+  });
+});
+
+// §"venir sin la preparación penaliza si no se hace, pero se da por
+// supuesto que si lo tienes que hacer así que no cuenta para sumar"
+// (feedback real, 2026-08-30): preparación=100 informa (breakdown) pero no
+// debe poder subir el overall — solo cuenta cuando falta algo.
+describe('computeReliabilityBreakdown preparación — asimétrica en el overall', () => {
+  it('preparación perfecta no sube el overall por encima de mecánica+defensiva', () => {
+    const rows = [
+      row({
+        report_code: 'REPORT1',
+        pull_number: 1,
+        enchanted_slot_count: 7,
+        enchantable_slot_count: 7,
+        gemmed_slot_count: 3,
+        gemmable_slot_count: 3,
+        personal_mechanic_fail_count: 3,
+        avoidable_mechanic_fail_count: 3,
+        avoidable_mechanic_eligible_count: 3,
+      }),
+    ];
+    const withPerfectPrep = computeReliabilityBreakdown(rows, NOW);
+    const withoutPrepData = computeReliabilityBreakdown(
+      rows.map((r) => ({ ...r, enchantable_slot_count: 0, gemmable_slot_count: 0 })),
+      NOW,
+    );
+    expect(withPerfectPrep?.breakdown.preparacion).toBe(100);
+    // Mismo overall que si preparación no se hubiese observado en absoluto —
+    // el 100% no aportó ningún punto extra al blend.
+    expect(withPerfectPrep?.overall).toBe(withoutPrepData?.overall);
+  });
+
+  it('preparación incompleta sí penaliza el overall', () => {
+    const rows = [
+      row({
+        report_code: 'REPORT1',
+        pull_number: 1,
+        enchanted_slot_count: 5,
+        enchantable_slot_count: 7,
+        gemmed_slot_count: 1,
+        gemmable_slot_count: 3,
+      }),
+    ];
+    const withGapPrep = computeReliabilityBreakdown(rows, NOW);
+    const withPerfectPrep = computeReliabilityBreakdown(
+      rows.map((r) => ({ ...r, enchanted_slot_count: 7, gemmed_slot_count: 3 })),
+      NOW,
+    );
+    expect(withGapPrep?.breakdown.preparacion).toBeLessThan(100);
+    expect(withGapPrep!.overall).toBeLessThan(withPerfectPrep!.overall);
   });
 });
 

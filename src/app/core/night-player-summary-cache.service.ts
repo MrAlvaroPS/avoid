@@ -54,7 +54,14 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // resuelta con éxito — ver pull-analysis.service.ts) — un caché v5 seguiría
 // sirviendo el número de antes del bonus hasta que algo más lo invalidara,
 // mismo motivo exacto que el bump de v4.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v6:';
+// v7 (2026-08-30): mismo shape otra vez, pero reliability/nightReliability
+// (el `overall` de Fiabilidad) cambia de VALOR — preparación al 100% ya no
+// suma al blend (§"se da por supuesto que si lo tienes que hacer no cuenta
+// para sumar", feedback real — ver effectiveAxisWeights en
+// reliability.service.ts). Mismo motivo exacto que el bump de v6: sin esto,
+// un dosier ya cacheado sigue enseñando el overall de la fórmula vieja
+// hasta que algo más invalide el fingerprint.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v7:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;

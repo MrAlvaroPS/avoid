@@ -95,7 +95,7 @@
       @if (d.reliability || d.nightReliability) {
         <div class="score-card">
           <span class="eyebrow">Fiabilidad</span>
-          <p class="score-card-note">Mecánica + defensiva + preparación — misma fórmula, dos ventanas de tiempo. La asistencia se enseña aparte (ver el desglose) y no puntúa aquí.</p>
+          <p class="score-card-note">Mecánica + defensiva + preparación (solo si falta algo — ir completo es la línea base, no suma) — misma fórmula, dos ventanas de tiempo. La asistencia se enseña aparte (ver el desglose) y no puntúa aquí.</p>
           <div class="badge-pair">
             @if (d.reliability; as rel) {
               <button type="button" class="score-trigger badge-trigger" (click)="openExplanation(reliabilityWindowExplanation(rel))">

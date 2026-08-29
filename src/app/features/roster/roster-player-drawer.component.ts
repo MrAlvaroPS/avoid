@@ -1,7 +1,7 @@
-import { Component, HostListener, input, output } from '@angular/core';
+import { Component, computed, HostListener, input, output } from '@angular/core';
 import { DatePipe, DecimalPipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import type { DefensiveDeathEvidence, PlayerReliability } from '../../core/reliability.service';
+import { effectiveAxisWeights, type DefensiveDeathEvidence, type PlayerReliability } from '../../core/reliability.service';
 import { RoleIconComponent } from '../../shared/role-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import type { RosterPlayerView } from './roster-view.util';
@@ -16,6 +16,12 @@ import type { RosterPlayerView } from './roster-view.util';
 export class RosterPlayerDrawerComponent {
   view = input.required<RosterPlayerView>();
   close = output<void>();
+
+  // §"venir sin la preparación penaliza si no se hace... no cuenta para
+  // sumar" (feedback real, 2026-08-30): el peso de Mecánica que se enseña
+  // en la rejilla de ejes ya no es un "44%" fijo — sale de
+  // effectiveAxisWeights porque preparación puede quedar fuera del blend.
+  axisWeights = computed(() => effectiveAxisWeights(this.view().player.breakdown));
 
   @HostListener('document:keydown.escape')
   closeOnEscape(): void {

@@ -3,7 +3,13 @@ import { SupabaseService } from './supabase.service';
 import type { PlayerReliability } from './reliability.service';
 import type { RepeatOffenderRow } from './offenders.service';
 
-const STORAGE_KEY = 'avoid:roster-snapshot:v3';
+// v4 (2026-08-30): mismo shape, pero PlayerReliability.overall cambia de
+// VALOR — preparación al 100% ya no suma al blend de Fiabilidad (§"se da
+// por supuesto que si lo tienes que hacer no cuenta para sumar", feedback
+// real — ver effectiveAxisWeights en reliability.service.ts). Mismo motivo
+// que los bumps de night-player-summary-cache.service.ts: sin esto, el
+// roster ya cacheado sigue enseñando el overall de la fórmula vieja.
+const STORAGE_KEY = 'avoid:roster-snapshot:v4';
 
 export interface RosterSnapshot {
   fingerprint: string;

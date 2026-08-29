@@ -9,7 +9,12 @@
 // enchant de esta season + tres slots de gema (cuello/anillos). Para gemas
 // se evalúa si el slot elegible lleva al menos una, no un máximo de
 // sockets que WCL no expone. Nunca se rellena un eje ausente con un cero
-// silencioso.
+// silencioso. Preparación es además asimétrica (§"se da por supuesto que
+// si lo tienes que hacer no cuenta para sumar", feedback real,
+// 2026-08-30): solo entra en el blend del `overall` cuando está incompleta
+// — venir con el pj perfecto es la línea base esperada, no un mérito que
+// deba subir el número (ver computeReliabilityBreakdown). El desglose
+// (`breakdown.preparacion`) sí sigue enseñando el 100% real, informativo.
 //
 // §"quitar de ahí asistencia... eventualmente habrá rotaciones y rotar en
 // un boss por tema de specs no tiene por qué afectar a la fiabilidad"
@@ -350,7 +355,18 @@ export function computeReliabilityBreakdown(
   const axes: { key: keyof typeof AXIS_WEIGHTS; value: number }[] = [];
   if (mecanica != null) axes.push({ key: 'mecanica', value: mecanica });
   if (defensiva != null) axes.push({ key: 'defensiva', value: defensiva });
-  if (preparacion != null) axes.push({ key: 'preparacion', value: preparacion });
+  // §"venir sin la preparación penaliza si no se hace, pero se da por
+  // supuesto que si lo tienes que hacer así que no cuenta para sumar"
+  // (feedback real, 2026-08-30): llegar con el pj completo (todos los
+  // enchants/gemas de la season) es la línea base esperada, no un mérito —
+  // un 100% aquí solo entra en el `overall` cuando hay algo que penalizar
+  // (preparacion < 100). Perfecto de verdad (100) queda fuera del blend:
+  // antes pesaba igual que un mecánica/defensiva perfectos y podía tapar
+  // una ejecución floja (caso real: Fiabilidad 60 con mecánica ~71 pero
+  // defensiva ~18, inflado por preparación=100%). `breakdown.preparacion`
+  // se sigue devolviendo intacto — la UI necesita el 100 real, no un "sin
+  // datos", solo cambia si CUENTA para el overall.
+  if (preparacion != null && preparacion < 100) axes.push({ key: 'preparacion', value: preparacion });
   const weightSum = axes.reduce((s, a) => s + AXIS_WEIGHTS[a.key], 0);
   const overall =
     weightSum > 0
@@ -381,6 +397,37 @@ export function computeReliabilityBreakdown(
     overall,
     breakdown: { mecanica, defensiva, preparacion },
     consistency,
+  };
+}
+
+/**
+ * §"venir sin la preparación penaliza si no se hace, pero se da por
+ * supuesto que si lo tienes que hacer así que no cuenta para sumar"
+ * (feedback real, 2026-08-30): los pesos normalizados (44%/33%/22%) que
+ * enseñaban el modal de explicación y el drawer del roster eran un texto
+ * FIJO que asumía los 3 ejes siempre puntuando — desde este cambio ya no es
+ * cierto cuando preparación sale perfecta (100, excluida del blend). Este
+ * helper replica EXACTAMENTE el mismo criterio de inclusión/normalización
+ * que usa `overall` arriba, para que la UI muestre el peso REAL aplicado en
+ * cada caso en vez de una etiqueta que puede mentir. null = ese eje no
+ * participó en el overall (sin dato, o preparación perfecta).
+ */
+export function effectiveAxisWeights(breakdown: {
+  mecanica: number | null;
+  defensiva: number | null;
+  preparacion: number | null;
+}): { mecanica: number | null; defensiva: number | null; preparacion: number | null } {
+  const included = new Set<keyof typeof AXIS_WEIGHTS>();
+  if (breakdown.mecanica != null) included.add('mecanica');
+  if (breakdown.defensiva != null) included.add('defensiva');
+  if (breakdown.preparacion != null && breakdown.preparacion < 100) included.add('preparacion');
+  const weightSum = [...included].reduce((s, key) => s + AXIS_WEIGHTS[key], 0);
+  const pctFor = (key: keyof typeof AXIS_WEIGHTS): number | null =>
+    weightSum > 0 && included.has(key) ? Math.round((AXIS_WEIGHTS[key] / weightSum) * 100) : null;
+  return {
+    mecanica: pctFor('mecanica'),
+    defensiva: pctFor('defensiva'),
+    preparacion: pctFor('preparacion'),
   };
 }
 
