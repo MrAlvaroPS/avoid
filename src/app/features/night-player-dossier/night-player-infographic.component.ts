@@ -18,6 +18,7 @@ import { toBlob, toCanvas } from 'html-to-image';
 import {
   type NightDefensiveCast,
   type NightDeathRow,
+  type NightMechanicDefensiveStat,
   type NightMechanicFailRow,
   type NightMechanicPressureSummary,
   type NightPlayerSummary,
@@ -108,11 +109,34 @@ const MIN_SHEET_HEIGHT = 1890;
 // resolución mayor no se lee mejor en Discord (se reescala igual al ancho
 // de pantalla) y solo penaliza la nitidez del texto al comprimir a JPEG.
 const EXPORT_PIXEL_RATIO = 1.6;
-const DISCORD_MAX_BYTES = 8 * 1024 * 1024;
+// §"a mano en discord si me permite meter imagenes de 16mb, lo de los 8mb
+// que comentas es una limitacion de la API?" (feedback real, 2026-08-29):
+// doblemente verificado — (1) GET /guilds/{id} contra la API real →
+// premium_tier: 0, CERO boosts en el guild de Avoid; (2) la documentación
+// OFICIAL y actual de Discord (docs.discord.com/developers/reference,
+// leída en vivo, no de memoria) dice textualmente: "The default limit is
+// 10 MiB for all users, but may be higher [...] depending on their Nitro
+// status or by the server's Boost Tier". El bot no tiene Nitro propio y el
+// guild no tiene boosts, así que 10 MiB es el número correcto para ESTE
+// bot en ESTE servidor — los 16MB que el usuario ve A MANO son su propia
+// cuota personal de Nitro, un perk por usuario que no se hereda al bot. El
+// 413 real que motivó el 8MB original (2026-08-27) era conservador de más.
+const DISCORD_MAX_BYTES = 10 * 1024 * 1024;
 const DISCORD_JPEG_QUALITY = 0.92;
 const DISCORD_RENDER_ATTEMPTS = 5;
-const FALLBACK_ICON_URL =
-  'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
+const FALLBACK_ICON_URL = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
+
+// §"a 3 columnas y, si no caben y desbordan de una de las cards, bajar a 2
+// columnas... contempla el mecanismo" (feedback real, 2026-08-29): el sheet
+// es de ancho FIJO (exportable, no responsive) — 2880px menos la cadena de
+// paddings hasta .iris-mechanic-list (.iris-player-sheet 78px +
+// .iris-player-macro-group 26px + .iris-player-section 30px, a cada lado) es
+// un cálculo determinista, no hace falta medir el DOM con ResizeObserver ni
+// arriesgarse a que html-to-image capture un layout a medio calcular.
+const MECH_CELL_WIDTH = 22;
+const MECH_CARD_PADDING_X = 44 * 2;
+const MECH_LIST_GAP = 24;
+const MECH_CONTENT_WIDTH = SHEET_WIDTH - 2 * (78 + 26 + 30);
 
 @Component({
   selector: 'app-night-player-infographic',
@@ -121,13 +145,20 @@ const FALLBACK_ICON_URL =
   templateUrl: './night-player-infographic.component.html',
   encapsulation: ViewEncapsulation.None,
 })
-export class NightPlayerInfographicComponent
-  implements OnInit, AfterViewInit, OnDestroy
-{
+export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, OnDestroy {
   private edgeFunctions = inject(EdgeFunctionsService);
 
   summary = input.required<NightPlayerSummary>();
   refreshing = input(false);
+  // §"actualizar TODAS las infografias... enviar TODAS las infografias
+  // individuales" (feedback real, 2026-08-29): el envío masivo crea esta
+  // MISMA instancia una vez por raider (ver night-report.component.ts,
+  // sendAllInfographics) para reutilizar tal cual el pipeline de render+
+  // envío ya probado, en vez de duplicarlo — headless evita que 24
+  // aperturas seguidas se vean en pantalla (fuera del viewport, ver CSS) y
+  // que cada una robe el foco o intercepte la tecla Escape de la página
+  // real que el usuario sí está usando.
+  headless = input(false);
   closed = output<void>();
   refreshRequested = output<void>();
 
@@ -137,9 +168,7 @@ export class NightPlayerInfographicComponent
   readonly sheetWidth = SHEET_WIDTH;
   readonly sheetHeight = signal(MIN_SHEET_HEIGHT);
   readonly exportWidth = Math.round(SHEET_WIDTH * EXPORT_PIXEL_RATIO);
-  readonly exportHeight = computed(() =>
-    Math.round(this.sheetHeight() * EXPORT_PIXEL_RATIO),
-  );
+  readonly exportHeight = computed(() => Math.round(this.sheetHeight() * EXPORT_PIXEL_RATIO));
   readonly exportStatus = signal<ExportStatus>('idle');
   readonly previewScale = signal(0.5);
   readonly fitToScreen = signal(true);
@@ -147,7 +176,8 @@ export class NightPlayerInfographicComponent
   readonly iconUrls = signal<Record<number, string>>({});
 
   readonly classAccent = computed(
-    () => classColor(this.summary().gearSnapshot?.class ?? this.summary().roster?.class) ?? '#b98bd0',
+    () =>
+      classColor(this.summary().gearSnapshot?.class ?? this.summary().roster?.class) ?? '#b98bd0',
   );
   readonly classLabel = computed(() => {
     const className = this.summary().gearSnapshot?.class ?? this.summary().roster?.class;
@@ -170,11 +200,37 @@ export class NightPlayerInfographicComponent
   // ratio real cubiertas/cubribles con el mismo never_touched=0/mistimed=
   // crédito parcial/covered=ratio que ya vimos y arreglamos hoy. Reutilizarlo
   // aquí evita una segunda fórmula que pudiera divergir de la de Fiabilidad.
-  readonly defensiveScore = computed(() => this.summary().nightReliability?.breakdown.defensiva ?? null);
+  readonly defensiveScore = computed(
+    () => this.summary().nightReliability?.breakdown.defensiva ?? null,
+  );
   readonly defensiveTone = computed(() => {
     const score = this.defensiveScore();
     return score == null ? 'neutral' : score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
   });
+
+  // §"explicame en Gusmï en esta tabla que salga SSZORAK limpio en verde y
+  // luego 31% en rojo" (feedback real, 2026-08-29, verificado contra datos
+  // reales — la aritmética cuadra exacto: 0.7×1 × 0.894(murió al 89% del
+  // intento) × 0.5(defensivo+piedra libres sin usar al morir) = 31%): el
+  // "limpio" venía de verifiableDeaths, que EXIGE mechanicId>0 y nombre
+  // real — una muerte por inanición/falta de sanación ("Unknown Ability",
+  // mechanicId 0, sin un solo golpe de mecánica al que culpar) no pasa ese
+  // filtro aunque SÍ cuenta para el marcador (computePullScore usa un
+  // filtro más amplio: cualquier muerte real que no sea wipe call/ninja
+  // pull/excluida estadísticamente, sin exigir mecánica identificada). Dos
+  // definiciones de "murió" distintas alimentando la misma fila — dos
+  // filtros para dos propósitos genuinamente distintos (verifiableDeaths
+  // necesita nombre real para poder enseñar evidencia con icono/mecánica en
+  // "Muertes con defensivo libre y sin usar"; el marcador de la tabla solo
+  // necesita saber SI murió, igual que la puntuación). scoredDeaths replica
+  // el filtro exacto de evaluatedDeaths en night-player-summary.service.ts
+  // para que la etiqueta de esta tabla nunca pueda volver a divergir del
+  // número que enseña al lado.
+  readonly scoredDeaths = computed(() =>
+    this.summary().deaths.filter(
+      (death) => !death.isWipeCall && !death.isNinjaPull && !death.statisticalExclusionReason,
+    ),
+  );
 
   readonly verifiableDeaths = computed(() =>
     this.summary().deaths.filter(
@@ -204,7 +260,11 @@ export class NightPlayerInfographicComponent
       const key = `${death.bossId}|${death.difficulty}|${death.mechanicId}`;
       const issue = grouped.get(key) ?? this.newIssueFromDeath(key, death);
       issue.deathCount++;
-      issue.occurrences.push({ pullNumber: death.pullNumber, timeMs: death.timeMs, kind: 'muerte' });
+      issue.occurrences.push({
+        pullNumber: death.pullNumber,
+        timeMs: death.timeMs,
+        kind: 'muerte',
+      });
       issue.availableDefensives.push(...death.defensivesAvailable);
       grouped.set(key, issue);
     };
@@ -213,16 +273,16 @@ export class NightPlayerInfographicComponent
     return [...grouped.values()]
       .map((issue) => ({
         ...issue,
-        availableDefensives: [...new Map(issue.availableDefensives.map((d) => [d.spellId, d])).values()],
+        availableDefensives: [
+          ...new Map(issue.availableDefensives.map((d) => [d.spellId, d])).values(),
+        ],
         occurrences: issue.occurrences.sort(
           (a, b) => a.pullNumber - b.pullNumber || a.timeMs - b.timeMs,
         ),
       }))
       .sort(
         (a, b) =>
-          b.deathCount - a.deathCount ||
-          b.failCount - a.failCount ||
-          b.totalDamage - a.totalDamage,
+          b.deathCount - a.deathCount || b.failCount - a.failCount || b.totalDamage - a.totalDamage,
       );
   });
 
@@ -259,7 +319,8 @@ export class NightPlayerInfographicComponent
       priorities.push({
         title: 'Piedra / poción de vida',
         evidence: `${execution.emergencyConsumableUses}/${execution.emergencyConsumableOpportunities} muertes evaluables con consumible de emergencia registrado en el try.`,
-        action: 'Reserva piedra o poción para la siguiente ventana letal identificada; el objetivo es registrar respuesta en cada muerte con tiempo de reacción.',
+        action:
+          'Reserva piedra o poción para la siguiente ventana letal identificada; el objetivo es registrar respuesta en cada muerte con tiempo de reacción.',
         spellId: null,
         kind: 'consumable',
       });
@@ -274,7 +335,8 @@ export class NightPlayerInfographicComponent
       priorities.push({
         title: 'Preparación antes de entrar',
         evidence: `${missingEnchants} enchant${missingEnchants === 1 ? '' : 's'} y ${missingGems} slot${missingGems === 1 ? '' : 's'} de gema sin cubrir en el primer pull.`,
-        action: 'Completa esos huecos antes de la próxima raid; la medición usa el primer pull y no penaliza equipo obtenido durante la noche.',
+        action:
+          'Completa esos huecos antes de la próxima raid; la medición usa el primer pull y no penaliza equipo obtenido durante la noche.',
         spellId: null,
         kind: 'preparation',
       });
@@ -297,8 +359,8 @@ export class NightPlayerInfographicComponent
       result.push({
         label: 'Interrupciones atribuidas',
         value: String(this.summary().interrupts.length),
-        detail: this.summary().interrupts
-          .slice(0, 3)
+        detail: this.summary()
+          .interrupts.slice(0, 3)
           .map((cut) => `${cut.mechanicName} #${cut.pullNumber} ${formatDuration(cut.timeMs)}`)
           .join(' · '),
         kind: 'interrupt',
@@ -325,12 +387,13 @@ export class NightPlayerInfographicComponent
   });
 
   readonly pullRows = computed(() =>
-    this.summary().pulls
-      .filter((pull) => pull.pullScore != null)
+    this.summary()
+      .pulls.filter((pull) => pull.pullScore != null)
       .map((pull) => ({
         ...pull,
-        failCount: this.summary().mechanicFails.filter((fail) => fail.pullId === pull.pullId).length,
-        evaluatedDeath: this.verifiableDeaths().find((death) => death.pullId === pull.pullId) ?? null,
+        failCount: this.summary().mechanicFails.filter((fail) => fail.pullId === pull.pullId)
+          .length,
+        evaluatedDeath: this.scoredDeaths().find((death) => death.pullId === pull.pullId) ?? null,
       })),
   );
 
@@ -366,8 +429,7 @@ export class NightPlayerInfographicComponent
       .sort(
         (a, b) =>
           (pulls.get(a.pullId) ?? Number.MAX_SAFE_INTEGER) -
-            (pulls.get(b.pullId) ?? Number.MAX_SAFE_INTEGER) ||
-          a.timeMs - b.timeMs,
+            (pulls.get(b.pullId) ?? Number.MAX_SAFE_INTEGER) || a.timeMs - b.timeMs,
       );
   });
 
@@ -383,7 +445,9 @@ export class NightPlayerInfographicComponent
   // pero un objeto sin este campo no debe volver a tumbar TODA la carga de
   // iconos de la infografía solo por leerlo sin guardia.
   readonly neverTouchedPulls = computed<NightPressurePullSummary[]>(() =>
-    (this.summary().defensiveSummary.pressurePullBreakdown ?? []).filter((p) => p.classification === 'never_touched'),
+    (this.summary().defensiveSummary.pressurePullBreakdown ?? []).filter(
+      (p) => p.classification === 'never_touched',
+    ),
   );
   // §"agrupar por mecánica... que se lea fácil... nada por el camino"
   // (feedback real, 2026-08-29): sustituye a la vieja lista de tarjetas por
@@ -392,14 +456,35 @@ export class NightPlayerInfographicComponent
   readonly mechanicPressureBreakdown = computed<NightMechanicPressureSummary[]>(
     () => this.summary().defensiveSummary.mechanicPressureBreakdown ?? [],
   );
+
+  // §"a 3 columnas y, si no caben y desbordan de una de las cards, bajar a 2
+  // columnas... contempla el mecanismo de bajar a 2 columnas cuando por nº
+  // de trys se desborde" (feedback real, 2026-08-29): 3 por defecto — cae a
+  // 2 y luego a 1 (nunca por debajo: el scroll horizontal de la propia
+  // timeline, ya soportado, es el último recurso) según la mecánica MÁS
+  // ancha de todas, no card por card — así toda la sección respira igual en
+  // vez de una cuadrícula con columnas de anchos dispares.
+  readonly mechanicColumns = computed<number>(() => {
+    const mechanics = this.mechanicPressureBreakdown();
+    if (!mechanics.length) return 3;
+    const maxOccurrences = Math.max(...mechanics.map((m) => m.totalCount));
+    const maxTimelineWidth = maxOccurrences * MECH_CELL_WIDTH;
+    const timelineAreaFor = (columns: number): number =>
+      (MECH_CONTENT_WIDTH - (columns - 1) * MECH_LIST_GAP) / columns - MECH_CARD_PADDING_X;
+    if (maxTimelineWidth <= timelineAreaFor(3)) return 3;
+    if (maxTimelineWidth <= timelineAreaFor(2)) return 2;
+    return 1;
+  });
   readonly windowCoverageTotals = computed(() => {
-    const rows = this.summary().defensiveSummary.pressurePullBreakdown ?? [];
-    const missed = rows.reduce((sum, p) => sum + p.missedCount, 0);
-    const covered = rows.reduce((sum, p) => sum + p.coveredCount, 0);
-    // `coverable` aquí SÍ es el total (cubiertas + falladas) — distinto de
-    // missedCount (solo las falladas) en NightPressurePullSummary. Nombres
-    // distintos a propósito para no repetir la ambigüedad que tenía antes.
-    return { coverable: missed + covered, covered };
+    // La cifra superior y las cards deben contar exactamente el mismo
+    // universo. pressurePullBreakdown excluye pulls con muerte para no
+    // penalizarlos dos veces en la puntuación; este bloque, en cambio, es
+    // descriptivo y enseña toda la noche, incluidas esas ocurrencias.
+    const mechanics = this.mechanicPressureBreakdown();
+    return {
+      coverable: mechanics.reduce((sum, mechanic) => sum + mechanic.totalCount, 0),
+      covered: mechanics.reduce((sum, mechanic) => sum + mechanic.coveredCount, 0),
+    };
   });
 
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
@@ -409,7 +494,9 @@ export class NightPlayerInfographicComponent
   formatPct = formatPct;
   categoryMeta = mechanicCategoryMeta;
   rootCauseLabel = (death: NightDeathRow): string =>
-    rootCauseMeta(death.rootCause)?.label ?? mechanicCategoryMeta(death.category)?.label ?? 'Causa no clasificada';
+    rootCauseMeta(death.rootCause)?.label ??
+    mechanicCategoryMeta(death.category)?.label ??
+    'Causa no clasificada';
 
   ngOnInit(): void {
     void this.loadSpellIcons();
@@ -423,7 +510,7 @@ export class NightPlayerInfographicComponent
     }
     queueMicrotask(() => {
       this.updateSheetSize();
-      this.closeButton?.nativeElement.focus();
+      if (!this.headless()) this.closeButton?.nativeElement.focus();
     });
   }
 
@@ -439,6 +526,7 @@ export class NightPlayerInfographicComponent
 
   @HostListener('document:keydown', ['$event'])
   onDocumentKeydown(event: KeyboardEvent): void {
+    if (this.headless()) return; // no debe interceptar el teclado de la página real que el usuario sí está usando
     if (event.key !== 'Escape') return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -514,31 +602,81 @@ export class NightPlayerInfographicComponent
     this.setStatus('downloaded');
   }
 
+  // §"aunque la infografia en pantalla la veamos bien, cuando la enviemos a
+  // discord [...] se manden dos mensajes para poder leerlo mejor [...] la
+  // parte de mecanicas [...] hasta el final de la infografia [...] el corte
+  // tiene que ser limpio: cuando acaba la card de mecanicas" (feedback real,
+  // 2026-08-29): SOLO afecta al envío a Discord — en pantalla y en
+  // "Descargar"/"Copiar" sigue siendo una única lámina continua (renderPng,
+  // sin tocar). El punto de corte se mide ANTES de renderizar, contra el DOM
+  // real (offsetTop no se ve afectado por el transform:scale() del preview,
+  // a diferencia de getBoundingClientRect — no hace falta dividir por
+  // previewScale()): el punto medio entre el final visual de
+  // .iris-player-macro-group.mechanics y el principio de .defensives, así
+  // el corte cae siempre en el hueco entre ambas cards, nunca a mitad de una.
   async sendToDiscord(): Promise<void> {
     const channelId = this.summary().discordChannel?.discordChannelId;
     if (!channelId) return;
     this.exportError.set(null);
     try {
-      const blob = await this.renderDiscordImage();
-      const base64 = await this.blobToBase64(blob);
-      this.exportStatus.set('sendingDiscord');
+      const splitYCss = this.findMechanicsDefensivesSplitY();
+      const { canvas, pixelRatio } = await this.renderFullCanvas();
       const date = this.summary().reportDate
-        ? new Date(this.summary().reportDate).toLocaleDateString('es-ES', {
-            day: 'numeric',
-            month: 'long',
-          })
+        ? new Date(this.summary().reportDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })
         : this.summary().reportTitle;
-      await this.edgeFunctions.sendDiscordMessage({
-        channelId,
-        content: `Informe de combate de ${this.summary().playerName} · ${date}`,
-        imageBase64: base64,
-        imageFilename: this.filename('jpg'),
-      });
+      const baseContent = `Informe de combate de ${this.summary().playerName} · ${date}`;
+      this.exportStatus.set('sendingDiscord');
+
+      if (splitYCss != null) {
+        const splitYPx = Math.min(canvas.height - 1, Math.max(1, Math.round(splitYCss * pixelRatio)));
+        const topCanvas = this.cropCanvas(canvas, 0, 0, canvas.width, splitYPx);
+        const bottomCanvas = this.cropCanvas(canvas, 0, splitYPx, canvas.width, canvas.height - splitYPx);
+        const part1 = await this.fitCanvasToDiscordLimit(topCanvas);
+        await this.edgeFunctions.sendDiscordMessage({
+          channelId,
+          content: `${baseContent} · 1/2 — mecánicas`,
+          imageBase64: await this.blobToBase64(part1.blob),
+          imageFilename: this.filename(part1.extension, '-1-mecanicas'),
+        });
+        // Pausa corta para que lleguen en orden y separados, no como un burst.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const part2 = await this.fitCanvasToDiscordLimit(bottomCanvas);
+        await this.edgeFunctions.sendDiscordMessage({
+          channelId,
+          content: `${baseContent} · 2/2 — defensivos`,
+          imageBase64: await this.blobToBase64(part2.blob),
+          imageFilename: this.filename(part2.extension, '-2-defensivos'),
+        });
+      } else {
+        // Fallback defensivo: si algún día cambian esas clases y el corte ya
+        // no se puede localizar, se manda entera en un único mensaje en vez
+        // de fallar el envío por completo.
+        const whole = await this.fitCanvasToDiscordLimit(canvas);
+        await this.edgeFunctions.sendDiscordMessage({
+          channelId,
+          content: baseContent,
+          imageBase64: await this.blobToBase64(whole.blob),
+          imageFilename: this.filename(whole.extension),
+        });
+      }
       this.setStatus('sentDiscord');
     } catch (err) {
       this.exportError.set(errorMessage(err));
       this.setStatus('error');
     }
+  }
+
+  /** Punto medio (en CSS px del sheet, sin escalar) entre el final de la card de Mecánicas y el principio de la de Defensivos — null si no se encuentran (nunca fuerza un corte que no tiene sentido). */
+  private findMechanicsDefensivesSplitY(): number | null {
+    const sheetEl = this.sheet?.nativeElement;
+    if (!sheetEl) return null;
+    const mechanicsEl = sheetEl.querySelector<HTMLElement>('.iris-player-macro-group.mechanics');
+    const defensivesEl = sheetEl.querySelector<HTMLElement>('.iris-player-macro-group.defensives');
+    if (!mechanicsEl || !defensivesEl) return null;
+    const mechanicsBottom = mechanicsEl.offsetTop + mechanicsEl.offsetHeight;
+    const defensivesTop = defensivesEl.offsetTop;
+    if (defensivesTop <= mechanicsBottom) return null; // orden inesperado — no debería pasar, mejor no cortar que cortar mal
+    return (mechanicsBottom + defensivesTop) / 2;
   }
 
   metricValue(value: number, unit: 'percent' | 'per10'): string {
@@ -623,6 +761,14 @@ export class NightPlayerInfographicComponent
       : `Se repite cada ~${time} (${pattern.sampleSize} repeticiones históricas)`;
   }
 
+  timingPatternCompactLabel(mechanic: NightMechanicPressureSummary): string | null {
+    const pattern = mechanic.timingPattern;
+    if (!pattern) return null;
+    const seconds = Math.round(pattern.ms / 1000);
+    const time = seconds < 60 ? `${seconds}s` : this.formatDuration(pattern.ms);
+    return pattern.kind === 'fixed' ? `sobre ${time}` : `cada ~${time}`;
+  }
+
   // §"usa el icono del boss o de la mecánica que ha fallado (si la tenemos
   // relacionada, si no, el del boss), no el icono de la habilidad defensiva
   // disponible" (feedback real, 2026-08-29): null cuando no hay mecánica
@@ -634,12 +780,69 @@ export class NightPlayerInfographicComponent
   }
 
   mechanicRatioPct(mechanic: NightMechanicPressureSummary): number {
-    return mechanic.totalCount > 0 ? Math.round((mechanic.coveredCount / mechanic.totalCount) * 100) : 0;
+    return mechanic.totalCount > 0
+      ? Math.round((mechanic.coveredCount / mechanic.totalCount) * 100)
+      : 0;
   }
 
-  mechanicTone(mechanic: NightMechanicPressureSummary): 'danger' | 'warning' | 'success' {
-    const pct = this.mechanicRatioPct(mechanic);
-    return pct < 40 ? 'danger' : pct < 75 ? 'warning' : 'success';
+  mechanicPullCount(mechanic: NightMechanicPressureSummary): number {
+    return new Set(mechanic.occurrences.map((occurrence) => occurrence.pullId)).size;
+  }
+
+  // §"timeline de cuadrados... agrupada visualmente por pull... el bracket
+  // debe comenzar exactamente sobre el primer cuadrado de ese pull [...]
+  // terminar exactamente sobre el último" (spec visual real, 2026-08-29,
+  // "validada"): las ocurrencias ya llegan ordenadas por pull/hora (ver
+  // buildMechanicPressureBreakdown) — agrupar es un simple corte por cambio
+  // de pullNumber, sin reordenar nada. Anidar los cuadrados DENTRO de cada
+  // grupo (en vez de una capa de brackets superpuesta con matemática de
+  // píxeles) deja que flexbox calcule el ancho de cada bracket solo — un
+  // grupo de 5 cuadrados de 20px mide 100px porque son 5 elementos de 20px,
+  // no porque se le haya dicho que mida 100px.
+  // §"el numero de pull... debe ser el numero de pull DEL BOSS... la
+  // numeracion no es global de toda la noche" (feedback real, 2026-08-29,
+  // corrección de un hallazgo previo de esta misma sesión): confirmado — la
+  // columna `pull_number` es la numeración global de todo el report (no se
+  // reinicia por boss), y por eso esta card llegó a enseñar un "3" con solo
+  // 1 pull. La corrección real vive en night-player-summary.service.ts
+  // (bossPullNumber/validAttemptOrdinal, mismo criterio que ya usaba
+  // raid-session.component.ts) — `occurrence.pullNumber` que llega aquí YA
+  // es el ordinal 1..N relativo a los intentos válidos de ESTE boss, no hay
+  // nada que corregir en este componente.
+  mechanicPullGroups(mechanic: NightMechanicPressureSummary): { pullNumber: number; occurrences: NightMechanicPressureSummary['occurrences'] }[] {
+    const groups: { pullNumber: number; occurrences: NightMechanicPressureSummary['occurrences'] }[] = [];
+    for (const occ of mechanic.occurrences) {
+      const last = groups[groups.length - 1];
+      if (last && last.pullNumber === occ.pullNumber) last.occurrences.push(occ);
+      else groups.push({ pullNumber: occ.pullNumber, occurrences: [occ] });
+    }
+    return groups;
+  }
+
+  mechanicGridAriaLabel(mechanic: NightMechanicPressureSummary): string {
+    const missed = Math.max(0, mechanic.totalCount - mechanic.coveredCount);
+    return `${mechanic.totalCount} oportunidades en orden cronológico: ${mechanic.coveredCount} cubiertas con celda rellena y ${missed} falladas con celda hueca.`;
+  }
+
+  mechanicOccurrenceTitle(occurrence: NightMechanicPressureSummary['occurrences'][number]): string {
+    const position = `#${occurrence.pullNumber} ${this.formatDuration(occurrence.timeMs)}`;
+    if (!occurrence.covered) return `${position} — fallo`;
+    return `${position} — cubierta${occurrence.coveredBySpellName ? ` con ${occurrence.coveredBySpellName}` : ''}`;
+  }
+
+  // §"cubrió / sin usar / en cooldown" (feedback real, 2026-08-29): total
+  // real de ocasiones donde ESTE defensivo en concreto fue una opción
+  // evaluable — no siempre es mechanic.totalCount entero (un talento
+  // cambiado a media noche, por ejemplo, dejaría a este spellId fuera del
+  // catálogo del jugador en algunas ocasiones) — se calcula el total propio
+  // en vez de asumir que coincide, para que la mini-barra siempre sume 100%.
+  private defensiveStatTotal(defensive: NightMechanicDefensiveStat): number {
+    return defensive.timesCovered + defensive.timesAvailableUnused + defensive.timesOnCooldown + defensive.timesUnknown;
+  }
+
+  defensiveStatPct(count: number, defensive: NightMechanicDefensiveStat): number {
+    const total = this.defensiveStatTotal(defensive);
+    return total > 0 ? Math.round((count / total) * 100) : 0;
   }
 
   consumableResponseLabel(death: DefensiveMissDeath): string {
@@ -698,7 +901,10 @@ export class NightPlayerInfographicComponent
   }
 
   /** Cast defensivo real más cercano a un instante dado, en la ventana −12s/+8s ya usada en el resto del informe. */
-  private nearestDefensiveCast(pullId: string, timeMs: number): (NightDefensiveCast & { offsetMs: number }) | null {
+  private nearestDefensiveCast(
+    pullId: string,
+    timeMs: number,
+  ): (NightDefensiveCast & { offsetMs: number }) | null {
     return (
       this.summary()
         .defensiveSummary.spells.flatMap((spell) => spell.casts)
@@ -734,29 +940,66 @@ export class NightPlayerInfographicComponent
     }
   }
 
-  private async renderDiscordImage(): Promise<Blob> {
+  /** Rasteriza el sheet completo UNA vez a la resolución de exportación — tanto el envío entero como el partido en dos parten de este mismo canvas (recortar/reencodar en memoria es barato; volver a rasterizar el DOM no lo es). */
+  private async renderFullCanvas(): Promise<{ canvas: HTMLCanvasElement; height: number; pixelRatio: number }> {
     if (!this.sheet) throw new Error('La infografía aún no está lista.');
     this.exportStatus.set('rendering');
     await this.waitForVisuals();
     const height = Math.max(MIN_SHEET_HEIGHT, Math.ceil(this.sheet.nativeElement.scrollHeight));
-    let pixelRatio = Math.max(1, Math.min(EXPORT_PIXEL_RATIO, 16_000 / height));
+    const pixelRatio = Math.max(1, Math.min(EXPORT_PIXEL_RATIO, 16_000 / height));
+    const canvas = await toCanvas(this.sheet.nativeElement, {
+      width: SHEET_WIDTH,
+      height,
+      pixelRatio,
+      backgroundColor: '#07070d',
+      cacheBust: true,
+      skipFonts: true,
+    });
+    return { canvas, height, pixelRatio };
+  }
+
+  private cropCanvas(source: HTMLCanvasElement, sx: number, sy: number, sw: number, sh: number): HTMLCanvasElement {
+    const target = document.createElement('canvas');
+    target.width = sw;
+    target.height = sh;
+    target.getContext('2d')!.drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
+    return target;
+  }
+
+  private downscaleCanvas(source: HTMLCanvasElement, factor: number): HTMLCanvasElement {
+    const target = document.createElement('canvas');
+    target.width = Math.max(1, Math.round(source.width * factor));
+    target.height = Math.max(1, Math.round(source.height * factor));
+    target.getContext('2d')!.drawImage(source, 0, 0, target.width, target.height);
+    return target;
+  }
+
+  // §"se puede enviar como imagen pero también como adjunto... para no
+  // perder calidad" + "se manda duplicada, se ve incluso peor que antes"
+  // (feedback real, 2026-08-29 — dos mensajes del mismo hilo): UN solo
+  // archivo por mensaje, nunca dos a la vez. Se intenta primero PNG sin
+  // pérdida al tamaño que llega (igual que "Descargar 4.6K") — si cabe
+  // entero bajo el límite de Discord, esa es la mejor calidad posible.
+  // Solo si NO cabe se recurre a JPEG probando varias calidades ANTES de
+  // reducir tamaño (recomendación externa contrastada, 2026-08-29: para
+  // texto/UI perjudica más perder resolución que un jpeg algo más agresivo)
+  // — la reducción de tamaño ahora es un downscale en memoria del mismo
+  // canvas, no volver a rasterizar el DOM a un pixelRatio menor.
+  private async fitCanvasToDiscordLimit(sourceCanvas: HTMLCanvasElement): Promise<{ blob: Blob; extension: 'png' | 'jpg' }> {
+    const pngBlob = await new Promise<Blob | null>((resolve) => sourceCanvas.toBlob(resolve, 'image/png'));
+    if (pngBlob && pngBlob.size <= DISCORD_MAX_BYTES) return { blob: pngBlob, extension: 'png' };
+
+    const JPEG_QUALITY_STEPS = [DISCORD_JPEG_QUALITY, 0.88, 0.8];
+    let canvas = sourceCanvas;
     let lastBlob: Blob | null = null;
     for (let attempt = 0; attempt < DISCORD_RENDER_ATTEMPTS; attempt++) {
-      const canvas = await toCanvas(this.sheet.nativeElement, {
-        width: SHEET_WIDTH,
-        height,
-        pixelRatio,
-        backgroundColor: '#07070d',
-        cacheBust: true,
-        skipFonts: true,
-      });
-      const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, 'image/jpeg', DISCORD_JPEG_QUALITY),
-      );
-      if (!blob) throw new Error('No se pudo crear la imagen para Discord.');
-      lastBlob = blob;
-      if (blob.size <= DISCORD_MAX_BYTES) return blob;
-      pixelRatio *= 0.72;
+      for (const quality of JPEG_QUALITY_STEPS) {
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+        if (!blob) continue;
+        lastBlob = blob;
+        if (blob.size <= DISCORD_MAX_BYTES) return { blob, extension: 'jpg' };
+      }
+      canvas = this.downscaleCanvas(canvas, 0.72);
     }
     const sizeMb = lastBlob ? (lastBlob.size / 1024 / 1024).toFixed(1) : '?';
     throw new Error(`La imagen sigue pesando ${sizeMb} MB incluso reducida.`);
@@ -823,9 +1066,11 @@ export class NightPlayerInfographicComponent
     });
   }
 
-  private filename(extension: 'png' | 'jpg'): string {
-    const player = this.summary().playerName.toLocaleLowerCase('es-ES').replace(/[^a-z0-9]+/g, '-');
-    return `iris-${player}-${this.summary().reportCode}.${extension}`;
+  private filename(extension: 'png' | 'jpg', suffix = ''): string {
+    const player = this.summary()
+      .playerName.toLocaleLowerCase('es-ES')
+      .replace(/[^a-z0-9]+/g, '-');
+    return `iris-${player}-${this.summary().reportCode}${suffix}.${extension}`;
   }
 
   private downloadBlob(blob: Blob): void {

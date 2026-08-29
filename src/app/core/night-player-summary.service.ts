@@ -8,7 +8,12 @@
 // enlaces para poder hablar con esa persona con todo el contexto delante.
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
-import { ReliabilityService, type PlayerReliability, type ReliabilityBreakdown, type ReliabilityInputRow } from './reliability.service';
+import {
+  ReliabilityService,
+  type PlayerReliability,
+  type ReliabilityBreakdown,
+  type ReliabilityInputRow,
+} from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
 import { NightPlayerSummaryCacheService } from './night-player-summary-cache.service';
 import { PULL_SCORE_FAIL_PENALTY, mapBrief, mechanicScoreFor } from './pull-analysis.service';
@@ -18,12 +23,24 @@ import {
   type MechanicCoaching,
 } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
-import type { DeathCause, DefensivePressureWindow, MechanicCategory, PlayerPullRecordRow, PullMechanicEventRow, PullRow, WclGearItem } from '../shared/models/domain';
+import type {
+  DeathCause,
+  DefensivePressureWindow,
+  MechanicCategory,
+  PlayerPullRecordRow,
+  PullMechanicEventRow,
+  PullRow,
+  WclGearItem,
+} from '../shared/models/domain';
 import type { LlmPullAnalysis } from '../shared/models/ui';
-import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
+import {
+  isDeathExcludedFromStatistics,
+  isMechanicExcludedByWipeCall,
+} from '../shared/death-statistics.util';
 import { gearPreparationCounts } from '../shared/gear-preparation.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
-import { PERSONAL_RESPONSIBILITY_CATEGORIES } from '../shared/pull-consistency.util';
+import { PERSONAL_RESPONSIBILITY_CATEGORIES, validAttemptOrdinal } from '../shared/pull-consistency.util';
+import { roleFromSpec } from '../shared/spec-role.util';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface NightPullSummary {
@@ -256,13 +273,28 @@ export interface NightMechanicOccurrence {
   coveredBySpellName: string | null;
 }
 
+// §"hay que contemplar los defensivos usados, no usados y posibles de
+// todos ellos (los que se usaron bien, los que no se usaron a secas, y los
+// que se usaron fuera de tiempo)" (feedback real, 2026-08-29, verificado
+// contra Ula'tek/Lvp1VCbzmwTRHdQ7 — los 4 status reales ya aparecen en los
+// datos: active/used_during_window, available_unused, on_cooldown, unknown):
+// antes solo se enseñaba "estuvo libre" (timesAvailable, que mezclaba
+// disponible-y-usado con disponible-y-no-usado en el mismo número) — eso no
+// distingue "no lo tenía" de "lo tenía y no lo usé", justo la distinción que
+// motivó todo este sistema de puntuación desde el principio de la sesión.
+// Los 4 campos sí sirven la misma fila (options[].status) que ya calculaba
+// evaluateWindowCoverage — no hace falta ningún dato nuevo del backend.
 export interface NightMechanicDefensiveStat {
   spellId: number;
   name: string;
-  /** Veces que este defensivo (no-emergencia) estaba libre cuando ocurrió esta mecánica. */
-  timesAvailable: number;
-  /** De esas, veces que fue el que de verdad la cubrió. */
-  timesUsed: number;
+  /** De todas las ocasiones de esta mecánica, en cuántas este defensivo (no-emergencia) fue quien de verdad la cubrió. */
+  timesCovered: number;
+  /** Estaba libre y NO se usó — la oportunidad perdida más clara. */
+  timesAvailableUnused: number;
+  /** En cooldown en ese momento — ya se había gastado en otra cosa, "fuera de tiempo" respecto a ESTA mecánica en concreto, no necesariamente un error (pudo ser lo correcto para otra ventana). */
+  timesOnCooldown: number;
+  /** Cooldown/duración del catálogo sin resolver en ese momento (ver Ajustes → catálogo de defensivos) — no se puede afirmar nada de estas ocasiones; se cuentan aparte para que un hueco de catálogo sea visible aquí también, no silencioso. */
+  timesUnknown: number;
 }
 
 export interface NightMechanicPressureSummary {
@@ -279,6 +311,18 @@ export interface NightMechanicPressureSummary {
   totalCount: number;
   /** Solo defensivos no-emergencia — mismo criterio que el resto de esta sección (ver evaluateWindowCoverage). */
   defensives: NightMechanicDefensiveStat[];
+}
+
+/**
+ * Una celda del grid defensivo solo puede afirmar "cubierta" o "fallada"
+ * cuando hubo una respuesta real que evaluar. Los picos sin un defensivo
+ * utilizable siguen siendo presión recibida, pero no una oportunidad
+ * defensiva fallada y, por tanto, no deben inflar el denominador.
+ */
+export function isDefensiveOpportunityWindow(
+  window: Pick<DefensivePressureWindow, 'covered' | 'coverable'>,
+): boolean {
+  return window.covered || window.coverable;
 }
 
 export interface NightPressureWindowMiss {
@@ -309,7 +353,8 @@ export interface NightMechanicTimingPattern {
   sampleSize: number;
 }
 
-export type NightPressurePullClassification = 'never_touched' | 'mistimed' | 'covered' | 'no_pressure';
+export type NightPressurePullClassification =
+  'never_touched' | 'mistimed' | 'covered' | 'no_pressure';
 
 export interface NightPressurePullSummary {
   pullId: string;
@@ -349,7 +394,14 @@ export interface NightExecutionSnapshot {
 export type NightEvolutionDirection = 'improved' | 'worsened' | 'stable';
 
 export interface NightEvolutionMetric {
-  key: 'execution' | 'clean-pulls' | 'avoidable-success' | 'personal-incidents' | 'deaths' | 'defensive-response' | 'consumables';
+  key:
+    | 'execution'
+    | 'clean-pulls'
+    | 'avoidable-success'
+    | 'personal-incidents'
+    | 'deaths'
+    | 'defensive-response'
+    | 'consumables';
   label: string;
   current: number;
   previous: number;
@@ -421,7 +473,11 @@ export interface NightPlayerSummary {
   /** §"meter en el dosier de un jugador... la consulta de IA" (feedback real): cacheado desde night_player_briefs, null si nunca se ha generado. */
   brief: LlmPullAnalysis | null;
   /** §"preparar la vinculación de ese ID... con el dosier de ese raider" (feedback real, 2026-08-28): de discord_roster_channels (Ajustes → Discord), cruzado por wowaudit character_id — null = ese personaje no tiene ninguna vinculación de Discord guardada todavía. discordChannelId puede ser null aunque SÍ haya vinculación (Trial/oficial/pendiente del próximo "Sincronizar"), eso no es un error. */
-  discordChannel: { discordChannelId: string | null; discordUserId: string; isOfficer: boolean } | null;
+  discordChannel: {
+    discordChannelId: string | null;
+    discordUserId: string;
+    isOfficer: boolean;
+  } | null;
 }
 
 // §"región... viene en wowaudit" — wowaudit no da región, pero esta guild es
@@ -457,15 +513,21 @@ export const NIGHT_DEFENSIVE_ESCALATION_STEP = 0.08;
 /** Suelo del factor de consistencia defensiva: por muchos pulls sin defensivo que acumule, este factor solo no baja de aquí (los multiplicadores por pull ya hacen su parte además de este). */
 export const NIGHT_DEFENSIVE_ESCALATION_FLOOR = 0.5;
 
-const MECHANIC_EVENT_FIELDS = 'pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms, player_hit_details, comparison_source, comparison_percentile';
+const MECHANIC_EVENT_FIELDS =
+  'pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms, player_hit_details, comparison_source, comparison_percentile';
 
-async function loadPlayerMechanicEvents(client: SupabaseClient, pullIds: string[], playerName: string) {
-  const query = (relation: string) => client
-    .from(relation)
-    .select(MECHANIC_EVENT_FIELDS)
-    .in('pull_id', pullIds)
-    .neq('outcome', 'clean')
-    .contains('players_hit_names', [playerName]);
+async function loadPlayerMechanicEvents(
+  client: SupabaseClient,
+  pullIds: string[],
+  playerName: string,
+) {
+  const query = (relation: string) =>
+    client
+      .from(relation)
+      .select(MECHANIC_EVENT_FIELDS)
+      .in('pull_id', pullIds)
+      .neq('outcome', 'clean')
+      .contains('players_hit_names', [playerName]);
 
   // Compatibilidad durante despliegues escalonados: la vista nueva aplica el
   // filtro de dificultad en servidor. Hasta que exista, conservamos el dosier
@@ -481,13 +543,14 @@ const INTERRUPT_EVENT_FIELDS = 'pull_id, ability_id, mechanic_name, trigger_time
 
 /** Mecánicas category='interrupt' que ESTE jugador cortó (outcome='clean' + su nombre en players_hit_names — ver analyze-report/index.ts). */
 async function loadPlayerInterrupts(client: SupabaseClient, pullIds: string[], playerName: string) {
-  const query = (relation: string) => client
-    .from(relation)
-    .select(INTERRUPT_EVENT_FIELDS)
-    .in('pull_id', pullIds)
-    .eq('category', 'interrupt')
-    .eq('outcome', 'clean')
-    .contains('players_hit_names', [playerName]);
+  const query = (relation: string) =>
+    client
+      .from(relation)
+      .select(INTERRUPT_EVENT_FIELDS)
+      .in('pull_id', pullIds)
+      .eq('category', 'interrupt')
+      .eq('outcome', 'clean')
+      .contains('players_hit_names', [playerName]);
 
   return withSupabaseRelationFallback(
     'applicable_pull_mechanic_events',
@@ -497,16 +560,18 @@ async function loadPlayerInterrupts(client: SupabaseClient, pullIds: string[], p
 }
 
 function slugifyRealm(realm: string): string {
-  return realm
-    .normalize('NFKD')
-    .replace(/[^\x00-\x7F]/g, '') // fuera de ASCII tras NFKD = marcas diacríticas
-    .toLowerCase()
-    // §mismo bug real encontrado en blizzard-client.ts (verificado: solo
-    // 18/30 avatares resolvían) — el slug oficial ELIMINA el apóstrofe
-    // ("C'Thun" -> "cthun"), no lo convierte en guión.
-    .replace(/'/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  return (
+    realm
+      .normalize('NFKD')
+      .replace(/[^\x00-\x7F]/g, '') // fuera de ASCII tras NFKD = marcas diacríticas
+      .toLowerCase()
+      // §mismo bug real encontrado en blizzard-client.ts (verificado: solo
+      // 18/30 avatares resolvían) — el slug oficial ELIMINA el apóstrofe
+      // ("C'Thun" -> "cthun"), no lo convierte en guión.
+      .replace(/'/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+  );
 }
 
 /** Media y coeficiente de variación (desviación típica / media) — null si la media es 0 (evita una división por cero, no una mecánica real). Ver enrichTimingPatterns más abajo. */
@@ -552,20 +617,85 @@ export class NightPlayerSummaryService {
 
     const client = this.supabase.client;
 
-    const [{ data: reportRow }, { data: pullsData, error: pullsErr }, { data: encounters }] = await Promise.all([
-      client.from('reports').select('title, start_time').eq('code', reportCode).maybeSingle(),
-      client.from('pulls').select('*').eq('report_code', reportCode).order('fight_id', { ascending: true }),
-      client.from('report_encounters').select('fight_id, boss_name').eq('report_code', reportCode),
-    ]);
+    const [{ data: reportRow }, { data: pullsData, error: pullsErr }, { data: encounters }] =
+      await Promise.all([
+        client.from('reports').select('title, start_time').eq('code', reportCode).maybeSingle(),
+        client
+          .from('pulls')
+          .select('*')
+          .eq('report_code', reportCode)
+          .order('fight_id', { ascending: true }),
+        client
+          .from('report_encounters')
+          .select('fight_id, boss_name')
+          .eq('report_code', reportCode),
+      ]);
     if (pullsErr) throw pullsErr;
 
-    const bossNameByFightId = new Map(((encounters ?? []) as { fight_id: number; boss_name: string }[]).map((e) => [e.fight_id, e.boss_name]));
+    const bossNameByFightId = new Map(
+      ((encounters ?? []) as { fight_id: number; boss_name: string }[]).map((e) => [
+        e.fight_id,
+        e.boss_name,
+      ]),
+    );
     const allPulls = (pullsData ?? []) as (PullRowLite & { fight_id: number })[];
     const pullIds = allPulls.map((p) => p.id);
 
-    const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, { data: interruptEventsData, error: interruptErr }, roster, reliabilityEntry, coachingByMechanicKey, { data: briefRow }, reliabilityInputRows, nightReliability] = await Promise.all([
+    // §"el numero de pull que va encima de los cuadrados debe ser el numero
+    // de pull del boss... la numeracion no es global de toda la noche si no
+    // por boss y así deberia serlo en toda la app" (feedback real,
+    // 2026-08-29, verificado contra Lvp1VCbzmwTRHdQ7): `pull_number` en la
+    // tabla `pulls` es la numeración GLOBAL secuencial de todo el report
+    // (Ula'tek mostraba 1/2/3 por pura coincidencia de ser el primer boss;
+    // otro boss de la misma noche usaba 6-9) — no es lo que ningún raider
+    // espera ver como "pull nº" de un boss concreto. raid-session.component
+    // ya resuelve esto bien con validAttemptOrdinal(group.pulls, id) (mismo
+    // criterio: ignora ninja pulls, 1..N solo entre intentos válidos del
+    // boss) — se reutiliza AQUÍ, en el único sitio donde este servicio
+    // construye pullNumber, así que dossier/infografía/pullScoreExplanation/
+    // muertes/fallos/interrupts/defensive casts quedan corregidos de una vez
+    // sin tener que tocar cada consumidor por separado.
+    const bossPullOrdinalByPullId = new Map<string, number>();
+    {
+      const pullsByBoss = new Map<string, PullRowLite[]>();
+      for (const p of allPulls) {
+        const key = `${p.boss_id}|${p.difficulty}`;
+        if (!pullsByBoss.has(key)) pullsByBoss.set(key, []);
+        pullsByBoss.get(key)!.push(p);
+      }
+      for (const group of pullsByBoss.values()) {
+        group.sort((a, b) => a.pull_number - b.pull_number);
+        for (const p of group) {
+          const ordinal = validAttemptOrdinal(group, p.id);
+          if (ordinal != null) bossPullOrdinalByPullId.set(p.id, ordinal);
+        }
+      }
+    }
+    // Fallback defensivo: solo puede faltar en el mapa un pull ninja
+    // (validAttemptOrdinal devuelve null a propósito para esos) — ninguno de
+    // los sitios que llaman a esto enseña ninja pulls, pero por si acaso se
+    // cae al pull_number crudo antes que a un valor inventado.
+    const bossPullNumber = (p: Pick<PullRowLite, 'id' | 'pull_number'>): number =>
+      bossPullOrdinalByPullId.get(p.id) ?? p.pull_number;
+
+    const [
+      { data: recordsData, error: recordsErr },
+      { data: mechEventsData, error: mechErr },
+      { data: interruptEventsData, error: interruptErr },
+      { data: pullRosterData },
+      roster,
+      reliabilityEntry,
+      coachingByMechanicKey,
+      { data: briefRow },
+      reliabilityInputRows,
+      nightReliability,
+    ] = await Promise.all([
       pullIds.length
-        ? client.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName)
+        ? client
+            .from('player_pull_records')
+            .select('*')
+            .in('pull_id', pullIds)
+            .eq('player_name', playerName)
         : Promise.resolve({ data: [] as PlayerPullRecordRow[], error: null }),
       pullIds.length
         ? loadPlayerMechanicEvents(client, pullIds, playerName)
@@ -573,6 +703,16 @@ export class NightPlayerSummaryService {
       pullIds.length
         ? loadPlayerInterrupts(client, pullIds, playerName)
         : Promise.resolve({ data: [] as InterruptEventRowLite[], error: null }),
+      // §"un golpe de melee a alguien que no es tank probablemente sea
+      // porque los tanks estan muertos... hay que tener algun sistema de
+      // validacion" (feedback real, 2026-08-29): TODOS los jugadores de
+      // estos pulls (no solo playerName) — hace falta saber quién tanqueaba
+      // y cuándo murió para poder afirmarlo, no darlo por hecho. Solo los 4
+      // campos necesarios, no select('*') — no hace falta gear/dps/etc. de
+      // 24 personas para esto.
+      pullIds.length
+        ? client.from('player_pull_records').select('pull_id,player_name,class,spec,died,death_cause').in('pull_id', pullIds)
+        : Promise.resolve({ data: [] as { pull_id: string; player_name: string; class: string; spec: string; died: boolean; death_cause: { timeMs?: number } | null }[] }),
       this.wowauditRoster.listRoster().catch(() => []),
       // §rendimiento (2026-08-29): "el dosier tarda muchísimo" (feedback
       // real) — antes listPlayerReliability() calculaba la fiabilidad de
@@ -581,17 +721,25 @@ export class NightPlayerSummaryService {
       // .find(playerName). getPlayerReliability sale ya filtrado por
       // jugador en el propio SQL, misma fórmula (ver reliability.service.ts).
       this.reliability.getPlayerReliability(playerName).catch(() => null),
-      loadMechanicCoachingByKey(client, allPulls.map((p) => p.boss_id)).catch(
-        () => new Map<string, MechanicCoaching>(),
-      ),
-      client.from('night_player_briefs').select('*').eq('report_code', reportCode).eq('player_name', playerName).maybeSingle(),
+      loadMechanicCoachingByKey(
+        client,
+        allPulls.map((p) => p.boss_id),
+      ).catch(() => new Map<string, MechanicCoaching>()),
+      client
+        .from('night_player_briefs')
+        .select('*')
+        .eq('report_code', reportCode)
+        .eq('player_name', playerName)
+        .maybeSingle(),
       // §"consistente... contemplar muchas posibilidades distintas"
       // (feedback real, 2026-08-28): MISMAS filas que ya usa Fiabilidad
       // (avoidable_mechanic_eligible_count/avoidable_mechanic_fail_count/
       // personal_mechanic_fail_count) — computePullScore las reutiliza vía
       // mechanicScoreFor en vez de re-derivar el ratio con su propia
       // lógica, así los dos sistemas nunca pueden divergir en "Mecánica".
-      this.reliability.getPlayerPullReliabilityInputsForReport(reportCode, playerName).catch(() => []),
+      this.reliability
+        .getPlayerPullReliabilityInputsForReport(reportCode, playerName)
+        .catch(() => []),
       // §rendimiento (2026-08-29): antes se esperaba SECUENCIALMENTE después
       // de este Promise.all sin motivo — no depende de nada de aquí, solo de
       // reportCode/playerName, así que corre en paralelo con todo lo demás.
@@ -605,6 +753,37 @@ export class NightPlayerSummaryService {
     const records = (recordsData ?? []) as PlayerPullRecordRow[];
     const recordByPullId = new Map(records.map((r) => [r.pull_id, r]));
     const pullById = new Map(allPulls.map((p) => [p.id, p]));
+
+    // §"un golpe de melee a alguien que no es tank probablemente sea porque
+    // los tanks estan muertos... OJO: hay que tener algun sistema de
+    // validacion de que ese golpe es consecuencia de que no hay tanks"
+    // (feedback real, 2026-08-29): verificado empíricamente antes de
+    // implementar (barrido real de las 22 ocurrencias de "Melee" contra
+    // no-tanks en toda la base) — SOLO 6 de 22 (27%) ocurrieron con TODOS
+    // los tanks ya muertos; las otras 16 tenían al menos un tank vivo en ese
+    // momento (a veces el pull entero), así que una exclusión general de
+    // "Melee = siempre excusa" habría escondido fallos reales de
+    // posicionamiento/cleave. Por eso la condición es estricta: rol por spec
+    // real (roleFromSpec, misma fuente que ya corrige el rol de wowaudit
+    // contra el combate — no roster asignado, que puede estar desactualizado
+    // o ser un híbrido), y TODOS los tanks de ESE pull con su death_cause.timeMs
+    // <= el momento exacto del pico. Ni un solo caso de "pull sin ningún
+    // tank" apareció en el barrido, así que sin tanks identificados no se
+    // asume nada (false) en vez de excusar a ciegas.
+    const tanksByPullId = new Map<string, { deathTimeMs: number | null }[]>();
+    for (const row of (pullRosterData ?? []) as { pull_id: string; class: string; spec: string; died: boolean; death_cause: { timeMs?: number } | null }[]) {
+      if (roleFromSpec(row.class, row.spec) !== 'Tank') continue;
+      if (!tanksByPullId.has(row.pull_id)) tanksByPullId.set(row.pull_id, []);
+      tanksByPullId.get(row.pull_id)!.push({
+        deathTimeMs: row.died && typeof row.death_cause?.timeMs === 'number' ? row.death_cause.timeMs : null,
+      });
+    }
+    function allTanksDeadAt(pullId: string, atMs: number): boolean {
+      const tanks = tanksByPullId.get(pullId);
+      if (!tanks || !tanks.length) return false;
+      return tanks.every((t) => t.deathTimeMs != null && t.deathTimeMs <= atMs);
+    }
+    const playerRole = roleFromSpec(records[0]?.class ?? null, records[0]?.spec ?? null);
     const coachingFor = (
       pull: Pick<PullRowLite, 'boss_id' | 'difficulty'>,
       mechanicName: string | null | undefined,
@@ -702,7 +881,7 @@ export class NightPlayerSummaryService {
         const excludedReason: 'ninja_pull' | null = p.ninja_pull_excluded ? 'ninja_pull' : null;
         return {
           pullId: p.id,
-          pullNumber: p.pull_number,
+          pullNumber: bossPullNumber(p),
           fightId: p.fight_id,
           bossId: p.boss_id,
           bossName: bossNameByFightId.get(p.fight_id) ?? `Boss ${p.boss_id}`,
@@ -738,7 +917,7 @@ export class NightPlayerSummaryService {
           bossId: pull.boss_id,
           bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
           difficulty: pull.difficulty,
-          pullNumber: pull.pull_number,
+          pullNumber: bossPullNumber(pull),
           timeMs: dc.timeMs,
           // §"unknown ability pon: unknown cause - WC" (feedback real):
           // transformado aquí, en el ORIGEN — así todo lo que se construye a
@@ -750,12 +929,20 @@ export class NightPlayerSummaryService {
           mechanicId: dc.mechanicId || null,
           category: dc.category ?? null,
           rootCause: dc.rootCause,
-          defensivesAvailable: excludedFromStatistics ? [] : (dc.defensiveOptions ?? []).filter((o) => o.status === 'available_unused').map((o) => ({ spellId: o.spellId, name: o.name })),
+          defensivesAvailable: excludedFromStatistics
+            ? []
+            : (dc.defensiveOptions ?? [])
+                .filter((o) => o.status === 'available_unused')
+                .map((o) => ({ spellId: o.spellId, name: o.name })),
           isWipeCall,
           isNinjaPull,
           statisticalExclusionReason: dc.statisticalExclusionReason ?? null,
-          usedHealthstoneInPull: r.consumables?.healthstone?.used === true || (r.consumables?.healthstone?.timestampsMs?.length ?? 0) > 0,
-          usedHealthPotionInPull: r.consumables?.healthPotion?.used === true || (r.consumables?.healthPotion?.timestampsMs?.length ?? 0) > 0,
+          usedHealthstoneInPull:
+            r.consumables?.healthstone?.used === true ||
+            (r.consumables?.healthstone?.timestampsMs?.length ?? 0) > 0,
+          usedHealthPotionInPull:
+            r.consumables?.healthPotion?.used === true ||
+            (r.consumables?.healthPotion?.timestampsMs?.length ?? 0) > 0,
           aiNote: coaching.note,
           resolution: coaching.resolution,
           damageProfile: dc.damageProfile,
@@ -770,18 +957,28 @@ export class NightPlayerSummaryService {
       .sort((a, b) => {
         const aPull = pullById.get(a.pullId)!;
         const bPull = pullById.get(b.pullId)!;
-        return (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) || a.pullNumber - b.pullNumber || a.timeMs - b.timeMs;
+        return (
+          (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) ||
+          a.pullNumber - b.pullNumber ||
+          a.timeMs - b.timeMs
+        );
       });
 
     // §"mecánicas falladas... a quién dirigir" a nivel de una noche entera:
     // mismo criterio que buildMechanicFails (categorías de responsabilidad
     // individual, o sin clasificar todavía) — no se descarta una muerte ya
     // cubierta arriba, para no duplicar la misma instancia dos veces.
-    const evaluatedDeaths = deaths.filter((death) => !death.isWipeCall && !death.isNinjaPull && !death.statisticalExclusionReason);
+    const evaluatedDeaths = deaths.filter(
+      (death) => !death.isWipeCall && !death.isNinjaPull && !death.statisticalExclusionReason,
+    );
     const mechanicFails: NightMechanicFailRow[] = ((mechEventsData ?? []) as MechEventRowLite[])
       .filter((ev) => {
         const pull = pullById.get(ev.pull_id);
-        return pull != null && !pull.ninja_pull_excluded && !isMechanicExcludedByWipeCall(pull as PullRow, ev as PullMechanicEventRow);
+        return (
+          pull != null &&
+          !pull.ninja_pull_excluded &&
+          !isMechanicExcludedByWipeCall(pull as PullRow, ev as PullMechanicEventRow)
+        );
       })
       .filter((ev) => ev.category == null || PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category))
       .map((ev) => {
@@ -793,7 +990,7 @@ export class NightPlayerSummaryService {
           bossId: pull.boss_id,
           bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
           difficulty: pull.difficulty,
-          pullNumber: pull.pull_number,
+          pullNumber: bossPullNumber(pull),
           mechanicName: ev.mechanic_name,
           mechanicId: ev.ability_id,
           category: ev.category,
@@ -806,11 +1003,23 @@ export class NightPlayerSummaryService {
           resolution: coaching.resolution,
         };
       })
-      .filter((row) => !evaluatedDeaths.some((death) => death.pullId === row.pullId && death.mechanicId === row.mechanicId && Math.abs(death.timeMs - row.timeMs) <= 4000))
+      .filter(
+        (row) =>
+          !evaluatedDeaths.some(
+            (death) =>
+              death.pullId === row.pullId &&
+              death.mechanicId === row.mechanicId &&
+              Math.abs(death.timeMs - row.timeMs) <= 4000,
+          ),
+      )
       .sort((a, b) => {
         const aPull = pullById.get(a.pullId)!;
         const bPull = pullById.get(b.pullId)!;
-        return (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) || a.pullNumber - b.pullNumber || a.timeMs - b.timeMs;
+        return (
+          (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) ||
+          a.pullNumber - b.pullNumber ||
+          a.timeMs - b.timeMs
+        );
       });
 
     // §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27):
@@ -826,7 +1035,10 @@ export class NightPlayerSummaryService {
     // Wipefest en consumibles: solo se evalúa piedra/poción SI murió.
     const mechanicFailCountByPullId = new Map<string, number>();
     for (const fail of mechanicFails) {
-      mechanicFailCountByPullId.set(fail.pullId, (mechanicFailCountByPullId.get(fail.pullId) ?? 0) + 1);
+      mechanicFailCountByPullId.set(
+        fail.pullId,
+        (mechanicFailCountByPullId.get(fail.pullId) ?? 0) + 1,
+      );
     }
     const evaluatedDeathByPullId = new Map(evaluatedDeaths.map((death) => [death.pullId, death]));
     // §"al pasar el ratón por encima de puntuación, debería salir por qué ha
@@ -835,7 +1047,10 @@ export class NightPlayerSummaryService {
     // final — un único sitio calcula la fórmula Y explica de qué está hecha,
     // para que el componente no tenga que duplicar FAIL_PENALTY/pesos para
     // pintar el tooltip.
-    function computePullScore(pull: { pullId: string; durationMs: number | null }): { score: number; breakdown: PullScoreBreakdown } {
+    function computePullScore(pull: { pullId: string; durationMs: number | null }): {
+      score: number;
+      breakdown: PullScoreBreakdown;
+    } {
       const death = evaluatedDeathByPullId.get(pull.pullId);
       // §"consistente... contemplar muchas posibilidades distintas"
       // (feedback real, 2026-08-28): MISMA fórmula/fuente que el eje
@@ -844,7 +1059,10 @@ export class NightPlayerSummaryService {
       // pull (no debería pasar salvo un fallo de red puntual) se cae al
       // conteo plano derivado en cliente, nunca a "0 fallos" silencioso.
       const reliabilityRow = reliabilityInputByPullId.get(pull.pullId);
-      const mechanicFailCount = reliabilityRow?.personal_mechanic_fail_count ?? mechanicFailCountByPullId.get(pull.pullId) ?? 0;
+      const mechanicFailCount =
+        reliabilityRow?.personal_mechanic_fail_count ??
+        mechanicFailCountByPullId.get(pull.pullId) ??
+        0;
       const mechanicScore = reliabilityRow
         ? mechanicScoreFor({
             personalMechanicFailCount: reliabilityRow.personal_mechanic_fail_count,
@@ -854,9 +1072,12 @@ export class NightPlayerSummaryService {
             selfPositioningDeath: reliabilityRow.self_positioning_death,
           })
         : Math.max(0, 1 - mechanicFailCount * FAIL_PENALTY);
-      const usedConsumable = death ? death.usedHealthstoneInPull || death.usedHealthPotionInPull : false;
+      const usedConsumable = death
+        ? death.usedHealthstoneInPull || death.usedHealthPotionInPull
+        : false;
       const consumableScore = !death ? 1 : usedConsumable ? 1 : 0;
-      const deathMultiplier = death && pull.durationMs ? Math.min(1, Math.max(0, death.timeMs / pull.durationMs)) : 1;
+      const deathMultiplier =
+        death && pull.durationMs ? Math.min(1, Math.max(0, death.timeMs / pull.durationMs)) : 1;
       // §"siempre hay un motivo para usarlo" (feedback real, 2026-08-29):
       // defensivesAvailable ya es exactamente status==='available_unused'
       // (catálogo real de la clase, sin cooldown, sin estar ya activo) — no
@@ -873,8 +1094,10 @@ export class NightPlayerSummaryService {
       // hubo muerte en el pull, para no evaluar dos veces la misma ventana
       // con dos criterios distintos.
       const pressureEval = death ? null : pressureWindowEvaluation(pull.pullId);
-      const neverTouchedMissed = !!pressureEval && pressureEval.coverableWindows.length > 0 && !pressureEval.usedAnything;
-      const mistimedMissed = !!pressureEval && pressureEval.coverableWindows.length > 0 && pressureEval.usedAnything;
+      const neverTouchedMissed =
+        !!pressureEval && pressureEval.coverableWindows.length > 0 && !pressureEval.usedAnything;
+      const mistimedMissed =
+        !!pressureEval && pressureEval.coverableWindows.length > 0 && pressureEval.usedAnything;
       const defensiveMissed = deathDefensiveMissed || neverTouchedMissed || mistimedMissed;
       // Tres niveles de severidad, no dos: morir con uno libre en la mano es
       // el fallo verificado más grave; no tocar NADA en todo un pull con
@@ -896,7 +1119,9 @@ export class NightPlayerSummaryService {
           : mistimedMissed
             ? 'mistimed'
             : null;
-      const defensiveMissedWindows: NightPressureWindowMiss[] = (pressureEval?.coverableWindows ?? []).map((w) => ({
+      const defensiveMissedWindows: NightPressureWindowMiss[] = (
+        pressureEval?.coverableWindows ?? []
+      ).map((w) => ({
         startMs: w.startMs,
         peakMs: w.peakMs,
         peakValue: w.peakValue,
@@ -916,7 +1141,12 @@ export class NightPlayerSummaryService {
           .map((o) => ({ spellId: o.spellId, name: o.name, survivalType: o.survivalType })),
       }));
       const score =
-        Math.round((mechanicScore * 0.7 + consumableScore * 0.3) * deathMultiplier * defensiveMissMultiplier * 1000) / 1000;
+        Math.round(
+          (mechanicScore * 0.7 + consumableScore * 0.3) *
+            deathMultiplier *
+            defensiveMissMultiplier *
+            1000,
+        ) / 1000;
       return {
         score,
         breakdown: {
@@ -947,12 +1177,20 @@ export class NightPlayerSummaryService {
     // Media ponderada por duración (un pull de 8 min pesa más que uno de 40s
     // en la impresión "de qué tal fue la noche") — 0 si algún pull evaluable
     // no tiene duración registrada, mejor que sesgar la media ignorándolo en silencio.
-    const scoredPulls = pullsWithScore.filter((p): p is NightPullSummary & { pullScore: number } => p.pullScore != null);
+    const scoredPulls = pullsWithScore.filter(
+      (p): p is NightPullSummary & { pullScore: number } => p.pullScore != null,
+    );
     const totalDurationMs = scoredPulls.reduce((sum, p) => sum + (p.durationMs ?? 0), 0);
     const rawNightScore = scoredPulls.length
       ? totalDurationMs > 0
-        ? Math.round((scoredPulls.reduce((sum, p) => sum + p.pullScore * (p.durationMs ?? 0), 0) / totalDurationMs) * 1000) / 1000
-        : Math.round((scoredPulls.reduce((sum, p) => sum + p.pullScore, 0) / scoredPulls.length) * 1000) / 1000
+        ? Math.round(
+            (scoredPulls.reduce((sum, p) => sum + p.pullScore * (p.durationMs ?? 0), 0) /
+              totalDurationMs) *
+              1000,
+          ) / 1000
+        : Math.round(
+            (scoredPulls.reduce((sum, p) => sum + p.pullScore, 0) / scoredPulls.length) * 1000,
+          ) / 1000
       : null;
     // §"no puedes tener una ejecución buenísima si no has usado NINGÚN
     // defensivo en algún pull" (feedback real, 2026-08-29): sin esto, un
@@ -964,13 +1202,18 @@ export class NightPlayerSummaryService {
     // demostró que lo intenta, no debe compuesto contra la noche entera
     // igual que morir o no tocar nada.
     const defensiveMissPullCount = scoredPulls.filter(
-      (p) => p.scoreBreakdown.defensiveMissKind === 'death' || p.scoreBreakdown.defensiveMissKind === 'never_touched',
+      (p) =>
+        p.scoreBreakdown.defensiveMissKind === 'death' ||
+        p.scoreBreakdown.defensiveMissKind === 'never_touched',
     ).length;
     const nightDefensiveConsistencyMultiplier = Math.max(
       NIGHT_DEFENSIVE_ESCALATION_FLOOR,
       1 - defensiveMissPullCount * NIGHT_DEFENSIVE_ESCALATION_STEP,
     );
-    const nightScore = rawNightScore == null ? null : Math.round(rawNightScore * nightDefensiveConsistencyMultiplier * 1000) / 1000;
+    const nightScore =
+      rawNightScore == null
+        ? null
+        : Math.round(rawNightScore * nightDefensiveConsistencyMultiplier * 1000) / 1000;
     const nightDefensiveConsistency = {
       missPullCount: defensiveMissPullCount,
       multiplier: nightDefensiveConsistencyMultiplier,
@@ -992,7 +1235,7 @@ export class NightPlayerSummaryService {
           bossId: pull.boss_id,
           bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
           difficulty: pull.difficulty,
-          pullNumber: pull.pull_number,
+          pullNumber: bossPullNumber(pull),
           mechanicName: ev.mechanic_name,
           mechanicId: ev.ability_id,
           timeMs: ev.trigger_time_ms,
@@ -1002,7 +1245,11 @@ export class NightPlayerSummaryService {
       .sort((a, b) => {
         const aPull = pullById.get(a.pullId)!;
         const bPull = pullById.get(b.pullId)!;
-        return (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) || a.pullNumber - b.pullNumber || a.timeMs - b.timeMs;
+        return (
+          (bossOrder.get(aPull.boss_id) ?? 0) - (bossOrder.get(bPull.boss_id) ?? 0) ||
+          a.pullNumber - b.pullNumber ||
+          a.timeMs - b.timeMs
+        );
       });
 
     // §"patrones repetidos esa noche concreta... murió 3 veces a zona
@@ -1013,12 +1260,36 @@ export class NightPlayerSummaryService {
     // ninja pull + exclusión estadística) — reusarlo en vez de repetirlo
     // evita que un tercer sitio se olvide de alguna de las tres exclusiones.
     const patternSource = [
-      ...evaluatedDeaths.map((d) => ({ mechanicName: d.mechanicName ?? 'Sin identificar', mechanicId: d.mechanicId, category: d.category, bossName: d.bossName })),
-      ...mechanicFails.map((f) => ({ mechanicName: f.mechanicName, mechanicId: f.mechanicId as number | null, category: f.category, bossName: f.bossName })),
+      ...evaluatedDeaths.map((d) => ({
+        mechanicName: d.mechanicName ?? 'Sin identificar',
+        mechanicId: d.mechanicId,
+        category: d.category,
+        bossName: d.bossName,
+      })),
+      ...mechanicFails.map((f) => ({
+        mechanicName: f.mechanicName,
+        mechanicId: f.mechanicId as number | null,
+        category: f.category,
+        bossName: f.bossName,
+      })),
     ];
-    const byMechanic = new Map<string, { mechanicId: number | null; category: MechanicCategory | null; bosses: Set<string>; count: number }>();
+    const byMechanic = new Map<
+      string,
+      {
+        mechanicId: number | null;
+        category: MechanicCategory | null;
+        bosses: Set<string>;
+        count: number;
+      }
+    >();
     for (const p of patternSource) {
-      if (!byMechanic.has(p.mechanicName)) byMechanic.set(p.mechanicName, { mechanicId: p.mechanicId, category: p.category, bosses: new Set(), count: 0 });
+      if (!byMechanic.has(p.mechanicName))
+        byMechanic.set(p.mechanicName, {
+          mechanicId: p.mechanicId,
+          category: p.category,
+          bosses: new Set(),
+          count: 0,
+        });
       const entry = byMechanic.get(p.mechanicName)!;
       entry.bosses.add(p.bossName);
       entry.count++;
@@ -1051,7 +1322,8 @@ export class NightPlayerSummaryService {
     // acumulado histórico.
     const lastPull = [...pulls].sort((a, b) => b.closedAt.localeCompare(a.closedAt))[0] ?? null;
     const lastRecord = lastPull ? recordByPullId.get(lastPull.pullId) : null;
-    const gearSnapshot: NightGearSnapshot | null = lastPull && lastRecord ? this.buildGearSnapshot(lastPull, lastRecord) : null;
+    const gearSnapshot: NightGearSnapshot | null =
+      lastPull && lastRecord ? this.buildGearSnapshot(lastPull, lastRecord) : null;
     const firstPull = pulls[0] ?? null;
     const firstRecord = firstPull ? recordByPullId.get(firstPull.pullId) : null;
     const startingPreparation =
@@ -1065,8 +1337,7 @@ export class NightPlayerSummaryService {
       const pull = pullById.get(record.pull_id);
       if (!pull || pull.ninja_pull_excluded) continue;
       const wipeCallStartMs =
-        pull.wipe_call_excluded &&
-        typeof pull.wipe_call_signals?.['wipeCallStartMs'] === 'number'
+        pull.wipe_call_excluded && typeof pull.wipe_call_signals?.['wipeCallStartMs'] === 'number'
           ? (pull.wipe_call_signals['wipeCallStartMs'] as number)
           : null;
       for (const defensive of record.defensive_casts ?? []) {
@@ -1075,7 +1346,7 @@ export class NightPlayerSummaryService {
           if (wipeCallStartMs != null && timeMs >= wipeCallStartMs) continue;
           defensiveCasts.push({
             pullId: record.pull_id,
-            pullNumber: pull.pull_number,
+            pullNumber: bossPullNumber(pull),
             bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
             difficulty: pull.difficulty,
             spellId: defensive.spellId,
@@ -1187,7 +1458,12 @@ export class NightPlayerSummaryService {
     // TODA la noche, no por pull — a diferencia de pressurePullBreakdown NO
     // excluye pulls con muerte (esto es un patrón para aprender, no una
     // superficie de puntuación, así que no aplica esa misma exclusión).
-    const mechanicPressureBreakdown = await this.buildMechanicPressureBreakdown(client, pulls, evaluableWindowsForPull);
+    const mechanicPressureBreakdown = await this.buildMechanicPressureBreakdown(
+      client,
+      pulls,
+      evaluableWindowsForPull,
+      (pullId, atMs) => playerRole !== 'Tank' && allTanksDeadAt(pullId, atMs),
+    );
     const defensiveSummary: NightDefensiveSummary = {
       totalCasts: defensiveCasts.length,
       pullsWithCasts: new Set(defensiveCasts.map((cast) => cast.pullId)).size,
@@ -1220,12 +1496,10 @@ export class NightPlayerSummaryService {
     const avoidableSucceeded = Math.max(0, avoidableEligible - avoidableFailed);
     const cleanPulls = scoredPulls.filter(
       (pull) =>
-        pull.scoreBreakdown.mechanicFailCount === 0 &&
-        !evaluatedDeathByPullId.has(pull.pullId),
+        pull.scoreBreakdown.mechanicFailCount === 0 && !evaluatedDeathByPullId.has(pull.pullId),
     ).length;
     const actionableDeaths = evaluatedDeaths.filter(
-      (death) =>
-        death.category != null && PERSONAL_RESPONSIBILITY_CATEGORIES.has(death.category),
+      (death) => death.category != null && PERSONAL_RESPONSIBILITY_CATEGORIES.has(death.category),
     );
     const actionableIncidents = mechanicFails.length + actionableDeaths.length;
     const emergencyConsumableUses = evaluatedDeaths.filter(
@@ -1261,7 +1535,11 @@ export class NightPlayerSummaryService {
     // resuelto `roster` (que SÍ vive en ese Promise.all). Best-effort: un
     // fallo aquí no debe tirar todo el dosier abajo, la vinculación de
     // Discord es un extra, no el contenido principal.
-    type DiscordChannelRow = { discord_channel_id: string | null; discord_user_id: string; is_officer: boolean };
+    type DiscordChannelRow = {
+      discord_channel_id: string | null;
+      discord_user_id: string;
+      is_officer: boolean;
+    };
     let discordChannel: DiscordChannelRow | null = null;
     if (rosterEntry) {
       try {
@@ -1278,14 +1556,20 @@ export class NightPlayerSummaryService {
 
     const realmSlug = rosterEntry ? slugifyRealm(rosterEntry.realm) : null;
     const nameSlug = playerName.toLowerCase();
-    const battleNetUrl = realmSlug ? `https://worldofwarcraft.blizzard.com/en-us/character/${REGION}/${realmSlug}/${nameSlug}` : null;
-    const raiderIoUrl = realmSlug ? `https://raider.io/characters/${REGION}/${realmSlug}/${nameSlug}` : null;
+    const battleNetUrl = realmSlug
+      ? `https://worldofwarcraft.blizzard.com/en-us/character/${REGION}/${realmSlug}/${nameSlug}`
+      : null;
+    const raiderIoUrl = realmSlug
+      ? `https://raider.io/characters/${REGION}/${realmSlug}/${nameSlug}`
+      : null;
 
     const summary: NightPlayerSummary = {
       playerName,
       reportCode,
       reportTitle: (reportRow as { title: string } | null)?.title ?? reportCode,
-      reportDate: (reportRow as { start_time: number } | null)?.start_time ? new Date((reportRow as { start_time: number }).start_time).toISOString() : '',
+      reportDate: (reportRow as { start_time: number } | null)?.start_time
+        ? new Date((reportRow as { start_time: number }).start_time).toISOString()
+        : '',
       roster: rosterEntry,
       reliability: reliabilityEntry,
       nightReliability,
@@ -1307,7 +1591,11 @@ export class NightPlayerSummaryService {
       raiderIoUrl,
       brief: briefRow ? mapBrief(briefRow as unknown as Parameters<typeof mapBrief>[0]) : null,
       discordChannel: discordChannel
-        ? { discordChannelId: discordChannel.discord_channel_id, discordUserId: discordChannel.discord_user_id, isOfficer: discordChannel.is_officer }
+        ? {
+            discordChannelId: discordChannel.discord_channel_id,
+            discordUserId: discordChannel.discord_user_id,
+            isOfficer: discordChannel.is_officer,
+          }
         : null,
     };
 
@@ -1346,7 +1634,10 @@ export class NightPlayerSummaryService {
   updateCachedBrief(reportCode: string, playerName: string, brief: LlmPullAnalysis): void {
     const cached = this.summaryCache.read(reportCode, playerName);
     if (!cached) return;
-    this.summaryCache.write(reportCode, playerName, cached.fingerprint, { ...cached.summary, brief });
+    this.summaryCache.write(reportCode, playerName, cached.fingerprint, {
+      ...cached.summary,
+      brief,
+    });
   }
 
   // §"si el boss lanza la habilidad siempre en el mismo momento... o cada X
@@ -1359,25 +1650,41 @@ export class NightPlayerSummaryService {
     client: SupabaseClient,
     pressurePullBreakdown: NightPressurePullSummary[],
   ): Promise<void> {
-    const uniqueKeys = new Map<string, { bossId: string; difficulty: string; mechanicId: number }>();
+    const uniqueKeys = new Map<
+      string,
+      { bossId: string; difficulty: string; mechanicId: number }
+    >();
     for (const pull of pressurePullBreakdown) {
       for (const win of pull.missedWindows) {
         if (win.mechanicId == null) continue;
         const key = `${pull.bossId}|${pull.difficulty}|${win.mechanicId}`;
-        if (!uniqueKeys.has(key)) uniqueKeys.set(key, { bossId: pull.bossId, difficulty: pull.difficulty, mechanicId: win.mechanicId });
+        if (!uniqueKeys.has(key))
+          uniqueKeys.set(key, {
+            bossId: pull.bossId,
+            difficulty: pull.difficulty,
+            mechanicId: win.mechanicId,
+          });
       }
     }
     if (!uniqueKeys.size) return;
     const entries = await Promise.all(
       [...uniqueKeys.entries()].map(async ([key, { bossId, difficulty, mechanicId }]) => {
-        const pattern = await this.computeMechanicTimingPattern(client, bossId, difficulty, mechanicId).catch(() => null);
+        const pattern = await this.computeMechanicTimingPattern(
+          client,
+          bossId,
+          difficulty,
+          mechanicId,
+        ).catch(() => null);
         return [key, pattern] as const;
       }),
     );
     const patternByKey = new Map(entries);
     for (const pull of pressurePullBreakdown) {
       for (const win of pull.missedWindows) {
-        win.timingPattern = win.mechanicId == null ? null : (patternByKey.get(`${pull.bossId}|${pull.difficulty}|${win.mechanicId}`) ?? null);
+        win.timingPattern =
+          win.mechanicId == null
+            ? null
+            : (patternByKey.get(`${pull.bossId}|${pull.difficulty}|${win.mechanicId}`) ?? null);
       }
     }
   }
@@ -1390,8 +1697,18 @@ export class NightPlayerSummaryService {
   // salen como dos entradas distintas, no se funden en una.
   private async buildMechanicPressureBreakdown(
     client: SupabaseClient,
-    pulls: Pick<NightPullSummary, 'pullId' | 'pullNumber' | 'bossId' | 'bossName' | 'difficulty' | 'excludedFromStats'>[],
+    pulls: Pick<
+      NightPullSummary,
+      'pullId' | 'pullNumber' | 'bossId' | 'bossName' | 'difficulty' | 'excludedFromStats'
+    >[],
     evaluableWindowsForPull: (pullId: string) => DefensivePressureWindow[],
+    // §"un golpe de melee a alguien que no es tank probablemente sea porque
+    // los tanks estan muertos... validado" (feedback real, 2026-08-29): true
+    // SOLO cuando el jugador no es tank y, en ESE pull concreto, todos los
+    // tanks reales (por spec, ver roleFromSpec) ya habían muerto antes del
+    // pico — ver el comentario junto a allTanksDeadAt más arriba para el
+    // barrido empírico que descartó una exclusión más amplia.
+    isNoTankMeleeArtifact: (pullId: string, atMs: number) => boolean,
   ): Promise<NightMechanicPressureSummary[]> {
     interface Group {
       mechanicId: number;
@@ -1400,13 +1717,23 @@ export class NightPlayerSummaryService {
       bossName: string;
       difficulty: string;
       occurrences: NightMechanicOccurrence[];
-      defensiveStats: Map<number, { name: string; timesAvailable: number; timesUsed: number }>;
+      defensiveStats: Map<number, { name: string; timesCovered: number; timesAvailableUnused: number; timesOnCooldown: number; timesUnknown: number }>;
     }
     const groups = new Map<string, Group>();
     for (const p of pulls) {
       if (p.excludedFromStats) continue;
       for (const w of evaluableWindowsForPull(p.pullId)) {
+        if (!isDefensiveOpportunityWindow(w)) continue;
         if (w.mechanicId == null || !w.mechanicName) continue;
+        // §"probablemente sea porque los tanks estan muertos" (feedback
+        // real, 2026-08-29, verificado): 'Melee' (id 1) es la autoatención
+        // básica del boss, no una mecánica con nombre propio — cuando pega a
+        // un no-tank es casi siempre porque perdió a su tank, no una
+        // decisión evitable del jugador. Solo se descarta con los tanks de
+        // verdad muertos ya (ver isNoTankMeleeArtifact) — el resto de casos
+        // (tank vivo pero igualmente golpeado) se deja tal cual, podría ser
+        // un cleave real.
+        if (w.mechanicId === 1 && w.mechanicName === 'Melee' && isNoTankMeleeArtifact(p.pullId, w.peakMs)) continue;
         const key = `${p.bossId}|${p.difficulty}|${w.mechanicId}`;
         let group = groups.get(key);
         if (!group) {
@@ -1421,7 +1748,12 @@ export class NightPlayerSummaryService {
           };
           groups.set(key, group);
         }
-        const coveringOption = w.options.find((o) => o.status === 'active' || o.status === 'used_during_window') ?? null;
+        const coveringOptions = w.options.filter(
+          (o) => o.status === 'active' || o.status === 'used_during_window',
+        );
+        // Si hay varios defensivos activos a la vez, sabemos que la ventana
+        // estuvo cubierta pero no cuál de ellos fue el responsable único.
+        const coveringOption = coveringOptions.length === 1 ? coveringOptions[0] : null;
         group.occurrences.push({
           pullId: p.pullId,
           pullNumber: p.pullNumber,
@@ -1433,13 +1765,26 @@ export class NightPlayerSummaryService {
         // Mismo criterio que el resto de la sección: 'emergency' nunca entra
         // en el desglose por defensivo (guardarlo suele ser lo correcto, no
         // es "disponible sin usar" en el mismo sentido que el resto).
+        //
+        // §"usados, no usados y posibles... bien usados, no usados a secas,
+        // y usados fuera de tiempo" (feedback real, 2026-08-29): los 4
+        // status reales de evaluateWindowCoverage se cuentan cada uno en su
+        // propio cubo — antes 'available_unused' y 'active' compartían el
+        // mismo contador (timesAvailable), mezclando "lo tenía y no lo usé"
+        // con "lo tenía y lo usé" en un único número.
         for (const o of w.options) {
           if (o.survivalType === 'emergency') continue;
-          const isActive = o.status === 'active' || o.status === 'used_during_window';
-          if (o.status !== 'available_unused' && !isActive) continue;
-          const stat = group.defensiveStats.get(o.spellId) ?? { name: o.name, timesAvailable: 0, timesUsed: 0 };
-          stat.timesAvailable++;
-          if (isActive) stat.timesUsed++;
+          const stat = group.defensiveStats.get(o.spellId) ?? {
+            name: o.name,
+            timesCovered: 0,
+            timesAvailableUnused: 0,
+            timesOnCooldown: 0,
+            timesUnknown: 0,
+          };
+          if (o.status === 'active' || o.status === 'used_during_window') stat.timesCovered++;
+          else if (o.status === 'available_unused') stat.timesAvailableUnused++;
+          else if (o.status === 'on_cooldown') stat.timesOnCooldown++;
+          else if (o.status === 'unknown') stat.timesUnknown++;
           group.defensiveStats.set(o.spellId, stat);
         }
       }
@@ -1448,10 +1793,15 @@ export class NightPlayerSummaryService {
 
     const entries = await Promise.all(
       [...groups.values()].map(async (group) => {
-        const timingPattern = await this.computeMechanicTimingPattern(client, group.bossId, group.difficulty, group.mechanicId).catch(
-          () => null,
+        const timingPattern = await this.computeMechanicTimingPattern(
+          client,
+          group.bossId,
+          group.difficulty,
+          group.mechanicId,
+        ).catch(() => null);
+        const occurrences = group.occurrences.sort(
+          (a, b) => a.pullNumber - b.pullNumber || a.timeMs - b.timeMs,
         );
-        const occurrences = group.occurrences.sort((a, b) => a.pullNumber - b.pullNumber || a.timeMs - b.timeMs);
         return {
           mechanicId: group.mechanicId,
           mechanicName: group.mechanicName,
@@ -1463,13 +1813,20 @@ export class NightPlayerSummaryService {
           coveredCount: occurrences.filter((o) => o.covered).length,
           totalCount: occurrences.length,
           defensives: [...group.defensiveStats.entries()]
-            .map(([spellId, stat]) => ({ spellId, name: stat.name, timesAvailable: stat.timesAvailable, timesUsed: stat.timesUsed }))
-            .sort((a, b) => b.timesUsed - a.timesUsed || b.timesAvailable - a.timesAvailable),
+            .map(([spellId, stat]) => ({
+              spellId,
+              name: stat.name,
+              timesCovered: stat.timesCovered,
+              timesAvailableUnused: stat.timesAvailableUnused,
+              timesOnCooldown: stat.timesOnCooldown,
+              timesUnknown: stat.timesUnknown,
+            }))
+            .sort((a, b) => b.timesCovered - a.timesCovered || b.timesAvailableUnused - a.timesAvailableUnused),
         };
       }),
     );
     // Más fallos primero — es lo que más le urge revisar al raider.
-    return entries.sort((a, b) => (b.totalCount - b.coveredCount) - (a.totalCount - a.coveredCount));
+    return entries.sort((a, b) => b.totalCount - b.coveredCount - (a.totalCount - a.coveredCount));
   }
 
   // §umbrales validados empíricamente contra datos reales (2026-08-29): un
@@ -1528,7 +1885,10 @@ export class NightPlayerSummaryService {
     // mecánica ocurre ~1 vez por pull (si se repite varias veces, "el
     // momento absoluto" ya no es una pregunta con una sola respuesta).
     const avgOccurrencesPerPull = rows.length / timesByPull.size;
-    if (timesByPull.size >= NightPlayerSummaryService.TIMING_MIN_SAMPLES && avgOccurrencesPerPull <= 1.3) {
+    if (
+      timesByPull.size >= NightPlayerSummaryService.TIMING_MIN_SAMPLES &&
+      avgOccurrencesPerPull <= 1.3
+    ) {
       const stats = meanAndCv(rows.map((r) => r.trigger_time_ms));
       if (stats && stats.cv <= NightPlayerSummaryService.TIMING_CV_THRESHOLD) {
         return { kind: 'fixed', ms: Math.round(stats.mean), sampleSize: rows.length };
@@ -1569,7 +1929,10 @@ export class NightPlayerSummaryService {
     return (data ?? null) as { code: string; title: string; start_time: number } | null;
   }
 
-  private buildGearSnapshot(pull: Pick<NightPullSummary, 'pullNumber' | 'bossName'>, record: PlayerPullRecordRow): NightGearSnapshot {
+  private buildGearSnapshot(
+    pull: Pick<NightPullSummary, 'pullNumber' | 'bossName'>,
+    record: PlayerPullRecordRow,
+  ): NightGearSnapshot {
     const items = (record.equipped_items ?? []) as (WclGearItem | null)[];
     const preparation = gearPreparationCounts(items);
     return {
@@ -1577,9 +1940,18 @@ export class NightPlayerSummaryService {
       bossName: pull.bossName,
       class: record.class,
       spec: record.spec,
-      talents: (record.talent_build ?? []).filter((t): t is { id: number; rank: number; nodeID: number; spellId: number } => typeof t.spellId === 'number').map((t) => ({ spellId: t.spellId, rank: t.rank })),
-      talentUnresolvedCount: (record.talent_build ?? []).filter((t) => typeof t.spellId !== 'number').length,
-      gear: items.map((item, slot) => ({ slot, itemId: item?.id ?? 0, itemLevel: item?.itemLevel ?? 0 })).filter((g) => g.itemId > 0),
+      talents: (record.talent_build ?? [])
+        .filter(
+          (t): t is { id: number; rank: number; nodeID: number; spellId: number } =>
+            typeof t.spellId === 'number',
+        )
+        .map((t) => ({ spellId: t.spellId, rank: t.rank })),
+      talentUnresolvedCount: (record.talent_build ?? []).filter(
+        (t) => typeof t.spellId !== 'number',
+      ).length,
+      gear: items
+        .map((item, slot) => ({ slot, itemId: item?.id ?? 0, itemLevel: item?.itemLevel ?? 0 }))
+        .filter((g) => g.itemId > 0),
       ...preparation,
     };
   }
@@ -1848,7 +2220,13 @@ interface MechEventRowLite {
   category: MechanicCategory | null;
   outcome: string;
   trigger_time_ms: number;
-  player_hit_details: { name: string; damage_taken: number; damage_hits: number; healing_received: number; used_defensive_spell_id: number | null }[];
+  player_hit_details: {
+    name: string;
+    damage_taken: number;
+    damage_hits: number;
+    healing_received: number;
+    used_defensive_spell_id: number | null;
+  }[];
   comparison_source: 'own_history' | 'world_reference' | 'fixed_threshold' | null;
   comparison_percentile: number | null;
 }

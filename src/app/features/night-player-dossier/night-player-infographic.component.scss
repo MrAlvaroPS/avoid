@@ -8,6 +8,20 @@ app-night-player-infographic {
     color: #f8f4fa;
     background: rgb(4 3 8 / 96%);
   }
+  // §"actualizar/enviar TODAS las infografias" (feedback real, 2026-08-29):
+  // el envío masivo crea esta instancia una vez por raider para reutilizar
+  // el pipeline de render — `inset: 0` es `position: fixed` así que taparía
+  // la pantalla entera pase lo que pase con su ancestro en el DOM; se
+  // sobreescribe con left/top muy alejados (sigue teniendo layout real, lo
+  // que html-to-image necesita para capturarlo — display:none no serviría)
+  // en vez de taparle la pantalla al usuario 24 veces seguidas.
+  .iris-player-overlay.headless {
+    inset: auto;
+    top: 0;
+    left: -100000px;
+    z-index: -1;
+    pointer-events: none;
+  }
 
   .iris-player-toolbar {
     min-height: 68px;
@@ -21,11 +35,32 @@ app-night-player-infographic {
     box-shadow: 0 12px 36px rgb(0 0 0 / 32%);
   }
   .iris-player-toolbar-title span,
-  .iris-player-toolbar-title strong { display: block; }
-  .iris-player-toolbar-title span { color: #ad9fb5; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-  .iris-player-toolbar-title strong { margin-top: 2px; color: #f5eef7; font-size: 14px; }
-  .iris-player-toolbar-actions { display: flex; align-items: center; gap: 8px; }
-  .iris-player-status { margin-right: 5px; color: #b9aebf; font-size: 10.5px; white-space: nowrap; }
+  .iris-player-toolbar-title strong {
+    display: block;
+  }
+  .iris-player-toolbar-title span {
+    color: #ad9fb5;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .iris-player-toolbar-title strong {
+    margin-top: 2px;
+    color: #f5eef7;
+    font-size: 14px;
+  }
+  .iris-player-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .iris-player-status {
+    margin-right: 5px;
+    color: #b9aebf;
+    font-size: 10.5px;
+    white-space: nowrap;
+  }
   .iris-player-tool-button,
   .iris-player-close {
     min-height: 36px;
@@ -42,17 +77,65 @@ app-night-player-infographic {
     font-weight: 700;
     cursor: pointer;
   }
-  .iris-player-tool-button:hover:not(:disabled) { background: #292033; border-color: rgb(199 157 219 / 34%); }
-  .iris-player-tool-button:disabled { opacity: .46; cursor: not-allowed; }
-  .iris-player-tool-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-player-tool-button.discord { color: #d8d6ff; background: rgb(88 101 242 / 15%); border-color: rgb(132 140 255 / 30%); }
-  .iris-player-tool-button.primary { color: #fff; background: #8c63ab; border-color: transparent; }
-  .iris-player-close { width: 36px; padding: 0; color: #c9bfce; font-size: 23px; font-weight: 300; }
-  .iris-player-export-error { z-index: 2; margin: 0; padding: 7px 18px; color: #ffdbe1; background: #4b1d27; font-size: 11px; text-align: center; }
+  .iris-player-tool-button:hover:not(:disabled) {
+    background: #292033;
+    border-color: rgb(199 157 219 / 34%);
+  }
+  .iris-player-tool-button:disabled {
+    opacity: 0.46;
+    cursor: not-allowed;
+  }
+  .iris-player-tool-button svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .iris-player-tool-button.discord {
+    color: #d8d6ff;
+    background: rgb(88 101 242 / 15%);
+    border-color: rgb(132 140 255 / 30%);
+  }
+  .iris-player-tool-button.primary {
+    color: #fff;
+    background: #8c63ab;
+    border-color: transparent;
+  }
+  .iris-player-close {
+    width: 36px;
+    padding: 0;
+    color: #c9bfce;
+    font-size: 23px;
+    font-weight: 300;
+  }
+  .iris-player-export-error {
+    z-index: 2;
+    margin: 0;
+    padding: 7px 18px;
+    color: #ffdbe1;
+    background: #4b1d27;
+    font-size: 11px;
+    text-align: center;
+  }
 
-  .iris-player-viewport { min-height: 0; flex: 1; overflow: auto; padding: 18px; }
-  .iris-player-stage { position: relative; margin: 0 auto; }
-  .iris-player-scaler { width: 2880px; min-height: 1890px; transform-origin: top left; }
+  .iris-player-viewport {
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    padding: 18px;
+  }
+  .iris-player-stage {
+    position: relative;
+    margin: 0 auto;
+  }
+  .iris-player-scaler {
+    width: 2880px;
+    min-height: 1890px;
+    transform-origin: top left;
+  }
 
   .iris-player-sheet {
     --class-accent: #b98bd0;
@@ -67,136 +150,666 @@ app-night-player-infographic {
     isolation: isolate;
     color: #faf6fb;
     background:
-      radial-gradient(circle at 86% 0%, color-mix(in srgb, var(--class-accent) 20%, transparent), transparent 29%),
+      radial-gradient(
+        circle at 86% 0%,
+        color-mix(in srgb, var(--class-accent) 20%, transparent),
+        transparent 29%
+      ),
       radial-gradient(circle at 0% 52%, rgb(111 72 137 / 15%), transparent 27%),
       linear-gradient(155deg, #090812 0%, #0d0a15 52%, #07070d 100%);
     border: 1px solid rgb(255 255 255 / 8%);
     font-family: Arial, Helvetica, sans-serif;
   }
-  .iris-player-sheet * { box-sizing: border-box; }
-  .iris-player-bg-grid { position: absolute; inset: 0; z-index: -3; opacity: .3; background-image: linear-gradient(rgb(255 255 255 / 5%) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / 5%) 1px, transparent 1px); background-size: 54px 54px; mask-image: linear-gradient(to bottom, #000, transparent 80%); }
-  .iris-player-bg-orb { position: absolute; z-index: -2; width: 700px; height: 700px; border-radius: 50%; filter: blur(110px); opacity: .13; }
-  .iris-player-bg-orb.orb-a { top: 260px; right: -260px; background: var(--class-accent); }
-  .iris-player-bg-orb.orb-b { bottom: 420px; left: -330px; background: #7d4c99; }
+  .iris-player-sheet * {
+    box-sizing: border-box;
+  }
+  .iris-player-bg-grid {
+    position: absolute;
+    inset: 0;
+    z-index: -3;
+    opacity: 0.3;
+    background-image:
+      linear-gradient(rgb(255 255 255 / 5%) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(255 255 255 / 5%) 1px, transparent 1px);
+    background-size: 54px 54px;
+    mask-image: linear-gradient(to bottom, #000, transparent 80%);
+  }
+  .iris-player-bg-orb {
+    position: absolute;
+    z-index: -2;
+    width: 700px;
+    height: 700px;
+    border-radius: 50%;
+    filter: blur(110px);
+    opacity: 0.13;
+  }
+  .iris-player-bg-orb.orb-a {
+    top: 260px;
+    right: -260px;
+    background: var(--class-accent);
+  }
+  .iris-player-bg-orb.orb-b {
+    bottom: 420px;
+    left: -330px;
+    background: #7d4c99;
+  }
 
-  .iris-player-sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 40px; padding-bottom: 26px; border-bottom: 1px solid rgb(255 255 255 / 12%); }
-  .iris-player-brand { display: flex; align-items: center; gap: 18px; }
-  .iris-player-brand > img { width: 72px; height: 72px; object-fit: contain; filter: drop-shadow(0 7px 15px rgb(0 0 0 / 35%)); }
+  .iris-player-sheet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 40px;
+    padding-bottom: 26px;
+    border-bottom: 1px solid rgb(255 255 255 / 12%);
+  }
+  .iris-player-brand {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .iris-player-brand > img {
+    width: 72px;
+    height: 72px;
+    object-fit: contain;
+    filter: drop-shadow(0 7px 15px rgb(0 0 0 / 35%));
+  }
   .iris-player-brand span,
-  .iris-player-brand strong { display: block; }
-  .iris-player-brand span { color: #d2a96d; font-size: 17px; font-weight: 900; letter-spacing: .16em; }
-  .iris-player-brand strong { margin-top: 5px; font-family: Georgia, 'Times New Roman', serif; font-size: 37px; font-weight: 500; }
-  .iris-player-date { text-align: right; }
-  .iris-player-date strong { display: block; font-family: Georgia, 'Times New Roman', serif; font-size: 27px; font-weight: 500; }
-  .iris-player-date span { display: block; margin-top: 7px; color: #c4b9c9; font-size: 16px; }
+  .iris-player-brand strong {
+    display: block;
+  }
+  .iris-player-brand span {
+    color: #d2a96d;
+    font-size: 17px;
+    font-weight: 900;
+    letter-spacing: 0.16em;
+  }
+  .iris-player-brand strong {
+    margin-top: 5px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 37px;
+    font-weight: 500;
+  }
+  .iris-player-date {
+    text-align: right;
+  }
+  .iris-player-date strong {
+    display: block;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 27px;
+    font-weight: 500;
+  }
+  .iris-player-date span {
+    display: block;
+    margin-top: 7px;
+    color: #c4b9c9;
+    font-size: 16px;
+  }
 
   // §"dos círculos... otro nuevo de defensivos más en detalle" (feedback
   // real, 2026-08-29): tercera columna para el círculo de cobertura
   // defensiva — más estrecha que la de ejecución (.compact/.small más abajo)
   // porque no necesita el mismo espacio de copy.
-  .iris-player-hero { min-height: 350px; display: grid; grid-template-columns: 1fr .62fr .5fr; gap: 24px; }
+  .iris-player-hero {
+    min-height: 350px;
+    display: grid;
+    grid-template-columns: 1fr 0.62fr 0.5fr;
+    gap: 24px;
+  }
   .iris-player-identity,
-  .iris-player-execution-card { min-width: 0; border: 1px solid rgb(255 255 255 / 9%); border-radius: 28px; }
-  .iris-player-identity { display: flex; align-items: center; gap: 38px; padding: 34px 42px; background: linear-gradient(120deg, color-mix(in srgb, var(--class-accent) 16%, #15101c), #100d16 74%); box-shadow: inset 0 1px rgb(255 255 255 / 6%); }
-  .iris-player-avatar { width: 250px; height: 250px; flex: 0 0 auto; overflow: hidden; display: grid; place-items: center; background: linear-gradient(145deg, color-mix(in srgb, var(--class-accent) 50%, #201628), #0a0810); border: 5px solid color-mix(in srgb, var(--class-accent) 58%, #fff 8%); border-radius: 28px; box-shadow: 0 22px 55px rgb(0 0 0 / 45%), 0 0 55px color-mix(in srgb, var(--class-accent) 20%, transparent); }
-  .iris-player-avatar img { width: 100%; height: 100%; object-fit: cover; }
-  .iris-player-avatar span { color: #fff; font-family: Georgia, 'Times New Roman', serif; font-size: 118px; }
-  .iris-player-identity > div:last-child > span { color: color-mix(in srgb, var(--class-accent) 72%, #fff); font-size: 17px; font-weight: 900; letter-spacing: .17em; }
-  .iris-player-identity h1 { margin: 13px 0 7px; font-family: Georgia, 'Times New Roman', serif; font-size: 78px; font-weight: 500; line-height: .98; text-wrap: balance; }
-  .iris-player-identity p { margin: 16px 0 0; color: #e1d7e5; font-size: 23px; line-height: 1.4; }
+  .iris-player-execution-card {
+    min-width: 0;
+    border: 1px solid rgb(255 255 255 / 9%);
+    border-radius: 28px;
+  }
+  .iris-player-identity {
+    display: flex;
+    align-items: center;
+    gap: 38px;
+    padding: 34px 42px;
+    background: linear-gradient(
+      120deg,
+      color-mix(in srgb, var(--class-accent) 16%, #15101c),
+      #100d16 74%
+    );
+    box-shadow: inset 0 1px rgb(255 255 255 / 6%);
+  }
+  .iris-player-avatar {
+    width: 250px;
+    height: 250px;
+    flex: 0 0 auto;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--class-accent) 50%, #201628),
+      #0a0810
+    );
+    border: 5px solid color-mix(in srgb, var(--class-accent) 58%, #fff 8%);
+    border-radius: 28px;
+    box-shadow:
+      0 22px 55px rgb(0 0 0 / 45%),
+      0 0 55px color-mix(in srgb, var(--class-accent) 20%, transparent);
+  }
+  .iris-player-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .iris-player-avatar span {
+    color: #fff;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 118px;
+  }
+  .iris-player-identity > div:last-child > span {
+    color: color-mix(in srgb, var(--class-accent) 72%, #fff);
+    font-size: 17px;
+    font-weight: 900;
+    letter-spacing: 0.17em;
+  }
+  .iris-player-identity h1 {
+    margin: 13px 0 7px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 78px;
+    font-weight: 500;
+    line-height: 0.98;
+    text-wrap: balance;
+  }
+  .iris-player-identity p {
+    margin: 16px 0 0;
+    color: #e1d7e5;
+    font-size: 23px;
+    line-height: 1.4;
+  }
 
-  .iris-player-execution-card { display: flex; align-items: center; gap: 32px; padding: 30px 38px; background: linear-gradient(135deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%)); }
-  .iris-player-execution-card.compact { gap: 22px; padding: 24px 28px; }
-  .iris-player-score-ring { --score: 0%; width: 240px; height: 240px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; background: conic-gradient(var(--ring-color, #b98bd0) var(--score), rgb(255 255 255 / 8%) 0); box-shadow: 0 0 48px color-mix(in srgb, var(--ring-color, #b98bd0) 18%, transparent); }
-  .iris-player-score-ring::before { content: ''; width: 192px; height: 192px; grid-area: 1 / 1; background: #100d17; border: 1px solid rgb(255 255 255 / 10%); border-radius: 50%; }
-  .iris-player-score-ring.small { width: 168px; height: 168px; }
-  .iris-player-score-ring.small::before { width: 134px; height: 134px; }
-  .iris-player-score-ring.small strong { font-size: 42px; }
-  .iris-player-score-ring.small span { font-size: 13px; }
-  .iris-player-score-ring > div { z-index: 1; grid-area: 1 / 1; text-align: center; }
-  .iris-player-score-ring strong { display: block; font-family: Georgia, 'Times New Roman', serif; font-size: 60px; font-weight: 500; }
-  .iris-player-score-ring span { display: block; color: #c8bdcc; font-size: 16px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-  .iris-player-execution-card.tone-success { --ring-color: #62c98a; }
-  .iris-player-execution-card.tone-warning { --ring-color: #e0ad55; }
-  .iris-player-execution-card.tone-danger { --ring-color: #e36679; }
-  .iris-player-execution-copy > span { color: var(--ring-color, #c5a2d5); font-size: 16px; font-weight: 900; letter-spacing: .13em; }
-  .iris-player-execution-copy > strong { display: block; margin-top: 8px; font-family: Georgia, 'Times New Roman', serif; font-size: 42px; font-weight: 500; }
-  .iris-player-execution-copy p { margin: 12px 0 0; color: #ddd3e0; font-size: 18px; line-height: 1.5; }
-  .iris-player-execution-card.compact .iris-player-execution-copy > span { font-size: 14px; }
-  .iris-player-execution-card.compact .iris-player-execution-copy > strong { margin-top: 6px; font-size: 32px; }
-  .iris-player-execution-card.compact .iris-player-execution-copy p { margin-top: 8px; font-size: 15px; line-height: 1.4; }
+  .iris-player-execution-card {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    padding: 30px 38px;
+    background: linear-gradient(135deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 2%));
+  }
+  .iris-player-execution-card.compact {
+    gap: 22px;
+    padding: 24px 28px;
+  }
+  .iris-player-score-ring {
+    --score: 0%;
+    width: 240px;
+    height: 240px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: conic-gradient(var(--ring-color, #b98bd0) var(--score), rgb(255 255 255 / 8%) 0);
+    box-shadow: 0 0 48px color-mix(in srgb, var(--ring-color, #b98bd0) 18%, transparent);
+  }
+  .iris-player-score-ring::before {
+    content: '';
+    width: 192px;
+    height: 192px;
+    grid-area: 1 / 1;
+    background: #100d17;
+    border: 1px solid rgb(255 255 255 / 10%);
+    border-radius: 50%;
+  }
+  .iris-player-score-ring.small {
+    width: 168px;
+    height: 168px;
+  }
+  .iris-player-score-ring.small::before {
+    width: 134px;
+    height: 134px;
+  }
+  .iris-player-score-ring.small strong {
+    font-size: 42px;
+  }
+  .iris-player-score-ring.small span {
+    font-size: 13px;
+  }
+  .iris-player-score-ring > div {
+    z-index: 1;
+    grid-area: 1 / 1;
+    text-align: center;
+  }
+  .iris-player-score-ring strong {
+    display: block;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 60px;
+    font-weight: 500;
+  }
+  .iris-player-score-ring span {
+    display: block;
+    color: #c8bdcc;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .iris-player-execution-card.tone-success {
+    --ring-color: #62c98a;
+  }
+  .iris-player-execution-card.tone-warning {
+    --ring-color: #e0ad55;
+  }
+  .iris-player-execution-card.tone-danger {
+    --ring-color: #e36679;
+  }
+  .iris-player-execution-copy > span {
+    color: var(--ring-color, #c5a2d5);
+    font-size: 16px;
+    font-weight: 900;
+    letter-spacing: 0.13em;
+  }
+  .iris-player-execution-copy > strong {
+    display: block;
+    margin-top: 8px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 42px;
+    font-weight: 500;
+  }
+  .iris-player-execution-copy p {
+    margin: 12px 0 0;
+    color: #ddd3e0;
+    font-size: 18px;
+    line-height: 1.5;
+  }
+  .iris-player-execution-card.compact .iris-player-execution-copy > span {
+    font-size: 14px;
+  }
+  .iris-player-execution-card.compact .iris-player-execution-copy > strong {
+    margin-top: 6px;
+    font-size: 32px;
+  }
+  .iris-player-execution-card.compact .iris-player-execution-copy p {
+    margin-top: 8px;
+    font-size: 15px;
+    line-height: 1.4;
+  }
 
-  .iris-player-stat-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); overflow: hidden; background: rgb(255 255 255 / 3.5%); border: 1px solid rgb(255 255 255 / 9%); border-radius: 22px; }
-  .iris-player-stat-strip article { min-width: 0; padding: 23px 26px; border-right: 1px solid rgb(255 255 255 / 8%); }
-  .iris-player-stat-strip article:last-child { border-right: 0; }
-  .iris-player-stat-strip span { display: block; color: #c8bdcc; font-size: 15px; font-weight: 900; letter-spacing: .1em; }
-  .iris-player-stat-strip strong { display: block; margin-top: 5px; font-family: Georgia, 'Times New Roman', serif; font-size: 45px; font-weight: 500; }
-  .iris-player-stat-strip strong small { color: #aaa0af; font-family: Arial, Helvetica, sans-serif; font-size: 18px; }
-  .iris-player-stat-strip p { min-height: 38px; margin: 5px 0 0; color: #cfc5d3; font-size: 17px; line-height: 1.4; }
-  .iris-player-stat-strip .success strong { color: #6dce91; }
-  .iris-player-stat-strip .warning strong { color: #e2b25e; }
-  .iris-player-stat-strip .danger strong { color: #eb7486; }
+  .iris-player-stat-strip {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow: hidden;
+    background: rgb(255 255 255 / 3.5%);
+    border: 1px solid rgb(255 255 255 / 9%);
+    border-radius: 22px;
+  }
+  .iris-player-stat-strip article {
+    min-width: 0;
+    padding: 23px 26px;
+    border-right: 1px solid rgb(255 255 255 / 8%);
+  }
+  .iris-player-stat-strip article:last-child {
+    border-right: 0;
+  }
+  .iris-player-stat-strip span {
+    display: block;
+    color: #c8bdcc;
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+  }
+  .iris-player-stat-strip strong {
+    display: block;
+    margin-top: 5px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 45px;
+    font-weight: 500;
+  }
+  .iris-player-stat-strip strong small {
+    color: #aaa0af;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 18px;
+  }
+  .iris-player-stat-strip p {
+    min-height: 38px;
+    margin: 5px 0 0;
+    color: #cfc5d3;
+    font-size: 17px;
+    line-height: 1.4;
+  }
+  .iris-player-stat-strip .success strong {
+    color: #6dce91;
+  }
+  .iris-player-stat-strip .warning strong {
+    color: #e2b25e;
+  }
+  .iris-player-stat-strip .danger strong {
+    color: #eb7486;
+  }
 
-  .iris-player-section { padding: 28px 30px; background: linear-gradient(145deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 2%)); border: 1px solid rgb(255 255 255 / 9%); border-radius: 24px; box-shadow: inset 0 1px rgb(255 255 255 / 4%); }
-  .iris-player-section-title { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 22px; }
-  .iris-player-section-title > div > span { display: block; color: color-mix(in srgb, var(--class-accent) 70%, #fff); font-size: 15px; font-weight: 900; letter-spacing: .17em; }
-  .iris-player-section-title h2 { margin: 5px 0 0; font-family: Georgia, 'Times New Roman', serif; font-size: 39px; font-weight: 500; line-height: 1.12; }
-  .iris-player-section-title > p { max-width: 640px; margin: 0; color: #c7bdcb; font-size: 18px; line-height: 1.4; text-align: right; }
+  .iris-player-section {
+    padding: 28px 30px;
+    background: linear-gradient(145deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 2%));
+    border: 1px solid rgb(255 255 255 / 9%);
+    border-radius: 24px;
+    box-shadow: inset 0 1px rgb(255 255 255 / 4%);
+  }
+  .iris-player-section-title {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 28px;
+    margin-bottom: 22px;
+  }
+  .iris-player-section-title > div > span {
+    display: block;
+    color: color-mix(in srgb, var(--class-accent) 70%, #fff);
+    font-size: 15px;
+    font-weight: 900;
+    letter-spacing: 0.17em;
+  }
+  .iris-player-section-title h2 {
+    margin: 5px 0 0;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 39px;
+    font-weight: 500;
+    line-height: 1.12;
+  }
+  .iris-player-section-title > p {
+    max-width: 640px;
+    margin: 0;
+    color: #c7bdcb;
+    font-size: 18px;
+    line-height: 1.4;
+    text-align: right;
+  }
 
-  .iris-player-positive-section { padding: 0; background: none; border: 0; box-shadow: none; }
-  .iris-player-positive-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
-  .iris-player-positive-grid article { min-width: 0; display: flex; align-items: center; gap: 20px; padding: 23px 25px; background: rgb(72 159 105 / 8%); border: 1px solid rgb(98 201 138 / 18%); border-radius: 20px; }
-  .iris-player-signal-icon { width: 70px; height: 70px; flex: 0 0 auto; display: grid; place-items: center; color: #70d097; background: rgb(98 201 138 / 12%); border-radius: 18px; }
-  .iris-player-signal-icon svg { width: 38px; height: 38px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-player-positive-grid span { display: block; color: #bfe8ce; font-size: 14px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
-  .iris-player-positive-grid strong { display: block; margin-top: 3px; font-family: Georgia, 'Times New Roman', serif; font-size: 37px; font-weight: 500; }
-  .iris-player-positive-grid p { margin: 4px 0 0; color: #d7e7dc; font-size: 17px; line-height: 1.4; }
+  .iris-player-positive-section {
+    padding: 0;
+    background: none;
+    border: 0;
+    box-shadow: none;
+  }
+  .iris-player-positive-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .iris-player-positive-grid article {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 23px 25px;
+    background: rgb(72 159 105 / 8%);
+    border: 1px solid rgb(98 201 138 / 18%);
+    border-radius: 20px;
+  }
+  .iris-player-signal-icon {
+    width: 70px;
+    height: 70px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    color: #70d097;
+    background: rgb(98 201 138 / 12%);
+    border-radius: 18px;
+  }
+  .iris-player-signal-icon svg {
+    width: 38px;
+    height: 38px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .iris-player-positive-grid span {
+    display: block;
+    color: #bfe8ce;
+    font-size: 14px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .iris-player-positive-grid strong {
+    display: block;
+    margin-top: 3px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 37px;
+    font-weight: 500;
+  }
+  .iris-player-positive-grid p {
+    margin: 4px 0 0;
+    color: #d7e7dc;
+    font-size: 17px;
+    line-height: 1.4;
+  }
 
-  .iris-player-main-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 24px; align-items: start; }
-  .iris-player-priority-list { display: flex; flex-direction: column; gap: 14px; }
-  .iris-player-priority-list article { min-height: 142px; display: grid; grid-template-columns: 42px 82px minmax(0, 1fr); align-items: center; gap: 18px; padding: 20px; background: rgb(8 6 13 / 58%); border: 1px solid rgb(255 255 255 / 9%); border-left: 4px solid color-mix(in srgb, var(--class-accent) 65%, #fff 5%); border-radius: 17px; }
-  .iris-player-priority-list article[data-kind='defensive'] { border-left-color: #5fc58a; }
-  .iris-player-priority-list article[data-kind='consumable'] { border-left-color: #d3a553; }
-  .iris-player-priority-list article[data-kind='preparation'] { border-left-color: #78a9d7; }
-  .iris-player-priority-number { color: #786d7e; font-family: Georgia, 'Times New Roman', serif; font-size: 24px; }
-  .iris-player-spell-icon { width: 66px; height: 66px; flex: 0 0 auto; display: grid; place-items: center; overflow: hidden; padding: 3px; color: #e6d9ea; background: linear-gradient(145deg, color-mix(in srgb, var(--class-accent) 65%, #392a43), #31213a); border: 1px solid rgb(255 255 255 / 16%); border-radius: 15px; box-shadow: 0 8px 20px rgb(0 0 0 / 30%); }
-  .iris-player-spell-icon.large { width: 78px; height: 78px; border-radius: 17px; }
-  .iris-player-spell-icon.small { width: 54px; height: 54px; border-radius: 12px; }
-  .iris-player-spell-icon.tiny { width: 30px; height: 30px; border-radius: 8px; padding: 2px; }
-  .iris-player-spell-icon img { width: 100%; height: 100%; object-fit: cover; border-radius: 11px; }
-  .iris-player-spell-icon svg { width: 72%; height: 72%; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-player-priority-copy > strong { display: block; font-family: Georgia, 'Times New Roman', serif; font-size: 27px; font-weight: 500; }
-  .iris-player-priority-copy > span { display: block; margin-top: 5px; color: #bfb4c4; font-size: 16px; line-height: 1.4; }
-  .iris-player-priority-copy > p { margin: 9px 0 0; padding: 10px 13px; color: #eee8f0; background: rgb(255 255 255 / 4%); border-radius: 10px; font-size: 18px; line-height: 1.45; }
-  .iris-player-priority-copy > p b { display: block; margin-bottom: 2px; color: #d8b6e8; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; }
-  .iris-player-no-priority { display: block !important; min-height: 120px !important; padding: 28px !important; }
-  .iris-player-no-priority strong { font-size: 22px; }
-  .iris-player-no-priority p { color: #c9bfcd; font-size: 17px; }
+  .iris-player-main-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .iris-player-priority-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .iris-player-priority-list article {
+    min-height: 142px;
+    display: grid;
+    grid-template-columns: 42px 82px minmax(0, 1fr);
+    align-items: center;
+    gap: 18px;
+    padding: 20px;
+    background: rgb(8 6 13 / 58%);
+    border: 1px solid rgb(255 255 255 / 9%);
+    border-left: 4px solid color-mix(in srgb, var(--class-accent) 65%, #fff 5%);
+    border-radius: 17px;
+  }
+  .iris-player-priority-list article[data-kind='defensive'] {
+    border-left-color: #5fc58a;
+  }
+  .iris-player-priority-list article[data-kind='consumable'] {
+    border-left-color: #d3a553;
+  }
+  .iris-player-priority-list article[data-kind='preparation'] {
+    border-left-color: #78a9d7;
+  }
+  .iris-player-priority-number {
+    color: #786d7e;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 24px;
+  }
+  .iris-player-spell-icon {
+    width: 66px;
+    height: 66px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    padding: 3px;
+    color: #e6d9ea;
+    background: linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--class-accent) 65%, #392a43),
+      #31213a
+    );
+    border: 1px solid rgb(255 255 255 / 16%);
+    border-radius: 15px;
+    box-shadow: 0 8px 20px rgb(0 0 0 / 30%);
+  }
+  .iris-player-spell-icon.large {
+    width: 78px;
+    height: 78px;
+    border-radius: 17px;
+  }
+  .iris-player-spell-icon.small {
+    width: 54px;
+    height: 54px;
+    border-radius: 12px;
+  }
+  .iris-player-spell-icon.tiny {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    padding: 2px;
+  }
+  .iris-player-spell-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 11px;
+  }
+  .iris-player-spell-icon svg {
+    width: 72%;
+    height: 72%;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .iris-player-priority-copy > strong {
+    display: block;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 27px;
+    font-weight: 500;
+  }
+  .iris-player-priority-copy > span {
+    display: block;
+    margin-top: 5px;
+    color: #bfb4c4;
+    font-size: 16px;
+    line-height: 1.4;
+  }
+  .iris-player-priority-copy > p {
+    margin: 9px 0 0;
+    padding: 10px 13px;
+    color: #eee8f0;
+    background: rgb(255 255 255 / 4%);
+    border-radius: 10px;
+    font-size: 18px;
+    line-height: 1.45;
+  }
+  .iris-player-priority-copy > p b {
+    display: block;
+    margin-bottom: 2px;
+    color: #d8b6e8;
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .iris-player-no-priority {
+    display: block !important;
+    min-height: 120px !important;
+    padding: 28px !important;
+  }
+  .iris-player-no-priority strong {
+    font-size: 22px;
+  }
+  .iris-player-no-priority p {
+    color: #c9bfcd;
+    font-size: 17px;
+  }
 
-  .iris-player-pull-list { display: flex; flex-direction: column; gap: 9px; }
-  .iris-player-pull-list article { display: grid; grid-template-columns: 240px minmax(120px, 1fr) 62px 150px; align-items: center; gap: 14px; padding: 12px 14px; background: rgb(8 6 13 / 55%); border: 1px solid rgb(255 255 255 / 7%); border-radius: 12px; }
-  .iris-player-pull-boss { min-width: 0; }
-  .iris-player-pull-boss span { display: block; color: #9e94a4; font-size: 12px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
-  .iris-player-pull-boss strong { display: block; overflow: hidden; margin-top: 2px; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
-  .iris-player-pull-track { height: 7px; overflow: hidden; background: #29232d; border-radius: 10px; }
-  .iris-player-pull-track i { display: block; height: 100%; background: #7f7385; border-radius: inherit; }
-  .iris-player-pull-list article.tone-success .iris-player-pull-track i { background: #58b87b; }
-  .iris-player-pull-list article.tone-warning .iris-player-pull-track i { background: #d1a34e; }
-  .iris-player-pull-list article.tone-danger .iris-player-pull-track i { background: #d85569; }
-  .iris-player-pull-list article > b { font-family: Georgia, 'Times New Roman', serif; font-size: 19px; font-weight: 500; text-align: right; }
-  .iris-player-pull-flags { display: flex; justify-content: flex-end; gap: 5px; }
-  .iris-player-pull-flags span { padding: 3px 6px; border-radius: 6px; font-size: 11px; font-weight: 800; white-space: nowrap; }
-  .iris-player-pull-flags .success { color: #7bd39c; background: rgb(95 191 130 / 11%); }
-  .iris-player-pull-flags .warning { color: #e4ba6e; background: rgb(227 173 79 / 11%); }
-  .iris-player-pull-flags .danger { color: #ed8191; background: rgb(226 89 111 / 11%); }
+  .iris-player-pull-list {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .iris-player-pull-list article {
+    display: grid;
+    grid-template-columns: 240px minmax(120px, 1fr) 62px 150px;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    background: rgb(8 6 13 / 55%);
+    border: 1px solid rgb(255 255 255 / 7%);
+    border-radius: 12px;
+  }
+  .iris-player-pull-boss {
+    min-width: 0;
+  }
+  .iris-player-pull-boss span {
+    display: block;
+    color: #9e94a4;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .iris-player-pull-boss strong {
+    display: block;
+    overflow: hidden;
+    margin-top: 2px;
+    font-size: 15px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .iris-player-pull-track {
+    height: 7px;
+    overflow: hidden;
+    background: #29232d;
+    border-radius: 10px;
+  }
+  .iris-player-pull-track i {
+    display: block;
+    height: 100%;
+    background: #7f7385;
+    border-radius: inherit;
+  }
+  .iris-player-pull-list article.tone-success .iris-player-pull-track i {
+    background: #58b87b;
+  }
+  .iris-player-pull-list article.tone-warning .iris-player-pull-track i {
+    background: #d1a34e;
+  }
+  .iris-player-pull-list article.tone-danger .iris-player-pull-track i {
+    background: #d85569;
+  }
+  .iris-player-pull-list article > b {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 19px;
+    font-weight: 500;
+    text-align: right;
+  }
+  .iris-player-pull-flags {
+    display: flex;
+    justify-content: flex-end;
+    gap: 5px;
+  }
+  .iris-player-pull-flags span {
+    padding: 3px 6px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .iris-player-pull-flags .success {
+    color: #7bd39c;
+    background: rgb(95 191 130 / 11%);
+  }
+  .iris-player-pull-flags .warning {
+    color: #e4ba6e;
+    background: rgb(227 173 79 / 11%);
+  }
+  .iris-player-pull-flags .danger {
+    color: #ed8191;
+    background: rgb(226 89 111 / 11%);
+  }
 
   // §"debe mezclarse el punto 4 y 5 que hablan de defensivos" (feedback
   // real, 2026-08-29): sustituye al banner grande de antes — con ventanas
   // reales por pull (no un booleano de la noche entera) el número único ya
   // no representa bien "cuánto falló"; la lista de abajo YA es la evidencia.
-  .iris-player-miss-note { margin: -4px 0 12px; max-width: 1500px; color: #cdb9bf; font-size: 15px; line-height: 1.45; }
+  .iris-player-miss-note {
+    margin: -4px 0 12px;
+    max-width: 1500px;
+    color: #cdb9bf;
+    font-size: 15px;
+    line-height: 1.45;
+  }
 
-  .iris-player-evidence-list { display: flex; flex-direction: column; gap: 12px; }
+  .iris-player-evidence-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
   .iris-player-evidence-list article {
     min-height: 154px;
     display: grid;
@@ -208,134 +821,611 @@ app-night-player-infographic {
     border: 1px solid rgb(211 165 83 / 17%);
     border-radius: 18px;
   }
-  .iris-player-evidence-list article.death { background: linear-gradient(90deg, rgb(142 42 61 / 12%), rgb(7 6 12 / 60%) 34%); border-color: rgb(226 89 111 / 20%); }
+  .iris-player-evidence-list article.death {
+    background: linear-gradient(90deg, rgb(142 42 61 / 12%), rgb(7 6 12 / 60%) 34%);
+    border-color: rgb(226 89 111 / 20%);
+  }
 
   // §"ponerle un subtítulo... otro color de fondo, tipo card dentro de
   // card" (feedback real, 2026-08-29): panel de agrupación macro —
   // deliberadamente solo una franja de etiqueta + fondo, sin padding
   // grande, para no crecer el alto de la lámina.
-  .iris-player-macro-group { position: relative; margin: 30px 0 0; padding: 34px 26px 10px; border-radius: 24px; }
-  .iris-player-macro-group.mechanics { background: linear-gradient(180deg, rgb(185 139 208 / 7%), transparent 120px); border: 1px solid rgb(185 139 208 / 14%); }
-  .iris-player-macro-group.defensives { background: linear-gradient(180deg, rgb(102 178 214 / 7%), transparent 160px); border: 1px solid rgb(102 178 214 / 14%); }
-  .iris-player-macro-label { position: absolute; top: -13px; left: 26px; padding: 5px 14px; color: #0c0a12; font-size: 13px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; border-radius: 999px; }
-  .iris-player-macro-group.mechanics .iris-player-macro-label { background: #b98bd0; }
-  .iris-player-macro-group.defensives .iris-player-macro-label { background: #7fc2e0; }
+  .iris-player-macro-group {
+    position: relative;
+    margin: 30px 0 0;
+    padding: 34px 26px 10px;
+    border-radius: 24px;
+  }
+  .iris-player-macro-group.mechanics {
+    background: linear-gradient(180deg, rgb(185 139 208 / 7%), transparent 120px);
+    border: 1px solid rgb(185 139 208 / 14%);
+  }
+  .iris-player-macro-group.defensives {
+    background: linear-gradient(180deg, rgb(102 178 214 / 7%), transparent 160px);
+    border: 1px solid rgb(102 178 214 / 14%);
+  }
+  .iris-player-macro-label {
+    position: absolute;
+    top: -13px;
+    left: 26px;
+    padding: 5px 14px;
+    color: #0c0a12;
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border-radius: 999px;
+  }
+  .iris-player-macro-group.mechanics .iris-player-macro-label {
+    background: #b98bd0;
+  }
+  .iris-player-macro-group.defensives .iris-player-macro-label {
+    background: #7fc2e0;
+  }
 
-  // §"agrupar por mecánica... escalable con 25 wipes... visual" (feedback
-  // real, 2026-08-29): una card por mecánica real, no una tarjeta por
-  // ocurrencia — reemplaza a la vieja lista "a destiempo".
-  //
-  // §"que no sea una lista tan larga... cards o chips... la gracia era
-  // tenerlo compacto" (feedback real, 2026-08-29): antes cada mecánica
-  // ocupaba una fila entera a lo ancho — con muchas mecánicas distintas en
-  // una noche eso es un scroll interminable. Grid en vez de columna única:
-  // varias cards por fila según el ancho disponible, cada una reducida a lo
-  // esencial (icono pequeño, ratio como badge, sin la lista de fallos en
-  // texto que había debajo — el tooltip de cada cuadradito ya la cubre).
-  .iris-mechanic-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-  .iris-mechanic-list > article {
+  // §especificación visual pegada por el usuario, 2026-08-29 ("quiero que
+  // se parezca mucho a esta, que esta validada") — paleta/tamaños/estructura
+  // tal cual la spec de 94 puntos. Card ancha y apilada (no grid de
+  // columnas): cada mecánica es una franja de análisis completa, densa en
+  // horizontal (timeline de una sola fila, con scroll si hace falta) en vez
+  // de densa por miniaturización — "la card no debe comprimir la timeline".
+  // §"el espacio es muy grande, lo podemos poner a 3 columnas y, si no caben
+  // y desbordan, bajar a 2" (feedback real, 2026-08-29): --mech-columns lo
+  // decide mechanicColumns() en el .ts (cálculo determinista contra el
+  // ancho fijo del sheet, no ResizeObserver) — la CSS solo obedece la
+  // variable, 3 por defecto si por lo que sea no llega a resolverse.
+  .iris-mechanic-list {
+    display: grid;
+    grid-template-columns: repeat(var(--mech-columns, 3), minmax(0, 1fr));
+    gap: 24px;
+  }
+  // §"es muy grande cada card verticalmente, habria que reducirlo"
+  // (feedback real, 2026-08-29): pasada completa de compactado — se reduce
+  // AIRE (padding/margin/tamaños de letra secundarios), nunca información;
+  // la cuadrícula de ocasiones (22px/celda) es contenido, no aire, así que
+  // se deja intacta — reducirla cambiaría el cálculo de mechanicColumns().
+  .iris-mech-card {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px;
-    background: linear-gradient(160deg, rgb(211 165 83 / 8%), rgb(7 6 12 / 60%) 60%);
-    border: 1px solid rgb(211 165 83 / 17%);
-    border-radius: 14px;
+    padding: 22px 26px;
+    background: linear-gradient(180deg, #0b111a, #080d14 140px);
+    border: 1px solid rgb(255 255 255 / 8%);
+    border-radius: 20px;
+    box-shadow: 0 14px 40px rgb(0 0 0 / 22%);
   }
-  .iris-mechanic-list > article.tone-danger { background: linear-gradient(160deg, rgb(226 89 111 / 10%), rgb(7 6 12 / 60%) 60%); border-color: rgb(226 89 111 / 20%); }
-  .iris-mechanic-list > article.tone-success { background: linear-gradient(160deg, rgb(98 201 138 / 8%), rgb(7 6 12 / 60%) 60%); border-color: rgb(98 201 138 / 18%); }
-  .iris-mechanic-head { display: flex; align-items: flex-start; gap: 10px; }
-  // Icono reducido respecto al resto de la infografía (66px por defecto) —
-  // en una card de ~280px de ancho el icono grande dejaba sitio para poco
-  // más.
-  .iris-mechanic-head .iris-player-spell-icon { width: 36px; height: 36px; padding: 2px; border-radius: 9px; }
-  .iris-mechanic-title { flex: 1; min-width: 0; }
-  .iris-mechanic-title > strong { display: block; overflow: hidden; font-family: Georgia, 'Times New Roman', serif; font-size: 16px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-  .iris-mechanic-title > span { display: block; overflow: hidden; margin-top: 2px; color: #b7abbc; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-  .iris-mechanic-ratio-badge { flex: 0 0 auto; font-family: Georgia, 'Times New Roman', serif; font-size: 17px; font-weight: 600; }
-  .iris-mechanic-list > article.tone-danger .iris-mechanic-ratio-badge { color: #e2596f; }
-  .iris-mechanic-list > article.tone-warning .iris-mechanic-ratio-badge { color: #d1a34e; }
-  .iris-mechanic-list > article.tone-success .iris-mechanic-ratio-badge { color: #62c98a; }
-  // §"no e slo que habiamos dicho con los chips y la barra y los cuadrados"
-  // (feedback real, 2026-08-29, con captura de Nanis 0/3, 0/2...): bug visual
-  // real — con ratio 0%, el relleno de color mide 0px y el fondo del track
-  // (#29232d) es casi idéntico al fondo de la página, así que la barra
-  // desaparece literalmente. El mockup original (▓▓▓░░░) es un bicolor que
-  // SIEMPRE se ve entero — la mitad "sin cubrir" también es un color visible,
-  // no el vacío. El track ahora lleva de fondo el mismo tono (atenuado) que
-  // el relleno, así que un 0% se lee como "barra roja entera", no como nada.
-  .iris-mechanic-list .iris-player-pull-track { height: 7px; }
-  .iris-mechanic-list > article.tone-danger .iris-player-pull-track { background: rgb(216 85 105 / 30%); }
-  .iris-mechanic-list > article.tone-warning .iris-player-pull-track { background: rgb(209 163 78 / 30%); }
-  .iris-mechanic-list > article.tone-success .iris-player-pull-track { background: rgb(88 184 123 / 30%); }
-  .iris-mechanic-list > article.tone-danger .iris-player-pull-track i { background: #d85569; }
-  .iris-mechanic-list > article.tone-warning .iris-player-pull-track i { background: #d1a34e; }
-  .iris-mechanic-list > article.tone-success .iris-player-pull-track i { background: #58b87b; }
 
-  // Cuadrícula de estado: tamaño de celda fijo, ancho fluido — con 6
-  // ocurrencias es una tira corta, con 90 se envuelve en varias líneas,
-  // pero la altura de cada celda nunca cambia. Relleno=cubierta,
-  // hueco=fallo — la forma nunca depende solo del color.
-  // §mismo feedback (2026-08-29): 11px con borde de 2px se leía como un
-  // punto suelto, no como una cuadrícula legible de un vistazo — subido a
-  // 15px y el hueco (sin cubrir) ahora lleva relleno rojo tenue, no solo
-  // borde, para que se note aun a tamaño de miniatura.
-  .iris-mechanic-grid { display: flex; flex-wrap: wrap; gap: 4px; }
-  .iris-mechanic-cell { width: 13px; height: 13px; border-radius: 4px; background: rgb(216 85 105 / 22%); border: 2px solid #d85569; }
-  .iris-mechanic-cell.covered { background: #58b87b; border-color: #58b87b; }
+  .iris-mech-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+  }
+  .iris-mech-head-left {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    min-width: 0;
+  }
+  .iris-mech-icon {
+    width: 60px;
+    height: 60px;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 12%);
+    border-radius: 13px;
+  }
+  .iris-mech-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  // §"quitale un pelo de margen inferior al titulo... para que el subtitulo
+  // este alineado realmente con la parte inferior del icono" (feedback real,
+  // 2026-08-29): line-height explícito en el nombre (el alto de línea por
+  // defecto del navegador a 38px añadía más aire del que se ve) + menos
+  // separación al subtítulo — el bloque título+subtítulo mide ahora ~lo
+  // mismo que el icono de 80px, en vez de sobrepasarlo.
+  .iris-mech-title {
+    min-width: 0;
+  }
+  .iris-mech-title > strong {
+    display: block;
+    overflow: hidden;
+    color: #f4f6fa;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 27px;
+    font-weight: 700;
+    line-height: 1.1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .iris-mech-title > span {
+    display: block;
+    margin-top: 4px;
+    overflow: hidden;
+    color: #8f98aa;
+    font-size: 15px;
+    font-weight: 450;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .iris-mech-occasions {
+    color: #a970ff;
+    font-weight: 600;
+  }
+  .iris-mech-head-right {
+    flex: 0 0 auto;
+    text-align: right;
+  }
+  .iris-mech-ratio {
+    display: block;
+    color: #f4f6fa;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 26px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .iris-mech-pct {
+    margin-left: 6px;
+    color: #65cb4a;
+  }
+  .iris-mech-legend {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 6px;
+    color: #b3bbc9;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .iris-mech-legend > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .iris-mech-legend i {
+    width: 11px;
+    height: 11px;
+    background: #ef4747;
+    border-radius: 3px;
+  }
+  .iris-mech-legend i.covered {
+    background: #65cb4a;
+  }
 
-  .iris-mechanic-defensives { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 8px; }
-  .iris-mechanic-defensive-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 4px; color: #e8dfe9; font-size: 12px; font-weight: 700; background: rgb(255 255 255 / 4%); border: 1px solid rgb(255 255 255 / 9%); border-radius: 999px; }
-  .iris-mechanic-defensive-chip .iris-player-spell-icon { width: 20px; height: 20px; padding: 1px; border-radius: 6px; }
+  .iris-mech-sep {
+    margin: 10px 0 8px;
+    border-top: 1px solid rgb(255 255 255 / 7%);
+  }
 
-  .iris-player-defensive-summary-list { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-  .iris-player-evidence-name > span { display: block; color: #c8bdcc; font-size: 14px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+  // §"la timeline no debe comprimirse... si supera el viewport, scroll
+  // horizontal" (spec, puntos 37-38): ancho de cuadrado fijo, la card crece
+  // o hace scroll, nunca reduce el tamaño ni pasa a varias filas.
+  .iris-mech-timeline-wrap {
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .iris-mech-timeline {
+    display: flex;
+    align-items: flex-end;
+    width: fit-content;
+  }
+  .iris-mech-pull-group {
+    display: flex;
+    flex-direction: column;
+  }
+  .iris-mech-pull-head {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-bottom: 5px;
+  }
+  .iris-mech-pull-num {
+    color: #8f98aa;
+    font-size: 13px;
+    font-weight: 500;
+    transition: color 0.15s ease;
+  }
+  .iris-mech-pull-bracket {
+    width: 100%;
+    height: 5px;
+    margin-top: 3px;
+    border: 1px solid rgb(175 185 200 / 38%);
+    border-bottom: none;
+    border-radius: 3px 3px 0 0;
+    transition: border-color 0.15s ease;
+  }
+  // Hover de pull: aísla visualmente todas las ocasiones del mismo pull —
+  // el resto de la timeline atenúa opacidad, nunca cambia de color.
+  .iris-mech-timeline:hover .iris-mech-pull-group:not(:hover) {
+    opacity: 0.6;
+  }
+  .iris-mech-pull-group:hover .iris-mech-pull-num {
+    color: #f4f6fa;
+  }
+  .iris-mech-pull-group:hover .iris-mech-pull-bracket {
+    border-color: rgb(175 185 200 / 70%);
+  }
+  .iris-mech-pull-cells {
+    display: flex;
+  }
+  // §"cuadrados perfectos... pegados entre sí... 1px de separación interna
+  // de bajo contraste, no un hueco" (spec, puntos 20-23): el "hueco" entre
+  // celdas es un borde de 1px, no gap — así siguen leyéndose como una única
+  // banda continua en vez de botones sueltos. Redondeo solo en las puntas de
+  // TODA la secuencia (primer/último cuadrado real), no por pull.
+  .iris-mech-cell {
+    box-sizing: border-box;
+    width: 22px;
+    height: 22px;
+    background: #ef4747;
+    border-right: 1px solid rgb(0 0 0 / 18%);
+    cursor: default;
+    transition: filter 0.1s ease;
+  }
+  .iris-mech-cell.covered {
+    background: #65cb4a;
+  }
+  .iris-mech-cell:hover {
+    outline: 2px solid rgb(255 255 255 / 55%);
+    outline-offset: -2px;
+    filter: brightness(1.12);
+  }
+  .iris-mech-pull-group:first-child .iris-mech-cell:first-child {
+    border-top-left-radius: 4px;
+    border-bottom-left-radius: 4px;
+  }
+  .iris-mech-pull-group:last-child .iris-mech-cell:last-child {
+    border-right: none;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+  }
+
+  .iris-mech-axis {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
+    color: #8f98aa;
+    font-size: 13px;
+  }
+  .iris-mech-axis-label {
+    display: flex;
+    flex: 1 0 auto;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+  }
+  .iris-mech-axis-label::before,
+  .iris-mech-axis-label::after {
+    display: block;
+    flex: 1 1 auto;
+    height: 0;
+    border-top: 1px solid rgb(255 255 255 / 12%);
+    content: '';
+  }
+
+  // §"la parte de defensivos disponibles se puede reducir bastante de alto"
+  // (feedback real, 2026-08-29): el bloque que más aire tenía — divisor y
+  // título recortados, y las sub-cards de abajo bajan de min-height 96px a
+  // altura libre (el contenido ya cabe en menos con los tamaños reducidos).
+  .iris-mech-defensives {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgb(255 255 255 / 6%);
+  }
+  .iris-mech-defensives-title {
+    margin: 0 0 10px;
+    color: #b7bfcc;
+    font-size: 15px;
+    font-weight: 550;
+  }
+  .iris-mech-defensive-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  // §"usados, no usados y posibles... bien usados, no usados a secas, y
+  // usados fuera de tiempo" (feedback real, 2026-08-29): 3 cubos siguen
+  // cabiendo — se compacta el AIRE (padding, iconos, tipografía), no la
+  // mini-barra ni la fila de números, que es la información en sí.
+  .iris-mech-defensive-card {
+    min-width: 230px;
+    display: flex;
+    flex: 1 1 230px;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: rgb(255 255 255 / 1.5%);
+    border: 1px solid rgb(255 255 255 / 8%);
+    border-radius: 12px;
+  }
+  .iris-mech-defensive-card .iris-player-spell-icon {
+    width: 40px;
+    height: 40px;
+    flex: 0 0 auto;
+    padding: 2px;
+    border-radius: 8px;
+  }
+  .iris-mech-defensive-body {
+    flex: 1;
+    min-width: 0;
+  }
+  .iris-mech-defensive-name {
+    display: block;
+    overflow: hidden;
+    color: #f2f4f8;
+    font-size: 15px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  // Mini-barra de 4 tramos, mismo lenguaje visual que el resto de la card
+  // (verde=cubrió) — el hueco "sin usar" es la oportunidad perdida real, se
+  // le da un tono cálido para que destaque frente al gris neutro de
+  // "en cooldown" (eso no siempre es un error del jugador).
+  .iris-mech-defensive-bar {
+    display: flex;
+    height: 5px;
+    margin-top: 5px;
+    overflow: hidden;
+    background: rgb(255 255 255 / 6%);
+    border-radius: 999px;
+  }
+  .iris-mech-defensive-bar i {
+    display: block;
+    height: 100%;
+  }
+  .iris-mech-defensive-bar i.covered {
+    background: #65cb4a;
+  }
+  .iris-mech-defensive-bar i.unused {
+    background: #ef4747;
+  }
+  .iris-mech-defensive-bar i.cooldown {
+    background: #5b6472;
+  }
+  .iris-mech-defensive-bar i.unknown {
+    background: repeating-linear-gradient(45deg, #6f7888 0 3px, #4a505c 3px 6px);
+  }
+  .iris-mech-defensive-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    margin-top: 5px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .iris-mech-defensive-stats > span.covered {
+    color: #65cb4a;
+  }
+  .iris-mech-defensive-stats > span.unused {
+    color: #ef4747;
+  }
+  .iris-mech-defensive-stats > span.cooldown {
+    color: #929bad;
+  }
+  .iris-mech-defensive-stats > span.unknown {
+    color: #6f7888;
+    font-style: italic;
+  }
+  .iris-mech-defensives-empty {
+    margin: 0;
+    color: #6f7888;
+    font-size: 13px;
+    font-style: italic;
+  }
+
+  .iris-mech-footer {
+    margin: 14px 0 0;
+    color: #8f98aa;
+    font-size: 13px;
+  }
+  .iris-mech-footer-icon {
+    margin-right: 4px;
+  }
+  .iris-mech-footer-link {
+    color: #a970ff;
+  }
+
+  .iris-player-defensive-summary-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .iris-player-evidence-name > span {
+    display: block;
+    color: #c8bdcc;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
   // §"ya que tenemos o podemos obtener las imágenes de los bosses... para
   // que fuese más atractivo" (feedback real, 2026-08-29): boss_id ya es el
   // encounter id de WCL en toda la app (ver bossIconUrl en el .ts) — mismo
   // CDN de assets.rpglogs.com que usa el propio WCL para sus iconos de boss.
-  .iris-player-evidence-boss { display: flex; align-items: center; gap: 9px; }
+  .iris-player-evidence-boss {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
   // §"no sale o sale raro" (feedback real, 2026-08-29): assets.rpglogs.com no
   // es una API documentada con garantía de disponibilidad — el SVG vive
   // SIEMPRE detrás del <img>, de fondo. Si la imagen carga, la tapa entera
   // (mismo tamaño, cover); si falla dos veces (ver onBossIconError) se oculta
   // y el SVG queda como resultado final, no como parche visible a medias.
-  .iris-player-boss-icon { position: relative; flex: 0 0 auto; width: 44px; height: 44px; overflow: hidden; display: grid; place-items: center; color: #cbb9d1; background: linear-gradient(145deg, color-mix(in srgb, var(--class-accent) 45%, #201628), #0a0810); border-radius: 10px; box-shadow: 0 4px 12px rgb(0 0 0 / 35%); }
-  .iris-player-boss-icon svg { width: 55%; height: 55%; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-  .iris-player-boss-icon img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; }
-  .iris-player-boss-icon.small { width: 26px; height: 26px; border-radius: 7px; }
-  .iris-player-boss-icon.small svg { stroke-width: 3; }
-  .iris-player-evidence-name > strong { display: block; margin-top: 5px; font-family: Georgia, 'Times New Roman', serif; font-size: 28px; font-weight: 500; }
-  .iris-player-evidence-name > small { display: inline-block; margin-top: 8px; padding: 4px 8px; color: #e4b866; background: rgb(211 165 83 / 11%); border-radius: 6px; font-size: 12px; font-weight: 900; letter-spacing: .08em; }
-  .iris-player-evidence-name > small.death { color: #ed8292; background: rgb(226 89 111 / 12%); }
+  .iris-player-boss-icon {
+    position: relative;
+    flex: 0 0 auto;
+    width: 44px;
+    height: 44px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    color: #cbb9d1;
+    background: linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--class-accent) 45%, #201628),
+      #0a0810
+    );
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 35%);
+  }
+  .iris-player-boss-icon svg {
+    width: 55%;
+    height: 55%;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .iris-player-boss-icon img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
+  }
+  .iris-player-boss-icon.small {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+  }
+  .iris-player-boss-icon.small svg {
+    stroke-width: 3;
+  }
+  .iris-player-evidence-name > strong {
+    display: block;
+    margin-top: 5px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 28px;
+    font-weight: 500;
+  }
+  .iris-player-evidence-name > small {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 4px 8px;
+    color: #e4b866;
+    background: rgb(211 165 83 / 11%);
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+  .iris-player-evidence-name > small.death {
+    color: #ed8292;
+    background: rgb(226 89 111 / 12%);
+  }
   // §"preparar el defensivo o tenerlo listo" (feedback real, 2026-08-29):
   // tono distinto (info, no advertencia) — es una ayuda para la próxima
   // vez, no otro fallo más que apilar sobre el resto de la tarjeta.
-  .iris-player-evidence-name > small.timing { display: block; margin-top: 6px; color: #7fc2e0; background: rgb(102 178 214 / 12%); }
-  .iris-player-evidence-cell { min-height: 104px; padding: 13px 16px; border-left: 1px solid rgb(255 255 255 / 9%); }
-  .iris-player-evidence-cell > span { display: block; color: #aca1b0; font-size: 12px; font-weight: 900; letter-spacing: .08em; }
-  .iris-player-evidence-cell > strong { display: block; margin-top: 8px; color: #e8dfe9; font-size: 18px; line-height: 1.3; }
-  .iris-player-evidence-cell > p { margin: 6px 0 0; color: #aea4b2; font-size: 14px; line-height: 1.4; }
-  .iris-player-evidence-cell.damage > strong { color: #ee788a; font-family: Georgia, 'Times New Roman', serif; font-size: 31px; font-weight: 500; }
-  .iris-player-evidence-cell.defensive { padding: 13px 17px; background: rgb(255 255 255 / 3%); border: 0; border-radius: 13px; }
-  .iris-player-evidence-cell.defensive.observed { background: rgb(72 159 105 / 8%); border: 1px solid rgb(98 201 138 / 13%); }
-  .iris-player-evidence-cell.defensive.missed { background: rgb(226 89 111 / 10%); border: 1px solid rgb(226 89 111 / 22%); }
-  .iris-player-evidence-cell.defensive.missed > strong { color: #f0879a; font-family: Georgia, 'Times New Roman', serif; font-size: 21px; font-weight: 500; }
-  .iris-player-evidence-cell.defensive > div { display: flex; align-items: center; gap: 12px; margin-top: 7px; }
-  .iris-player-evidence-cell.defensive > div > strong { color: #e9e1eb; font-size: 16px; }
-  .iris-player-evidence-cell.defensive.observed > p { color: #79cc98; }
-  .iris-player-evidence-cell.source > strong { color: #d9c8df; }
-  .iris-player-evidence-cell.source > p.missed { color: #ed8796; }
-  .iris-player-evidence-cell.source > p.used { color: #70ce93; }
+  .iris-player-evidence-name > small.timing {
+    display: block;
+    margin-top: 6px;
+    color: #7fc2e0;
+    background: rgb(102 178 214 / 12%);
+  }
+  .iris-player-evidence-cell {
+    min-height: 104px;
+    padding: 13px 16px;
+    border-left: 1px solid rgb(255 255 255 / 9%);
+  }
+  .iris-player-evidence-cell > span {
+    display: block;
+    color: #aca1b0;
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+  .iris-player-evidence-cell > strong {
+    display: block;
+    margin-top: 8px;
+    color: #e8dfe9;
+    font-size: 18px;
+    line-height: 1.3;
+  }
+  .iris-player-evidence-cell > p {
+    margin: 6px 0 0;
+    color: #aea4b2;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .iris-player-evidence-cell.damage > strong {
+    color: #ee788a;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 31px;
+    font-weight: 500;
+  }
+  .iris-player-evidence-cell.defensive {
+    padding: 13px 17px;
+    background: rgb(255 255 255 / 3%);
+    border: 0;
+    border-radius: 13px;
+  }
+  .iris-player-evidence-cell.defensive.observed {
+    background: rgb(72 159 105 / 8%);
+    border: 1px solid rgb(98 201 138 / 13%);
+  }
+  .iris-player-evidence-cell.defensive.missed {
+    background: rgb(226 89 111 / 10%);
+    border: 1px solid rgb(226 89 111 / 22%);
+  }
+  .iris-player-evidence-cell.defensive.missed > strong {
+    color: #f0879a;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 21px;
+    font-weight: 500;
+  }
+  .iris-player-evidence-cell.defensive > div {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 7px;
+  }
+  .iris-player-evidence-cell.defensive > div > strong {
+    color: #e9e1eb;
+    font-size: 16px;
+  }
+  .iris-player-evidence-cell.defensive.observed > p {
+    color: #79cc98;
+  }
+  .iris-player-evidence-cell.source > strong {
+    color: #d9c8df;
+  }
+  .iris-player-evidence-cell.source > p.missed {
+    color: #ed8796;
+  }
+  .iris-player-evidence-cell.source > p.used {
+    color: #70ce93;
+  }
 
   // §"en txerokee... en la infografía no viene reflejada esa penalización"
   // (feedback real, 2026-08-29): lista secundaria para el pull sobrevivido
   // bajo presión sin ningún cast — más simple a propósito que la tarjeta de
   // muerte de arriba, porque no hay un catálogo "qué estaba disponible" para
   // este caso (defensive_use_opportunity es un booleano de pull).
-  .iris-player-miss-subheading { margin: 18px 0 10px; color: #d9c8df; font-size: 15px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
-  .iris-player-evidence-list + .iris-player-miss-subheading { margin-top: 22px; }
-  .iris-player-pressure-list { display: flex; flex-direction: column; gap: 10px; }
+  .iris-player-miss-subheading {
+    margin: 18px 0 10px;
+    color: #d9c8df;
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .iris-player-evidence-list + .iris-player-miss-subheading {
+    margin-top: 22px;
+  }
+  .iris-player-pressure-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
   .iris-player-pressure-list article {
     display: flex;
     align-items: center;
@@ -345,72 +1435,299 @@ app-night-player-infographic {
     border: 1px solid rgb(226 89 111 / 16%);
     border-radius: 15px;
   }
-  .iris-player-pressure-list .iris-player-boss-icon { width: 54px; height: 54px; border-radius: 12px; }
-  .iris-player-pressure-copy { flex: 1; min-width: 0; }
-  .iris-player-pressure-copy > strong { display: block; font-size: 19px; }
-  .iris-player-pressure-copy > p { margin: 4px 0 0; color: #cdb9bf; font-size: 15px; line-height: 1.4; }
-  .iris-player-pressure-penalty { flex: 0 0 auto; padding: 8px 16px; color: #f0879a; background: rgb(226 89 111 / 12%); border: 1px solid rgb(226 89 111 / 25%); border-radius: 10px; font-family: Georgia, 'Times New Roman', serif; font-size: 22px; font-weight: 500; }
+  .iris-player-pressure-list .iris-player-boss-icon {
+    width: 54px;
+    height: 54px;
+    border-radius: 12px;
+  }
+  .iris-player-pressure-copy {
+    flex: 1;
+    min-width: 0;
+  }
+  .iris-player-pressure-copy > strong {
+    display: block;
+    font-size: 19px;
+  }
+  .iris-player-pressure-copy > p {
+    margin: 4px 0 0;
+    color: #cdb9bf;
+    font-size: 15px;
+    line-height: 1.4;
+  }
+  .iris-player-pressure-penalty {
+    flex: 0 0 auto;
+    padding: 8px 16px;
+    color: #f0879a;
+    background: rgb(226 89 111 / 12%);
+    border: 1px solid rgb(226 89 111 / 25%);
+    border-radius: 10px;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 22px;
+    font-weight: 500;
+  }
 
-  .iris-player-defensive-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; }
-  .iris-player-defensive-summary article { padding: 18px 20px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 7%); border-radius: 15px; }
-  .iris-player-defensive-summary strong { display: block; color: #78cf98; font-family: Georgia, 'Times New Roman', serif; font-size: 36px; font-weight: 500; }
-  .iris-player-defensive-summary article.danger strong { color: #e97384; }
-  .iris-player-defensive-summary span { display: block; margin-top: 3px; color: #e5dce8; font-size: 15px; font-weight: 800; text-transform: uppercase; }
-  .iris-player-defensive-summary p { margin: 5px 0 0; color: #aca2b1; font-size: 14px; }
-  .iris-player-empty-evidence { margin: 16px 0 0; padding: 18px; color: #c4bac8; background: rgb(255 255 255 / 3%); border-radius: 13px; font-size: 16px; }
+  .iris-player-defensive-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 13px;
+  }
+  .iris-player-defensive-summary article {
+    padding: 18px 20px;
+    background: rgb(255 255 255 / 3%);
+    border: 1px solid rgb(255 255 255 / 7%);
+    border-radius: 15px;
+  }
+  .iris-player-defensive-summary strong {
+    display: block;
+    color: #78cf98;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 36px;
+    font-weight: 500;
+  }
+  .iris-player-defensive-summary article.danger strong {
+    color: #e97384;
+  }
+  .iris-player-defensive-summary span {
+    display: block;
+    margin-top: 3px;
+    color: #e5dce8;
+    font-size: 15px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+  .iris-player-defensive-summary p {
+    margin: 5px 0 0;
+    color: #aca2b1;
+    font-size: 14px;
+  }
+  .iris-player-empty-evidence {
+    margin: 16px 0 0;
+    padding: 18px;
+    color: #c4bac8;
+    background: rgb(255 255 255 / 3%);
+    border-radius: 13px;
+    font-size: 16px;
+  }
 
-  .iris-player-evolution-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 13px; }
-  .iris-player-evolution-metrics article { min-width: 0; padding: 17px 18px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 7%); border-top: 3px solid #6f6874; border-radius: 14px; }
-  .iris-player-evolution-metrics article.improved { border-top-color: #5fc185; }
-  .iris-player-evolution-metrics article.worsened { border-top-color: #de5d72; }
-  .iris-player-evolution-metrics > article > span { display: block; min-height: 34px; color: #d8cddd; font-size: 14px; font-weight: 800; }
-  .iris-player-evolution-metrics > article > div { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
-  .iris-player-evolution-metrics b { color: #a59aa9; font-size: 18px; }
-  .iris-player-evolution-metrics i { color: #746b79; font-style: normal; }
-  .iris-player-evolution-metrics strong { font-family: Georgia, 'Times New Roman', serif; font-size: 30px; font-weight: 500; }
-  .iris-player-evolution-metrics em { display: block; margin-top: 6px; color: #aaa0af; font-size: 12px; font-style: normal; font-weight: 900; letter-spacing: .08em; }
-  .iris-player-evolution-metrics .improved em { color: #6dca90; }
-  .iris-player-evolution-metrics .worsened em { color: #e57485; }
-  .iris-player-evolution-metrics p { margin: 6px 0 0; color: #a89eac; font-size: 13px; }
-  .iris-player-evolution-mechanics { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; }
-  .iris-player-evolution-mechanics > div { padding: 17px 19px; background: rgb(255 255 255 / 3%); border: 1px solid rgb(255 255 255 / 7%); border-radius: 15px; }
-  .iris-player-evolution-mechanics > div > strong { display: block; margin-bottom: 9px; color: #d8cedc; font-size: 14px; text-transform: uppercase; }
-  .iris-player-evolution-mechanics article { display: flex; align-items: center; gap: 12px; padding: 7px 0; border-top: 1px solid rgb(255 255 255 / 6%); }
-  .iris-player-evolution-mechanics article > span { width: 28px; height: 28px; flex: 0 0 auto; display: grid; place-items: center; color: #70ce93; background: rgb(95 191 130 / 12%); border-radius: 8px; font-weight: 900; }
-  .iris-player-evolution-mechanics .worsened article > span { color: #e67384; background: rgb(226 89 111 / 12%); }
-  .iris-player-evolution-mechanics b { display: block; font-size: 15px; }
-  .iris-player-evolution-mechanics p { margin: 2px 0 0; color: #aaa0af; font-size: 13px; }
-  .iris-player-evolution-note { margin: 14px 0 0; color: #a99fad; font-size: 14px; text-align: right; }
-  .iris-player-no-evolution { display: flex; align-items: baseline; gap: 22px; padding: 22px 28px; }
-  .iris-player-no-evolution > span { color: #c9a4d9; font-size: 13px; font-weight: 900; letter-spacing: .14em; }
-  .iris-player-no-evolution > strong { font-family: Georgia, 'Times New Roman', serif; font-size: 28px; font-weight: 500; }
-  .iris-player-no-evolution > p { margin: 0 0 0 auto; color: #aaa0af; font-size: 15px; }
+  .iris-player-evolution-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 13px;
+  }
+  .iris-player-evolution-metrics article {
+    min-width: 0;
+    padding: 17px 18px;
+    background: rgb(255 255 255 / 3%);
+    border: 1px solid rgb(255 255 255 / 7%);
+    border-top: 3px solid #6f6874;
+    border-radius: 14px;
+  }
+  .iris-player-evolution-metrics article.improved {
+    border-top-color: #5fc185;
+  }
+  .iris-player-evolution-metrics article.worsened {
+    border-top-color: #de5d72;
+  }
+  .iris-player-evolution-metrics > article > span {
+    display: block;
+    min-height: 34px;
+    color: #d8cddd;
+    font-size: 14px;
+    font-weight: 800;
+  }
+  .iris-player-evolution-metrics > article > div {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .iris-player-evolution-metrics b {
+    color: #a59aa9;
+    font-size: 18px;
+  }
+  .iris-player-evolution-metrics i {
+    color: #746b79;
+    font-style: normal;
+  }
+  .iris-player-evolution-metrics strong {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 30px;
+    font-weight: 500;
+  }
+  .iris-player-evolution-metrics em {
+    display: block;
+    margin-top: 6px;
+    color: #aaa0af;
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+  }
+  .iris-player-evolution-metrics .improved em {
+    color: #6dca90;
+  }
+  .iris-player-evolution-metrics .worsened em {
+    color: #e57485;
+  }
+  .iris-player-evolution-metrics p {
+    margin: 6px 0 0;
+    color: #a89eac;
+    font-size: 13px;
+  }
+  .iris-player-evolution-mechanics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 18px;
+  }
+  .iris-player-evolution-mechanics > div {
+    padding: 17px 19px;
+    background: rgb(255 255 255 / 3%);
+    border: 1px solid rgb(255 255 255 / 7%);
+    border-radius: 15px;
+  }
+  .iris-player-evolution-mechanics > div > strong {
+    display: block;
+    margin-bottom: 9px;
+    color: #d8cedc;
+    font-size: 14px;
+    text-transform: uppercase;
+  }
+  .iris-player-evolution-mechanics article {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 0;
+    border-top: 1px solid rgb(255 255 255 / 6%);
+  }
+  .iris-player-evolution-mechanics article > span {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    color: #70ce93;
+    background: rgb(95 191 130 / 12%);
+    border-radius: 8px;
+    font-weight: 900;
+  }
+  .iris-player-evolution-mechanics .worsened article > span {
+    color: #e67384;
+    background: rgb(226 89 111 / 12%);
+  }
+  .iris-player-evolution-mechanics b {
+    display: block;
+    font-size: 15px;
+  }
+  .iris-player-evolution-mechanics p {
+    margin: 2px 0 0;
+    color: #aaa0af;
+    font-size: 13px;
+  }
+  .iris-player-evolution-note {
+    margin: 14px 0 0;
+    color: #a99fad;
+    font-size: 14px;
+    text-align: right;
+  }
+  .iris-player-no-evolution {
+    display: flex;
+    align-items: baseline;
+    gap: 22px;
+    padding: 22px 28px;
+  }
+  .iris-player-no-evolution > span {
+    color: #c9a4d9;
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 0.14em;
+  }
+  .iris-player-no-evolution > strong {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 28px;
+    font-weight: 500;
+  }
+  .iris-player-no-evolution > p {
+    margin: 0 0 0 auto;
+    color: #aaa0af;
+    font-size: 15px;
+  }
 
-  .iris-player-sheet-footer { display: flex; align-items: end; justify-content: space-between; gap: 40px; padding-top: 24px; border-top: 1px solid rgb(255 255 255 / 10%); }
-  .iris-player-sheet-footer > div { display: flex; align-items: center; gap: 12px; }
-  .iris-player-sheet-footer img { width: 42px; height: 42px; object-fit: contain; }
-  .iris-player-sheet-footer span { color: #d2ac70; font-family: Georgia, 'Times New Roman', serif; font-size: 24px; }
-  .iris-player-sheet-footer strong { color: #bdb2c1; font-size: 13px; letter-spacing: .14em; }
-  .iris-player-sheet-footer p { max-width: 1500px; margin: 0; color: #aaa0af; font-size: 14px; line-height: 1.5; text-align: right; }
+  .iris-player-sheet-footer {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 40px;
+    padding-top: 24px;
+    border-top: 1px solid rgb(255 255 255 / 10%);
+  }
+  .iris-player-sheet-footer > div {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .iris-player-sheet-footer img {
+    width: 42px;
+    height: 42px;
+    object-fit: contain;
+  }
+  .iris-player-sheet-footer span {
+    color: #d2ac70;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 24px;
+  }
+  .iris-player-sheet-footer strong {
+    color: #bdb2c1;
+    font-size: 13px;
+    letter-spacing: 0.14em;
+  }
+  .iris-player-sheet-footer p {
+    max-width: 1500px;
+    margin: 0;
+    color: #aaa0af;
+    font-size: 14px;
+    line-height: 1.5;
+    text-align: right;
+  }
 }
 
 @media (max-width: 1050px) {
   app-night-player-infographic {
-    .iris-player-toolbar-title { display: none; }
-    .iris-player-toolbar-actions { width: 100%; justify-content: flex-end; }
-    .iris-player-status { margin-right: auto; }
-    .iris-player-tool-button { padding-inline: 9px; font-size: 0; }
+    .iris-player-toolbar-title {
+      display: none;
+    }
+    .iris-player-toolbar-actions {
+      width: 100%;
+      justify-content: flex-end;
+    }
+    .iris-player-status {
+      margin-right: auto;
+    }
+    .iris-player-tool-button {
+      padding-inline: 9px;
+      font-size: 0;
+    }
     .iris-player-tool-button.primary,
-    .iris-player-tool-button.discord { font-size: 10px; }
+    .iris-player-tool-button.discord {
+      font-size: 10px;
+    }
   }
 }
 
 @media (max-width: 650px) {
   app-night-player-infographic {
-    .iris-player-status { display: none; }
-    .iris-player-toolbar-actions { justify-content: center; }
+    .iris-player-status {
+      display: none;
+    }
+    .iris-player-toolbar-actions {
+      justify-content: center;
+    }
     .iris-player-tool-button.primary,
-    .iris-player-tool-button.discord { font-size: 0; }
-    .iris-player-viewport { padding: 10px; }
+    .iris-player-tool-button.discord {
+      font-size: 0;
+    }
+    .iris-player-viewport {
+      padding: 10px;
+    }
   }
 }

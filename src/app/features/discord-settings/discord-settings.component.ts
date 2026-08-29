@@ -1,14 +1,19 @@
 // Colocar en: src/app/features/discord-settings/discord-settings.component.ts
 // §"un bot que crea canales privados dentro de una categoría... solo para
-// rango Raider, ni trial ni oficial... la primera vez tiene que crearlos,
-// luego si cambia el roster tiene que actualizarlos" + "debe estar en la
-// pestaña de ajustes, crear un nuevo submenu llamado Discord" (feedback
-// real, 2026-08-28): mismo patrón que DefensiveCatalogComponent — vive
-// embebido dentro de ManifestComponent (pestaña "Discord" de Ajustes).
-// WoWAudit no expone Discord ID (comprobado empíricamente contra la API
-// real), así que la vinculación personaje↔Discord es manual aquí; el resto
+// rango Raider... la primera vez tiene que crearlos, luego si cambia el
+// roster tiene que actualizarlos" + "debe estar en la pestaña de ajustes,
+// crear un nuevo submenu llamado Discord" (feedback real, 2026-08-28): mismo
+// patrón que DefensiveCatalogComponent — vive embebido dentro de
+// ManifestComponent (pestaña "Discord" de Ajustes). WoWAudit no expone
+// Discord ID (comprobado empíricamente contra la API real), así que la
+// vinculación personaje↔Discord es manual aquí; el resto
 // (crear/actualizar/borrar canales) lo hace discord-roster-channels
 // (action=sync), idempotente.
+//
+// §"quitar que no se creen canales para los oficiales, tambien se tienen que
+// crear" (feedback real, 2026-08-29): ser oficial ya NO excluye de tener
+// canal — solo se sigue mostrando como badge informativo (is_officer, ver
+// discord-roster-channels/index.ts).
 import { Component, computed, inject, signal } from '@angular/core';
 import { EdgeFunctionsService, type DiscordRosterLink } from '../../core/edge-functions.service';
 import { errorMessage } from '../../shared/error-message.util';
@@ -68,9 +73,9 @@ export class DiscordSettingsComponent {
   lastSyncResult = signal<SyncResult | null>(null);
 
   // §"solo para rango Raider": Main es el único rank de WoWAudit que
-  // corresponde a raider de verdad (el otro es Trial) — ver cabecera de
-  // discord-roster-channels/index.ts sobre por qué "ni oficial" se decide
-  // con el rol de Discord en vez de con un rank que no existe en WoWAudit.
+  // corresponde a raider de verdad (el otro es Trial) — un oficial que
+  // también es Main raider entra igual, ya no hay exclusión por rol de
+  // Discord (ver discord-roster-channels/index.ts).
   mainRoster = computed(() => this.roster().filter((r) => r.rank === 'Main'));
   linkByCharacterId = computed(() => new Map(this.links().map((l) => [l.character_id, l])));
   configReady = computed(() => !!this.settings().category_id && !!this.settings().officers_role_id);

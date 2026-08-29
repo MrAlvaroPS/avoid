@@ -1,0 +1,28 @@
+diff --git a/src/app/core/night-player-summary-cache.service.ts b/src/app/core/night-player-summary-cache.service.ts
+index 04e6c77..a707772 100644
+--- a/src/app/core/night-player-summary-cache.service.ts
++++ b/src/app/core/night-player-summary-cache.service.ts
+@@ -79,12 +79,21 @@ export class NightPlayerSummaryCacheService {
+     }
+   }
+ 
+-  write(reportCode: string, playerName: string, fingerprint: string, summary: NightPlayerSummary): void {
++  write(
++    reportCode: string,
++    playerName: string,
++    fingerprint: string,
++    summary: NightPlayerSummary,
++  ): void {
+     try {
+       this.evictOldestBeyondLimit();
+       localStorage.setItem(
+         cacheKey(reportCode, playerName),
+-        JSON.stringify({ fingerprint, savedAt: new Date().toISOString(), summary } satisfies CachedEntry),
++        JSON.stringify({
++          fingerprint,
++          savedAt: new Date().toISOString(),
++          summary,
++        } satisfies CachedEntry),
+       );
+     } catch {
+       // La vista sigue funcionando en memoria si el navegador bloquea o

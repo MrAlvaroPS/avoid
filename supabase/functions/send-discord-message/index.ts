@@ -23,10 +23,29 @@ import { errorMessage } from '../_shared/error-message.ts';
 // función nunca puede usarse para publicar fuera del guild de Avoid.
 const DISCORD_API = 'https://discord.com/api/v10';
 
+// §"Si Discord tuviese cupo o limites, hará alguna clase de waiting para
+// terminar de enviarlo" (feedback real, 2026-08-29, para el envío masivo de
+// infografías a todo el roster): mismo patrón de reintento con backoff ya
+// probado en discord-roster-channels/index.ts (fetchGuildMember) contra un
+// 429 real de este mismo bot — se envuelve aquí también porque un envío en
+// bucle de ~24 mensajes (uno por raider) es justo el caso que puede
+// toparse con el rate limit por-ruta de Discord, cosa que un envío suelto
+// desde el visor de un jugador casi nunca alcanza.
+async function discordFetchWithRetry(url: string, init: RequestInit, attempt = 0): Promise<Response> {
+  const res = await fetch(url, init);
+  if (res.status === 429 && attempt < 4) {
+    const body = (await res.clone().json().catch(() => null)) as { retry_after?: number } | null;
+    const waitMs = Math.ceil((body?.retry_after ?? 1) * 1000) + 100;
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    return discordFetchWithRetry(url, init, attempt + 1);
+  }
+  return res;
+}
+
 interface Body {
   channelId: string;
   content?: string;
-  /** PNG en base64 SIN el prefijo "data:image/png;base64,". */
+  /** Imagen en base64 SIN el prefijo "data:image/...;base64,". */
   imageBase64?: string;
   imageFilename?: string;
 }
@@ -51,7 +70,7 @@ Deno.serve(async (req: Request) => {
   if (!allowedGuildId) return jsonResponse({ ok: false, error: 'Falta DISCORD_GUILD_ID en los secrets del proyecto Supabase.' }, 500);
 
   try {
-    const channelRes = await fetch(`${DISCORD_API}/channels/${body.channelId}`, {
+    const channelRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${body.channelId}`, {
       headers: { Authorization: `Bot ${botToken}` },
     });
     if (!channelRes.ok) {
@@ -68,22 +87,24 @@ Deno.serve(async (req: Request) => {
       const form = new FormData();
       form.append('payload_json', JSON.stringify({ content: body.content ?? '' }));
       const bytes = Uint8Array.from(atob(body.imageBase64), (c) => c.charCodeAt(0));
-      // §"Discord devolvió HTTP 413" (feedback real, 2026-08-27): el
-      // cliente ahora manda JPEG (mucho más pequeño) para la infografía —
-      // esto estaba hardcodeado a image/png sin mirar el nombre real,
-      // así que un .jpg se habría subido con Content-Type mentiroso (Discord
-      // decide bastante por el nombre, pero el Content-Type de la parte
-      // multipart también cuenta para cómo lo procesa/previsualiza).
+      // §"Discord devolvió HTTP 413" (feedback real, 2026-08-27): esto
+      // estaba hardcodeado a image/png sin mirar el nombre real, así que un
+      // .jpg se habría subido con Content-Type mentiroso (Discord decide
+      // bastante por el nombre, pero el Content-Type de la parte multipart
+      // también cuenta para cómo lo procesa/previsualiza). El componente
+      // manda PNG o JPG según cuál cupiera sin recomprimir de más (ver
+      // renderDiscordImage en night-player-infographic.component.ts) — nunca
+      // los dos a la vez.
       const filename = body.imageFilename ?? 'infografia.png';
       const mimeType = /\.jpe?g$/i.test(filename) ? 'image/jpeg' : 'image/png';
       form.append('files[0]', new Blob([bytes], { type: mimeType }), filename);
-      sendRes = await fetch(`${DISCORD_API}/channels/${body.channelId}/messages`, {
+      sendRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${body.channelId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bot ${botToken}` },
         body: form,
       });
     } else {
-      sendRes = await fetch(`${DISCORD_API}/channels/${body.channelId}/messages`, {
+      sendRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${body.channelId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: body.content }),

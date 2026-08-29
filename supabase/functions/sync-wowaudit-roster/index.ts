@@ -35,6 +35,21 @@ async function wowauditFetch<T>(path: string, apiKey: string): Promise<T> {
   return res.json();
 }
 
+// §"hay dos iconos de spec rotos: la de demon hunter y la de death knight"
+// (feedback real, 2026-08-29, verificado: wowaudit_roster.class guardaba
+// literalmente "Death Knight"/"Demon Hunter" con espacio): el resto de la
+// app entera (ClassIconComponent, roleFromSpec/SPEC_ROLE, CLASS_DISPLAY_NAME
+// en format.util.ts) usa el formato de WCL — sin espacio, cada palabra en
+// mayúscula ("DeathKnight", "DemonHunter") — porque esa es la fuente de
+// TODO lo demás (class de player_pull_records viene de WCL). Solo estas dos
+// clases tienen espacio en el nombre en inglés, así que solo ellas fallaban
+// silenciosamente (el resto son una palabra, da igual el formato). Se
+// normaliza aquí, en el único punto de entrada de datos de wowaudit, para
+// que cada lector (hay 8 sitios que leen esta tabla) no tenga que saberlo.
+function normalizeWclClassName(rawClass: string): string {
+  return rawClass.replace(/\s+/g, '');
+}
+
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
@@ -91,7 +106,7 @@ Deno.serve(async (req: Request) => {
         character_id: c.id,
         name: c.name,
         realm: c.realm,
-        class: c.class,
+        class: normalizeWclClassName(c.class),
         role: c.role,
         rank: c.rank,
         status: c.status,

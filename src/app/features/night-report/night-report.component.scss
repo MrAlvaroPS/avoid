@@ -267,6 +267,44 @@ h4 {
   font-size: 10.5px;
 }
 
+// §"un boton arriba a la derecha que sea 'actualizar infografias' [...] y
+// otro botón [...] para enviar TODAS las infografias" (feedback real,
+// 2026-08-29): misma cabecera con acciones a la derecha que ya usa
+// .page-header/.page-actions arriba, a escala de tarjeta en vez de página.
+.attendance-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.attendance-bulk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+// Estado "armado" del botón de confirmación — mismo ámbar que el resto de
+// la app usa para "atención, un clic más" (ver .result-warn en
+// defensive-catalog.component.scss), no el rojo de error real.
+.primary-button.confirming {
+  background: #a9762a;
+  border-color: color-mix(in srgb, #a9762a 80%, white);
+}
+.bulk-result {
+  margin: -6px 0 0;
+  padding: 7px 12px;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
+  border-radius: 8px;
+  font-size: 11px;
+}
+.bulk-result.tone-warn {
+  color: #e0b466;
+  background: rgb(224 180 102 / 12%);
+  border-color: rgb(224 180 102 / 30%);
+}
+
 // §"a nivel de raid también" (informe 1): chips de asistencia, mismo idioma
 // visual que el resto de tarjetas de esta pantalla (antes vivían en su
 // propio widget claro, ahora en un .report-section oscuro).

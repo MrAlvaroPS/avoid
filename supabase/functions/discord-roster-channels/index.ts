@@ -3,8 +3,7 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { errorMessage } from '../_shared/error-message.ts';
 
 // §"un bot que crea canales privados dentro de una categoría... solo para
-// rango Raider, ni trial ni oficial. Esas personas concretas las podemos
-// traer de wowaudit" (feedback real, 2026-08-28): mismo patrón que
+// rango Raider" (feedback real, 2026-08-28): mismo patrón que
 // send-discord-message (REST directo con el bot token, sin gateway) — aquí
 // además MANAGE_CHANNELS/MANAGE_ROLES, que hay que concederle al bot a mano
 // una vez en Ajustes del servidor de Discord (eso no se puede hacer por API).
@@ -15,10 +14,15 @@ import { errorMessage } from '../_shared/error-message.ts';
 // /v1/characters, /v1/attendance, /v1/team y /v1/period lo son). La
 // vinculación personaje↔Discord se hace a mano (action=save-link).
 //
-// "Ni oficial" se decide con el MISMO rol de Discord que da visibilidad a los
-// canales (officers_role_id) — no hay un rank="Officer" en WoWAudit (solo
-// Main/Trial), así que reusar ese rol es la única fuente de verdad posible
-// sin inventarse una segunda configuración.
+// §"quiero quitar que no se creen canales para los oficiales, tambien se
+// tienen que crear y tiene que permitirse enviar su infografia" (feedback
+// real, 2026-08-29): la exclusión original de oficiales se ha quitado —
+// elegible = rank Main de verdad en WoWAudit, punto. officers_role_id (el
+// mismo rol de Discord que da visibilidad a TODOS los canales) se sigue
+// resolviendo y guardando como is_officer, pero ahora es solo informativo
+// (el badge "Oficial" en Ajustes → Discord) — ya no bloquea la creación del
+// canal ni el envío de infografías, que solo depende de tener
+// discord_channel_id (ver night-player-summary.service.ts).
 const DISCORD_API = 'https://discord.com/api/v10';
 const PERM_VIEW_CHANNEL = 1024n; // 0x400
 const PERM_SEND_MESSAGES = 2048n; // 0x800
@@ -440,12 +444,16 @@ async function handleSync(env: Env, supabase: any): Promise<Response> {
     const isOfficer = !confirmedNotMember && memberResult.roles.includes(officersRoleId);
     const displayName = confirmedNotMember ? (group.find((l) => l.discord_display_name)?.discord_display_name ?? null) : displayNameOf(memberResult);
 
-    // §"solo para rango Raider, ni trial ni oficial": elegible si CUALQUIER
-    // personaje del grupo es Main de verdad ahora mismo en WoWAudit — un
-    // main Trial temporalmente pero con un alt Main sigue contando (es la
-    // misma persona raideando, solo que hoy le tocó el alt).
+    // §"quiero quitar que no se creen canales para los oficiales, tambien se
+    // tienen que crear y tiene que permitirse enviar su infografia" (feedback
+    // real, 2026-08-29): elegible si CUALQUIER personaje del grupo es Main de
+    // verdad ahora mismo en WoWAudit — un main Trial temporalmente pero con
+    // un alt Main sigue contando (es la misma persona raideando, solo que hoy
+    // le tocó el alt). Ya NO excluye oficiales — is_officer se sigue
+    // calculando y guardando (se usa como badge informativo en Ajustes →
+    // Discord), pero deja de ser un motivo para no tener canal.
     const eligibleMembers = group.filter((l) => rosterByCharacterId.get(l.character_id)?.rank === 'Main');
-    const groupEligible = eligibleMembers.length > 0 && !isOfficer && !confirmedNotMember;
+    const groupEligible = eligibleMembers.length > 0 && !confirmedNotMember;
 
     // El canal es UNO por grupo — se elige un personaje "dueño": el que ya
     // tuviera canal (estabilidad — no lo mueve de sitio en cada sync), si no
@@ -504,7 +512,7 @@ async function handleSync(env: Env, supabase: any): Promise<Response> {
               discord_user_id: discordUserId,
               discord_display_name: displayName,
               discord_channel_id: link.discord_channel_id,
-              is_officer: false,
+              is_officer: isOfficer,
               channel_synced_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             });
@@ -530,7 +538,7 @@ async function handleSync(env: Env, supabase: any): Promise<Response> {
             discord_user_id: discordUserId,
             discord_display_name: displayName,
             discord_channel_id: createdChannel.id,
-            is_officer: false,
+            is_officer: isOfficer,
             channel_synced_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           });
@@ -541,7 +549,7 @@ async function handleSync(env: Env, supabase: any): Promise<Response> {
             discord_user_id: discordUserId,
             discord_display_name: displayName,
             discord_channel_id: link.discord_channel_id,
-            is_officer: false,
+            is_officer: isOfficer,
             channel_synced_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           });

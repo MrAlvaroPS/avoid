@@ -43,11 +43,7 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // "Pulls sin ningún defensivo usado" (que si acumula muchos pulls, sí puede
 // leerse como "una lista muy larga"). Lección: cada cambio de forma de
 // NightPlayerSummary necesita su propio bump, no solo el primero.
-// v4 corrige también la semántica del grid defensivo: una ventana sin
-// ninguna respuesta utilizable ya no se cachea como si fuera un fallo. El
-// shape no cambia, pero mantener v3 serviría ratios antiguos hasta que
-// cambiara el fingerprint global.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v4:';
+const STORAGE_PREFIX = 'avoid:night-player-summary:v3:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;
@@ -83,12 +79,21 @@ export class NightPlayerSummaryCacheService {
     }
   }
 
-  write(reportCode: string, playerName: string, fingerprint: string, summary: NightPlayerSummary): void {
+  write(
+    reportCode: string,
+    playerName: string,
+    fingerprint: string,
+    summary: NightPlayerSummary,
+  ): void {
     try {
       this.evictOldestBeyondLimit();
       localStorage.setItem(
         cacheKey(reportCode, playerName),
-        JSON.stringify({ fingerprint, savedAt: new Date().toISOString(), summary } satisfies CachedEntry),
+        JSON.stringify({
+          fingerprint,
+          savedAt: new Date().toISOString(),
+          summary,
+        } satisfies CachedEntry),
       );
     } catch {
       // La vista sigue funcionando en memoria si el navegador bloquea o

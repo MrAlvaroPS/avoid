@@ -109,8 +109,67 @@
            quién estuvo — informe 2 nunca lo trajo. Roster real de wowaudit,
            no "quién ha aparecido alguna vez". -->
       <section class="report-section attendance" aria-labelledby="attendance-heading">
-        <div class="section-kicker">Roster</div>
-        <h3 id="attendance-heading">Asistencia</h3>
+        <div class="attendance-header">
+          <div>
+            <div class="section-kicker">Roster</div>
+            <h3 id="attendance-heading">Asistencia</h3>
+          </div>
+          <!-- §"un boton arriba a la derecha que sea 'actualizar infografias'
+               [...] y otro botón [...] para enviar TODAS las infografias
+               individuales [...] asegurando 100% que estan actualizadas"
+               (feedback real, 2026-08-29): solo asistentes de ESTA noche
+               (Main+Trial), nunca los ausentes — ver attendingPlayers() en
+               el .ts. "Enviar" pide confirmación (manda mensajes reales a
+               gente real) con el mismo patrón de doble clic que ya usa
+               Ajustes → Discord para desvincular. -->
+          <div class="attendance-bulk-actions">
+            <button type="button" class="secondary-button" [disabled]="bulkUpdating() || bulkSending()" (click)="updateAllInfographics()">
+              @if (bulkUpdating()) {
+                <span class="button-spinner" aria-hidden="true"></span> Actualizando {{ bulkUpdateProgress()?.done }}/{{ bulkUpdateProgress()?.total }}…
+              } @else {
+                ↻ Actualizar infografías
+              }
+            </button>
+            <button
+              type="button"
+              class="primary-button"
+              [class.confirming]="bulkSendConfirming()"
+              [disabled]="bulkUpdating() || bulkSending()"
+              [title]="bulkSendConfirming() ? 'Vuelve a pulsar para confirmar el envío' : 'Manda la infografía de esta noche a cada canal privado de Discord vinculado'"
+              (click)="onRequestSendAllInfographics()"
+            >
+              @if (bulkSending()) {
+                <span class="button-spinner" aria-hidden="true"></span> Enviando {{ bulkSendProgress()?.done }}/{{ bulkSendProgress()?.total }}@if (bulkSendProgress()?.current) { · {{ bulkSendProgress()?.current }} }…
+              } @else if (bulkSendConfirming()) {
+                ¿Seguro? Pulsa de nuevo para enviar
+              } @else {
+                Enviar todas las infografías
+              }
+            </button>
+          </div>
+        </div>
+        @if (bulkUpdateResult(); as r) {
+          <p class="bulk-result" [class.tone-warn]="r.failed.length > 0">
+            ✓ {{ r.done }} infografía{{ r.done === 1 ? '' : 's' }} actualizada{{ r.done === 1 ? '' : 's' }}
+            @if (r.failed.length) {
+              · ⚠ error en: {{ r.failed.join(', ') }}
+            }
+          </p>
+        }
+        @if (bulkSendResult(); as r) {
+          <p class="bulk-result" [class.tone-warn]="r.failed.length > 0 || r.skippedNoChannel.length > 0">
+            ✓ {{ r.sent.length }} infografía{{ r.sent.length === 1 ? '' : 's' }} enviada{{ r.sent.length === 1 ? '' : 's' }}
+            @if (r.skippedNoChannel.length) {
+              · {{ r.skippedNoChannel.length }} sin canal de Discord vinculado ({{ r.skippedNoChannel.join(', ') }})
+            }
+            @if (r.failed.length) {
+              · ⚠ fallo en:
+              @for (f of r.failed; track f.name; let last = $last) {
+                {{ f.name }} ({{ f.error }}){{ last ? '' : ', ' }}
+              }
+            }
+          </p>
+        }
         <div class="attendance-row">
           <div class="attendance-col">
             <span class="attendance-label tone-success">Presentes — Main ({{ d.attendingMain.length }})</span>

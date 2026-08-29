@@ -19,12 +19,13 @@
 // detectados, top offenders) — nunca los dos a la vez para el mismo dato
 // (ej. topDeathCauses de informe 1 se descarta: deaths.topFinalBlows de
 // informe 2 cubre lo mismo con más detalle, boss incluido).
-import { Component, computed, effect, inject, input, signal, ElementRef, ViewChild } from '@angular/core';
+import { Component, computed, effect, inject, input, signal, ElementRef, ViewChild, ViewContainerRef } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { toBlob } from 'html-to-image';
-import { NightReportService, type NightReport } from '../../core/night-report.service';
+import { NightReportService, type NightAttendee, type NightReport } from '../../core/night-report.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
+import { NightPlayerSummaryService } from '../../core/night-player-summary.service';
 import { mapBrief } from '../../core/pull-analysis.service';
 import { classColor, comparisonLabel, formatDuration, formatPct } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
@@ -32,6 +33,7 @@ import { ClassIconComponent } from '../../shared/class-icon.component';
 import { TrendBarsComponent } from '../../shared/charts/trend-bars.component';
 import { LlmAnalysisCardComponent } from '../live-pull/llm-analysis-card.component';
 import { NightReportInfographicComponent } from './night-report-infographic.component';
+import { NightPlayerInfographicComponent } from '../night-player-dossier/night-player-infographic.component';
 import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-text.component';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
 import type { NightFullReport, NightReportTrend, StoredNightFullReport } from '../../shared/models/night-full-report';
@@ -50,6 +52,8 @@ const SCHEMA_VERSION = 15;
 export class NightReportComponent {
   private nightReportService = inject(NightReportService);
   private edgeFunctions = inject(EdgeFunctionsService);
+  private nightPlayerSummaryService = inject(NightPlayerSummaryService);
+  private viewContainerRef = inject(ViewContainerRef);
 
   reportCode = input.required<string>();
 
@@ -413,5 +417,122 @@ export class NightReportComponent {
     anchor.download = filename;
     anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  }
+
+  // §"un boton arriba a la derecha que sea 'actualizar infografias', que
+  // actualice TODAS las infografias de los miembros del roster [...] y otro
+  // botón [...] para enviar TODAS las infografias individuales [...]
+  // asegurando 100% que estan actualizadas [...] excluyendo obviamente
+  // todos los que no han participado" (feedback real, 2026-08-29): SOLO
+  // asistentes de ESTE report (Main+Trial) — nunca absentMain. "Actualizar"
+  // reutiliza el MISMO mecanismo que ya usa el botón "Actualizar" de la
+  // infografía individual (load(..., forceRefresh=true) — releer Supabase,
+  // sin tocar WCL/IA, ver comentario junto a refreshInfographic en
+  // night-player-dossier.component.ts) — barato, sin cuota de WCL de por
+  // medio, seguro de correr sobre 20+ jugadores seguidos.
+  private attendingPlayers(): NightAttendee[] {
+    const d = this.data();
+    return d ? [...d.attendingMain, ...d.attendingTrial] : [];
+  }
+
+  readonly bulkUpdating = signal(false);
+  readonly bulkUpdateProgress = signal<{ done: number; total: number } | null>(null);
+  readonly bulkUpdateResult = signal<{ done: number; failed: string[] } | null>(null);
+
+  async updateAllInfographics(): Promise<void> {
+    const players = this.attendingPlayers();
+    if (!players.length || this.bulkUpdating()) return;
+    this.bulkUpdating.set(true);
+    this.bulkUpdateResult.set(null);
+    const failed: string[] = [];
+    this.bulkUpdateProgress.set({ done: 0, total: players.length });
+    for (const [index, player] of players.entries()) {
+      try {
+        await this.nightPlayerSummaryService.load(this.reportCode(), player.name, true, true);
+      } catch {
+        failed.push(player.name);
+      }
+      this.bulkUpdateProgress.set({ done: index + 1, total: players.length });
+    }
+    this.bulkUpdating.set(false);
+    this.bulkUpdateProgress.set(null);
+    this.bulkUpdateResult.set({ done: players.length - failed.length, failed });
+  }
+
+  // §"otro botón que tenga alguna clase de confirmacion" (feedback real,
+  // 2026-08-29): mismo patrón de doble clic (armar → confirmar en 5s, o se
+  // desarma solo) que ya usa discord-settings.component.ts para desvincular
+  // — acción que manda mensajes reales a gente real, no dispara con un
+  // único clic accidental.
+  readonly bulkSendConfirming = signal(false);
+  private bulkSendConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  onRequestSendAllInfographics(): void {
+    if (this.bulkSendConfirming()) {
+      void this.sendAllInfographics();
+      return;
+    }
+    this.bulkSendConfirming.set(true);
+    if (this.bulkSendConfirmTimer) clearTimeout(this.bulkSendConfirmTimer);
+    this.bulkSendConfirmTimer = setTimeout(() => this.bulkSendConfirming.set(false), 5_000);
+  }
+
+  readonly bulkSending = signal(false);
+  readonly bulkSendProgress = signal<{ done: number; total: number; current: string | null } | null>(null);
+  readonly bulkSendResult = signal<{ sent: string[]; skippedNoChannel: string[]; failed: { name: string; error: string }[] } | null>(null);
+
+  // §"asegurando 100% que estan actualizadas [...] es importante que esten
+  // actualizadas a la noche en cuestion cuyo informe tenemos abierto"
+  // (feedback real, 2026-08-29): cada envío recarga su propio resumen con
+  // forceRefresh=true AQUÍ MISMO, nunca confía en que "Actualizar" se haya
+  // pulsado antes — el botón de arriba es una comodidad para previsualizar,
+  // no un requisito. Crea la MISMA app-night-player-infographic que ya usa
+  // el dosier individual (headless=true, ver ese componente) para reutilizar
+  // tal cual su pipeline de render+compresión+envío ya probado, en vez de
+  // duplicarlo — una instancia a la vez, nunca en paralelo (ver
+  // discord-roster-channels/index.ts: incluso llamadas ligeras a la API de
+  // Discord ya han chocado con su rate limit en bloque; aquí cada iteración
+  // ya hace un render de imagen pesado de por sí, la pausa extra es margen,
+  // no la única defensa — send-discord-message reintenta con backoff si
+  // aun así llega un 429 real).
+  private async sendAllInfographics(): Promise<void> {
+    this.bulkSendConfirming.set(false);
+    if (this.bulkSendConfirmTimer) clearTimeout(this.bulkSendConfirmTimer);
+    const players = this.attendingPlayers();
+    if (!players.length || this.bulkSending()) return;
+    this.bulkSending.set(true);
+    this.bulkSendResult.set(null);
+    const sent: string[] = [];
+    const skippedNoChannel: string[] = [];
+    const failed: { name: string; error: string }[] = [];
+
+    for (const [index, player] of players.entries()) {
+      this.bulkSendProgress.set({ done: index, total: players.length, current: player.name });
+      try {
+        const summary = await this.nightPlayerSummaryService.load(this.reportCode(), player.name, true, true);
+        if (!summary.discordChannel?.discordChannelId) {
+          skippedNoChannel.push(player.name);
+          continue;
+        }
+        const componentRef = this.viewContainerRef.createComponent(NightPlayerInfographicComponent);
+        try {
+          componentRef.setInput('summary', summary);
+          componentRef.setInput('headless', true);
+          componentRef.changeDetectorRef.detectChanges();
+          await componentRef.instance.sendToDiscord();
+          if (componentRef.instance.exportStatus() === 'sentDiscord') sent.push(player.name);
+          else failed.push({ name: player.name, error: componentRef.instance.exportError() ?? 'Fallo desconocido al enviar.' });
+        } finally {
+          componentRef.destroy();
+        }
+      } catch (err) {
+        failed.push({ name: player.name, error: errorMessage(err) });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    this.bulkSending.set(false);
+    this.bulkSendProgress.set(null);
+    this.bulkSendResult.set({ sent, skippedNoChannel, failed });
   }
 }

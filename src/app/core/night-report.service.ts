@@ -18,6 +18,7 @@ import type { LlmPullAnalysis } from '../shared/models/ui';
 import type { NightFullReport, StoredNightFullReport } from '../shared/models/night-full-report';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
+import { validAttemptOrdinal } from '../shared/pull-consistency.util';
 
 /** Tanks primero, luego healers, luego dps (melee y ranged juntos). */
 const ROLE_SORT_ORDER: WowauditRosterEntry['role'][] = ['Tank', 'Heal', 'Melee', 'Ranged'];
@@ -167,13 +168,21 @@ export class NightReportService {
         kills: kills.length,
         bestWipePct: wipePcts.length ? Math.min(...wipePcts) : null,
         bestKillDurationMs: killDurations.length ? Math.min(...killDurations) : null,
-        progressBars: g.pulls.map((p) => ({
-          label: `#${p.pull_number}`,
-          value: Math.round(100 - (p.wipe_pct ?? 100)),
-          isKill: p.wipe_pct === 0,
-          isCurrent: false,
-          tooltip: `Intento #${p.pull_number}: ${p.wipe_pct === 0 ? 'Kill' : `Wipe al ${(p.wipe_pct ?? 100).toFixed(1)}%`}`,
-        })),
+        // §"la numeracion no es global de toda la noche si no por boss y así
+        // deberia serlo en toda la app" (feedback real, 2026-08-29): mismo
+        // criterio que raid-session.component.ts (validAttemptOrdinal contra
+        // g.pulls, ya agrupado por boss+dificultad aquí mismo) — p.pull_number
+        // crudo es la numeración global del report entero, no la de este boss.
+        progressBars: g.pulls.map((p) => {
+          const ordinal = validAttemptOrdinal(g.pulls, p.id) ?? p.pull_number;
+          return {
+            label: `#${ordinal}`,
+            value: Math.round(100 - (p.wipe_pct ?? 100)),
+            isKill: p.wipe_pct === 0,
+            isCurrent: false,
+            tooltip: `Intento #${ordinal}: ${p.wipe_pct === 0 ? 'Kill' : `Wipe al ${(p.wipe_pct ?? 100).toFixed(1)}%`}`,
+          };
+        }),
       };
     });
 
@@ -195,7 +204,15 @@ export class NightReportService {
 
     const wipeCallPulls: NightWipeCallPull[] = pulls
       .filter((p) => p.wipe_call_excluded && p.wipe_call_confidence != null)
-      .map((p) => ({ bossName: bossNameByFightId.get(p.fight_id) ?? `Boss ${p.boss_id}`, difficulty: p.difficulty, pullNumber: p.pull_number, confidence: p.wipe_call_confidence! }));
+      .map((p) => {
+        const group = bossGroups.get(`${p.boss_id}|${p.difficulty}`)?.pulls ?? [p];
+        return {
+          bossName: bossNameByFightId.get(p.fight_id) ?? `Boss ${p.boss_id}`,
+          difficulty: p.difficulty,
+          pullNumber: validAttemptOrdinal(group, p.id) ?? p.pull_number,
+          confidence: p.wipe_call_confidence!,
+        };
+      });
 
     const deathsByMechanic = new Map<string, { wowheadSpellId: number | null; count: number; players: Set<string> }>();
     const deathsByPlayer = new Map<string, number>();
