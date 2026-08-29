@@ -1,6 +1,7 @@
 import { DatePipe } from '@angular/common';
 import {
   AfterViewInit,
+  ChangeDetectorRef,
   Component,
   ElementRef,
   HostListener,
@@ -147,6 +148,7 @@ const MECH_CONTENT_WIDTH = SHEET_WIDTH - 2 * (78 + 26 + 30);
 })
 export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, OnDestroy {
   private edgeFunctions = inject(EdgeFunctionsService);
+  private cdr = inject(ChangeDetectorRef);
 
   summary = input.required<NightPlayerSummary>();
   refreshing = input(false);
@@ -526,8 +528,23 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     mechanicCategoryMeta(death.category)?.label ??
     'Causa no clasificada';
 
+  // §"cuando le doy al boton de actualizar y enviar todas las infografias
+  // se estan perdiendo iconos de mecanicas y habilidades" (feedback real,
+  // 2026-08-30): bug real — loadSpellIcons() hace fetch a wowhead (red) y
+  // no se esperaba en ningún sitio. Al enviar en bulk
+  // (night-report.component.ts: sendAllInfographics) la instancia headless
+  // se crea y sendToDiscord() se llama casi inmediatamente después — mucho
+  // más rápido que el round-trip de red, así que iconUrls() seguía vacío,
+  // el template caía a @else (SVG de escudo) y waitForVisuals() ni
+  // siquiera encontraba un <img> que esperar (el fallback no es una
+  // imagen). En el dosier individual "colaba" porque el usuario tarda
+  // segundos en pulsar enviar tras abrir el modal — tiempo de sobra para
+  // que la red respondiera. Guardar la promesa para que renderPng/
+  // renderFullCanvas la esperen ANTES de rasterizar (ver waitForVisuals).
+  private spellIconsLoaded: Promise<void> = Promise.resolve();
+
   ngOnInit(): void {
-    void this.loadSpellIcons();
+    this.spellIconsLoaded = this.loadSpellIcons();
   }
 
   ngAfterViewInit(): void {
@@ -1034,6 +1051,12 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   }
 
   private async waitForVisuals(): Promise<void> {
+    // Primero los iconos (fetch a wowhead, ver el comentario junto a
+    // spellIconsLoaded) — si no se espera aquí, el @if de la plantilla
+    // puede seguir cayendo al SVG de escudo (no un <img>) y el bucle de
+    // abajo nunca se entera de que faltaba algo por cargar.
+    await this.spellIconsLoaded;
+    this.cdr.detectChanges();
     await document.fonts?.ready;
     const images = Array.from(this.sheet?.nativeElement.querySelectorAll('img') ?? []);
     await Promise.all(
