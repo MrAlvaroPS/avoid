@@ -7,6 +7,17 @@ export const routes: Routes = [
     loadComponent: () => import('./features/login/login.component').then((m) => m.LoginComponent),
   },
   {
+    // §"página independiente con URL... sin navegación, que no se llegue a
+    // ella salvo por la URL... que la gente no pueda navegar por ningún
+    // lado" (feedback real, 2026-08-30): guía para raiders, sin login (van
+    // a abrirla desde un enlace de Discord, no logeados como Oficial) y
+    // fuera del nodo con officerGuard a propósito — mismo criterio que
+    // /login, un hermano de ese nodo, no un hijo. app.ts/app.html también
+    // saltan el nav/mobile-block SOLO para esta ruta (ver ISOLATED_ROUTE_PREFIXES).
+    path: 'guia-infografia',
+    loadComponent: () => import('./features/guia-infografia/guia-infografia.component').then((m) => m.GuiaInfografiaComponent),
+  },
+  {
     // §"proteger todos los datos y rutas salvo que esté logeado un
     // oficial" (feedback real, 2026-08-29): un único nodo padre con
     // officerGuard envuelve TODAS las rutas reales de la app como

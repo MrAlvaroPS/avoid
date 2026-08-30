@@ -1,4 +1,6 @@
-@if (isMobile()) {
+@if (isIsolatedPage()) {
+  <router-outlet />
+} @else if (isMobile()) {
   <app-mobile-block />
 } @else {
 <div class="app-shell">

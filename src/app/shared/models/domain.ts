@@ -207,8 +207,13 @@ export interface PlayerPullRecordRow {
   // datos (bug real encontrado en real: "Cannot read properties of
   // undefined (reading 'used')" al abrir uno de esos pulls antiguos).
   consumables: {
-    healthstone?: { available: boolean; used: boolean; count: number; timestampsMs: number[] };
-    healthPotion?: { used: boolean; count: number; timestampsMs: number[] };
+    // §"si tras sufrir daño uso la piedra es un uso correcto, usarla por
+    // usarla no es correcto" (feedback real, 2026-08-30): usedReactively es
+    // opcional a propósito — filas de antes de este cambio no lo tienen
+    // hasta pasar por el backfill (ver migración 2026-08-30_backfill), igual
+    // criterio que el resto de este comentario para consumables:{} vacío.
+    healthstone?: { available: boolean; used: boolean; usedReactively?: boolean; count: number; timestampsMs: number[] };
+    healthPotion?: { used: boolean; usedReactively?: boolean; count: number; timestampsMs: number[] };
   };
   created_at: string;
 }

@@ -219,7 +219,11 @@ export class NightPlayerDossierComponent {
             : 'Sin ventana de presión real sin cubrir.',
       );
     } else {
-      lines.push(`Consumibles: ${this.formatPct(b.consumableScore * 100)} — murió ${b.usedConsumable ? 'con' : 'sin'} piedra de brujo o poción usada en el intento.`);
+      // §"si tras sufrir daño uso la poción es un uso correcto, usarla por
+      // usarla no es correcto" (feedback real, 2026-08-30): usedConsumable ya
+      // exige que el cast caiga dentro de una ventana de presión real (ver
+      // isReactiveConsumableUse) — el texto lo deja explícito.
+      lines.push(`Consumibles: ${this.formatPct(b.consumableScore * 100)} — murió ${b.usedConsumable ? 'con' : 'sin'} piedra de brujo o poción usada en respuesta a daño real durante el intento.`);
       if (b.deathTimeMs != null && durationMs) {
         lines.push(`Murió a los ${this.formatDuration(b.deathTimeMs)} de ${this.formatDuration(durationMs)} (${this.formatPct(b.deathMultiplier * 100)} del intento) — penaliza toda la puntuación, no solo el punto de consumibles.`);
       }

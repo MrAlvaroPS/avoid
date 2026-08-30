@@ -1,10 +1,21 @@
 import { Component, inject } from '@angular/core';
-import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { filter, map, startWith } from 'rxjs';
 import { WowheadRefreshService } from './core/wowhead-refresh.service';
 import { SeasonProgressComponent } from './features/raid-session/season-progress.component';
 import { ViewportService } from './core/viewport.service';
 import { MobileBlockComponent } from './features/mobile-block/mobile-block.component';
 import { AuthService } from './core/auth.service';
+
+// §"página independiente... sin cabecera de la app ni ningún botón
+// perteneciente a la app" (feedback real, 2026-08-30): rutas que se sirven
+// SIN el app-shell (nav/guild-tag) ni el bloqueo de móvil — pensadas para
+// compartir por enlace fuera de la guild (raiders sin login), donde lo
+// normal es abrirlas desde el móvil (un enlace de Discord). Lista explícita
+// en vez de "todo lo que no tiene nav" para no esconder por accidente una
+// ruta real de la app el día que se añada otra sin querer.
+const ISOLATED_ROUTE_PREFIXES = ['/guia-infografia'];
 
 @Component({
   selector: 'app-root',
@@ -32,4 +43,19 @@ export class App {
   // app.html). Instanciarlo aquí (fuera de cualquier ruta) es lo que hace
   // que arranque el chequeo de sesión/rol en cuanto carga la app.
   protected readonly auth = inject(AuthService);
+
+  // §ver ISOLATED_ROUTE_PREFIXES arriba. Reactivo (no solo location.pathname
+  // al construir) por si algún día se navega hacia/desde esta ruta con el
+  // Router en vez de una carga de página nueva — hoy no ocurre (la guía no
+  // tiene ningún routerLink, es un callejón sin salida a propósito), pero
+  // más barato dejarlo bien hecho que confiar en que nunca cambie.
+  private readonly router = inject(Router);
+  protected readonly isIsolatedPage = toSignal(
+    this.router.events.pipe(
+      filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+      map((e) => ISOLATED_ROUTE_PREFIXES.some((prefix) => e.urlAfterRedirects.startsWith(prefix))),
+      startWith(ISOLATED_ROUTE_PREFIXES.some((prefix) => this.router.url.startsWith(prefix))),
+    ),
+    { initialValue: ISOLATED_ROUTE_PREFIXES.some((prefix) => this.router.url.startsWith(prefix)) },
+  );
 }

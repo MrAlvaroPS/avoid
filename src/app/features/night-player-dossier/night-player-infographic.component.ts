@@ -890,13 +890,18 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     return total > 0 ? Math.round((count / total) * 100) : 0;
   }
 
+  // §"si tras sufrir daño uso la poción es un uso correcto, usarla por
+  // usarla no es correcto" (feedback real, 2026-08-30): usedHealthstoneInPull/
+  // usedHealthPotionInPull ya exigen que el cast caiga dentro de una ventana
+  // de presión real (ver isReactiveConsumableUse) — el texto lo deja
+  // explícito para que no se lea como "en algún momento del intento".
   consumableResponseLabel(death: DefensiveMissDeath): string {
     if (death.usedHealthstoneInPull && death.usedHealthPotionInPull) {
-      return 'Piedra + poción registradas en el try';
+      return 'Piedra + poción, ambas en respuesta a daño real';
     }
-    if (death.usedHealthstoneInPull) return 'Piedra registrada en el try';
-    if (death.usedHealthPotionInPull) return 'Poción registrada en el try';
-    return 'Sin piedra ni poción registradas en el try';
+    if (death.usedHealthstoneInPull) return 'Piedra usada en respuesta a daño real';
+    if (death.usedHealthPotionInPull) return 'Poción usada en respuesta a daño real';
+    return 'Sin piedra ni poción en respuesta a daño real en el try';
   }
 
   private newIssueFromFail(key: string, fail: NightMechanicFailRow): PlayerIssue {

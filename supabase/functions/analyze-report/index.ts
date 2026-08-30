@@ -1178,7 +1178,7 @@ Deno.serve(async (req: Request) => {
                   timestampsMs: (defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []).map((t) => t - fight.startTime),
                 }))
               : [],
-            consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent),
+            consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent, defensivePressureWindows.windows),
             defensive_pressure_windows: defensivePressureWindows,
             talent_build:
               combatantInfoByActor.get(actorId)?.talentTree?.map((node) => {

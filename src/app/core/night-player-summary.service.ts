@@ -150,7 +150,7 @@ export interface NightDeathRow {
   /** §"un ninja pull... también cuenta en la estadística de wipes": true = esta muerte ocurrió en un pull que analyze-report marcó como ninja pull (ver pulls.ninja_pull_excluded) — se sigue mostrando como contexto, pero no cuenta en totalDeaths ni en patrones repetidos. */
   isNinjaPull: boolean;
   statisticalExclusionReason: DeathCause['statisticalExclusionReason'];
-  /** Uso registrado en cualquier momento del try. Es una observación factual; las muertes no evaluables siguen excluidas de estadísticas. */
+  /** §"si tras sufrir daño uso la poción o piedra es un uso correcto, usarla por usarla no es correcto" (feedback real, 2026-08-30): pese al nombre (histórico), esto YA NO es "hubo un cast en cualquier momento del try" — exige que el cast caiga dentro de una ventana de presión real de ESE jugador en ESE pull (o justo después), igual criterio que ya usa el resto del informe para "en respuesta a daño real" (ver isReactiveConsumableUse en _shared/consumables.ts). Las muertes no evaluables siguen excluidas de estadísticas. */
   usedHealthstoneInPull: boolean;
   usedHealthPotionInPull: boolean;
   /** §"poner una 'I' de información junto a la mecánica con la nota descriptiva que haya traído la IA" (feedback real): solo la nota, cruzada por nombre — null si esta mecánica no tiene ai_classification en el manifiesto. */
@@ -977,12 +977,18 @@ export class NightPlayerSummaryService {
           isWipeCall,
           isNinjaPull,
           statisticalExclusionReason: dc.statisticalExclusionReason ?? null,
+          // §fallback (`??`) solo para una fila que, por lo que sea, nunca
+          // llegó a pasar por el backfill de usedReactively (ver migración
+          // 2026-08-30) — en cuanto el campo existe (aunque sea `false`) se
+          // usa tal cual, nunca se cae al criterio antiguo por debajo.
           usedHealthstoneInPull:
-            r.consumables?.healthstone?.used === true ||
-            (r.consumables?.healthstone?.timestampsMs?.length ?? 0) > 0,
+            r.consumables?.healthstone?.usedReactively ??
+            (r.consumables?.healthstone?.used === true ||
+              (r.consumables?.healthstone?.timestampsMs?.length ?? 0) > 0),
           usedHealthPotionInPull:
-            r.consumables?.healthPotion?.used === true ||
-            (r.consumables?.healthPotion?.timestampsMs?.length ?? 0) > 0,
+            r.consumables?.healthPotion?.usedReactively ??
+            (r.consumables?.healthPotion?.used === true ||
+              (r.consumables?.healthPotion?.timestampsMs?.length ?? 0) > 0),
           aiNote: coaching.note,
           resolution: coaching.resolution,
           damageProfile: dc.damageProfile,
@@ -1910,8 +1916,27 @@ export class NightPlayerSummaryService {
         };
       }),
     );
-    // Más fallos primero — es lo que más le urge revisar al raider.
-    return entries.sort((a, b) => b.totalCount - b.coveredCount - (a.totalCount - a.coveredCount));
+    // §"ponerlos en orden de bosses en lugar de caótico. Si hay 3 mecánicas
+    // de un mismo boss, poner las 3 seguidas" (feedback real, 2026-08-30):
+    // antes se ordenaba solo por nº de fallos GLOBAL, sin mirar el boss —
+    // dos mecánicas del mismo encuentro podían salir separadas por una
+    // tercera de otro boss en medio. Los grupos de boss ahora van en el
+    // orden en que se pulleó esa noche (su primer pull más bajo) y, dentro
+    // de un mismo boss, se conserva el criterio de siempre: más fallos
+    // primero, es lo que más le urge revisar al raider de ese encuentro.
+    const missCount = (e: NightMechanicPressureSummary) => e.totalCount - e.coveredCount;
+    const firstPullNumberByBoss = new Map<string, number>();
+    for (const e of entries) {
+      const earliest = Math.min(...e.occurrences.map((o) => o.pullNumber));
+      const current = firstPullNumberByBoss.get(e.bossId);
+      if (current == null || earliest < current) firstPullNumberByBoss.set(e.bossId, earliest);
+    }
+    return entries.sort((a, b) => {
+      if (a.bossId !== b.bossId) {
+        return (firstPullNumberByBoss.get(a.bossId) ?? 0) - (firstPullNumberByBoss.get(b.bossId) ?? 0);
+      }
+      return missCount(b) - missCount(a);
+    });
   }
 
   // §umbrales validados empíricamente contra datos reales (2026-08-29): un

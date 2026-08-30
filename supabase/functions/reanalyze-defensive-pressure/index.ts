@@ -1,6 +1,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { getReportFights, getReportActors, getReportAbilities, getFightEvents, getFightGraph, type WclActor } from '../_shared/wcl-client.ts';
-import { defensivesForClass, type CooldownCatalog, type TalentGate } from '../_shared/defensive-cooldowns.ts';
+import { defensivesForClass, defensiveStatusAt, type CooldownCatalog, type TalentGate } from '../_shared/defensive-cooldowns.ts';
 import { getSpecName, getCurrentBuildNamespace } from '../_shared/blizzard-client.ts';
 import { buildFromBlizzardNamespace, fetchTalentSpellLookup } from '../_shared/wago-db2-client.ts';
 import { attributeWindowAbility, detectDamageWindows, evaluateWindowCoverage } from '../_shared/damage-pressure-windows.ts';
@@ -11,10 +11,24 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 // §"backfill completo del histórico" (feedback real, 2026-08-29): analyze-report
 // solo escribe defensive_pressure_windows para fights NUEVOS a partir de su
 // despliegue — esta función recalcula esa misma columna para un pull YA
-// importado, sin tocar report_code/fight_id/pull_number/death_cause/nada más
-// de la fila. Mismo patrón que reanalyze-wipe-call (vuelve a pedir a WCL
-// solo lo necesario: graph(DamageTaken) + Casts(Friendlies), no todo el
-// pipeline de mecánicas/gear/consumibles).
+// importado, sin tocar report_code/fight_id/pull_number/nada más de la fila.
+// Mismo patrón que reanalyze-wipe-call (vuelve a pedir a WCL solo lo
+// necesario: graph(DamageTaken) + Casts(Friendlies), no todo el pipeline de
+// mecánicas/gear/consumibles).
+//
+// §"añadir crisálida vital también tiene consecuencia para actualizar...
+// todos los sitios que afectan los defensivos" (feedback real, 2026-08-30):
+// SÍ toca death_cause.defensiveOptions ahora (solo esa clave, el resto de
+// death_cause se deja intacto) — es el mismo hueco que dejó sin cerrar el
+// backfill original: un catálogo nuevo (o un cooldown/duración editado)
+// deja desactualizada tanto defensive_pressure_windows COMO el estado de
+// cada defensivo en el instante exacto de morir, y hasta ahora solo se
+// recalculaba lo primero. Simplificación deliberada frente a analyze-report:
+// no repite el snapshot de buffs de WCL a ≤2s de morir (buffActiveOverride)
+// porque exigiría pedir Buffs además de Casts — sin él, un defensivo con
+// duración desconocida que SÍ estaba activo al morir puede quedar en
+// 'unknown' en vez de 'active' (mismo criterio de "mejor no lo sé que
+// inventar" que ya rige el resto del catálogo, nunca un falso 'available_unused').
 //
 // §"arregla los históricos haciendo un backfill en condiciones... que todo
 // sea consistente" (feedback real, 2026-08-29): SÍ resuelve talentos —
@@ -216,7 +230,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: existingRecords, error: recordsFetchError } = await supabase
       .from('player_pull_records')
-      .select('player_name')
+      .select('player_name, died, death_cause')
       .eq('pull_id', pull.id);
     if (recordsFetchError) return jsonResponse({ ok: false, error: recordsFetchError.message }, 500);
 
@@ -225,7 +239,7 @@ Deno.serve(async (req: Request) => {
     let updated = 0;
     let skipped = 0;
     const perPlayerWindowCounts: { playerName: string; windowCount: number }[] = [];
-    for (const record of (existingRecords ?? []) as { player_name: string }[]) {
+    for (const record of (existingRecords ?? []) as { player_name: string; died: boolean; death_cause: Record<string, unknown> | null }[]) {
       const actorId = actorIdByName.get(record.player_name);
       const actor = actorId != null ? actorById.get(actorId) : undefined;
       const damageSeries = actorId != null ? damageTakenSeriesByActorId.get(actorId) : undefined;
@@ -255,9 +269,37 @@ Deno.serve(async (req: Request) => {
           };
         }),
       };
+      const updatePatch: Record<string, unknown> = { defensive_pressure_windows: defensivePressureWindows };
+      // §"añadir crisálida vital también tiene consecuencia para... muertes
+      // con defensivo libre y sin usar" (feedback real, 2026-08-30):
+      // death_cause.defensiveOptions es un snapshot calculado UNA VEZ en
+      // analyze-report — un catálogo nuevo o editado lo deja obsoleto igual
+      // que dejaba defensive_pressure_windows.options obsoleto (mismo bug de
+      // fondo, ver cabecera del fichero). Se recalcula con la MISMA fórmula
+      // (defensiveStatusAt en el instante exacto de morir), simplificada sin
+      // el snapshot de buffs de WCL (ver cabecera) — se sustituye solo esa
+      // clave dentro de death_cause, el resto (mechanicName, rootCause,
+      // timeMs...) se deja intacto.
+      // §nota: no replica aquí el caso bossMeleeOnNonTank de analyze-report
+      // (que fuerza defensiveOptions:[] para esas muertes) — no bloquea
+      // nada, el consumidor real (night-player-summary.service.ts,
+      // excludedFromStatistics) ya vacía defensivesAvailable para esas
+      // mismas muertes leyendo statisticalExclusionReason, que esta función
+      // no toca. Repetir el cálculo aquí solo para volver a llegar a `[]`
+      // no aporta nada.
+      const deathTimeMs = typeof record.death_cause?.['timeMs'] === 'number' ? (record.death_cause['timeMs'] as number) : null;
+      if (record.died && record.death_cause && deathTimeMs != null) {
+        const deathTimestampAbs = deathTimeMs + fight.startTime;
+        const defensiveOptions = catalog.map((cd) => {
+          const casts = castsBySpellId.get(cd.spellId) ?? [];
+          const result = defensiveStatusAt(cd, casts, deathTimestampAbs);
+          return { spellId: cd.spellId, name: cd.name, status: result.status, cooldownRemainingMs: result.cooldownRemainingMs };
+        });
+        updatePatch['death_cause'] = { ...record.death_cause, defensiveOptions };
+      }
       const { error: updateError } = await supabase
         .from('player_pull_records')
-        .update({ defensive_pressure_windows: defensivePressureWindows })
+        .update(updatePatch)
         .eq('pull_id', pull.id)
         .eq('player_name', record.player_name);
       if (updateError) return jsonResponse({ ok: false, error: updateError.message }, 500);
