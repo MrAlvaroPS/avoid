@@ -2,13 +2,17 @@
 // addon MRT (Method Raid Tools) — Reminders. Sale de investigación externa
 // del propio formato interno de Reminder.lua (protocolo senderVersion=4 /
 // addonVersion=71, verificado por el usuario contra MRT v5325, retail
-// 12.1.0) — NO verificado contra el código fuente real de MRT desde este
-// repo, ni contra el propio juego. NO dar por bueno sin la validación real
-// descrita en el plan: decodeMrtExport() de un export hecho de verdad desde
-// el juego (pegar el resultado aquí), y encodeMrtExport() de un reminder
-// propio importado de verdad en MRT en juego, antes de repartir nada a un
-// raider. Mientras tanto, roundtrip.spec.ts solo prueba que encode/decode
-// son inversos ENTRE SÍ — no que sean compatibles con el MRT real.
+// 12.1.0) — validado en real, no solo por el roundtrip de mrt-reminder-codec
+// spec.ts (encode()↔decode() como inversos entre sí, eso solo prueba
+// consistencia interna): decodeMrtExport() decodificó limpio un export
+// hecho de verdad desde el juego (senderVersion/addonVersion/los 20 campos
+// fijos/escapado/footer/multi-trigger, todo coincidió), y por separado
+// encodeMrtExport() generó dos reminders (trigger de tiempo y de bossmod)
+// que MRT aceptó e importó correctamente en el juego (2026-08-30). Sigue
+// habiendo margen no cubierto (event de trigger distinto de 3/7 — ver
+// MrtUnknownTrigger — y roles/classes por bitfield, nunca probados), pero el
+// contenedor y los dos tipos de trigger que esta app necesita ya están
+// confirmados en las dos direcciones.
 //
 // Formato, de fuera a dentro:
 //   "MRTREMD1" + EncodeForPrint(DeflateRaw(payload + "##F##"))
