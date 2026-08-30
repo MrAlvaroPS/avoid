@@ -84,6 +84,8 @@ export interface NightPullSummary {
    * los eventos DESPUÉS del momento del wipe call, todo lo anterior sigue
    * evaluándose con normalidad. */
   hadWipeCall: boolean;
+  /** §"el parse obtenido durante la noche (esto lo traemos de WCL)" (feedback real, 2026-08-30): percentil real de WCL (player_pull_records.world_rank_percent, ver Report.rankings) para ESTE pull — null si WCL no pudo rankearlo (log privado, boss no rankeable todavía). night-report.component.ts promedia esto sobre los pulls de la noche para "Parse" en la tabla de asistencia — nunca un cálculo paralelo, es la misma columna que ya trae player_pull_records. */
+  worldRankPercent: number | null;
   /** §"puntuación compuesta... como wipefest" (feedback real, 2026-08-27): (mecánicas de responsabilidad individual + consumibles al morir) × penalización por momento de muerte. null si excludedFromStats — no hubo intento real que puntuar. Ver computePullScore más abajo para la fórmula completa. */
   pullScore: number | null;
   /** §"debería salir por qué ha obtenido esta puntuación" (feedback real, 2026-08-27): los ingredientes de pullScore, para el tooltip — no solo el número final. Se calcula igual aunque excludedFromStats (barato, y deja auditar qué había) — el componente solo lo enseña cuando pullScore no es null. */
@@ -931,6 +933,7 @@ export class NightPlayerSummaryService {
           durationMs: p.duration_ms,
           closedAt: p.closed_at,
           died: r.died,
+          worldRankPercent: r.world_rank_percent,
           excludedFromStats: excludedReason != null,
           excludedReason,
           // §informativo solamente (ver arriba) — nunca anula pullScore.

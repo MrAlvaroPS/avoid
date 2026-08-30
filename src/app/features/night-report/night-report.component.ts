@@ -26,13 +26,13 @@ import { toBlob } from 'html-to-image';
 import { NightReportService, type NightAttendee, type NightReport } from '../../core/night-report.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { NightPlayerSummaryService } from '../../core/night-player-summary.service';
-import { ReliabilityService, type PlayerReliability } from '../../core/reliability.service';
+import { ReliabilityService, type PlayerReliability, type BossDifficultyEvolutionPoint } from '../../core/reliability.service';
 import { OffendersService, type RepeatOffenderRow } from '../../core/offenders.service';
 import { RosterSnapshotCacheService, type RosterSnapshot } from '../../core/roster-snapshot-cache.service';
-import { NightScoreCacheService } from '../../core/night-score-cache.service';
-import { buildRosterPlayerView, type RosterPlayerView } from '../roster/roster-view.util';
+import { NightScoreCacheService, type CachedNightAttendanceStats } from '../../core/night-score-cache.service';
+import { NightBossEvolutionCacheService } from '../../core/night-boss-evolution-cache.service';
 import { mapBrief } from '../../core/pull-analysis.service';
-import { classColor, comparisonLabel, formatDuration, formatPct } from '../../shared/format.util';
+import { classColor, comparisonLabel, formatDuration, formatPct, wclParseTier } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { ClassIconComponent } from '../../shared/class-icon.component';
 import { TrendBarsComponent } from '../../shared/charts/trend-bars.component';
@@ -68,8 +68,10 @@ export class NightReportComponent {
   private offendersService = inject(OffendersService);
   private rosterSnapshotCache = inject(RosterSnapshotCacheService);
   private nightScoreCache = inject(NightScoreCacheService);
+  private bossEvolutionCache = inject(NightBossEvolutionCacheService);
   private viewContainerRef = inject(ViewContainerRef);
   scoreTone = scoreTone;
+  wclParseTier = wclParseTier;
 
   reportCode = input.required<string>();
 
@@ -233,6 +235,7 @@ export class NightReportComponent {
     this.fullReport.set(null);
     this.fullReportError.set(null);
     this.infographicOpen.set(false);
+    this.expandedPlayerNames.set(new Set());
     try {
       this.data.set(await this.nightReportService.load(code));
     } catch (err) {
@@ -243,7 +246,11 @@ export class NightReportComponent {
     // Independiente del resto (informe completo, brief IA): no bloquea
     // `loading` ni retrasa el resto de la pantalla — la tabla de asistencia
     // rellena "Ejecución de esta noche" en cuanto cada jugador resuelve.
-    void this.loadNightScores(code, this.attendingPlayers());
+    void this.loadNightAttendanceStats(code, this.attendingPlayers());
+    // §evolución por boss+dificultad: keyed por boss (no por report), así
+    // que si esta noche repite un boss+dificultad ya visto en otro report
+    // de esta sesión, sale del Map en memoria sin volver a pedirlo.
+    void this.prefetchBossEvolution();
     try {
       const existing = await this.nightReportService.loadFullReport(code);
       if (existing) this.applyFullReport(existing);
@@ -456,52 +463,60 @@ export class NightReportComponent {
     return d ? [...d.attendingMain, ...d.attendingTrial] : [];
   }
 
-  // §"en lugar de ponerlo asi [chips de presentes/ausentes], podriamos
-  // ponerlo como un listado breve con puntuacion de 'EJECUCIÓN DE ESTA
-  // NOCHE' y 'FIABILIDAD'... 'estado' [...] la misma información que tiene
-  // en estado del roster para esa noche [...] si pulsas sobre el estado, te
-  // lleva a la pestaña de 'roster'" (feedback real, 2026-08-30): Fiabilidad
-  // y Estado reutilizan EXACTAMENTE lo que ya calcula /roster —
-  // ReliabilityService.listPlayerReliability() + OffendersService +
-  // buildRosterPlayerView (roster-view.util.ts), MISMA caché
+  // §"más completa... quitar la columna de 'estado' (eso ya se puede ver en
+  // la pestaña de roster)... columnas siempre visibles: el parse (WCL),
+  // ejecución de esta noche, defensivos (el que ya enseña el dosier),
+  // fiabilidad de la noche y fiabilidad a 60 días" (feedback real,
+  // 2026-08-30): Fiabilidad-60-días reutiliza EXACTAMENTE lo que ya calcula
+  // /roster — ReliabilityService.listPlayerReliability(), MISMA caché
   // (RosterSnapshotCacheService — si el RL ya visitó /roster esta sesión,
-  // esto sale gratis) — nunca una fórmula de estado paralela que pueda
-  // divergir de lo que el roster real enseña. "Ejecución de esta noche" en
-  // cambio SÍ es específica de este report (nightScore no existe fuera de
-  // NightPlayerSummaryService) — se carga en paralelo por jugador asistente,
-  // sin forceRefresh (cache-first, igual que abrir su dosier), así que si
-  // "Actualizar infografías" ya se pulsó antes esto sale instantáneo.
+  // esto sale gratis) — nunca una fórmula paralela. Las otras 4 columnas
+  // (parse/ejecución/defensivos/fiabilidad-de-la-noche) SÍ son específicas
+  // de este report (nightScore/nightReliability/worldRankPercent no existen
+  // fuera de NightPlayerSummaryService) — se cargan en paralelo por jugador
+  // asistente, sin forceRefresh (cache-first, igual que abrir su dosier), y
+  // se cachean aparte con fingerprint acotado a ESTE report (ver
+  // loadNightAttendanceStats) — una noche cerrada no vuelve a tocar
+  // Supabase para esto.
   readonly rosterPlayers = signal<PlayerReliability[]>([]);
   readonly rosterOffenders = signal<RepeatOffenderRow[]>([]);
-  readonly nightScores = signal<Map<string, number | null>>(new Map());
+  readonly nightAttendanceStats = signal<Map<string, CachedNightAttendanceStats>>(new Map());
 
-  private rosterViewByName = computed(() => {
-    const patternsByPlayer = new Map<string, RepeatOffenderRow[]>();
-    for (const pattern of this.rosterOffenders()) {
-      const patterns = patternsByPlayer.get(pattern.playerName) ?? [];
-      patterns.push(pattern);
-      patternsByPlayer.set(pattern.playerName, patterns);
-    }
-    const map = new Map<string, RosterPlayerView>();
-    for (const player of this.rosterPlayers()) {
-      map.set(player.playerName, buildRosterPlayerView(player, patternsByPlayer.get(player.playerName) ?? []));
-    }
-    return map;
-  });
+  private rosterOverallByName = computed(() => new Map(this.rosterPlayers().map((p) => [p.playerName, p.overall])));
 
   attendanceRows = computed(() => {
     const d = this.data();
     if (!d) return [];
-    const scores = this.nightScores();
-    const views = this.rosterViewByName();
+    const stats = this.nightAttendanceStats();
+    const overallByName = this.rosterOverallByName();
     const build = (attendee: NightAttendee, isTrial: boolean) => ({
       ...attendee,
       isTrial,
-      nightScore: scores.get(attendee.name) ?? null,
-      view: views.get(attendee.name) ?? null,
+      stats: stats.get(attendee.name) ?? null,
+      reliability60d: overallByName.get(attendee.name) ?? null,
     });
     return [...d.attendingMain.map((p) => build(p, false)), ...d.attendingTrial.map((p) => build(p, true))];
   });
+
+  // §"que las filas también fueran un desplegable... si pulso sobre el
+  // nombre me lleva a su dosier, pero además dentro del desplegable hay un
+  // botón con una flecha que diga 'ver dosier'" (feedback real, 2026-08-30):
+  // mismo patrón desplegable/colapsado-por-defecto que expandedBossKeys de
+  // arriba (boss-accordion) — el nombre sigue siendo un <a> normal (nunca
+  // anidado dentro del botón de desplegar, dos elementos interactivos
+  // distintos en la misma fila).
+  private expandedPlayerNames = signal<Set<string>>(new Set());
+  isPlayerExpanded(name: string): boolean {
+    return this.expandedPlayerNames().has(name);
+  }
+  togglePlayer(name: string): void {
+    this.expandedPlayerNames.update((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
 
   private async loadRosterSnapshot(): Promise<void> {
     const cached = this.rosterSnapshotCache.read();
@@ -525,9 +540,9 @@ export class NightReportComponent {
     }
   }
 
-  private async loadNightScores(code: string, players: NightAttendee[]): Promise<void> {
+  private async loadNightAttendanceStats(code: string, players: NightAttendee[]): Promise<void> {
     if (!players.length) {
-      this.nightScores.set(new Map());
+      this.nightAttendanceStats.set(new Map());
       return;
     }
     // §"una vez calculado para un informe debería cargarse al instante si no
@@ -543,26 +558,147 @@ export class NightReportComponent {
       fingerprint = await this.nightScoreCache.fingerprint(code);
       const cached = this.nightScoreCache.read(code);
       if (cached && cached.fingerprint === fingerprint) {
-        this.nightScores.set(new Map(Object.entries(cached.scores)));
+        this.nightAttendanceStats.set(new Map(Object.entries(cached.scores)));
         return;
       }
     } catch {
       // sigue al cálculo completo si el fingerprint ligero falla — nunca deja la tabla sin números por esto.
     }
+    const emptyStats: CachedNightAttendanceStats = { nightScore: null, nightReliability: null, nightDefensiva: null, nightParse: null };
     const entries = await Promise.all(
-      players.map(async (p): Promise<[string, number | null]> => {
+      players.map(async (p): Promise<[string, CachedNightAttendanceStats]> => {
         try {
           // includeEvolution=false: no hace falta la comparación con la
-          // noche anterior (que recalcula TODO otra vez) solo para leer nightScore.
+          // noche anterior (que recalcula TODO otra vez) solo para leer estas 4 columnas.
           const summary = await this.nightPlayerSummaryService.load(code, p.name, false);
-          return [p.name, summary.nightScore];
+          // §"el parse obtenido durante la noche (esto lo traemos de WCL)"
+          // (feedback real, 2026-08-30): media del percentil de WCL sobre
+          // los pulls de esta noche donde WCL pudo rankear al jugador
+          // (ninja pulls fuera, igual que el resto de las estadísticas de
+          // la noche) — ya viene en summary.pulls[].worldRankPercent, sin
+          // query nueva.
+          const parses = summary.pulls
+            .filter((pull) => !pull.excludedFromStats && pull.worldRankPercent != null)
+            .map((pull) => pull.worldRankPercent!);
+          // §"el parse son numeros enteros normalmente" (feedback real,
+          // 2026-08-30): WCL redondea sus percentiles a enteros — con más
+          // de un kill esta noche, la media de dos enteros puede caer en
+          // .5, pero nunca en la precisión decimal que salía antes
+          // (redondeaba a 1 decimal en vez de a entero).
+          const nightParse = parses.length ? Math.round(parses.reduce((sum, v) => sum + v, 0) / parses.length) : null;
+          return [
+            p.name,
+            {
+              nightScore: summary.nightScore,
+              nightReliability: summary.nightReliability?.overall ?? null,
+              nightDefensiva: summary.nightReliability?.breakdown.defensiva ?? null,
+              nightParse,
+            },
+          ];
         } catch {
-          return [p.name, null];
+          return [p.name, emptyStats];
         }
       }),
     );
-    this.nightScores.set(new Map(entries));
+    this.nightAttendanceStats.set(new Map(entries));
     if (fingerprint) this.nightScoreCache.write(code, fingerprint, Object.fromEntries(entries));
+  }
+
+  // §"al desplegar cada fila habrá una comparación (OJO: con la misma
+  // dificultad) de su evolución... con otros logs comparables por
+  // dificultad y boss de esa misma dificultad... heroico con heroico y
+  // mítico con mítico" (feedback real, 2026-08-30): UN fetch por
+  // boss+dificultad de ESTA noche (nunca por jugador — la misma llamada ya
+  // trae a TODOS los asistentes de una vez, ver
+  // ReliabilityService.getBossDifficultyEvolution), precargado en paralelo
+  // al entrar (no hace falta esperar a que se despliegue una fila — con 1-3
+  // bosses por noche es barato, y así el desplegable abre ya con datos).
+  // Cacheado aparte (NightBossEvolutionCacheService) porque depende de TODO
+  // el historial de ese boss+dificultad, no solo de este report — mismo
+  // fingerprint que ya usa /roster, reutilizado tal cual.
+  readonly bossEvolution = signal<Map<string, Map<string, BossDifficultyEvolutionPoint[]>>>(new Map());
+  private bossEvolutionRequested = new Set<string>();
+
+  // §todos los boss+dificultad de la noche (data().bosses trae bossId real
+  // — bossDetails()/full report solo trae bossName, no sirve para esto),
+  // deduplicados: la evolución se enseña igual para todos los jugadores que
+  // desplieguen su fila esta noche, no hace falta filtrar por quién asistió
+  // a qué boss concreto.
+  tonightBossKeys = computed(() => {
+    const d = this.data();
+    if (!d) return [];
+    const seen = new Set<string>();
+    const out: { bossId: string; bossName: string; difficulty: string; key: string }[] = [];
+    for (const b of d.bosses) {
+      const key = `${b.bossId}|${b.difficulty}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ bossId: b.bossId, bossName: b.bossName, difficulty: b.difficulty, key });
+    }
+    return out;
+  });
+
+  private async prefetchBossEvolution(): Promise<void> {
+    await Promise.all(this.tonightBossKeys().map((b) => this.loadBossEvolution(b.bossId, b.difficulty, b.key)));
+  }
+
+  private async loadBossEvolution(bossId: string, difficulty: string, key: string): Promise<void> {
+    if (this.bossEvolutionRequested.has(key)) return;
+    this.bossEvolutionRequested.add(key);
+    try {
+      const fingerprint = await this.bossEvolutionCache.fingerprint();
+      const cached = this.bossEvolutionCache.read(bossId, difficulty);
+      if (cached && cached.fingerprint === fingerprint) {
+        this.bossEvolution.update((current) => new Map(current).set(key, new Map(Object.entries(cached.points))));
+        return;
+      }
+      const points = await this.reliabilityService.getBossDifficultyEvolution(bossId, difficulty);
+      this.bossEvolution.update((current) => new Map(current).set(key, points));
+      this.bossEvolutionCache.write(bossId, difficulty, fingerprint, Object.fromEntries(points));
+    } catch {
+      // best-effort: sin evolución cacheable, el desplegable simplemente no la enseña — nunca bloquea el resto de la fila.
+      this.bossEvolutionRequested.delete(key);
+    }
+  }
+
+  // §"esto es poco visual, porque además no sé ni qué estoy comparando...
+  // algo más visual y sabiendo lo que se compara" (feedback real,
+  // 2026-08-30): antes reutilizaba app-trend-bars (pensado para % de vida
+  // del boss por intento, una escala y un significado distintos) sin decir
+  // en ningún sitio visible qué número era ese ni contra qué se comparaba
+  // cada barra — solo salía en el tooltip, así que había que pasar el ratón
+  // por cada barra para enterarte. Ahora es un mini-gráfico propio: el
+  // valor (Fiabilidad, mismo eje que la columna "Fiabilidad — noche" de la
+  // cabecera — misma fórmula, solo que UNA noche por barra en vez de
+  // "esta noche") va SIEMPRE visible encima de cada barra, con el
+  // resultado (kill/wipe) debajo — el tooltip solo añade el desglose
+  // (defensiva/parse) para quien quiera verificar.
+  evolutionPointsFor(
+    playerName: string,
+    bossKey: string,
+    reportCode: string,
+  ): {
+    reportCode: string;
+    dateLabel: string;
+    overall: number;
+    isCurrent: boolean;
+    resultLabel: string;
+    resultIsKill: boolean;
+    tooltip: string;
+  }[] {
+    const points = this.bossEvolution().get(bossKey)?.get(playerName) ?? [];
+    return points.map((p) => ({
+      reportCode: p.reportCode,
+      dateLabel: new Date(p.closedAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
+      overall: p.overall,
+      isCurrent: p.reportCode === reportCode,
+      resultLabel: p.kill ? 'kill' : p.bestWipePct != null ? `${formatPct(p.bestWipePct)} vida` : 'wipe',
+      resultIsKill: p.kill,
+      tooltip:
+        `${p.reportTitle ?? p.reportCode} — Fiabilidad ${p.overall}` +
+        (p.breakdown.defensiva != null ? ` · defensiva ${p.breakdown.defensiva}%` : '') +
+        (p.parseAvg != null ? ` · parse ${formatPct(p.parseAvg, 0)}` : ''),
+    }));
   }
 
   readonly bulkUpdating = signal(false);

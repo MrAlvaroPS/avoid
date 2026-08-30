@@ -69,7 +69,17 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // 20260830090000/20260830100000). Ya corregido en Supabase, pero un dosier
 // cacheado ANTES de esa corrección seguiría sirviendo el texto corrupto
 // hasta que algo más invalide el fingerprint — mismo motivo que v6/v7.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v8:';
+// v9 (2026-08-30): bug real encontrado ("por un lado hay gente que no le
+// sale el parse" — feedback real, verificado): pulls[].worldRankPercent es
+// un campo NUEVO en NightPullSummary (para la columna "Parse" de la tabla
+// de asistencia) — un resumen ya cacheado bajo v8 simplemente no lo tiene,
+// así que night-report.component.ts lo leía como `undefined` y lo trataba
+// como "sin dato" (`!= null` es false para undefined también) — no fallaba,
+// pero mentía "—" para cualquier jugador cuyo dosier ya estuviera en caché
+// desde antes de este cambio, exactamente el mismo síntoma que v4/v5/v6/v7
+// ya arreglaron cada vez que se añadía un campo al shape cacheado sin mover
+// la versión.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v9:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;
