@@ -28,3 +28,30 @@ export function roleFromSpec(wclClass: string | null, spec: string | null): Raid
   if (!wclClass || !spec) return null;
   return SPEC_ROLE[wclClass]?.[spec] ?? null;
 }
+
+/** Las 13 clases reales tal cual las guarda WCL — para poblar un desplegable de clase sin tecleo. */
+export const ALL_CLASSES: string[] = Object.keys(SPEC_ROLE);
+
+/** Specs reales de una clase (mismos nombres que cd.spec en cooldown_catalog/defensive-cooldowns.ts) — [] si la clase no se reconoce. */
+export function specsForClass(wclClass: string): string[] {
+  return Object.keys(SPEC_ROLE[wclClass] ?? {});
+}
+
+/**
+ * §"Preparación" (ver plan guardado): puente entre el vocabulario de rol de
+ * raid de ESTA app (RaidRole: Tank/Heal/Melee/Ranged, el que usa el roster)
+ * y el de BossMechanicCandidateRow.responsibility (tank/dps/healer/raid/
+ * personal, el que usa el catálogo de mecánicas) — dos ejes con
+ * granularidad distinta a propósito (Melee/Ranged solo importan para DAÑO
+ * recibido, nunca para "esta mecánica exige respuesta"), así que Melee y
+ * Ranged colapsan a 'dps' aquí. 'raid'/'personal' aplican a cualquiera,
+ * nunca se filtran por rol.
+ */
+export function mechanicAppliesToRole(responsibility: string | null, role: RaidRole | null): boolean {
+  if (responsibility === 'raid' || responsibility === 'personal' || responsibility == null) return true;
+  if (!role) return true; // rol sin resolver — no ocultar por precaución, mismo criterio que talentAllows en defensive-cooldowns.ts
+  if (responsibility === 'tank') return role === 'Tank';
+  if (responsibility === 'healer') return role === 'Heal';
+  if (responsibility === 'dps') return role === 'Melee' || role === 'Ranged';
+  return true;
+}

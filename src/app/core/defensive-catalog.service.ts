@@ -22,4 +22,11 @@ export class DefensiveCatalogService {
     if (error) throw error;
     return (data ?? []) as CooldownCatalogRow[];
   }
+
+  /** §"Preparación" (ver plan guardado): el desplegable de asignación de defensivo necesita las 13 clases a la vez, no una — el catálogo entero es pequeño (un puñado de filas por clase), una sola carga al entrar en la pantalla en vez de re-pedir por clase seleccionada. */
+  async listAll(): Promise<CooldownCatalogRow[]> {
+    const { data, error } = await this.supabase.client.from('cooldown_catalog').select('*').order('class', { ascending: true }).order('name', { ascending: true });
+    if (error) throw error;
+    return (data ?? []) as CooldownCatalogRow[];
+  }
 }

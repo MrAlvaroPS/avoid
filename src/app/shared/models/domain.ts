@@ -380,7 +380,7 @@ export interface CooldownCatalogRow {
  * guardado, conversación real 2026-08-30): peligrosidad/timing por mecánica,
  * separado de BossMechanicCandidateRow (otro consumidor: severidad de
  * mecánica evitable) aunque comparten clave (boss_id, difficulty,
- * ability_id). Los campos reference_*/requires_defensive(_source) SOLO los
+ * ability_id). Los campos reference_* y requires_defensive(_source) SOLO los
  * escribe sync-mechanic-defensive-profile; requires_group_split/
  * group_split_notes/reviewed SOLO la edición manual — mismo contrato que
  * BossMechanicCandidateRow.

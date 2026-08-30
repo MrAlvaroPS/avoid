@@ -355,6 +355,54 @@ export class EdgeFunctionsService {
     return this.invoke('save-unassigned-mechanic-edit', edit);
   }
 
+  /**
+   * §"Preparación" (ver plan guardado, conversación real 2026-08-30):
+   * perfila daño/timing de cada mecánica ya curada de este boss+dificultad
+   * contra logs públicos de referencia — ver sync-mechanic-defensive-profile/
+   * index.ts para el porqué de separar hits mitigados/sin mitigar (evita el
+   * sesgo de "trampeadas" de un log ya bien jugado).
+   */
+  async syncMechanicDefensiveProfile(bossId: string, difficulties?: number[]): Promise<{
+    ok: true;
+    results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number }[];
+    minReferenceSampleFights: number;
+  }> {
+    return this.invoke('sync-mechanic-defensive-profile', { bossId, difficulties });
+  }
+
+  /** Persiste los campos MANUALES de boss_mechanic_defensive_profile (requires_defensive/requires_group_split/group_split_notes/reviewed) — los reference_* solo los toca el sync. */
+  async saveMechanicDefensiveProfileEdit(edit: {
+    bossId: string;
+    difficulty: string;
+    abilityId: number;
+    requiresDefensive?: boolean | null;
+    requiresGroupSplit?: boolean;
+    groupSplitNotes?: string | null;
+    reviewed?: boolean;
+  }): Promise<{ ok: true }> {
+    return this.invoke('save-mechanic-defensive-profile-edit', edit);
+  }
+
+  /** Crear/editar (upsert por boss+dificultad+mecánica+class+spec) o borrar (`id`+`delete:true`) una asignación de defensivo — ver save-mechanic-defensive-assignment/index.ts. */
+  async saveMechanicDefensiveAssignment(
+    edit:
+      | {
+          bossId: string;
+          difficulty: string;
+          abilityId: number;
+          class: string;
+          spec: string;
+          defensiveSpellId: number;
+          prewarnSeconds?: number;
+          triggerType?: 'bossmod' | 'time';
+          bossmodSpellId?: number | null;
+          notes?: string | null;
+        }
+      | { id: string; delete: true },
+  ): Promise<{ ok: true; id?: string }> {
+    return this.invoke('save-mechanic-defensive-assignment', edit);
+  }
+
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */
   async syncReports(params: { guildName: string; serverSlug: string; serverRegion: string; sinceMs?: number }): Promise<SyncReportsResult> {
     return this.invoke<SyncReportsResult>('sync-reports', params);

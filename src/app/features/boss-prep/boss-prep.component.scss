@@ -1,0 +1,327 @@
+// Mismo vocabulario visual que unassigned-mechanics-catalog.component.scss/
+// defensive-catalog.component.scss a propósito — Angular encapsula por
+// componente, así que se copian las reglas compartidas en vez de
+// importarlas (mismo criterio ya documentado en esos ficheros).
+.boss-prep {
+  display: block;
+}
+
+.intro {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 20px;
+  max-width: 900px;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.result-line {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.result-ok {
+  color: var(--success);
+}
+.result-warn {
+  color: var(--warning);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.boss-list {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 8px;
+}
+
+.boss-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.boss-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+  &.selected {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+}
+
+.detail {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 16px;
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+
+  h2 {
+    margin: 0;
+    font-size: 15px;
+  }
+}
+
+.difficulty-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+
+  button {
+    padding: 4px 10px;
+    background: var(--surface-2);
+    border: none;
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+
+    &.selected {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+  }
+}
+
+.sync-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.sync-btn {
+  padding: 8px 14px;
+  background: var(--accent-solid);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:disabled {
+    opacity: 0.6;
+  }
+}
+
+.candidates,
+.assignments {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+
+  th {
+    text-align: left;
+    padding: 6px 8px;
+    color: var(--text-faint);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--surface-2);
+  }
+
+  td {
+    padding: 8px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--surface-2);
+  }
+
+  tr.saving {
+    opacity: 0.5;
+  }
+}
+
+.assignments-row td {
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.meta {
+  display: block;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.group-split-cell {
+  min-width: 180px;
+}
+
+select,
+input[type='text'],
+input[type='number'],
+.notes-input {
+  background: var(--surface-2);
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.notes-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  margin-top: 4px;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+
+  span {
+    white-space: nowrap;
+  }
+}
+
+.delete-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: 6px;
+
+  &:hover {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+  }
+  &.confirming {
+    background: var(--danger);
+    color: #fff;
+  }
+}
+
+.classify-toggle {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 4px 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.add-form {
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.add-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+
+    input,
+    select {
+      background: var(--surface-2);
+      border: none;
+      border-radius: 6px;
+      color: var(--text);
+      padding: 6px 8px;
+      font-size: 12.5px;
+    }
+  }
+}
+
+.add-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.export-section {
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--surface-2);
+
+  h3 {
+    margin: 0 0 10px;
+    font-size: 14px;
+  }
+}
+
+.export-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.export-result {
+  margin-top: 14px;
+}
+
+.prompt-box {
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 160px;
+  overflow-y: auto;
+  margin: 6px 0 10px;
+}

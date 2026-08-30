@@ -31,6 +31,17 @@ export const routes: Routes = [
         loadComponent: () => import('./features/raid-session/raid-session.component').then((m) => m.RaidSessionComponent),
       },
       {
+        // §"Preparación": sección propia en el nav, ANTES de Ajustes —
+        // pedida explícitamente aparte de las pestañas de Ajustes (a
+        // diferencia de defensive-catalog/unassigned-mechanics-catalog, que
+        // sí van embebidas ahí) porque esto no es "catálogo administrativo
+        // de datos", es el plan de la mecánica + el generador de reminders
+        // que se usa antes de cada pull — ver plan guardado, conversación
+        // real 2026-08-30.
+        path: 'preparacion',
+        loadComponent: () => import('./features/boss-prep/boss-prep.component').then((m) => m.BossPrepComponent),
+      },
+      {
         // §"vamos mejor a meterlo en ajustes... pestañas, una mecánicas de
         // bosses... otra defensivos... así tenemos todos los ajustes
         // centralizados" (feedback real): una sola ruta — ManifestComponent

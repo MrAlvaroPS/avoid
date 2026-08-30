@@ -1,0 +1,258 @@
+<section class="boss-prep">
+  <p class="intro">
+    Perfil de peligrosidad/timing por mecánica (independiente de qué se cubrió en un pull concreto — ver punto 4 de la
+    infografía) + asignación de defensivo por spec + generador de reminders para MRT.
+  </p>
+
+  @if (error()) {
+    <p class="error">{{ error() }}</p>
+  }
+
+  <div class="layout">
+    <nav class="boss-list">
+      @if (loadingBosses()) {
+        <p class="muted">Cargando bosses…</p>
+      } @else {
+        <ul>
+          @for (boss of bosses(); track boss.encounterId) {
+            <li>
+              <button type="button" class="boss-btn" [class.selected]="selectedEncounterId() === boss.encounterId" (click)="selectBoss(boss.encounterId)">
+                {{ boss.bossName }}
+              </button>
+            </li>
+          }
+        </ul>
+      }
+    </nav>
+
+    <section class="detail">
+      @if (!selectedBoss()) {
+        <p class="muted">Elige un boss.</p>
+      } @else {
+        <div class="detail-header">
+          <h2>{{ selectedBoss()!.bossName }}</h2>
+        </div>
+
+        <div class="difficulty-tabs" role="tablist">
+          @for (id of standardDifficultyIds; track id) {
+            <button type="button" role="tab" [class.selected]="selectedDifficultyId() === id" (click)="selectDifficulty(id)">
+              {{ difficultyLabel(id) }}
+            </button>
+          }
+        </div>
+
+        <div class="sync-row">
+          <button type="button" class="sync-btn" [disabled]="syncing()" (click)="runSync()">
+            {{ syncing() ? 'Sincronizando…' : '🔄 Sincronizar desde logs públicos' }}
+          </button>
+          @if (syncSummary()) {
+            <span class="result-line result-ok">{{ syncSummary() }}</span>
+          }
+        </div>
+
+        @if (loadingRows()) {
+          <p class="muted">Cargando mecánicas…</p>
+        } @else if (!mechanicRows().length) {
+          <p class="muted">Sin mecánicas curadas todavía para esta dificultad — sincroniza primero en Ajustes → Mecánicas.</p>
+        } @else {
+          <table class="candidates">
+            <thead>
+              <tr>
+                <th>Mecánica</th>
+                <th>Categoría / rol</th>
+                <th>Daño (sin mitigar / mitigado)</th>
+                <th>A quién golpea</th>
+                <th>Exige defensivo</th>
+                <th>Grupos alternos</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of mechanicRows(); track row.candidate.ability_id) {
+                <tr [class.saving]="savingProfileId() === row.candidate.ability_id">
+                  <td>
+                    <strong>{{ row.candidate.name }}</strong>
+                    @if (row.profile) {
+                      <span class="meta">{{ row.profile.reference_sample_fight_count }} fights de referencia</span>
+                    } @else {
+                      <span class="meta">sin sincronizar</span>
+                    }
+                  </td>
+                  <td>
+                    <span class="meta">{{ row.candidate.category ?? '—' }}</span>
+                    <span class="meta">{{ row.candidate.responsibility ?? '—' }}</span>
+                  </td>
+                  <td>
+                    @if (row.profile && (row.profile.reference_unmitigated_damage_samples.length || row.profile.reference_mitigated_damage_samples.length)) {
+                      <span class="meta">sin mitigar: mediana {{ median(row.profile.reference_unmitigated_damage_samples) | number: '1.0-0' }} ({{ row.profile.reference_unmitigated_damage_samples.length }})</span>
+                      <span class="meta">mitigado: mediana {{ median(row.profile.reference_mitigated_damage_samples) | number: '1.0-0' }} ({{ row.profile.reference_mitigated_damage_samples.length }})</span>
+                    } @else {
+                      <span class="meta">sin datos</span>
+                    }
+                  </td>
+                  <td>
+                    @if (row.profile?.reference_role_hit_breakdown; as breakdown) {
+                      <span class="meta">tank {{ breakdown.tank | percent: '1.0-0' }} · heal {{ breakdown.healer | percent: '1.0-0' }} · dps {{ breakdown.dps | percent: '1.0-0' }}</span>
+                    } @else {
+                      <span class="meta">—</span>
+                    }
+                  </td>
+                  <td>
+                    <select [value]="row.profile?.requires_defensive === true ? 'true' : row.profile?.requires_defensive === false ? 'false' : ''" (change)="onRequiresDefensiveChange(row.candidate.ability_id, $any($event.target).value)">
+                      <option value="">sin decidir</option>
+                      <option value="true">sí</option>
+                      <option value="false">no</option>
+                    </select>
+                    @if (row.profile?.requires_defensive_source) {
+                      <span class="meta">{{ row.profile!.requires_defensive_source }}</span>
+                    }
+                  </td>
+                  <td class="group-split-cell">
+                    <label class="inline-field">
+                      <input type="checkbox" [checked]="row.profile?.requires_group_split ?? false" (change)="setRequiresGroupSplit(row.candidate.ability_id, $any($event.target).checked)" />
+                      <span>requiere turnos</span>
+                    </label>
+                    @if (row.profile?.requires_group_split) {
+                      <textarea
+                        class="notes-input"
+                        rows="2"
+                        placeholder="Ej. grupos 1-2 primero, luego 3-4"
+                        [value]="row.profile?.group_split_notes ?? ''"
+                        (change)="setGroupSplitNotes(row.candidate.ability_id, $any($event.target).value)"
+                      ></textarea>
+                    }
+                  </td>
+                  <td>
+                    <button type="button" class="classify-toggle" (click)="toggleExpanded(row.candidate.ability_id)">
+                      {{ expandedAbilityId() === row.candidate.ability_id ? 'cerrar' : 'asignaciones (' + row.assignments.length + ')' }}
+                    </button>
+                  </td>
+                </tr>
+                @if (expandedAbilityId() === row.candidate.ability_id) {
+                  <tr class="assignments-row">
+                    <td colspan="7">
+                      <table class="assignments">
+                        <thead>
+                          <tr>
+                            <th>Clase</th>
+                            <th>Spec</th>
+                            <th>Defensivo</th>
+                            <th>Aviso previo</th>
+                            <th>Trigger</th>
+                            <th>Notas</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (a of row.assignments; track a.id) {
+                            <tr>
+                              <td>{{ a.class }}</td>
+                              <td>{{ a.spec }}</td>
+                              <td>{{ a.defensive_spell_id }}</td>
+                              <td>{{ a.prewarn_seconds }}s</td>
+                              <td>{{ a.trigger_type }}</td>
+                              <td class="meta">{{ a.notes }}</td>
+                              <td>
+                                <button type="button" class="classify-toggle" (click)="openAssignmentDraft(row.candidate.ability_id, a)">editar</button>
+                                <button type="button" class="delete-btn" [class.confirming]="confirmingDeleteAssignmentId() === a.id" (click)="requestDeleteAssignment(a.id)">
+                                  {{ confirmingDeleteAssignmentId() === a.id ? '¿seguro?' : 'borrar' }}
+                                </button>
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+
+                      @if (assignmentDraft() && assignmentDraft()!.abilityId === row.candidate.ability_id) {
+                        <div class="add-form">
+                          <div class="add-form-grid">
+                            <label>
+                              Clase
+                              <select [value]="assignmentDraft()!.class" (change)="onDraftClassChange($any($event.target).value)">
+                                @for (cls of allClasses; track cls) {
+                                  <option [value]="cls">{{ cls }}</option>
+                                }
+                              </select>
+                            </label>
+                            <label>
+                              Spec
+                              <select [value]="assignmentDraft()!.spec" (change)="onDraftSpecChange($any($event.target).value)">
+                                @for (spec of specsForDraftClass(); track spec) {
+                                  <option [value]="spec">{{ spec }}</option>
+                                }
+                              </select>
+                            </label>
+                            <label>
+                              Defensivo
+                              <select [value]="assignmentDraft()!.defensiveSpellId ?? ''" (change)="onDraftDefensiveChange($any($event.target).value)">
+                                <option value="">— elige —</option>
+                                @for (cd of defensivesForDraft(); track cd.spell_id) {
+                                  <option [value]="cd.spell_id">{{ cd.name }}</option>
+                                }
+                              </select>
+                            </label>
+                            <label>
+                              Aviso previo (s)
+                              <input type="number" min="0" [value]="assignmentDraft()!.prewarnSeconds" (change)="onDraftPrewarnChange($any($event.target).value)" />
+                            </label>
+                            <label>
+                              Trigger
+                              <select [value]="assignmentDraft()!.triggerType" (change)="onDraftTriggerTypeChange($any($event.target).value)">
+                                <option value="bossmod">bossmod (BigWigs/DBM) — recomendado</option>
+                                <option value="time">tiempo fijo desde pull</option>
+                              </select>
+                            </label>
+                            @if (assignmentDraft()!.triggerType === 'bossmod') {
+                              <label>
+                                spellID del timer (opcional, si no = el de la mecánica)
+                                <input type="text" [value]="assignmentDraft()!.bossmodSpellId" (change)="onDraftBossmodSpellIdChange($any($event.target).value)" />
+                              </label>
+                            }
+                            <label>
+                              Notas
+                              <input type="text" [value]="assignmentDraft()!.notes" (change)="onDraftNotesChange($any($event.target).value)" />
+                            </label>
+                          </div>
+                          <div class="add-form-actions">
+                            <button type="button" class="sync-btn" [disabled]="savingAssignment()" (click)="submitAssignmentDraft()">Guardar asignación</button>
+                            <button type="button" class="classify-toggle" (click)="closeAssignmentDraft()">Cancelar</button>
+                          </div>
+                        </div>
+                      } @else {
+                        <button type="button" class="classify-toggle" (click)="openAssignmentDraft(row.candidate.ability_id)">+ asignar defensivo</button>
+                      }
+                    </td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+
+          @if (specsWithAssignments().length) {
+            <div class="export-section">
+              <h3>Crear reminder MRT</h3>
+              <div class="export-buttons">
+                @for (cs of specsWithAssignments(); track cs.class + cs.spec) {
+                  <button type="button" class="sync-btn" (click)="generateExport(cs.class, cs.spec)">{{ cs.class }} — {{ cs.spec }}</button>
+                }
+              </div>
+
+              @if (exportResult()) {
+                <div class="export-result">
+                  <p class="meta">{{ exportResult()!.class }} — {{ exportResult()!.spec }}</p>
+                  @if (exportResult()!.skippedForMissingTiming.length) {
+                    <p class="result-line result-warn">Sin timing para: {{ exportResult()!.skippedForMissingTiming.join(', ') }} (usa trigger bossmod o sincroniza)</p>
+                  }
+                  <pre class="prompt-box">{{ exportResult()!.text }}</pre>
+                  <button type="button" class="sync-btn" (click)="copyExport()">
+                    {{ copyStatus() === 'copied' ? '✓ copiado' : copyStatus() === 'error' ? 'error al copiar' : 'copiar' }}
+                  </button>
+                </div>
+              }
+            </div>
+          }
+        }
+      }
+    </section>
+  </div>
+</section>
