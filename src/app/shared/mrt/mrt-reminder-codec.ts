@@ -187,6 +187,22 @@ export interface MrtBossmodTrigger {
 
 export type MrtTrigger = MrtPullTrigger | MrtBossmodTrigger;
 
+/**
+ * §Solo aparece en DECODE, nunca lo produce encodeMrtExport — MRT tiene más
+ * tipos de trigger (verificado en real: un reminder "TEST" creado a mano en
+ * el juego usó event=6, no documentado en la investigación original) que
+ * esta app no necesita generar. Preservar los subcampos crudos en vez de
+ * reventar el decode entero deja que la validación contra exports reales
+ * siga adelante con reminders que no son de tiempo/bossmod.
+ */
+export interface MrtUnknownTrigger {
+  type: 'unknown';
+  event: number;
+  rawFields: string[];
+}
+
+export type MrtDecodedTrigger = MrtTrigger | MrtUnknownTrigger;
+
 const PULL_EVENT = 3; // BOSS_START
 const BOSSMOD_EVENT = 7; // BW_TIMER (MRT escucha tanto BigWigs como DBM)
 
@@ -199,7 +215,7 @@ function serializeTrigger(trigger: MrtTrigger): Uint8Array {
   return joinBytes(fields.map(escapeMrtValue), D2);
 }
 
-function deserializeTrigger(bytes: Uint8Array): MrtTrigger {
+function deserializeTrigger(bytes: Uint8Array): MrtDecodedTrigger {
   const raw = splitBytes(bytes, D2).map(unescapeMrtValue);
   const event = Number(raw[0]);
   const num = (s: string | undefined): number | undefined => (s === undefined || s === '' ? undefined : Number(s));
@@ -209,7 +225,7 @@ function deserializeTrigger(bytes: Uint8Array): MrtTrigger {
   if (event === BOSSMOD_EVENT) {
     return { type: 'bossmod', timeLeftSeconds: num(raw[2]) ?? 0, spellId: num(raw[3]), pattern: raw[4] || undefined };
   }
-  throw new Error(`mrt-reminder-codec: evento de trigger ${raw[0]} no soportado (solo 3=BOSS_START y 7=BW_TIMER) — export de un tipo de reminder que este codec no cubre todavía.`);
+  return { type: 'unknown', event, rawFields: raw };
 }
 
 // --- reminder ----------------------------------------------------------
@@ -239,7 +255,7 @@ export interface MrtDecodedReminder {
   prewarnSeconds: number;
   countdown: boolean;
   durRev: boolean;
-  triggers: MrtTrigger[];
+  triggers: MrtDecodedTrigger[];
 }
 
 const CHECK_COUNTDOWN = 1;
