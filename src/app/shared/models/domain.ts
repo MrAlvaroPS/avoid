@@ -375,6 +375,56 @@ export interface CooldownCatalogRow {
   reviewed: boolean;
 }
 
+/**
+ * Fila de boss_mechanic_defensive_profile (§"Preparación" — ver plan
+ * guardado, conversación real 2026-08-30): peligrosidad/timing por mecánica,
+ * separado de BossMechanicCandidateRow (otro consumidor: severidad de
+ * mecánica evitable) aunque comparten clave (boss_id, difficulty,
+ * ability_id). Los campos reference_*/requires_defensive(_source) SOLO los
+ * escribe sync-mechanic-defensive-profile; requires_group_split/
+ * group_split_notes/reviewed SOLO la edición manual — mismo contrato que
+ * BossMechanicCandidateRow.
+ */
+export interface BossMechanicDefensiveProfileRow {
+  id: string;
+  boss_id: string;
+  difficulty: string;
+  ability_id: number;
+  /** Daño (amount+absorbed) en hits SIN un defensivo de %-reducción activo en el objetivo — la señal cruda, no amortiguada por logs de referencia ya bien jugados. */
+  reference_unmitigated_damage_samples: number[];
+  /** Mismos hits pero CON un defensivo activo — delta real de mitigación observado. */
+  reference_mitigated_damage_samples: number[];
+  reference_role_hit_breakdown: { tank: number; healer: number; dps: number } | null;
+  /** Ms desde pull-start de cada ocurrencia observada — solo timeline/preview, nunca el trigger real (ver MrtBossmodTrigger). */
+  reference_cast_offset_ms_samples: number[];
+  reference_sample_fight_count: number;
+  requires_defensive: boolean | null;
+  /** Mismo vocabulario que SeveritySource (_shared/mechanic-severity.ts) + 'manual_override'. */
+  requires_defensive_source: 'own_history' | 'world_reference' | 'fixed_threshold' | 'manual_override' | null;
+  requires_group_split: boolean;
+  group_split_notes: string | null;
+  reviewed: boolean;
+  updated_at: string;
+}
+
+/** Fila de mechanic_defensive_assignments — asignación curada a mano de qué defensivo de qué spec cubre qué mecánica, para el generador de reminders MRT. */
+export interface MechanicDefensiveAssignmentRow {
+  id: string;
+  boss_id: string;
+  difficulty: string;
+  ability_id: number;
+  class: string;
+  spec: string;
+  /** Referencia lógica a cooldown_catalog.spell_id para esta class+spec (sin FK, ver migración). */
+  defensive_spell_id: number;
+  prewarn_seconds: number;
+  trigger_type: 'bossmod' | 'time';
+  /** Normalmente = ability_id; distinto solo si el timer real de BigWigs/DBM usa otro spellID. */
+  bossmod_spell_id: number | null;
+  notes: string | null;
+  updated_at: string;
+}
+
 /** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
  * 2026-08-29): mecánicas de un boss donde cualquier jugador elegible puede
  * actuar sin asignación fija (huevos, orbes, ítems) — ver unassigned_mechanic_catalog
