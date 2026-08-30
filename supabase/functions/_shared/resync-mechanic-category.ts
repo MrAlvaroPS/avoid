@@ -1,5 +1,28 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 
+// §"asegurado que no hay contradicciones de datos... actualizado los
+// fingerprints" (feedback real, 2026-08-30 — auditoría al construir la
+// evolución por boss+dificultad de la tabla de asistencia): bug real
+// encontrado, preexistente a ese cambio. Las tres funciones de abajo
+// reescriben pull_mechanic_events/player_pull_records.death_cause de
+// TODOS los pulls históricos de un boss+dificultad al reclasificar una
+// mecánica en Ajustes — eso cambia lo que devuelve player_pull_reliability_
+// inputs (la vista de la que sale Mecánica/Defensiva) para esos pulls, con
+// efecto en cascada sobre nightScore, Fiabilidad-noche, Fiabilidad-60-días
+// y la evolución por boss — pero ninguna de las tres tocaba pulls.updated_at,
+// la ÚNICA señal que consumen esos cachés (RosterSnapshotCacheService,
+// NightScoreCacheService, NightBossEvolutionCacheService — ver sus
+// comentarios) para saber que hay que recalcular. Sin esto, una
+// reclasificación en Ajustes dejaba esos 4 sitios enseñando el número viejo
+// indefinidamente, exactamente el mismo síntoma que
+// invalidateNightFullReportsForBossDifficulty (más abajo) ya arregla para el
+// informe de noche — aquí falta el equivalente para todo lo demás.
+async function touchPulls(supabase: SupabaseClient, pullIds: string[]): Promise<void> {
+  if (!pullIds.length) return;
+  const { error } = await supabase.from('pulls').update({ updated_at: new Date().toISOString() }).in('id', pullIds);
+  if (error) console.error('No se pudo marcar pulls.updated_at tras reclasificar (no bloqueante):', error);
+}
+
 // §"Uncoiling sale sin clasificar en 'a quién dirigir' pero confirmada en
 // la tabla de Ajustes... falta ahí cruce de datos, ese cruce está
 // arruinando varias partes de la app" (feedback real, investigado a fondo):
@@ -46,6 +69,7 @@ export async function resyncMechanicCategory(supabase: SupabaseClient, bossId: s
       .update({ death_cause: { ...r.death_cause, category, categoryIsInferred: false, rootCause } })
       .eq('id', r.id);
   }
+  await touchPulls(supabase, pullIds);
 }
 
 /** Propaga la responsabilidad confirmada a eventos y muertes históricos. */
@@ -74,6 +98,7 @@ export async function resyncMechanicResponsibility(
       .update({ death_cause: { ...row.death_cause, responsibility } })
       .eq('id', row.id);
   }
+  await touchPulls(supabase, pullIds);
 }
 
 // §bug real encontrado (2026-08-27): los tres campos aceptan `null` a
@@ -112,6 +137,7 @@ export async function resyncMechanicAvoidable(
       .update({ death_cause: { ...row.death_cause, avoidable } })
       .eq('id', row.id);
   }
+  await touchPulls(supabase, pullIds);
 }
 
 // §"Daño evitable de toda la noche — solo hay cobertura en 1 de 3

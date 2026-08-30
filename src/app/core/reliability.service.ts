@@ -1092,4 +1092,143 @@ export class ReliabilityService {
           sampleSize: 0,
         };
   }
+
+  /**
+   * §"comparación (OJO: con la misma dificultad) de su evolución... con
+   * otros logs comparables por dificultad y boss de esa misma dificultad...
+   * heroico con heroico y mítico con mítico" (feedback real, 2026-08-30):
+   * un punto por NOCHE (report_code) en ESTE boss+dificultad, para TODOS
+   * los jugadores a la vez — mismo scope que ya usa listPlayerReliability
+   * ({bossId,difficulty}, ver boss-history.service.ts) pero sin colapsar
+   * todo el historial en un único número: aquí se agrupa por report_code
+   * para poder pintar la evolución noche a noche. MISMA fórmula que
+   * Fiabilidad (computeReliabilityBreakdown) — nunca un cálculo paralelo.
+   * Todo el historial, sin ventana de tiempo (a diferencia de los 60 días
+   * de listPlayerReliability sin scope): aquí la pregunta es "¿cómo le ha
+   * ido a este jugador en este boss+dificultad concreto, alguna vez?", no
+   * "últimamente en general".
+   *
+   * El parse (WCL) no vive en player_pull_reliability_inputs — se trae
+   * aparte con un query sobre player_pull_records acotado a los pulls ya
+   * resueltos por el primero (mismo boss+dificultad), sin llamar a WCL de
+   * nuevo (world_rank_percent ya está persistido desde analyze-report).
+   */
+  async getBossDifficultyEvolution(
+    bossId: string,
+    difficulty: string,
+  ): Promise<Map<string, BossDifficultyEvolutionPoint[]>> {
+    const client = this.supabase.client;
+    const [inputRows, pullsResponse] = await Promise.all([
+      this.fetchReliabilityInputs({ scope: { bossId, difficulty } }),
+      // §bug real encontrado en auditoría (2026-08-30 — "¿has asegurado que
+      // no hay contradicciones de datos?"): player_pull_reliability_inputs
+      // (fetchReliabilityInputs de arriba) ya excluye ninja pulls a nivel de
+      // vista (`where not p.ninja_pull_excluded`, ver migración
+      // 20260829070000), así que `breakdown`/`kill`/`bestWipePct` (derivados
+      // de `inputRows`) ya salían limpios sin querer. El parse (WCL) NO pasa
+      // por esa vista — sale de player_pull_records directo — así que sin
+      // este filtro aquí, un ninja pull SÍ colaba su world_rank_percent en
+      // parseAvg, mientras que la columna "Parse" de la cabecera (que sí
+      // filtra excludedFromStats, ver loadNightAttendanceStats) lo
+      // descartaba: dos números que deberían coincidir en una noche de un
+      // solo boss+dificultad podían divergir por esto.
+      client.from('pulls').select('id, report_code, wipe_pct').eq('boss_id', bossId).eq('difficulty', difficulty).eq('ninja_pull_excluded', false),
+    ]);
+    if (pullsResponse.error) throw pullsResponse.error;
+    const pullRows = (pullsResponse.data ?? []) as { id: string; report_code: string; wipe_pct: number | null }[];
+    const pullIds = pullRows.map((p) => p.id);
+    const wipePctByPullId = new Map(pullRows.map((p) => [p.id, p.wipe_pct]));
+    const reportCodeByPullId = new Map(pullRows.map((p) => [p.id, p.report_code]));
+    const reportCodes = [...new Set(pullRows.map((p) => p.report_code))];
+
+    const [recordsResponse, reportsResponse] = await Promise.all([
+      pullIds.length
+        ? client.from('player_pull_records').select('pull_id, player_name, world_rank_percent').in('pull_id', pullIds)
+        : Promise.resolve({ data: [] as { pull_id: string; player_name: string; world_rank_percent: number | null }[], error: null }),
+      reportCodes.length
+        ? client.from('reports').select('code, title, start_time').in('code', reportCodes)
+        : Promise.resolve({ data: [] as { code: string; title: string | null; start_time: string | null }[], error: null }),
+    ]);
+    if (recordsResponse.error) throw recordsResponse.error;
+    if (reportsResponse.error) throw reportsResponse.error;
+    const reportByCode = new Map(
+      ((reportsResponse.data ?? []) as { code: string; title: string | null; start_time: string | null }[]).map((r) => [r.code, r]),
+    );
+
+    // Filas de fiabilidad, agrupadas por jugador → report_code.
+    const byPlayerReport = new Map<string, Map<string, ReliabilityInputRow[]>>();
+    for (const row of inputRows) {
+      if (!row.report_code) continue;
+      let byReport = byPlayerReport.get(row.player_name);
+      if (!byReport) {
+        byReport = new Map();
+        byPlayerReport.set(row.player_name, byReport);
+      }
+      const list = byReport.get(row.report_code) ?? [];
+      list.push(row);
+      byReport.set(row.report_code, list);
+    }
+    // Parse (WCL), agrupado igual — vía pull_id → report_code, no viene con el campo directo.
+    const parseByPlayerReport = new Map<string, Map<string, number[]>>();
+    for (const record of (recordsResponse.data ?? []) as { pull_id: string; player_name: string; world_rank_percent: number | null }[]) {
+      if (record.world_rank_percent == null) continue;
+      const reportCode = reportCodeByPullId.get(record.pull_id);
+      if (!reportCode) continue;
+      let byReport = parseByPlayerReport.get(record.player_name);
+      if (!byReport) {
+        byReport = new Map();
+        parseByPlayerReport.set(record.player_name, byReport);
+      }
+      const list = byReport.get(reportCode) ?? [];
+      list.push(record.world_rank_percent);
+      byReport.set(reportCode, list);
+    }
+
+    const now = Date.now();
+    const result = new Map<string, BossDifficultyEvolutionPoint[]>();
+    for (const [playerName, byReport] of byPlayerReport) {
+      const points: BossDifficultyEvolutionPoint[] = [];
+      for (const [reportCode, rows] of byReport) {
+        const breakdown = computeReliabilityBreakdown(rows, now);
+        if (!breakdown) continue;
+        const wipePcts = rows.map((r) => wipePctByPullId.get(r.pull_id)).filter((v): v is number => v != null);
+        const kill = wipePcts.some((v) => v === 0);
+        const bestWipePct = wipePcts.length ? Math.min(...wipePcts) : null;
+        const parses = parseByPlayerReport.get(playerName)?.get(reportCode) ?? [];
+        const parseAvg = parses.length ? Math.round((parses.reduce((sum, v) => sum + v, 0) / parses.length) * 10) / 10 : null;
+        const report = reportByCode.get(reportCode);
+        const closedAt = rows.reduce((max, r) => (r.closed_at > max ? r.closed_at : max), rows[0].closed_at);
+        points.push({
+          reportCode,
+          reportTitle: report?.title ?? null,
+          closedAt,
+          kill,
+          bestWipePct: kill ? null : bestWipePct,
+          overall: breakdown.overall,
+          breakdown: breakdown.breakdown,
+          parseAvg,
+          sampleSize: rows.length,
+        });
+      }
+      points.sort((a, b) => a.closedAt.localeCompare(b.closedAt));
+      result.set(playerName, points);
+    }
+    return result;
+  }
+}
+
+export interface BossDifficultyEvolutionPoint {
+  reportCode: string;
+  reportTitle: string | null;
+  /** Momento del pull más reciente de este jugador en este report_code para este boss+dificultad — no siempre coincide con reports.start_time (un report puede abarcar varios bosses). */
+  closedAt: string;
+  kill: boolean;
+  /** Mejor (menor) % de vida restante esa noche en este boss+dificultad — null si hubo kill (ya no aplica) o sin dato. */
+  bestWipePct: number | null;
+  /** 0-100, misma fórmula que Fiabilidad (mecánica+defensiva+preparación). */
+  overall: number;
+  breakdown: { mecanica: number | null; defensiva: number | null; preparacion: number | null };
+  /** Media (0-100) del percentil de WCL (world_rank_percent) de esa noche en este boss+dificultad — null si WCL no pudo rankear ningún pull. */
+  parseAvg: number | null;
+  sampleSize: number;
 }

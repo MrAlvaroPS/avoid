@@ -20,12 +20,30 @@
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 
-const STORAGE_PREFIX = 'avoid:night-scores:v1:';
+// v2 (2026-08-30): §"columnas siempre visibles: parse, ejecución de esta
+// noche, defensivos, fiabilidad de la noche" (feedback real) — antes solo
+// guardaba nightScore; ahora cachea las 4 métricas de "esta noche" de la
+// tabla de asistencia de una vez (todas salen del mismo NightPlayerSummary,
+// mismo fingerprint de siempre: acotado a los pulls de ESTE report). Bump de
+// versión porque el shape cambia — una entrada v1 vieja (solo nightScore)
+// no debe leerse como si ya trajera los campos nuevos.
+const STORAGE_PREFIX = 'avoid:night-scores:v2:';
+
+export interface CachedNightAttendanceStats {
+  /** Ejecución de esta noche — night-player-summary.service.ts: nightScore (0-1). */
+  nightScore: number | null;
+  /** Fiabilidad — esta noche (ReliabilityService.getNightReliability(...).overall, 0-100). */
+  nightReliability: number | null;
+  /** Sub-score "defensiva" del mismo breakdown de fiabilidad de la noche (0-100) — el que ya enseña el dosier. */
+  nightDefensiva: number | null;
+  /** Media (0-100) del percentil de WCL (world_rank_percent) de los pulls rankeados de esta noche — null si ninguno se pudo rankear. */
+  nightParse: number | null;
+}
 
 interface CachedEntry {
   fingerprint: string;
   savedAt: string;
-  scores: Record<string, number | null>;
+  scores: Record<string, CachedNightAttendanceStats>;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -59,7 +77,7 @@ export class NightScoreCacheService {
     }
   }
 
-  write(reportCode: string, fingerprint: string, scores: Record<string, number | null>): void {
+  write(reportCode: string, fingerprint: string, scores: Record<string, CachedNightAttendanceStats>): void {
     try {
       localStorage.setItem(
         STORAGE_PREFIX + reportCode,

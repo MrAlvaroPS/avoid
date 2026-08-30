@@ -19,7 +19,7 @@ import { DecimalPipe } from '@angular/common';
 import type { PlayerStatRow } from '../../core/pull-analysis.service';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { RoleIconComponent } from '../../shared/role-icon.component';
-import { formatTimeLabel } from '../../shared/format.util';
+import { formatTimeLabel, percentileTone } from '../../shared/format.util';
 
 @Component({
   selector: 'app-player-stats-table',
@@ -66,15 +66,9 @@ export class PlayerStatsTableComponent {
     return (p.defensiveStatusAtDeath ?? []).some((o) => o.status === 'on_cooldown');
   }
 
-  // §3.1/§7.1: banda de color del percentil — mismo lenguaje de estado
-  // (--danger/--warning/--success) que ya usa el resto de la app, no una
-  // paleta categórica nueva (esto es "qué tal va", no "qué es").
-  percentileTone(pct: number | null): 'danger' | 'warning' | 'success' | 'neutral' {
-    if (pct == null) return 'neutral';
-    if (pct < 25) return 'danger';
-    if (pct < 75) return 'warning';
-    return 'success';
-  }
+  // §movido a shared/format.util.ts (2026-08-30): night-report también lo
+  // necesita para el percentil medio de la noche — mismo umbral, un único sitio.
+  percentileTone = percentileTone;
 
   // Resumen de UN vistazo para la fila compacta (🪨✓ 🧪✗ estilo) — el
   // desglose completo (cuántas veces, disponibilidad real) sigue en la fila
