@@ -1,285 +1,336 @@
 <div class="guide">
 
   <header class="guide-header">
-    <img class="guide-mark" src="/assets/avoid-guild-logo.png" alt="" aria-hidden="true" />
-    <span class="guide-eyebrow">Guild Avoid</span>
-    <h1>Cómo leer tu infografía de jugador</h1>
-    <p class="guide-dek">
-      La lámina que te llega por Discord tras cada raid resume tu noche en un vistazo. Aquí va, sección
-      por sección, qué significa cada número, de dónde sale exactamente, y qué hacer con ello antes de
-      la próxima sesión.
-    </p>
+    <div class="guide-header-inner">
+      <img class="guide-mark" src="/assets/avoid-guild-logo.png" alt="" aria-hidden="true" />
+      <span class="guide-eyebrow">Guild Avoid</span>
+      <h1>Cómo leer tu infografía de jugador</h1>
+      <p class="guide-dek">
+        La lámina que te llega por Discord tras cada raid resume tu noche en un vistazo. Aquí va, sección
+        por sección, qué significa cada número, de dónde sale exactamente, y qué hacer con ello antes de
+        la próxima sesión.
+      </p>
+      <p class="guide-intro">
+        Nada de lo que ves ahí es una opinión. Cada dato sale del registro de combate real de la noche
+        (Warcraft Logs) — quién lanzó qué, cuándo, cuánto daño entró y cuánto se curó — cruzado contra un
+        catálogo propio de mecánicas de cada boss y de habilidades defensivas por clase, especialización y
+        talentos.
+      </p>
+    </div>
   </header>
 
-  <section class="guide-intro">
-    <p>
-      Nada de lo que ves ahí es una opinión. Cada dato sale del registro de combate real de la noche
-      (Warcraft Logs) — quién lanzó qué, cuándo, cuánto daño entró y cuánto se curó — cruzado contra un
-      catálogo propio de mecánicas de cada boss y de habilidades defensivas por clase, especialización y
-      talentos. Los números "01–05" de abajo son los mismos que ya llevan las cabeceras de la propia
-      lámina, para poder ir y volver entre este texto y la imagen sin perderte.
-    </p>
-  </section>
+  <div class="guide-layout">
 
-  <!-- 00 -->
-  <section class="guide-part">
-    <div class="guide-part-head">
-      <span class="guide-part-index">00 · Cabecera</span>
-      <h2>Identidad y las dos puntuaciones de arriba</h2>
+    <nav class="guide-toc" aria-label="Secciones de la guía">
+      <a href="/guia-infografia#cabecera">00 <span>Cabecera</span></a>
+      <a href="/guia-infografia#conservar">01 <span>Qué conservar</span></a>
+      <a href="/guia-infografia#proxima-raid">02 <span>Próxima raid</span></a>
+      <a href="/guia-infografia#regularidad">03 <span>Regularidad</span></a>
+      <a href="/guia-infografia#defensivos">04 <span>Defensivos</span></a>
+      <a href="/guia-infografia#evolucion">05 <span>Evolución</span></a>
+      <a href="/guia-infografia#en-la-practica">→ <span>En la práctica</span></a>
+    </nav>
+
+    <div class="guide-cards">
+
+      <!-- 00 -->
+      <article class="guide-card" id="cabecera">
+        <div class="guide-card-head">
+          <span class="guide-card-index">00 · Cabecera</span>
+          <h2>Identidad y las dos puntuaciones de arriba</h2>
+        </div>
+        <div class="guide-card-body">
+          <p>
+            Arriba del todo: tu retrato, tu clase/especialización (detectadas en el equipo real que llevabas
+            puesto en tu primer pull de la noche) y dos anillos de puntuación.
+          </p>
+
+          <p>
+            <strong>Ejecución de esta noche</strong> es la media de tu puntuación en cada pull, ponderada por
+            duración — un intento de 8 minutos pesa más que un wipe de 40 segundos, porque hubo más
+            oportunidad real de acertar o fallar. Cada pull individual se calcula así:
+          </p>
+          <div class="guide-formula">(mecánica × 70% + consumible al morir × 30%) × % del intento vivo × penalización defensiva</div>
+          <p>
+            Encima de esa media se aplica un ajuste para toda la noche si algún pull se quedó sin lanzar ni un
+            solo defensivo teniendo presión real encima — para que sobrevivir de churro en un pull no tape un
+            problema real en otro.
+          </p>
+
+          <p>
+            <strong>Cobertura defensiva</strong> es un número más específico: qué porcentaje de tus ventanas de
+            presión reales de la noche cubriste con algo de tu catálogo — 0% si nunca lanzaste nada en esa
+            ventana, parcial si llegaste tarde, completo si acertaste el momento. En el punto <a href="/guia-infografia#defensivos">04</a>
+            se explica con detalle qué es exactamente una "ventana de presión".
+          </p>
+
+          <p>Justo debajo va una tira de cinco cifras en bruto, la misma fuente que alimenta las puntuaciones de arriba:</p>
+          <dl class="guide-metrics">
+            <div><dt>Pulls limpios</dt><dd>sin fallo personal ni muerte evaluable, sobre el total de pulls evaluados esa noche</dd></div>
+            <div><dt>Zona / spread</dt><dd>oportunidades de esquivar zona o dispersarse, verificadas mientras seguías con vida</dd></div>
+            <div><dt>Fallos personales</dt><dd>incidentes accionables, por cada 10 pulls — así se puede comparar una noche corta con una larga</dd></div>
+            <div><dt>Muertes evaluables</dt><dd>ya separadas de wipe call, ninja pull y mención sin mecánica identificada</dd></div>
+            <div><dt>Kicks atribuidos</dt><dd>interrupciones con autor y momento confirmados por el registro de combate, no una estimación</dd></div>
+          </dl>
+          <p>"Evaluable" descarta de raíz wipe calls, ninja pulls y menciones sin mecánica identificada — no se penaliza (ni se premia) nada que no se pueda verificar con datos reales.</p>
+        </div>
+      </article>
+
+      <!-- 01 -->
+      <article class="guide-card guide-card--positive" id="conservar">
+        <div class="guide-card-head">
+          <span class="guide-card-index">01 · Qué conservar</span>
+          <h2>Ejecuciones positivas con evidencia</h2>
+        </div>
+        <div class="guide-card-body">
+          <p>
+            Esquivas de zona/spread verificadas, interrupciones atribuidas (autor y segundo exacto), pulls sin
+            ningún fallo personal ni muerte evaluable, respuesta defensiva en pulls con presión, y mecánicas
+            <strong>sin asignación fija</strong> que resolviste sin que nadie te lo marcara — huevos, orbes,
+            objetos de suelo que le tocan a "quien llegue".
+          </p>
+          <div class="guide-example">
+            <span class="guide-example-tag">Ejemplo</span>
+            <p>Si evitaste 7 de 8 zonas de suelo mientras seguías con vida, aquí sale literalmente
+            <code>7/8 · 88%</code>. La octava, si moriste dentro, no resta aquí — ya está capturada en la
+            tabla de muertes; esta sección solo cuenta lo que hiciste bien mientras podías seguir actuando.</p>
+          </div>
+          <p>
+            Las mecánicas sin asignar resueltas también suman de verdad a tu Ejecución de esta noche: +5%
+            sobre el bloque de mecánica por cada una, con un tope de +15% — es crédito, nunca aparece como
+            fallo de otro por no hacerla nadie ese pull.
+          </p>
+        </div>
+      </article>
+
+      <!-- 02 -->
+      <article class="guide-card guide-card--warning" id="proxima-raid">
+        <div class="guide-card-head">
+          <span class="guide-card-index">02 · Próxima raid</span>
+          <h2>Qué corregir primero y cómo</h2>
+        </div>
+        <div class="guide-card-body">
+          <p>
+            Hasta 4 tarjetas, ordenadas por muertes → fallos → daño acumulado, agrupando por boss y mecánica
+            exacta. Se descartan de esta lista las causas sin nombre real (tipo "habilidad desconocida") — no
+            tiene sentido darte una acción concreta sobre algo que ni el propio registro de combate pudo
+            identificar.
+          </p>
+          <div class="guide-example">
+            <span class="guide-example-tag">Ejemplo</span>
+            <p><code>Descarga de vacío — 2 fallos · 1 muerte · Nexus-Rey Salhadaar #3 0:45 · #4 1:20</code> te
+            dice exactamente en qué intento y segundo revisar el log — no un genérico "mejora tu
+            posicionamiento".</p>
+          </div>
+          <p>
+            Si te faltan encantamientos o gemas en el primer pull de la noche, también aparece aquí como una
+            tarjeta más — es el único sitio donde se enseña tu preparación previa a entrar.
+          </p>
+        </div>
+      </article>
+
+      <!-- 03 -->
+      <article class="guide-card" id="regularidad">
+        <div class="guide-card-head">
+          <span class="guide-card-index">03 · Regularidad</span>
+          <h2>Lectura pull a pull</h2>
+        </div>
+        <div class="guide-card-body">
+          <p>
+            Una fila por intento válido: boss, dificultad y número de pull; una barra rellena hasta tu
+            puntuación de <em>ese</em> pull en concreto; el porcentaje exacto al lado; y una etiqueta que
+            dice qué pasó. El color de toda la fila avisa de un vistazo — verde a partir de 75%, ámbar entre
+            50% y 75%, rojo por debajo de 50%.
+          </p>
+
+          <div class="guide-example">
+            <span class="guide-example-tag">Así se ve</span>
+            <div class="guide-mock-pull guide-mock-pull--danger">
+              <span class="guide-mock-pull-label">Heroico · #4<strong>Nexus-Rey Salhadaar</strong></span>
+              <div class="guide-mock-pull-track"><i style="width: 42%"></i></div>
+              <span class="guide-mock-pull-score">42%</span>
+              <span class="guide-mock-pull-flag">muerte 1:58</span>
+            </div>
+            <div class="guide-mock-pull guide-mock-pull--warning">
+              <span class="guide-mock-pull-label">Heroico · #5<strong>Nexus-Rey Salhadaar</strong></span>
+              <div class="guide-mock-pull-track"><i style="width: 68%"></i></div>
+              <span class="guide-mock-pull-score">68%</span>
+              <span class="guide-mock-pull-flag">2 fallos</span>
+            </div>
+            <div class="guide-mock-pull guide-mock-pull--success">
+              <span class="guide-mock-pull-label">Heroico · #6<strong>Nexus-Rey Salhadaar</strong></span>
+              <div class="guide-mock-pull-track"><i style="width: 91%"></i></div>
+              <span class="guide-mock-pull-score">91%</span>
+              <span class="guide-mock-pull-flag guide-mock-pull-flag--success">limpio</span>
+            </div>
+            <p>
+              La etiqueta es literal: <code>N fallos</code> si hubo fallos de mecánica personal en ese pull,
+              <code>muerte 1:58</code> con el segundo exacto si moriste, o <code>limpio</code> en verde si no
+              hubo ni lo uno ni lo otro. El #4 de arriba, en rojo, te dice que ese intento se rompió pronto —
+              revisa justo el segundo 1:58 en el log.
+            </p>
+          </div>
+
+          <p>
+            Los pulls excluidos por wipe call o ninja pull se listan aparte, sin barra ni puntuación —
+            nunca cuentan ni a favor ni en contra. Esta lectura sirve para distinguir un pull raro y aislado
+            de un patrón real: si fallas la misma mecánica tres noches seguidas, eso sí merece revisarse a
+            fondo (y suele aparecer también en <a href="/guia-infografia#proxima-raid">02</a>); si fue un pull suelto entre
+            quince limpios, probablemente no.
+          </p>
+        </div>
+      </article>
+
+      <!-- 04 -->
+      <article class="guide-card" id="defensivos">
+        <div class="guide-card-head">
+          <span class="guide-card-index">04 · Defensivos</span>
+          <h2>Qué usó, cuándo, y dónde faltó</h2>
+        </div>
+        <div class="guide-card-body">
+          <p>
+            Es la sección con más matices, así que va con más detalle. Primero, qué es una
+            <strong>ventana de presión</strong>: se calcula tu propia línea base de daño recibido en
+            <em>ese</em> pull concreto (la mediana de tus propios tramos con daño&nbsp;&gt;&nbsp;0) y se marca
+            un tramo como ventana real solo cuando el daño entrante se mantiene, de forma sostenida, muy por
+            encima de esa línea base tuya — no un umbral fijo de vida igual para todos, y no un pico de un
+            solo segundo.
+          </p>
+
+          <div class="guide-example">
+            <span class="guide-example-tag">Ejemplo con números</span>
+            <p>
+              Tu línea base ese pull es 12.000 de daño recibido por tramo. En el segundo 0:52 subes a 45.000
+              durante 6 segundos seguidos — eso es ×3,75 tu propia base, por encima del umbral (×2,5), así que
+              se abre una ventana de presión de 0:52 a 0:58. Si en esos 6 segundos (o hasta 8 segundos después,
+              por si tardaste en reaccionar) lanzaste una mitigación o absorción de tu catálogo, la ventana
+              queda <em>cubierta</em>. Si no lanzaste nada de tu catálogo real, queda como fallo.
+            </p>
+          </div>
+
+          <p>
+            Un tank con daño alto constante no genera ventanas falsas por tener ya una base alta; alguien con
+            daño normalmente bajo sí se marca en cuanto recibe algo fuera de su propio patrón habitual esa
+            noche.
+          </p>
+
+          <div class="guide-note">
+            <span class="guide-note-tag">Sobre "si sé que no voy a morir, no lo gasto"</span>
+            <p>
+              Eso ya está contemplado, no ignorado: cada defensivo del catálogo lleva un tipo —
+              mitigación, absorción, autocuración o <strong>emergencia</strong> — y una opción de tipo
+              emergencia nunca convierte una ventana en "fallo" por guardarla. El sistema ya asume que
+              reservar el pánico suele ser la jugada correcta. Lo que sí se mide es lo previo a esa decisión:
+              si una ventana aparece marcada, es porque tu propio daño recibido en ese tramo estuvo
+              objetivamente muy por encima de tu patrón normal en ese pull — no es una lectura subjetiva de
+              "cuánto susto pasaste", es tu comportamiento contra ti mismo.
+            </p>
+          </div>
+
+          <p>
+            La tarjeta "Mecánicas que exigían respuesta" nombra, para cada ventana, la habilidad que más daño
+            metió en ese tramo — igual que la propia web de registro de combate hace cuando señalas un pico en
+            su gráfica.
+          </p>
+
+          <div class="guide-note">
+            <span class="guide-note-tag">Sobre ver "Melee" en la lista</span>
+            <p>
+              No es un error de etiquetado ni una mecánica inventada: si en esos segundos el golpe normal del
+              boss fue lo que más contribuyó al pico, se llama exactamente así — Melee. Un tank lo va a ver
+              más que cualquier otro rol porque buena parte de su daño recibido real, toda la noche, es ese
+              golpeo sostenido. La ventana solo se dispara si ese melee, en ese tramo concreto, superó tu
+              propia línea base — por ejemplo, justo antes de que caduque una mitigación rotativa — no en cada
+              golpe normal de tanqueo.
+            </p>
+          </div>
+
+          <p>
+            El catálogo de qué tenías disponible se cruza contra tu clase, tu especialización y tus talentos
+            reales de esa noche — nunca se te enseña algo que ni siquiera talentaste.
+          </p>
+
+          <div class="guide-note">
+            <span class="guide-note-tag">Sobre contar una curación como "defensivo"</span>
+            <p>
+              Una autocuración lanzada para aguantar un pico de daño es, en la práctica, tan defensiva como un
+              escudo: no reduce el golpe que ya ha entrado, pero repara el margen de vida perdido antes del
+              siguiente — el mismo eje que ya usan una mitigación o un absorbedor, solo que este repara en vez
+              de bloquear. No se juzga la escuela del hechizo, se juzga qué le hace a tu curva de vida en ese
+              momento.
+            </p>
+          </div>
+
+          <p>
+            La piedra de brujo y la poción de vida cuentan igual: solo se consideran "usadas de verdad" cuando
+            el cast cae dentro de una ventana de presión real (o justo después) — usarla sin haber sufrido daño
+            real cerca no suma nada, tiene que ser una respuesta, no un hábito.
+          </p>
+        </div>
+      </article>
+
+      <!-- 05 -->
+      <article class="guide-card" id="evolucion">
+        <div class="guide-card-head">
+          <span class="guide-card-index">05 · Evolución</span>
+          <h2>Qué cambió desde la noche anterior</h2>
+        </div>
+        <div class="guide-card-body">
+          <p>
+            Compara los mismos indicadores contra tu noche de raid anterior — mismo criterio, mismas fórmulas,
+            solo cambia el punto de comparación. Sin esto, un 62% aislado no dice si vas a mejor o a peor; con
+            esto, sí.
+          </p>
+        </div>
+      </article>
+
+      <article class="guide-card guide-card--practice" id="en-la-practica">
+        <div class="guide-card-head">
+          <span class="guide-card-index">En la práctica</span>
+          <h2>Cómo usarla antes de la próxima raid</h2>
+        </div>
+        <div class="guide-card-body">
+          <ol class="guide-steps">
+            <li>
+              <strong>Empieza por 02.</strong> Son timestamps exactos, no una opinión sobre "hay que mejorar".
+              Abre el log en ese pull y ese segundo, mira qué pasó en pantalla, y decide una respuesta concreta
+              antes de la próxima vez que salga esa mecánica.
+            </li>
+            <li>
+              <strong>Si 04 marca una muerte con un defensivo libre sin usar, es la evidencia más accionable
+              del informe.</strong> No es "deberías haber usado algo" en genérico — es "tenías X disponible,
+              sin cooldown, y no lo lanzaste". Deja uno preasignado para la próxima exposición a esa mecánica
+              en vez de decidirlo sobre la marcha.
+            </li>
+            <li>
+              <strong>Compara 03 contra 05.</strong> Un fallo que se repite noche tras noche pesa mucho más que
+              uno aislado — si ves el mismo patrón dos semanas seguidas en 05, ese es el que hay que priorizar
+              en la próxima sesión de prácticas, por delante de algo puntual de una sola noche.
+            </li>
+            <li>
+              <strong>No te saltes 01.</strong> Si algo mejoró de verdad respecto a la noche anterior, sirve
+              para no "corregir" algo que ya funciona — y para saber qué mantener cuando cambies de spec, boss
+              o rol.
+            </li>
+            <li>
+              <strong>Las mecánicas sin asignar de 01 son gratis.</strong> Si tienes hueco entre tu rotación,
+              resolver un huevo u orbe que nadie tiene marcado sube tu puntuación sin quitarle nada a nadie —
+              nunca cuenta como fallo de otro por no hacerla.
+            </li>
+          </ol>
+        </div>
+      </article>
+
     </div>
-    <div class="guide-part-body">
-      <p>
-        Arriba del todo: tu retrato, tu clase/especialización (detectadas en el equipo real que llevabas
-        puesto en tu primer pull de la noche) y dos anillos de puntuación.
-      </p>
-
-      <p>
-        <strong>Ejecución de esta noche</strong> es la media de tu puntuación en cada pull, ponderada por
-        duración — un intento de 8 minutos pesa más que un wipe de 40 segundos, porque hubo más
-        oportunidad real de acertar o fallar. Cada pull individual se calcula así:
-      </p>
-      <div class="guide-formula">(mecánica × 70% + consumible al morir × 30%) × % del intento vivo × penalización defensiva</div>
-      <p>
-        Encima de esa media se aplica un ajuste para toda la noche si algún pull se quedó sin lanzar ni un
-        solo defensivo teniendo presión real encima — para que sobrevivir de churro en un pull no tape un
-        problema real en otro.
-      </p>
-
-      <p>
-        <strong>Cobertura defensiva</strong> es un número más específico: qué porcentaje de tus ventanas de
-        presión reales de la noche cubriste con algo de tu catálogo — 0% si nunca lanzaste nada en esa
-        ventana, parcial si llegaste tarde, completo si acertaste el momento. En el punto <strong>04</strong>
-        se explica con detalle qué es exactamente una "ventana de presión".
-      </p>
-
-      <p>Justo debajo va una tira de cinco cifras en bruto, la misma fuente que alimenta las puntuaciones de arriba:</p>
-      <dl class="guide-metrics">
-        <div><dt>Pulls limpios</dt><dd>sin fallo personal ni muerte evaluable, sobre el total de pulls evaluados esa noche</dd></div>
-        <div><dt>Zona / spread</dt><dd>oportunidades de esquivar zona o dispersarse, verificadas mientras seguías con vida</dd></div>
-        <div><dt>Fallos personales</dt><dd>incidentes accionables, por cada 10 pulls — así se puede comparar una noche corta con una larga</dd></div>
-        <div><dt>Muertes evaluables</dt><dd>ya separadas de wipe call, ninja pull y mención sin mecánica identificada</dd></div>
-        <div><dt>Kicks atribuidos</dt><dd>interrupciones con autor y momento confirmados por el registro de combate, no una estimación</dd></div>
-      </dl>
-      <p>"Evaluable" descarta de raíz wipe calls, ninja pulls y menciones sin mecánica identificada — no se penaliza (ni se premia) nada que no se pueda verificar con datos reales.</p>
-    </div>
-  </section>
-
-  <!-- 01 -->
-  <section class="guide-part">
-    <div class="guide-part-head">
-      <span class="guide-part-index">01 · Qué conservar</span>
-      <h2>Ejecuciones positivas con evidencia</h2>
-    </div>
-    <div class="guide-part-body">
-      <p>
-        Esquivas de zona/spread verificadas, interrupciones atribuidas (autor y segundo exacto), pulls sin
-        ningún fallo personal ni muerte evaluable, respuesta defensiva en pulls con presión, y mecánicas
-        <strong>sin asignación fija</strong> que resolviste sin que nadie te lo marcara — huevos, orbes,
-        objetos de suelo que le tocan a "quien llegue".
-      </p>
-      <div class="guide-example">
-        <span class="guide-example-tag">Ejemplo</span>
-        <p>Si evitaste 7 de 8 zonas de suelo mientras seguías con vida, aquí sale literalmente
-        <code>7/8 · 88%</code>. La octava, si moriste dentro, no resta aquí — ya está capturada en la
-        tabla de muertes; esta sección solo cuenta lo que hiciste bien mientras podías seguir actuando.</p>
-      </div>
-      <p>
-        Las mecánicas sin asignar resueltas también suman de verdad a tu Ejecución de esta noche: +5%
-        sobre el bloque de mecánica por cada una, con un tope de +15% — es crédito, nunca aparece como
-        fallo de otro por no hacerla nadie ese pull.
-      </p>
-    </div>
-  </section>
-
-  <!-- 02 -->
-  <section class="guide-part">
-    <div class="guide-part-head">
-      <span class="guide-part-index">02 · Próxima raid</span>
-      <h2>Qué corregir primero y cómo</h2>
-    </div>
-    <div class="guide-part-body">
-      <p>
-        Hasta 4 tarjetas, ordenadas por muertes → fallos → daño acumulado, agrupando por boss y mecánica
-        exacta. Se descartan de esta lista las causas sin nombre real (tipo "habilidad desconocida") — no
-        tiene sentido darte una acción concreta sobre algo que ni el propio registro de combate pudo
-        identificar.
-      </p>
-      <div class="guide-example">
-        <span class="guide-example-tag">Ejemplo</span>
-        <p><code>Descarga de vacío — 2 fallos · 1 muerte · Nexus-Rey Salhadaar #3 0:45 · #4 1:20</code> te
-        dice exactamente en qué intento y segundo revisar el log — no un genérico "mejora tu
-        posicionamiento".</p>
-      </div>
-      <p>
-        Si te faltan encantamientos o gemas en el primer pull de la noche, también aparece aquí como una
-        tarjeta más — es el único sitio donde se enseña tu preparación previa a entrar.
-      </p>
-    </div>
-  </section>
-
-  <!-- 03 -->
-  <section class="guide-part">
-    <div class="guide-part-head">
-      <span class="guide-part-index">03 · Regularidad</span>
-      <h2>Lectura pull a pull</h2>
-    </div>
-    <div class="guide-part-body">
-      <p>
-        Una barra por intento válido — los excluidos por wipe call o ninja pull se listan sin puntuar,
-        nunca cuentan ni a favor ni en contra. Sirve para distinguir un pull raro y aislado de un patrón
-        real: si fallas la misma mecánica tres noches seguidas, eso sí merece revisarse a fondo (y suele
-        aparecer también en <strong>02</strong>); si fue un pull suelto entre quince limpios, probablemente
-        no.
-      </p>
-    </div>
-  </section>
-
-  <!-- 04 -->
-  <section class="guide-part">
-    <div class="guide-part-head">
-      <span class="guide-part-index">04 · Defensivos</span>
-      <h2>Qué usó, cuándo, y dónde faltó</h2>
-    </div>
-    <div class="guide-part-body">
-      <p>
-        Es la sección con más matices, así que va con más detalle. Primero, qué es una
-        <strong>ventana de presión</strong>: se calcula tu propia línea base de daño recibido en
-        <em>ese</em> pull concreto (la mediana de tus propios tramos con daño&nbsp;&gt;&nbsp;0) y se marca
-        un tramo como ventana real solo cuando el daño entrante se mantiene, de forma sostenida, muy por
-        encima de esa línea base tuya — no un umbral fijo de vida igual para todos, y no un pico de un
-        solo segundo.
-      </p>
-
-      <div class="guide-example">
-        <span class="guide-example-tag">Ejemplo con números</span>
-        <p>
-          Tu línea base ese pull es 12.000 de daño recibido por tramo. En el segundo 0:52 subes a 45.000
-          durante 6 segundos seguidos — eso es ×3,75 tu propia base, por encima del umbral (×2,5), así que
-          se abre una ventana de presión de 0:52 a 0:58. Si en esos 6 segundos (o hasta 8 segundos después,
-          por si tardaste en reaccionar) lanzaste una mitigación o absorción de tu catálogo, la ventana
-          queda <em>cubierta</em>. Si no lanzaste nada de tu catálogo real, queda como fallo.
-        </p>
-      </div>
-
-      <p>
-        Un tank con daño alto constante no genera ventanas falsas por tener ya una base alta; alguien con
-        daño normalmente bajo sí se marca en cuanto recibe algo fuera de su propio patrón habitual esa
-        noche.
-      </p>
-
-      <div class="guide-note">
-        <span class="guide-note-tag">Sobre "si sé que no voy a morir, no lo gasto"</span>
-        <p>
-          Eso ya está contemplado, no ignorado: cada defensivo del catálogo lleva un tipo —
-          mitigación, absorción, autocuración o <strong>emergencia</strong> — y una opción de tipo
-          emergencia nunca convierte una ventana en "fallo" por guardarla. El sistema ya asume que
-          reservar el pánico suele ser la jugada correcta. Lo que sí se mide es lo previo a esa decisión:
-          si una ventana aparece marcada, es porque tu propio daño recibido en ese tramo estuvo
-          objetivamente muy por encima de tu patrón normal en ese pull — no es una lectura subjetiva de
-          "cuánto susto pasaste", es tu comportamiento contra ti mismo.
-        </p>
-      </div>
-
-      <p>
-        La tarjeta "Mecánicas que exigían respuesta" nombra, para cada ventana, la habilidad que más daño
-        metió en ese tramo — igual que la propia web de registro de combate hace cuando señalas un pico en
-        su gráfica.
-      </p>
-
-      <div class="guide-note">
-        <span class="guide-note-tag">Sobre ver "Melee" en la lista</span>
-        <p>
-          No es un error de etiquetado ni una mecánica inventada: si en esos segundos el golpe normal del
-          boss fue lo que más contribuyó al pico, se llama exactamente así — Melee. Un tank lo va a ver
-          más que cualquier otro rol porque buena parte de su daño recibido real, toda la noche, es ese
-          golpeo sostenido. La ventana solo se dispara si ese melee, en ese tramo concreto, superó tu
-          propia línea base — por ejemplo, justo antes de que caduque una mitigación rotativa — no en cada
-          golpe normal de tanqueo.
-        </p>
-      </div>
-
-      <p>
-        El catálogo de qué tenías disponible se cruza contra tu clase, tu especialización y tus talentos
-        reales de esa noche — nunca se te enseña algo que ni siquiera talentaste.
-      </p>
-
-      <div class="guide-note">
-        <span class="guide-note-tag">Sobre contar una curación como "defensivo"</span>
-        <p>
-          Una autocuración lanzada para aguantar un pico de daño es, en la práctica, tan defensiva como un
-          escudo: no reduce el golpe que ya ha entrado, pero repara el margen de vida perdido antes del
-          siguiente — el mismo eje que ya usan una mitigación o un absorbedor, solo que este repara en vez
-          de bloquear. No se juzga la escuela del hechizo, se juzga qué le hace a tu curva de vida en ese
-          momento.
-        </p>
-      </div>
-
-      <p>
-        La piedra de brujo y la poción de vida cuentan igual: solo se consideran "usadas de verdad" cuando
-        el cast cae dentro de una ventana de presión real (o justo después) — usarla sin haber sufrido daño
-        real cerca no suma nada, tiene que ser una respuesta, no un hábito.
-      </p>
-    </div>
-  </section>
-
-  <!-- 05 -->
-  <section class="guide-part">
-    <div class="guide-part-head">
-      <span class="guide-part-index">05 · Evolución</span>
-      <h2>Qué cambió desde la noche anterior</h2>
-    </div>
-    <div class="guide-part-body">
-      <p>
-        Compara los mismos indicadores contra tu noche de raid anterior — mismo criterio, mismas fórmulas,
-        solo cambia el punto de comparación. Sin esto, un 62% aislado no dice si vas a mejor o a peor; con
-        esto, sí.
-      </p>
-    </div>
-  </section>
-
-  <section class="guide-part guide-practice">
-    <div class="guide-part-head">
-      <span class="guide-part-index">En la práctica</span>
-      <h2>Cómo usarla antes de la próxima raid</h2>
-    </div>
-    <div class="guide-part-body">
-      <ol class="guide-steps">
-        <li>
-          <strong>Empieza por 02.</strong> Son timestamps exactos, no una opinión sobre "hay que mejorar".
-          Abre el log en ese pull y ese segundo, mira qué pasó en pantalla, y decide una respuesta concreta
-          antes de la próxima vez que salga esa mecánica.
-        </li>
-        <li>
-          <strong>Si 04 marca una muerte con un defensivo libre sin usar, es la evidencia más accionable
-          del informe.</strong> No es "deberías haber usado algo" en genérico — es "tenías X disponible,
-          sin cooldown, y no lo lanzaste". Deja uno preasignado para la próxima exposición a esa mecánica
-          en vez de decidirlo sobre la marcha.
-        </li>
-        <li>
-          <strong>Compara 03 contra 05.</strong> Un fallo que se repite noche tras noche pesa mucho más que
-          uno aislado — si ves el mismo patrón dos semanas seguidas en <strong>05</strong>, ese es el que
-          hay que priorizar en la próxima sesión de prácticas, por delante de algo puntual de una sola
-          noche.
-        </li>
-        <li>
-          <strong>No te saltes 01.</strong> Si algo mejoró de verdad respecto a la noche anterior, sirve
-          para no "corregir" algo que ya funciona — y para saber qué mantener cuando cambies de spec, boss
-          o rol.
-        </li>
-        <li>
-          <strong>Las mecánicas sin asignar de 01 son gratis.</strong> Si tienes hueco entre tu rotación,
-          resolver un huevo u orbe que nadie tiene marcado sube tu puntuación sin quitarle nada a nadie —
-          nunca cuenta como fallo de otro por no hacerla.
-        </li>
-      </ol>
-    </div>
-  </section>
+  </div>
 
   <footer class="guide-footer">
-    <p>
-      Los criterios de puntuación pueden afinarse con el tiempo. Si algo de esta guía deja de encajar con
-      lo que ves en tu propia infografía, pregúntale a un oficial.
-    </p>
+    <div class="guide-footer-inner">
+      <p>
+        Los criterios de puntuación pueden afinarse con el tiempo. Si algo de esta guía deja de encajar
+        con lo que ves en tu propia infografía, pregúntale a un oficial.
+      </p>
+    </div>
   </footer>
 
 </div>

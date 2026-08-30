@@ -94,6 +94,16 @@ body {
   margin: 0;
 }
 
+// §"menú lateral que te lleve rápido ahí" (feedback real, 2026-08-30): scroll
+// suave para los saltos por ancla (#seccion) de guia-infografia.component —
+// regla global porque el scroll ocurre en <html>, fuera del alcance de los
+// estilos encapsulados de un componente. Respeta prefers-reduced-motion.
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 body {
   background: var(--bg);
   color: var(--text);

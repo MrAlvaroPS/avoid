@@ -7,22 +7,39 @@
   color: var(--text);
 }
 
+// §"queda pequeño flotando" (feedback real, 2026-08-30): ancho de página
+// más disciplinado que antes (860 en vez de 1040) — a 814px de columna de
+// texto las líneas eran demasiado largas para leer cómodo, y encima
+// cabecera/pie sin ningún borde propio se veían como texto suelto flotando
+// en un fondo enorme, sin nada que los "ancle" — mismo motivo por el que
+// ahora van dentro de una tarjeta, igual que el resto de la página.
 .guide {
-  max-width: 720px;
+  max-width: 860px;
   margin: 0 auto;
-  padding: 56px 24px 80px;
+  padding: 48px 24px 72px;
 }
 
+// ---------- Cabecera ----------
+// Misma superficie que .guide-card (ver más abajo) — la cabecera y el pie
+// ya no son texto suelto sobre el fondo, son una tarjeta más, coherente con
+// el resto de la página.
+
 .guide-header {
+  margin-bottom: 20px;
+}
+
+.guide-header-inner {
   text-align: center;
-  padding-bottom: 32px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 8px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 44px 36px;
 }
 
 .guide-mark {
-  width: 48px;
-  height: 48px;
+  width: 44px;
+  height: 44px;
   object-fit: contain;
   margin-bottom: 14px;
 }
@@ -40,81 +57,184 @@
 .guide-header h1 {
   font-family: var(--font-display);
   font-weight: 400;
-  font-size: clamp(28px, 5vw, 38px);
-  line-height: 1.15;
-  margin: 0 0 16px;
+  font-size: clamp(26px, 4.5vw, 34px);
+  line-height: 1.2;
+  margin: 0 0 18px;
   text-wrap: balance;
 }
 
 .guide-dek {
   font-size: 16px;
-  line-height: 1.6;
+  line-height: 1.65;
   color: var(--text-muted);
-  max-width: 56ch;
-  margin: 0 auto;
+  // max-width: 46ch;
+  margin: 0 auto 16px;
 }
 
 .guide-intro {
-  padding: 28px 0 4px;
-  font-size: 15.5px;
+  font-size: 14.5px;
   line-height: 1.65;
-  color: var(--text-muted);
-}
-
-.guide-part {
-  padding: 36px 0 4px;
+  color: var(--text-faint);
+  // max-width: 52ch;
+  margin: 0 auto;
+  padding-top: 16px;
   border-top: 1px solid var(--border);
 }
 
-.guide-part-head {
-  margin-bottom: 16px;
+// ---------- Layout de dos columnas ----------
+
+.guide-layout {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 30px;
+  align-items: start;
 }
 
-.guide-part-index {
+.guide-toc {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.guide-toc a {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.guide-toc a span {
+  color: inherit;
+  letter-spacing: 0.01em;
+}
+
+.guide-toc a:hover,
+.guide-toc a:focus-visible {
+  color: var(--text);
+  background: var(--surface-2);
+  border-left-color: var(--border-bright);
+}
+
+.guide-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+// ---------- Tarjetas ----------
+
+.guide-card {
+  scroll-margin-top: 20px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 26px 28px;
+  border-top: 3px solid var(--accent-deep);
+}
+
+// Foco momentáneo al llegar por el menú lateral — confirma "has llegado".
+.guide-card:target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow-card);
+}
+
+.guide-card--positive {
+  border-top-color: var(--success);
+}
+
+.guide-card--warning {
+  border-top-color: var(--warning);
+}
+
+.guide-card--practice {
+  border-top-color: var(--gold);
+}
+
+.guide-card-head {
+  margin-bottom: 14px;
+}
+
+.guide-card-index {
   display: block;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--accent);
   margin-bottom: 6px;
 }
 
-.guide-part h2 {
+.guide-card--positive .guide-card-index {
+  color: var(--success);
+}
+
+.guide-card--warning .guide-card-index {
+  color: var(--warning);
+}
+
+.guide-card--practice .guide-card-index {
+  color: var(--gold);
+}
+
+.guide-card h2 {
   font-family: var(--font-display);
   font-weight: 400;
-  font-size: clamp(20px, 3vw, 24px);
+  font-size: clamp(19px, 2.6vw, 23px);
   margin: 0;
   line-height: 1.2;
   text-wrap: balance;
 }
 
-.guide-part-body {
-  font-size: 15.5px;
+.guide-card-body {
+  font-size: 15px;
   line-height: 1.65;
 }
 
-.guide-part-body p {
+// Medida de lectura cómoda (~68 caracteres) aunque la tarjeta en sí sea más
+// ancha — sin esto, un párrafo estirado a los ~660px de la columna real se
+// lee peor (demasiados caracteres por línea). Los bloques que SÍ necesitan
+// todo el ancho (dl de métricas, mock de pull) no llevan esta clase.
+.guide-card-body p,
+.guide-card-body li {
+  max-width: 68ch;
+}
+
+.guide-card-body p {
   margin: 0 0 14px;
 }
 
-.guide-part-body p:last-child {
+.guide-card-body p:last-child {
   margin-bottom: 0;
 }
 
-.guide-part-body strong {
+.guide-card-body strong {
   color: var(--text);
 }
 
-.guide-part-body em {
+.guide-card-body em {
   font-style: italic;
   color: var(--text-muted);
 }
 
-.guide-part-body code {
+.guide-card-body a {
+  color: var(--accent);
+}
+
+.guide-card-body code {
   font-family: var(--font-mono);
   font-size: 0.88em;
-  background: var(--surface-2);
+  background: var(--bg);
   border: 1px solid var(--border);
   padding: 0.05em 0.4em;
   border-radius: 4px;
@@ -127,7 +247,7 @@
   font-size: 13.5px;
   line-height: 1.5;
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px 14px;
@@ -135,10 +255,8 @@
   overflow-wrap: break-word;
 }
 
-// Lista simple en vez de grid de tarjetas: son descripciones de una frase,
-// no cifras cortas — una fila ancha por métrica se lee mejor que forzarlas
-// en columnas estrechas (y evita el problema de "5 no encaja en 2 ni en 3
-// columnas sin dejar un hueco vacío al final").
+// ---------- Tira de métricas (00) ----------
+
 .guide-metrics {
   margin: 4px 0 16px;
   border-top: 1px solid var(--border);
@@ -168,17 +286,8 @@
   color: var(--text-muted);
 }
 
-@media (max-width: 560px) {
-  .guide-metrics > div {
-    flex-direction: column;
-    gap: 4px;
-  }
-  .guide-metrics dt {
-    flex-basis: auto;
-  }
-}
+// ---------- Aclaraciones ----------
 
-// Aclaraciones (responde a las dudas reales sin citarlas literalmente).
 .guide-note {
   border-left: 3px solid var(--accent);
   background: var(--accent-soft);
@@ -204,11 +313,14 @@
   line-height: 1.6;
 }
 
-// Ejemplos numéricos ilustrativos — look de "extracto de log", distinto del
-// tono de aclaración de arriba (misma superficie que .card-surface global).
+// ---------- Ejemplos ----------
+// Superficie plana (recesada) a propósito, para distinguirse del degradado
+// de la propia tarjeta que la envuelve — si usara el mismo degradado, se
+// fundiría visualmente con la tarjeta en vez de leerse como algo insertado.
+
 .guide-example {
-  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
-  border: 1px solid var(--card-border);
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 14px 18px;
   margin: 4px 0 18px;
@@ -222,19 +334,112 @@
   text-transform: uppercase;
   color: var(--gold);
   font-weight: 600;
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .guide-example p {
-  margin: 0;
-  font-size: 14.5px;
+  margin: 12px 0 0;
+  font-size: 14px;
   line-height: 1.6;
   color: var(--text-muted);
+}
+
+.guide-example p:first-child {
+  margin-top: 0;
 }
 
 .guide-example code {
   color: var(--text);
 }
+
+// Mini-reproducción de una fila real de "03 · Regularidad".
+.guide-mock-pull {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(60px, 2fr) 44px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+}
+
+.guide-mock-pull + .guide-mock-pull {
+  border-top: 1px solid var(--border);
+}
+
+.guide-mock-pull-label {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+}
+
+.guide-mock-pull-label strong {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.guide-mock-pull-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.guide-mock-pull-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--neutral);
+}
+
+.guide-mock-pull-score {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.guide-mock-pull-flag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.guide-mock-pull--danger .guide-mock-pull-track i {
+  background: var(--danger);
+}
+
+.guide-mock-pull--warning .guide-mock-pull-track i {
+  background: var(--warning);
+}
+.guide-mock-pull--warning .guide-mock-pull-flag {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.guide-mock-pull--success .guide-mock-pull-track i {
+  background: var(--success);
+}
+.guide-mock-pull-flag--success {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+// ---------- "En la práctica" ----------
 
 .guide-steps {
   margin: 0;
@@ -250,25 +455,105 @@
 
 .guide-steps li::marker {
   font-family: var(--font-mono);
-  color: var(--accent);
+  color: var(--gold);
 }
 
+// ---------- Pie ----------
+
 .guide-footer {
-  margin-top: 44px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
+  margin-top: 36px;
+}
+
+.guide-footer-inner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px 24px;
+  text-align: center;
+}
+
+.guide-footer p {
+  margin: 0 auto;
+  // max-width: 60ch;
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-faint);
 }
 
-.guide-footer p {
-  margin: 0;
-  max-width: 60ch;
+// ---------- Responsive ----------
+
+@media (max-width: 860px) {
+  .guide-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-toc {
+    position: static;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 8px;
+    padding-bottom: 6px;
+    margin-bottom: 4px;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .guide-toc::-webkit-scrollbar {
+    display: none;
+  }
+
+  .guide-toc a {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+  }
 }
 
 @media (max-width: 560px) {
   .guide {
-    padding: 40px 18px 64px;
+    padding: 40px 16px 64px;
+  }
+
+  .guide-header-inner {
+    padding: 32px 20px;
+  }
+
+  .guide-footer-inner {
+    padding: 16px 18px;
+  }
+
+  .guide-card {
+    padding: 20px 18px;
+  }
+
+  .guide-mock-pull {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label score'
+      'track track'
+      'flag flag';
+    row-gap: 6px;
+  }
+  .guide-mock-pull-label {
+    grid-area: label;
+  }
+  .guide-mock-pull-score {
+    grid-area: score;
+  }
+  .guide-mock-pull-track {
+    grid-area: track;
+  }
+  .guide-mock-pull-flag {
+    grid-area: flag;
+    justify-self: start;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .guide-toc a {
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
   }
 }
