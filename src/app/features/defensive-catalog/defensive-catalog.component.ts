@@ -94,6 +94,8 @@ export class DefensiveCatalogComponent {
     skippedUndetermined: { spellId: number; name: string }[];
     suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
+    appliedSpecProfiles: number;
+    appliedModifiers: number;
   } | null>(null);
 
   classCounts = computed(() => {
@@ -373,15 +375,20 @@ export class DefensiveCatalogComponent {
       // La clasificación IA modifica los mismos campos materiales que la
       // edición manual; por tanto usa exactamente la misma cola secuencial
       // de reanálisis antes de dar la operación por terminada.
-      if (res.pullIds.length) {
-        await this.runReanalysisQueue(scope === 'all' ? 'clasificación IA (catálogo completo)' : `clasificación IA (${classDisplayName(scope)})`, res.pullIds);
+      const pullIds = Array.isArray(res.pullIds) ? res.pullIds : [];
+      if (pullIds.length) {
+        await this.runReanalysisQueue(scope === 'all' ? 'clasificación IA (catálogo completo)' : `clasificación IA (${classDisplayName(scope)})`, pullIds);
       }
       this.classifyResult.set({
-        applied: res.applied,
-        skippedLowConfidence: res.skippedLowConfidence,
-        skippedUndetermined: res.skippedUndetermined,
-        suggestedExclusions: res.suggestedExclusions,
-        invalid: res.invalid,
+        // Una edge function antigua o una respuesta parcial no debe romper el
+        // template con "Cannot read properties of undefined (reading length)".
+        applied: Array.isArray(res.applied) ? res.applied : [],
+        skippedLowConfidence: Array.isArray(res.skippedLowConfidence) ? res.skippedLowConfidence : [],
+        skippedUndetermined: Array.isArray(res.skippedUndetermined) ? res.skippedUndetermined : [],
+        suggestedExclusions: Array.isArray(res.suggestedExclusions) ? res.suggestedExclusions : [],
+        invalid: Array.isArray(res.invalid) ? res.invalid : [],
+        appliedSpecProfiles: Number(res.appliedSpecProfiles ?? 0),
+        appliedModifiers: Number(res.appliedModifiers ?? 0),
       });
     } catch (err) {
       this.classifySubmitError.set(errorMessage(err));

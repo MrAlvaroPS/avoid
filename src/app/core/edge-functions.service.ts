@@ -269,13 +269,15 @@ export class EdgeFunctionsService {
   ): Promise<{
     ok: true;
     applied: { spellId: number; name: string; survivalType: string }[];
+    appliedSpecProfiles?: number;
+    appliedModifiers?: number;
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
     /** §"que lo sugiera, no que lo borre solo" (feedback real, 2026-08-31): la IA cree que ya no es un defensivo real — nunca se aplica sola, un humano confirma fila por fila con el botón "excluir" manual. */
     suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
     /** Pulls cuyo snapshot defensivo quedó materialmente obsoleto por survival type/CD/duración aplicados por la IA. */
-    pullIds: string[];
+    pullIds?: string[];
   }> {
     return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
   }
@@ -415,6 +417,45 @@ export class EdgeFunctionsService {
       | { id: string; delete: true },
   ): Promise<{ ok: true; id?: string }> {
     return this.invoke('save-mechanic-defensive-assignment', edit);
+  }
+
+  /** Sustituye de forma explícita el calendario v2 de un jugador concreto. Las asignaciones manuales legacy no se tocan. */
+  async replaceDefensivePlan(plan: {
+    bossId: string;
+    difficulty: string;
+    characterId: number;
+    playerName: string;
+    class: string;
+    spec: string;
+    talentSpellIds: number[];
+    loadoutHash: string;
+    loadoutObservedAt?: string | null;
+    catalogVersion?: string | null;
+    mechanicProfileVersion?: string | null;
+    assignments: {
+      windowKey: string;
+      plannedTimeMs: number;
+      impactScore: number;
+      priority: number | null;
+      abilityIds: number[];
+      abilityNames: string[];
+      primaryAbilityId: number;
+      occurrenceIndex: number;
+      defensiveSpellId: number;
+      effectiveCooldownMs: number;
+      cooldownExplanation: string;
+      prewarnSeconds?: number;
+      triggerType?: 'bossmod' | 'time';
+      bossmodSpellId?: number | null;
+      bossmodCounter?: number | null;
+      locked?: boolean;
+    }[];
+  }): Promise<{ ok: true; planId: string; assignmentCount: number }> {
+    return this.invoke('save-defensive-plan', { action: 'replace', ...plan });
+  }
+
+  async deleteDefensivePlans(filter: { bossId: string; difficulty: string; class?: string; characterId?: number }): Promise<{ ok: true }> {
+    return this.invoke('save-defensive-plan', { action: 'delete', ...filter });
   }
 
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */

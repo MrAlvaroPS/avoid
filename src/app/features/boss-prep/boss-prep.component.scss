@@ -150,6 +150,37 @@
   }
 }
 
+.cooldown-explanation {
+  display: block;
+  max-width: 320px;
+  margin-top: 3px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.effective-kit-panel {
+  margin: 10px 0 14px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+
+  summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+}
+
+.effective-kit-table {
+  margin-top: 8px;
+
+  td:nth-child(4) {
+    max-width: 460px;
+    white-space: normal;
+  }
+}
+
 .group-field {
   margin-top: 10px;
 

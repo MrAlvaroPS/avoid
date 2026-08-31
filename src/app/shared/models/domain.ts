@@ -404,6 +404,8 @@ export interface BossMechanicDefensiveProfileRow {
   reference_role_hit_breakdown: { tank: number; healer: number; dps: number } | null;
   /** Ms desde pull-start de cada ocurrencia observada — solo timeline/preview, nunca el trigger real (ver MrtBossmodTrigger). */
   reference_cast_offset_ms_samples: number[];
+  /** Timings agrupados por fight de referencia; permite conservar el ordinal real de cada cast. */
+  reference_cast_offsets_by_fight?: { fightKey: string; offsetsMs: number[] }[];
   reference_sample_fight_count: number;
   /** 1-5, relativo a las demás mecánicas de este boss+dificultad (quintil por impacto) — null = sin evidencia todavía. */
   priority: number | null;
@@ -434,6 +436,92 @@ export interface MechanicDefensiveAssignmentRow {
   /** Grupos de raid (1-6) a los que aplica — null = todos/sin restringir. Solo informativo (se refleja en el texto del reminder), MRT no filtra por esto — ver migración 20260831130000. */
   assigned_groups: number[] | null;
   updated_at: string;
+}
+
+/** Base de un defensivo específica de spec. Gana sobre el valor genérico de cooldown_catalog al planificar. */
+export interface DefensiveSpecProfileRow {
+  class: string;
+  spec: string;
+  spell_id: number;
+  base_cooldown_ms: number | null;
+  base_duration_ms: number | null;
+  charges: number;
+  source: string | null;
+  source_note: string | null;
+  synced_from_commit: string | null;
+  verified_at: string | null;
+  updated_at: string;
+}
+
+export type DefensiveModifierOperation = 'subtract_ms' | 'add_ms' | 'multiply' | 'set_ms' | 'charges_add';
+
+/** Regla declarativa de un talento/pasiva sobre un defensivo concreto. */
+export interface DefensiveModifierRuleRow {
+  id: string;
+  class: string;
+  specs: string[] | null;
+  modifier_spell_id: number;
+  target_spell_id: number;
+  operation: DefensiveModifierOperation;
+  value: number;
+  per_rank: boolean;
+  condition: 'always' | 'conditional';
+  description: string;
+  source: string | null;
+  verified_at: string | null;
+  active: boolean;
+  updated_at: string;
+}
+
+/** Roster canónico cruzado con el CombatantInfo más reciente de cada personaje. */
+export interface PlayerLatestLoadoutRow {
+  character_id: number;
+  player_name: string;
+  realm: string;
+  roster_class: string;
+  class: string | null;
+  spec: string | null;
+  talent_build: { id: number; rank: number; nodeID: number; spellId?: number }[] | null;
+  pull_id: string | null;
+  loadout_observed_at: string | null;
+}
+
+export interface DefensivePlanRunRow {
+  id: string;
+  boss_id: string;
+  difficulty: string;
+  character_id: number;
+  player_name: string;
+  class: string;
+  spec: string;
+  talent_spell_ids: number[];
+  loadout_hash: string;
+  loadout_observed_at: string | null;
+  catalog_version: string | null;
+  mechanic_profile_version: string | null;
+  generated_at: string;
+}
+
+export interface DefensivePlanAssignmentRow {
+  id: string;
+  plan_id: string;
+  window_key: string;
+  planned_time_ms: number;
+  impact_score: number;
+  priority: number | null;
+  ability_ids: number[];
+  ability_names: string[];
+  primary_ability_id: number;
+  occurrence_index: number;
+  defensive_spell_id: number;
+  effective_cooldown_ms: number;
+  cooldown_explanation: string;
+  prewarn_seconds: number;
+  trigger_type: 'bossmod' | 'time';
+  bossmod_spell_id: number | null;
+  bossmod_counter: number | null;
+  locked: boolean;
+  created_at: string;
 }
 
 /** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,

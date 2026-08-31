@@ -60,6 +60,15 @@ describe('encodeMrtExport / decodeMrtExport', () => {
     expect(r.triggers).toEqual([{ type: 'bossmod', timeLeftSeconds: 6, spellId: 123456, pattern: undefined }]);
   });
 
+  it('conserva el contador de ocurrencia de un trigger bossmod', () => {
+    const encoded = encodeMrtExport('Ocurrencia', [
+      baseReminder({ uid: 'occ_3', trigger: { type: 'bossmod', timeLeftSeconds: 5, spellId: 123456, counter: 3 } }),
+    ]);
+    expect(decodeMrtExport(encoded).reminders[0].triggers[0]).toEqual({
+      type: 'bossmod', timeLeftSeconds: 5, spellId: 123456, pattern: undefined, counter: 3,
+    });
+  });
+
   it('varios reminders en un único export, en orden', () => {
     const exported = encodeMrtExport('Raid Defensivos', [
       baseReminder({ uid: 'a', name: 'Primero' }),

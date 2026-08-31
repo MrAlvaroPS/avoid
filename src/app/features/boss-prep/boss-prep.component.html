@@ -1,7 +1,6 @@
 <section class="boss-prep">
   <p class="intro">
-    Perfil de peligrosidad/timing por mecánica (independiente de qué se cubrió en un pull concreto — ver punto 4 de la
-    infografía) + asignación de defensivo por spec + generador de reminders para MRT.
+    Planificación por jugador real: build observado, cooldown efectivo por spec/talentos y todas las ventanas repetidas del combate. Las asignaciones manuales por spec se conservan como plantillas bloqueadas.
   </p>
 
   @if (error()) {
@@ -43,7 +42,7 @@
           </div>
 
           <!-- §"ponlo en la cabecera a la derecha de donde vienen las dificultades... así está más a la vista" (feedback real, 2026-08-31) -->
-          <div class="auto-assign-bar" title="Asigna sola el defensivo de la spec a cada mecánica, empezando por la que más pico hace a toda la raid, respetando cooldowns reales a lo largo del fight. Nunca toca defensivos de emergencia ni con cooldown sin resolver.">
+          <div class="auto-assign-bar" title="Planifica los defensivos personales del jugador real usando su último build observado, bases por spec y modificadores garantizados de talentos. Recorre todas las ocurrencias del fight y respeta reservas manuales.">
             <select [value]="autoAssignClass()" (change)="onAutoAssignClassChange($any($event.target).value)">
               @for (cls of allClasses; track cls) {
                 <option [value]="cls">{{ cls }}</option>
@@ -54,7 +53,12 @@
                 <option [value]="spec">{{ spec }}</option>
               }
             </select>
-            <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssign()">{{ autoAssigning() ? '…' : '⚡ Auto-asignar spec' }}</button>
+            <select aria-label="Jugador del roster" [value]="selectedPlannerCharacterId() ?? ''" (change)="onPlannerPlayerChange($any($event.target).value)">
+              @for (player of plannerPlayersForSelectedSpec(); track player.character_id) {
+                <option [value]="player.character_id">{{ player.player_name }}</option>
+              }
+            </select>
+            <button type="button" class="sync-btn" [disabled]="autoAssigning() || !selectedPlannerPlayer()" (click)="onAutoAssign()">{{ autoAssigning() ? '…' : '⚡ Auto-asignar jugador' }}</button>
             <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssignClass()">{{ autoAssigning() ? '…' : '⚡ Auto-asignar clase entera' }}</button>
             <button type="button" class="delete-btn" [class.confirming]="confirmingResetClass()" [disabled]="resetting()" (click)="requestResetClass()">
               {{ confirmingResetClass() ? '¿seguro? (borra todo lo de ' + autoAssignClass() + ')' : 'restablecer clase' }}
@@ -63,7 +67,7 @@
               {{ confirmingResetAll() ? '¿seguro? (borra TODO este boss+dificultad)' : 'restablecer todo' }}
             </button>
             <!-- §"el botón de crear reminder reubícalo... que sea útil y accesible" (feedback real, 2026-08-31): mismo par clase/spec que ya está aquí, en vez de una lista de botones al final de la página. -->
-            <button type="button" class="sync-btn export-trigger" [disabled]="!hasAssignmentsForSelected()" [title]="hasAssignmentsForSelected() ? '' : 'Esta spec todavía no tiene ninguna asignación'" (click)="generateExport(autoAssignClass(), autoAssignSpec())">
+            <button type="button" class="sync-btn export-trigger" [disabled]="!hasAssignmentsForSelected() || selectedPlanStale()" [title]="selectedPlanStale() ? 'El build o catálogo cambió: recalcula antes de exportar' : hasAssignmentsForSelected() ? '' : 'Este jugador todavía no tiene ninguna asignación'" (click)="generateExport(autoAssignClass(), autoAssignSpec())">
               📋 Exportar reminder MRT
             </button>
             <!-- §"cómo podemos ver los huecos que quedan libres... o si ya está asignado antes de esa habilidad" (feedback real, 2026-08-31) -->
@@ -71,10 +75,42 @@
           </div>
         </div>
         @if (autoAssignResult(); as r) {
-          <p class="result-line result-ok">{{ r.assigned }}/{{ r.candidates }} mecánicas asignadas.</p>
+          <p class="result-line result-ok">{{ r.assigned }}/{{ r.candidates }} ventanas planificadas.</p>
+        }
+        @if (!planningReferenceLoading() && !plannerPlayersForSelectedSpec().length) {
+          <p class="result-line result-warn">No hay un {{ autoAssignSpec() }} del roster con build observado. Importa/analiza un pull reciente para poder resolver sus talentos.</p>
+        }
+        @if (selectedPlannerPlayer(); as player) {
+          <p class="meta">Build de {{ player.player_name }} observado @if (player.loadout_observed_at) { {{ player.loadout_observed_at | date: 'd MMM, HH:mm' }} } @else { sin fecha }.</p>
+        }
+        @if (selectedPlanStale()) {
+          <p class="result-line result-warn">⚠ El build o las reglas de cooldown cambiaron después de generar este plan. Vuelve a auto-asignar antes de exportarlo.</p>
         }
         @if (assignmentsStaleFor(autoAssignClass(), autoAssignSpec())) {
           <p class="result-line result-warn">⚠ Se editó algún defensivo de {{ autoAssignClass() }} — {{ autoAssignSpec() }} después de la última asignación guardada. Se recomienda volver a auto-asignar.</p>
+        }
+
+        @if (selectedEffectiveResolution(); as resolution) {
+          <details class="effective-kit-panel">
+            <summary>Kit efectivo de {{ resolution.player.player_name }} · {{ resolution.defensives.length }} defensivos detectados</summary>
+            @if (resolution.unresolvedTalentCount) {
+              <p class="result-line result-warn">{{ resolution.unresolvedTalentCount }} nodo{{ resolution.unresolvedTalentCount === 1 ? '' : 's' }} del build no tiene spellId resuelto; revisa la sincronización DB2 si falta alguna regla.</p>
+            }
+            <table class="assignments effective-kit-table">
+              <thead><tr><th>Defensivo</th><th>Base</th><th>Efectivo</th><th>Procedencia</th><th>AUTO personal</th></tr></thead>
+              <tbody>
+                @for (defensive of resolution.defensives; track defensive.spellId) {
+                  <tr>
+                    <td><app-wowhead-link type="spell" [id]="defensive.spellId">{{ defensive.name }}</app-wowhead-link></td>
+                    <td>{{ defensive.baseCooldownMs != null ? (defensive.baseCooldownMs / 1000 | number: '1.0-0') + 's' : '—' }}</td>
+                    <td><strong>{{ defensive.effectiveCooldownMs != null ? (defensive.effectiveCooldownMs / 1000 | number: '1.0-0') + 's' : 'sin resolver' }}</strong></td>
+                    <td class="meta">{{ defensive.explanation }} @if (defensive.warnings.length) { · {{ defensive.warnings.join(' · ') }} }</td>
+                    <td>{{ (defensive.category === 'personal_defensive' || defensive.category === 'semi_defensive') && defensive.survivalType !== 'emergency' && defensive.effectiveCooldownMs != null ? '✓' : '— ' + defensive.category }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </details>
         }
 
         <div class="sync-row">
@@ -346,12 +382,11 @@
     <div class="export-modal-backdrop" (click)="closeTimeline()">
       <div class="export-modal" (click)="$event.stopPropagation()">
         <div class="export-modal-header">
-          <h3>Cronología — {{ autoAssignClass() }} · {{ autoAssignSpec() }}</h3>
+          <h3>Cronología — {{ autoAssignClass() }} · {{ autoAssignSpec() }}@if (selectedPlannerPlayer(); as player) { · {{ player.player_name }} }</h3>
           <button type="button" class="classify-toggle" (click)="closeTimeline()">✕ cerrar</button>
         </div>
         <p class="meta">
-          Orden real del fight (mediana de ocurrencias observadas). "en conflicto" = este mismo defensivo ya se habría usado antes y su cooldown no le habría dado tiempo a estar libre de nuevo aquí
-          — revísalo a mano. Fila vacía = esta spec no tiene nada asignado a esa mecánica.
+          Todas las ocurrencias reconstruidas de los logs de referencia. Las habilidades que se solapan se agrupan en una sola ventana. El cooldown mostrado es el efectivo del build guardado, no el valor genérico del catálogo.
         </p>
         @if (!timelineEntries().length) {
           <p class="muted">Ninguna mecánica de esta spec tiene timing conocido todavía — sincroniza primero.</p>
@@ -368,7 +403,7 @@
               </tr>
             </thead>
             <tbody>
-              @for (e of timelineEntries(); track e.abilityId) {
+              @for (e of timelineEntries(); track e.key) {
                 <tr [class.timeline-conflict]="e.conflict" [class.timeline-gap]="!e.assignment && e.priority && e.priority >= 3">
                   <td>{{ formatFightTime(e.timeMs) }}</td>
                   <td>{{ e.name }}</td>
@@ -379,8 +414,14 @@
                       <span class="meta">—</span>
                     }
                   </td>
-                  <td>{{ e.defensiveName ?? '— sin asignar —' }}</td>
-                  <td class="meta">{{ e.cooldownMs != null ? (e.cooldownMs / 1000 | number: '1.0-0') + 's' : e.assignment ? 'desconocido' : '' }}</td>
+                  <td>
+                    {{ e.defensiveName ?? '— sin asignar —' }}
+                    @if (e.locked) { <span class="meta"> · reserva manual</span> }
+                  </td>
+                  <td class="meta">
+                    {{ e.cooldownMs != null ? (e.cooldownMs / 1000 | number: '1.0-0') + 's' : e.assignment ? 'desconocido' : '' }}
+                    @if (e.cooldownExplanation) { <small class="cooldown-explanation">{{ e.cooldownExplanation }}</small> }
+                  </td>
                   <td>
                     @if (e.conflict) {
                       <span class="result-warn">⚠ en conflicto</span>

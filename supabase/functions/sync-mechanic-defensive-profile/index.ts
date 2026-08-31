@@ -169,6 +169,7 @@ Deno.serve(async (req: Request) => {
       // coincide con el abilityGameID real de un log concreto (misma causa
       // raíz documentada en sync-boss-mechanics) — se cruza por NOMBRE.
       interface FightBundle {
+        fightKey: string;
         idsByName: Map<string, number[]>;
         damageTaken: DamageTakenEventLite[];
         playerCasts: CastEventLite[];
@@ -194,6 +195,7 @@ Deno.serve(async (req: Request) => {
                 getFightPlayerRoles({ code: ref.code, fightId: ref.fightId, startTime: ref.startTime, endTime: ref.endTime }).catch(() => null),
               ]);
               bundles.push({
+                fightKey: `${ref.code}:${ref.fightId}`,
                 idsByName: buildAbilityIdsByName(abilities),
                 damageTaken: damageTaken as DamageTakenEventLite[],
                 playerCasts: playerCasts as CastEventLite[],
@@ -216,6 +218,7 @@ Deno.serve(async (req: Request) => {
         unmitigated: number[];
         mitigated: number[];
         castOffsets: number[];
+        castOffsetsByFight: { fightKey: string; offsetsMs: number[] }[];
         tankHits: number;
         healerHits: number;
         dpsHits: number;
@@ -228,6 +231,7 @@ Deno.serve(async (req: Request) => {
         const unmitigated: number[] = [];
         const mitigated: number[] = [];
         const castOffsets: number[] = [];
+        const castOffsetsByFight: { fightKey: string; offsetsMs: number[] }[] = [];
         let tankHits = 0;
         let healerHits = 0;
         let dpsHits = 0;
@@ -315,11 +319,15 @@ Deno.serve(async (req: Request) => {
           // puede golpear a varios jugadores a la vez, eso sería la misma
           // "ocurrencia" contada varias veces. Solo preview/timeline en la
           // pantalla, nunca el trigger real (ver MrtBossmodTrigger).
+          const offsetsThisFight: number[] = [];
           for (const cast of bundle.enemyCasts) {
             if (typeof cast.abilityGameID !== 'number' || !realIds.includes(cast.abilityGameID)) continue;
             if (typeof cast.timestamp !== 'number') continue;
-            castOffsets.push(cast.timestamp - bundle.startTime);
+            const offsetMs = cast.timestamp - bundle.startTime;
+            castOffsets.push(offsetMs);
+            offsetsThisFight.push(offsetMs);
           }
+          if (offsetsThisFight.length) castOffsetsByFight.push({ fightKey: bundle.fightKey, offsetsMs: offsetsThisFight.sort((a, b) => a - b) });
 
           if (bundle.damageTally) {
             for (const id of realIds) {
@@ -335,7 +343,7 @@ Deno.serve(async (req: Request) => {
         }
 
         if (sampledFights < 1) continue; // ni un solo fight de referencia de ESTA tanda vio esta mecánica — no toca la fila existente
-        accumulated.push({ candidate, unmitigated, mitigated, castOffsets, tankHits, healerHits, dpsHits, sampledFights });
+        accumulated.push({ candidate, unmitigated, mitigated, castOffsets, castOffsetsByFight, tankHits, healerHits, dpsHits, sampledFights });
       }
 
       // §"que se tiene que auto poner el 'exige defensivo' cuando lo
@@ -360,7 +368,7 @@ Deno.serve(async (req: Request) => {
         const { data: existingRows } = await supabase
           .from('boss_mechanic_defensive_profile')
           .select(
-            'ability_id, reference_unmitigated_damage_samples, reference_mitigated_damage_samples, reference_cast_offset_ms_samples, reference_sample_fight_count, reference_role_hit_breakdown, requires_defensive, requires_defensive_source',
+            'ability_id, reference_unmitigated_damage_samples, reference_mitigated_damage_samples, reference_cast_offset_ms_samples, reference_cast_offsets_by_fight, reference_sample_fight_count, reference_role_hit_breakdown, requires_defensive, requires_defensive_source',
           )
           .eq('boss_id', body.bossId)
           .eq('difficulty', difficultyName)
@@ -379,6 +387,10 @@ Deno.serve(async (req: Request) => {
             unmitigated,
             mitigated: [...((existing?.reference_mitigated_damage_samples as number[]) ?? []), ...a.mitigated],
             castOffsets: [...((existing?.reference_cast_offset_ms_samples as number[]) ?? []), ...a.castOffsets],
+            castOffsetsByFight: [
+              ...(((existing?.reference_cast_offsets_by_fight as { fightKey: string; offsetsMs: number[] }[]) ?? [])),
+              ...a.castOffsetsByFight,
+            ],
             sampleFightCount: ((existing?.reference_sample_fight_count as number) ?? 0) + a.sampledFights,
             breakdown: { tank: (existingBreakdown?.tank ?? 0) + a.tankHits, healer: (existingBreakdown?.healer ?? 0) + a.healerHits, dps: (existingBreakdown?.dps ?? 0) + a.dpsHits },
             existingRequiresDefensive: (existing?.requires_defensive as boolean | null) ?? null,
@@ -412,6 +424,7 @@ Deno.serve(async (req: Request) => {
             reference_mitigated_damage_samples: m.mitigated,
             reference_role_hit_breakdown: m.breakdown,
             reference_cast_offset_ms_samples: m.castOffsets,
+            reference_cast_offsets_by_fight: m.castOffsetsByFight,
             reference_sample_fight_count: m.sampleFightCount,
             priority,
             updated_at: new Date().toISOString(),

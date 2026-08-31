@@ -13,18 +13,21 @@ import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { ManifestService } from '../../core/manifest.service';
 import { BossMechanicDefensiveProfileService } from '../../core/boss-mechanic-defensive-profile.service';
 import { DefensiveCatalogService } from '../../core/defensive-catalog.service';
+import { DefensivePlanningService, type DefensivePlanningReference, type StoredDefensivePlan } from '../../core/defensive-planning.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
 import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
 import { ALL_CLASSES, specsForClass, mechanicAppliesToRole, roleFromSpec } from '../../shared/spec-role.util';
 import { defensivesForSpec } from '../../shared/defensive-spec-match.util';
 import { encodeMrtExport, spellTag, type MrtReminderInput, type MrtTrigger } from '../../shared/mrt/mrt-reminder-codec';
-import { autoAssignCascade } from '../../shared/mrt/auto-assign-cascade.util';
+import { buildDamageWindowTimeline, type DamageWindow } from '../../shared/mrt/damage-window-timeline.util';
+import { resolveEffectiveDefensives, defensiveLoadoutHash, type EffectiveDefensiveResolution } from '../../shared/mrt/effective-defensive-resolver.util';
+import { planRosterCooldowns } from '../../shared/mrt/roster-cooldown-planner.util';
 import { errorMessage } from '../../shared/error-message.util';
 import { classColor } from '../../shared/format.util';
 import { ClassIconComponent } from '../../shared/class-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { MechanicResolutionIconComponent } from '../../shared/mechanic-resolution-icon.component';
-import type { BossMechanicCandidateRow, BossMechanicDefensiveProfileRow, MechanicDefensiveAssignmentRow, CooldownCatalogRow } from '../../shared/models/domain';
+import type { BossMechanicCandidateRow, BossMechanicDefensiveProfileRow, MechanicDefensiveAssignmentRow, CooldownCatalogRow, DefensivePlanAssignmentRow, PlayerLatestLoadoutRow } from '../../shared/models/domain';
 
 // §Validado en real (2026-08-30, ver mrt-reminder-codec.ts): un export real
 // decodificado desde el juego en Normal trajo difficultyId=14 — confirma
@@ -63,15 +66,18 @@ interface ExportResult {
 }
 
 interface TimelineEntry {
+  key: string;
   abilityId: number;
   name: string;
   timeMs: number;
   priority: number | null;
-  assignment: MechanicDefensiveAssignmentRow | null;
+  assignment: MechanicDefensiveAssignmentRow | DefensivePlanAssignmentRow | null;
   defensiveName: string | null;
   cooldownMs: number | null;
   /** El mismo defensivo ya se habría usado antes en esta cronología y su cooldown no le habría dado tiempo a estar libre de nuevo aquí. */
   conflict: boolean;
+  cooldownExplanation: string | null;
+  locked: boolean;
 }
 
 @Component({
@@ -86,6 +92,7 @@ export class BossPrepComponent {
   private manifestService = inject(ManifestService);
   private profileService = inject(BossMechanicDefensiveProfileService);
   private defensiveCatalogService = inject(DefensiveCatalogService);
+  private defensivePlanningService = inject(DefensivePlanningService);
   private reportsService = inject(ReportsService);
 
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
@@ -105,6 +112,10 @@ export class BossPrepComponent {
   error = signal<string | null>(null);
 
   cooldownCatalog = signal<CooldownCatalogRow[]>([]);
+  planningReference = signal<DefensivePlanningReference | null>(null);
+  storedPlans = signal<StoredDefensivePlan[]>([]);
+  selectedPlannerCharacterId = signal<number | null>(null);
+  planningReferenceLoading = signal(false);
 
   syncing = signal(false);
   syncSummary = signal<string | null>(null);
@@ -124,6 +135,18 @@ export class BossPrepComponent {
 
   selectedBoss = computed(() => this.bosses().find((b) => b.encounterId === this.selectedEncounterId()) ?? null);
   selectedDifficultyName = computed(() => (this.selectedDifficultyId() != null ? WCL_DIFFICULTY_NAME_BY_ID[this.selectedDifficultyId()!] : null));
+  selectedEffectiveResolution = computed(() => {
+    const player = this.selectedPlannerPlayer();
+    const reference = this.planningReference();
+    if (!player?.spec || !player.talent_build || !reference?.allTalentSpellIds) return null;
+    return resolveEffectiveDefensives({
+      player,
+      catalog: this.cooldownCatalog(),
+      specProfiles: reference.specProfiles,
+      modifierRules: reference.modifierRules,
+      allTalentSpellIds: reference.allTalentSpellIds,
+    });
+  });
 
   /** Mecánica + su perfil de daño/timing (si ya se sincronizó) + sus asignaciones — una fila de la tabla. */
   mechanicRows = computed(() => {
@@ -138,13 +161,29 @@ export class BossPrepComponent {
 
   /** §"saber que los defensivos que asignas no dejan huecos de mecánicas... sin cubrir" (feedback real, 2026-08-31): mecánicas que SÍ exigen defensivo (auto o a mano) pero no tienen ni una sola asignación, de ninguna clase/spec, en este boss+dificultad. */
   coverageGaps = computed(() => {
-    const assignedAbilityIds = new Set(this.assignments().map((a) => a.ability_id));
+    const assignedAbilityIds = new Set([
+      ...this.assignments().map((a) => a.ability_id),
+      ...this.storedPlans().flatMap((plan) => plan.assignments.flatMap((assignment) => assignment.ability_ids)),
+    ]);
     return this.mechanicRows().filter((r) => r.profile?.requires_defensive === true && !assignedAbilityIds.has(r.candidate.ability_id));
   });
 
   constructor() {
     void this.loadBosses();
     void this.loadCooldownCatalog();
+    void this.loadPlanningReference();
+  }
+
+  async loadPlanningReference(): Promise<void> {
+    this.planningReferenceLoading.set(true);
+    try {
+      this.planningReference.set(await this.defensivePlanningService.loadReference());
+      this.ensureSelectedPlannerPlayer();
+    } catch (err) {
+      this.error.set(`No se pudo cargar el resolver de defensivos efectivos: ${errorMessage(err)}`);
+    } finally {
+      this.planningReferenceLoading.set(false);
+    }
   }
 
   async loadBosses(): Promise<void> {
@@ -195,16 +234,19 @@ export class BossPrepComponent {
     this.loadingRows.set(true);
     this.error.set(null);
     try {
-      const [candidates, profiles, assignments, syncState] = await Promise.all([
+      const [candidates, profiles, assignments, syncState, storedPlans] = await Promise.all([
         this.manifestService.listCandidates(String(bossId), difficulty),
         this.profileService.listProfiles(String(bossId), difficulty),
         this.profileService.listAssignments(String(bossId), difficulty),
         this.profileService.getSyncState(String(bossId), difficulty),
+        this.defensivePlanningService.listPlans(String(bossId), difficulty),
       ]);
       this.candidates.set(candidates);
       this.profiles.set(profiles);
       this.assignments.set(assignments);
       this.syncState.set(syncState);
+      this.storedPlans.set(storedPlans);
+      this.ensureSelectedPlannerPlayer();
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
@@ -481,6 +523,40 @@ export class BossPrepComponent {
 
     const reminders: MrtReminderInput[] = [];
     const skipped: string[] = [];
+    const storedPlan = this.selectedStoredPlan();
+    if (storedPlan && storedPlan.run.class === cls && storedPlan.run.spec === spec) {
+      for (const assignment of storedPlan.assignments) {
+        const defensiveName = this.cooldownCatalog().find((cd) => cd.spell_id === assignment.defensive_spell_id)?.name ?? `#${assignment.defensive_spell_id}`;
+        const trigger: MrtTrigger = assignment.trigger_type === 'bossmod'
+          ? {
+              type: 'bossmod',
+              timeLeftSeconds: assignment.prewarn_seconds,
+              spellId: assignment.bossmod_spell_id ?? assignment.primary_ability_id,
+              ...(assignment.bossmod_counter == null ? {} : { counter: assignment.bossmod_counter }),
+            }
+          : { type: 'pull', delayTimeSeconds: Math.round(assignment.planned_time_ms / 1000) };
+        const windowName = assignment.ability_names.join(' + ');
+        reminders.push({
+          uid: `avoid_v2_${bossId}_${mrtDifficultyId}_${storedPlan.run.character_id}_${assignment.window_key}`.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+          name: `${windowName} - ${storedPlan.run.player_name}`,
+          message: `${spellTag(assignment.defensive_spell_id)} ${defensiveName}`,
+          bossId: Number(bossId),
+          difficultyId: mrtDifficultyId,
+          players: [storedPlan.run.player_name],
+          prewarnSeconds: assignment.prewarn_seconds,
+          trigger,
+        });
+      }
+      if (!reminders.length) {
+        this.error.set(`El plan de ${storedPlan.run.player_name} no contiene ninguna asignación exportable.`);
+        return;
+      }
+      const profileName = `Preparación - ${this.selectedBoss()?.bossName ?? ''} ${this.selectedDifficultyName() ?? ''} - ${storedPlan.run.player_name}`;
+      this.exportResult.set({ class: cls, spec: `${spec} · ${storedPlan.run.player_name}`, text: encodeMrtExport(profileName, reminders), skippedForMissingTiming: [] });
+      this.copyStatus.set('idle');
+      this.exportModalOpen.set(true);
+      return;
+    }
     for (const a of this.assignments().filter((x) => x.class === cls && x.spec === spec)) {
       const candidateName = this.candidates().find((c) => c.ability_id === a.ability_id)?.name ?? `Mecánica ${a.ability_id}`;
       const defensiveName = this.cooldownCatalog().find((cd) => cd.spell_id === a.defensive_spell_id)?.name ?? '';
@@ -529,7 +605,9 @@ export class BossPrepComponent {
   }
 
   /** §"reubica el botón de crear reminder... que sea útil y accesible" (feedback real, 2026-08-31): reusa la misma pareja clase/spec ya visible en la cabecera en vez de una lista de botones creciendo al final de la página. */
-  hasAssignmentsForSelected = computed(() => this.assignments().some((a) => a.class === this.autoAssignClass() && a.spec === this.autoAssignSpec()));
+  hasAssignmentsForSelected = computed(
+    () => !!this.selectedStoredPlan()?.assignments.length || this.assignments().some((a) => a.class === this.autoAssignClass() && a.spec === this.autoAssignSpec()),
+  );
 
   // --- cronología por spec ---
   // §"cómo podemos ver los huecos que quedan libres... o si ya está
@@ -545,6 +623,32 @@ export class BossPrepComponent {
   timelineEntries = signal<TimelineEntry[]>([]);
 
   openTimeline(): void {
+    const player = this.selectedPlannerPlayer();
+    const storedPlan = this.selectedStoredPlan();
+    if (player && storedPlan) {
+      const windows = this.buildWindowsForPlayer(player);
+      const entries: TimelineEntry[] = windows.map((window) => {
+        const assignment = storedPlan.assignments.find((row) => row.window_key === window.key) ?? null;
+        const defensive = assignment ? this.cooldownCatalog().find((row) => row.spell_id === assignment.defensive_spell_id) : null;
+        return {
+          key: window.key,
+          abilityId: window.occurrences[0]?.abilityId ?? 0,
+          name: window.occurrences.map((occurrence) => `${occurrence.name} #${occurrence.occurrenceIndex}`).join(' + '),
+          timeMs: window.timeMs,
+          priority: window.priority,
+          assignment,
+          defensiveName: assignment ? (defensive?.name ?? `#${assignment.defensive_spell_id}`) : null,
+          cooldownMs: assignment?.effective_cooldown_ms ?? null,
+          conflict: false,
+          cooldownExplanation: assignment?.cooldown_explanation ?? null,
+          locked: assignment?.locked ?? false,
+        };
+      });
+      this.timelineEntries.set(entries);
+      this.timelineOpen.set(true);
+      return;
+    }
+
     const cls = this.autoAssignClass();
     const spec = this.autoAssignSpec();
     const role = roleFromSpec(cls, spec);
@@ -563,8 +667,8 @@ export class BossPrepComponent {
     const nextAvailableMs = new Map<number, number>();
     const entries: TimelineEntry[] = relevant.map((e) => {
       const assignment = this.assignments().find((a) => a.ability_id === e.candidate.ability_id && a.class === cls && a.spec === spec) ?? null;
-      const base = { abilityId: e.candidate.ability_id, name: e.candidate.name, timeMs: e.timeMs, priority: e.profile?.priority ?? null };
-      if (!assignment) return { ...base, assignment: null, defensiveName: null, cooldownMs: null, conflict: false };
+      const base = { key: String(e.candidate.ability_id), abilityId: e.candidate.ability_id, name: e.candidate.name, timeMs: e.timeMs, priority: e.profile?.priority ?? null };
+      if (!assignment) return { ...base, assignment: null, defensiveName: null, cooldownMs: null, conflict: false, cooldownExplanation: null, locked: false };
       const cd = this.cooldownCatalog().find((c) => c.spell_id === assignment.defensive_spell_id);
       const cooldownMs = cd?.base_cooldown_ms ?? null;
       const prevAvailable = nextAvailableMs.get(assignment.defensive_spell_id) ?? 0;
@@ -574,7 +678,7 @@ export class BossPrepComponent {
       // el próximo hueco disponible sigue siendo el de antes (el conflicto
       // se arrastra hasta que pase suficiente tiempo, como en la realidad).
       if (!conflict && cooldownMs != null) nextAvailableMs.set(assignment.defensive_spell_id, e.timeMs + cooldownMs);
-      return { ...base, assignment, defensiveName: cd?.name ?? `#${assignment.defensive_spell_id}`, cooldownMs, conflict };
+      return { ...base, assignment, defensiveName: cd?.name ?? `#${assignment.defensive_spell_id}`, cooldownMs, conflict, cooldownExplanation: cooldownMs == null ? null : `${cooldownMs / 1000} s del catálogo legacy`, locked: true };
     });
     this.timelineEntries.set(entries);
     this.timelineOpen.set(true);
@@ -591,17 +695,7 @@ export class BossPrepComponent {
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
-  // --- auto-asignación en cascada ---
-  // §"la app ya sabe los cooldown... puede autogenerar una nota sabiendo en
-  // qué momento empieza una habilidad o mecánica de boss... empezando en
-  // cascada: primero en las que más pico hace a toda la raid" (feedback
-  // real, 2026-08-31): impactScore = mediana de daño SIN mitigar (ya
-  // reconstruido por sync-mechanic-defensive-profile, sin sesgo de logs
-  // ya bien jugados) × reference_avg_players_hit (ya calculado por
-  // sync-boss-mechanics con correlación real por-cast) — "cuánto daño cae
-  // sobre la raid de una vez", la métrica de raid-wide que pedías. El
-  // algoritmo en sí (greedy, respeta cooldowns reales a lo largo del
-  // fight) vive en auto-assign-cascade.util.ts, testeado aparte.
+  // --- auto-asignación v2: roster + build + ocurrencias ---
   autoAssignClass = signal<string>(this.allClasses[0]);
   autoAssignSpec = signal<string>(specsForClass(this.allClasses[0])[0] ?? '');
   autoAssigning = signal(false);
@@ -610,12 +704,67 @@ export class BossPrepComponent {
   onAutoAssignClassChange(cls: string): void {
     this.autoAssignClass.set(cls);
     this.autoAssignSpec.set(specsForClass(cls)[0] ?? '');
+    this.ensureSelectedPlannerPlayer();
   }
   onAutoAssignSpecChange(spec: string): void {
     this.autoAssignSpec.set(spec);
+    this.ensureSelectedPlannerPlayer();
   }
   specsForAutoAssignClass(): string[] {
     return specsForClass(this.autoAssignClass());
+  }
+
+  plannerPlayersForSelectedSpec(): PlayerLatestLoadoutRow[] {
+    return (this.planningReference()?.loadouts ?? []).filter(
+      (player) => (player.class ?? player.roster_class) === this.autoAssignClass() && player.spec === this.autoAssignSpec(),
+    );
+  }
+
+  selectedPlannerPlayer(): PlayerLatestLoadoutRow | null {
+    const id = this.selectedPlannerCharacterId();
+    return this.planningReference()?.loadouts.find((player) => player.character_id === id) ?? null;
+  }
+
+  onPlannerPlayerChange(raw: string): void {
+    const id = Number(raw);
+    this.selectedPlannerCharacterId.set(Number.isFinite(id) ? id : null);
+  }
+
+  private ensureSelectedPlannerPlayer(): void {
+    const players = this.plannerPlayersForSelectedSpec();
+    if (!players.some((player) => player.character_id === this.selectedPlannerCharacterId())) {
+      this.selectedPlannerCharacterId.set(players[0]?.character_id ?? null);
+    }
+  }
+
+  selectedStoredPlan(): StoredDefensivePlan | null {
+    const id = this.selectedPlannerCharacterId();
+    return this.storedPlans().find((plan) => plan.run.character_id === id) ?? null;
+  }
+
+  private currentReferenceVersion(): string | null {
+    const reference = this.planningReference();
+    const versions = [
+      ...this.cooldownCatalog().map((row) => row.updated_at),
+      ...(reference?.specProfiles.map((row) => row.updated_at) ?? []),
+      ...(reference?.modifierRules.map((row) => row.updated_at) ?? []),
+    ].filter((value): value is string => !!value).sort();
+    return versions.at(-1) ?? null;
+  }
+
+  private currentMechanicProfileVersion(): string | null {
+    return this.profiles().map((profile) => profile.updated_at).filter((value): value is string => !!value).sort().at(-1) ?? null;
+  }
+
+  selectedPlanStale(): boolean {
+    const plan = this.selectedStoredPlan();
+    const player = this.selectedPlannerPlayer();
+    if (!plan || !player) return false;
+    if (plan.run.loadout_hash !== defensiveLoadoutHash(player)) return true;
+    const version = this.currentReferenceVersion();
+    if (version != null && (plan.run.catalog_version == null || version > plan.run.catalog_version)) return true;
+    const mechanicVersion = this.currentMechanicProfileVersion();
+    return mechanicVersion != null && (plan.run.mechanic_profile_version == null || mechanicVersion > plan.run.mechanic_profile_version);
   }
 
   private impactScore(candidate: BossMechanicCandidateRow, profile: BossMechanicDefensiveProfileRow | null): number {
@@ -623,93 +772,116 @@ export class BossPrepComponent {
     return unmitigatedMedian * (candidate.reference_avg_players_hit ?? 1);
   }
 
-  /** Motor de la cascada para UNA spec. Solo rellena huecos; las asignaciones humanas existentes son inmutables y reservan su cooldown. */
-  private async runCascadeForSpec(bossId: string, difficulty: string, cls: string, spec: string): Promise<{ assigned: number; candidates: number }> {
-    const role = roleFromSpec(cls, spec);
+  private buildWindowsForPlayer(player: PlayerLatestLoadoutRow): DamageWindow[] {
+    const playerClass = player.class ?? player.roster_class;
+    const role = roleFromSpec(playerClass, player.spec);
     const profilesByAbilityId = new Map(this.profiles().map((p) => [p.ability_id, p]));
-    const timeByAbilityId = new Map(
-      this.candidates().map((candidate) => [
-        candidate.ability_id,
-        median(profilesByAbilityId.get(candidate.ability_id)?.reference_cast_offset_ms_samples ?? []),
-      ]),
-    );
-
-    const existingForSpec = this.assignments().filter((a) => a.class === cls && a.spec === spec);
-    const alreadyAssignedAbilityIds = new Set(existingForSpec.map((a) => a.ability_id));
-
-    const mechanicInputs = this.candidates()
+    const inputs = this.candidates()
       .filter((candidate) => {
         const profile = profilesByAbilityId.get(candidate.ability_id) ?? null;
-        return (
-          profile?.requires_defensive === true &&
-          mechanicAppliesToRole(candidate.responsibility, role) &&
-          !alreadyAssignedAbilityIds.has(candidate.ability_id)
-        );
+        return profile?.requires_defensive === true && mechanicAppliesToRole(candidate.responsibility, role);
       })
-      .map((candidate) => ({
-        abilityId: candidate.ability_id,
-        name: candidate.name,
-        timeMs: timeByAbilityId.get(candidate.ability_id) ?? null,
-        impactScore: this.impactScore(candidate, profilesByAbilityId.get(candidate.ability_id) ?? null),
-      }));
-
-    const reservationsBySpellId = new Map<number, number[]>();
-    const blockedBecauseTimingUnknown = new Set<number>();
-    for (const assignment of existingForSpec) {
-      const timeMs = timeByAbilityId.get(assignment.ability_id) ?? null;
-      if (timeMs == null) {
-        // Si ya hay un uso manual cuyo momento no podemos situar, ese spell
-        // no es seguro para nuevas asignaciones automáticas.
-        blockedBecauseTimingUnknown.add(assignment.defensive_spell_id);
-        continue;
-      }
-      const reservations = reservationsBySpellId.get(assignment.defensive_spell_id) ?? [];
-      reservations.push(timeMs);
-      reservationsBySpellId.set(assignment.defensive_spell_id, reservations);
-    }
-
-    const defensiveInputs = defensivesForSpec(this.cooldownCatalog(), cls, spec)
-      .filter((cd) => !blockedBecauseTimingUnknown.has(cd.spell_id))
-      .map((cd) => ({
-        spellId: cd.spell_id,
-        survivalType: cd.survival_type,
-        baseCooldownMs: cd.base_cooldown_ms,
-        reservedTimesMs: reservationsBySpellId.get(cd.spell_id) ?? [],
-      }));
-
-    const result = autoAssignCascade(mechanicInputs, defensiveInputs);
-    for (const assignment of result) {
-      await this.edgeFunctions.saveMechanicDefensiveAssignment({
-        bossId,
-        difficulty,
-        abilityId: assignment.abilityId,
-        class: cls,
-        spec,
-        defensiveSpellId: assignment.defensiveSpellId,
-        prewarnSeconds: 5,
-        triggerType: 'bossmod',
+      .map((candidate) => {
+        const profile = profilesByAbilityId.get(candidate.ability_id)!;
+        return {
+          abilityId: candidate.ability_id,
+          name: candidate.name,
+          offsetSamplesMs: profile.reference_cast_offset_ms_samples ?? [],
+          offsetsByFight: profile.reference_cast_offsets_by_fight ?? [],
+          sampleFightCount: profile.reference_sample_fight_count ?? 0,
+          impactScore: this.impactScore(candidate, profile),
+          priority: profile.priority,
+        };
       });
+    return buildDamageWindowTimeline(inputs);
+  }
+
+  private resolvePlayerKit(player: PlayerLatestLoadoutRow): EffectiveDefensiveResolution {
+    const reference = this.planningReference();
+    if (!reference) throw new Error('El resolver de defensivos todavía no está cargado.');
+    if (!reference.allTalentSpellIds) throw new Error('No hay talent_spell_lookup disponible: no se puede filtrar el build de forma fiable. Analiza un pull reciente primero.');
+    if (!player.spec || !player.talent_build) throw new Error(`${player.player_name} no tiene todavía un build observado en CombatantInfo.`);
+    return resolveEffectiveDefensives({
+      player,
+      catalog: this.cooldownCatalog(),
+      specProfiles: reference.specProfiles,
+      modifierRules: reference.modifierRules,
+      allTalentSpellIds: reference.allTalentSpellIds,
+    });
+  }
+
+  private async runPlannerForPlayer(bossId: string, difficulty: string, player: PlayerLatestLoadoutRow): Promise<{ assigned: number; candidates: number }> {
+    const resolution = this.resolvePlayerKit(player);
+    const windows = this.buildWindowsForPlayer(player);
+    const playerClass = player.class ?? player.roster_class;
+
+    // Las asignaciones manuales v1 siguen intactas. Si son personales y se
+    // pueden situar, se importan como reservas bloqueadas en la ventana de
+    // mayor impacto de esa ability; externals no se fuerzan sobre uno mismo.
+    const locked: { windowKey: string; defensiveSpellId: number }[] = [];
+    const lockedWindows = new Set<string>();
+    for (const manual of this.assignments().filter((row) => row.class === playerClass && row.spec === player.spec)) {
+      const defensive = resolution.defensives.find((row) => row.spellId === manual.defensive_spell_id);
+      if (!defensive || (defensive.category !== 'personal_defensive' && defensive.category !== 'semi_defensive')) continue;
+      const window = windows
+        .filter((candidate) => !lockedWindows.has(candidate.key) && candidate.occurrences.some((occurrence) => occurrence.abilityId === manual.ability_id))
+        .sort((a, b) => b.impactScore - a.impactScore || a.timeMs - b.timeMs)[0];
+      if (!window) continue;
+      locked.push({ windowKey: window.key, defensiveSpellId: manual.defensive_spell_id });
+      lockedWindows.add(window.key);
     }
-    return { assigned: result.length, candidates: mechanicInputs.filter((m) => m.timeMs != null).length };
+
+    const planned = planRosterCooldowns({ windows, defensives: resolution.defensives, locked });
+    const assignments = planned.map((assignment) => {
+      const primary = [...assignment.window.occurrences].sort((a, b) => b.impactScore - a.impactScore || a.abilityId - b.abilityId)[0];
+      return {
+        windowKey: assignment.window.key,
+        plannedTimeMs: assignment.window.timeMs,
+        impactScore: assignment.window.impactScore,
+        priority: assignment.window.priority,
+        abilityIds: assignment.window.occurrences.map((occurrence) => occurrence.abilityId),
+        abilityNames: assignment.window.occurrences.map((occurrence) => occurrence.name),
+        primaryAbilityId: primary.abilityId,
+        occurrenceIndex: primary.occurrenceIndex,
+        defensiveSpellId: assignment.defensive.spellId,
+        effectiveCooldownMs: assignment.defensive.effectiveCooldownMs!,
+        cooldownExplanation: assignment.defensive.explanation,
+        prewarnSeconds: 5,
+        triggerType: 'bossmod' as const,
+        bossmodSpellId: primary.abilityId,
+        bossmodCounter: primary.occurrenceIndex,
+        locked: assignment.locked,
+      };
+    });
+    await this.edgeFunctions.replaceDefensivePlan({
+      bossId,
+      difficulty,
+      characterId: player.character_id,
+      playerName: player.player_name,
+      class: playerClass,
+      spec: player.spec!,
+      talentSpellIds: resolution.talentSpellIds,
+      loadoutHash: resolution.loadoutHash,
+      loadoutObservedAt: player.loadout_observed_at,
+      catalogVersion: this.currentReferenceVersion(),
+      mechanicProfileVersion: this.currentMechanicProfileVersion(),
+      assignments,
+    });
+    return { assigned: assignments.length, candidates: windows.length };
   }
 
   async onAutoAssign(): Promise<void> {
     const bossId = this.selectedEncounterId();
     const difficulty = this.selectedDifficultyName();
-    const spec = this.autoAssignSpec();
-    if (bossId == null || !difficulty || !spec || this.autoAssigning()) return;
+    const player = this.selectedPlannerPlayer();
+    if (bossId == null || !difficulty || !player || this.autoAssigning()) return;
     this.autoAssigning.set(true);
     this.autoAssignResult.set(null);
     this.error.set(null);
     try {
-      // §"esto tiene que reactualizar bien, si cambiamos un defensivo (cd)
-      // tiene que recalcularlo de verdad" (feedback real, 2026-08-31):
-      // cooldownCatalog() se carga UNA vez al entrar en la pantalla — si
-      // editaste un CD en Ajustes en otra pestaña sin recargar Preparación,
-      // la cascada usaría el valor viejo. Refrescar aquí siempre, no confiar
-      // en que el usuario haya recargado la página.
       await this.loadCooldownCatalog();
-      const r = await this.runCascadeForSpec(String(bossId), difficulty, this.autoAssignClass(), spec);
+      await this.loadPlanningReference();
+      const r = await this.runPlannerForPlayer(String(bossId), difficulty, player);
       this.autoAssignResult.set(r);
       await this.loadRows();
     } catch (err) {
@@ -719,7 +891,7 @@ export class BossPrepComponent {
     }
   }
 
-  /** §"un botón para auto-asignar la clase (en lugar de tener que elegir spec)" (feedback real, 2026-08-31): corre la misma cascada para cada spec real de la clase elegida, una detrás de otra. */
+  /** Recorre únicamente los personajes reales de esta clase con build observado, no todas las specs teóricas. */
   async onAutoAssignClass(): Promise<void> {
     const bossId = this.selectedEncounterId();
     const difficulty = this.selectedDifficultyName();
@@ -730,10 +902,15 @@ export class BossPrepComponent {
     this.error.set(null);
     try {
       await this.loadCooldownCatalog();
+      await this.loadPlanningReference();
       let assigned = 0;
       let candidates = 0;
-      for (const spec of specsForClass(cls)) {
-        const r = await this.runCascadeForSpec(String(bossId), difficulty, cls, spec);
+      const players = (this.planningReference()?.loadouts ?? []).filter(
+        (player) => (player.class ?? player.roster_class) === cls && player.spec != null && player.talent_build != null,
+      );
+      if (!players.length) throw new Error(`No hay ningún ${cls} del roster con build observado.`);
+      for (const player of players) {
+        const r = await this.runPlannerForPlayer(String(bossId), difficulty, player);
         assigned += r.assigned;
         candidates += r.candidates;
       }
@@ -759,7 +936,7 @@ export class BossPrepComponent {
 
   requestResetClass(): void {
     if (this.confirmingResetClass()) {
-      void this.doReset(this.assignments().filter((a) => a.class === this.autoAssignClass()));
+      void this.doReset(this.assignments().filter((a) => a.class === this.autoAssignClass()), this.autoAssignClass());
       return;
     }
     this.confirmingResetClass.set(true);
@@ -768,23 +945,26 @@ export class BossPrepComponent {
 
   requestResetAll(): void {
     if (this.confirmingResetAll()) {
-      void this.doReset(this.assignments());
+      void this.doReset(this.assignments(), null);
       return;
     }
     this.confirmingResetAll.set(true);
     setTimeout(() => this.confirmingResetAll.set(false), 5000);
   }
 
-  private async doReset(rows: MechanicDefensiveAssignmentRow[]): Promise<void> {
+  private async doReset(rows: MechanicDefensiveAssignmentRow[], classFilter: string | null): Promise<void> {
     this.confirmingResetClass.set(false);
     this.confirmingResetAll.set(false);
-    if (!rows.length) return;
+    const bossId = this.selectedEncounterId();
+    const difficulty = this.selectedDifficultyName();
+    if (bossId == null || !difficulty) return;
     this.resetting.set(true);
     this.error.set(null);
     try {
       for (const row of rows) {
         await this.edgeFunctions.saveMechanicDefensiveAssignment({ id: row.id, delete: true });
       }
+      await this.edgeFunctions.deleteDefensivePlans({ bossId: String(bossId), difficulty, ...(classFilter ? { class: classFilter } : {}) });
       await this.loadRows();
     } catch (err) {
       this.error.set(errorMessage(err));

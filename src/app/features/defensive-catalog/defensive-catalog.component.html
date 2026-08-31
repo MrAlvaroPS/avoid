@@ -84,6 +84,12 @@
                 tabla): {{ r.applied.map((a) => a.name + ' → ' + a.survivalType).join(', ') }}
               </p>
             }
+            @if (r.appliedSpecProfiles || r.appliedModifiers) {
+              <p class="result-line result-ok">
+                ✓ {{ r.appliedSpecProfiles }} base{{ r.appliedSpecProfiles === 1 ? '' : 's' }} por spec y
+                {{ r.appliedModifiers }} modificador{{ r.appliedModifiers === 1 ? '' : 'es' }} de talentos guardados para el planificador.
+              </p>
+            }
             @if (r.skippedLowConfidence.length) {
               <p class="result-line result-warn">
                 ⚠ {{ r.skippedLowConfidence.length }} con poca confianza, sin aplicar (revisa a mano):

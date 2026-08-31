@@ -190,6 +190,9 @@ function extractCatalog(repoRoot) {
   console.error(`Identificadores SPELLS/TALENTS indexados: ${constantIndex.size}`);
 
   const byClassAndId = new Map();
+  // No colapsar el cooldown específico de una spec dentro de la fila
+  // genérica class+spell del catálogo: el planner v2 consume estas bases.
+  const specProfiles = new Map();
   for (const file of files) {
     const m = file.replace(/\\/g, '/').match(/analysis\/retail\/([a-z]+)\//);
     if (!m) continue;
@@ -203,6 +206,17 @@ function extractCatalog(repoRoot) {
       if (!ref) continue;
       const resolved = constantIndex.get(`${ref.source}.${ref.key}`);
       if (!resolved) continue;
+      const baseCooldownMs = extractBaseCooldownMs(block);
+      if (spec && baseCooldownMs != null) {
+        specProfiles.set(`${wclClass}|${spec}|${resolved.id}`, {
+          class: wclClass,
+          spec,
+          spell_id: resolved.id,
+          base_cooldown_ms: baseCooldownMs,
+          source: 'wowanalyzer_spec',
+          source_note: `Extraído de ${file.replace(/\\/g, '/')} para ${resolved.name}.`,
+        });
+      }
       // La clave YA NO es solo clase+id: la misma spell puede vivir en dos
       // Abilities.tsx de specs distintas de la misma clase (ej. una defensiva
       // compartida re-declarada en cada carpeta de spec en vez de en
@@ -218,14 +232,14 @@ function extractCatalog(repoRoot) {
           spell_id: resolved.id,
           name: resolved.name,
           category: subCategory === 'DEFENSIVE' ? 'personal_defensive' : 'semi_defensive',
-          base_cooldown_ms: extractBaseCooldownMs(block),
+          base_cooldown_ms: baseCooldownMs,
         });
       } else if (existing.spec == null && spec != null) {
         existing.spec = spec;
       }
     }
   }
-  return [...byClassAndId.values()];
+  return { catalog: [...byClassAndId.values()], specProfiles: [...specProfiles.values()] };
 }
 
 // ---------- 2) Verificar cada entrada contra Blizzard Game Data antes de subir nada ----------
@@ -263,6 +277,23 @@ async function verifyAgainstBlizzard(catalog, token) {
 
 // ---------- 3) Upsert en Supabase vía PostgREST (service role, salta RLS) ----------
 
+async function upsertSpecProfiles(rows, commitSha) {
+  if (!rows.length) return;
+  const now = new Date().toISOString();
+  const payload = rows.map((row) => ({ ...row, synced_from_commit: commitSha, verified_at: now, updated_at: now }));
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/defensive_spec_profiles?on_conflict=class,spec,spell_id`, {
+    method: 'POST',
+    headers: {
+      apikey: SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`Upsert a defensive_spec_profiles falló: HTTP ${res.status} — ${await res.text()}`);
+}
+
 async function upsertCatalog(rows, commitSha) {
   if (!rows.length) return;
   const payload = rows.map((r) => ({ ...r, synced_from_commit: commitSha, synced_at: new Date().toISOString() }));
@@ -287,15 +318,18 @@ try {
   const commitSha = execSync('git rev-parse HEAD', { cwd: REPO_ROOT }).toString().trim();
   console.error(`Extrayendo del commit ${commitSha}...`);
 
-  const extracted = extractCatalog(REPO_ROOT);
+  const { catalog: extracted, specProfiles } = extractCatalog(REPO_ROOT);
   console.error(`\n${extracted.length} candidatas extraídas del código fuente. Verificando contra Blizzard Game Data...`);
 
   const token = await getBlizzardToken();
   const verified = await verifyAgainstBlizzard(extracted, token);
   console.error(`\n${verified.length}/${extracted.length} verificadas 1:1 (nombre exacto) — solo estas se suben.`);
 
+  const verifiedKeys = new Set(verified.map((row) => `${row.class}|${row.spell_id}`));
+  const verifiedSpecProfiles = specProfiles.filter((row) => verifiedKeys.has(`${row.class}|${row.spell_id}`));
   await upsertCatalog(verified, commitSha);
-  console.error(`\nHecho. cooldown_catalog actualizado con ${verified.length} entradas del commit ${commitSha.slice(0, 8)}.`);
+  await upsertSpecProfiles(verifiedSpecProfiles, commitSha);
+  console.error(`\nHecho. cooldown_catalog actualizado con ${verified.length} entradas y ${verifiedSpecProfiles.length} bases específicas de spec del commit ${commitSha.slice(0, 8)}.`);
 } catch (err) {
   // Fallo limpio y explícito en vez de un stack trace de undici: cooldown_catalog
   // no se toca hasta que el upsert completo funcione (el script no borra nada
