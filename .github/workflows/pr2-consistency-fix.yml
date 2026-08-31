@@ -30,6 +30,17 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Repair temporary fixer escaping
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply-pr2-consistency-fixes.mjs')
+          s = p.read_text()
+          s = s.replace(r"\\`", r"\`")
+          p.write_text(s)
+          PY
+          node --check scripts/apply-pr2-consistency-fixes.mjs
+
       - name: Apply deterministic fixes
         run: node scripts/apply-pr2-consistency-fixes.mjs
 
