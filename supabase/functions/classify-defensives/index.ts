@@ -9,7 +9,7 @@ function todayIso(): string {
 
 const SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
 const CATEGORIES = new Set(['personal_defensive', 'semi_defensive', 'external_defensive', 'utility']);
-const CONFIDENCES = new Set(['high', 'medium', 'low']);
+const CONFIDENCES = new Set<unknown>(['high', 'medium', 'low']);
 const MODIFIER_OPERATIONS = new Set(['subtract_seconds', 'add_seconds', 'multiply', 'set_seconds', 'charges_add']);
 const MODIFIER_CONDITIONS = new Set(['always', 'conditional']);
 
@@ -56,7 +56,7 @@ COOLDOWNS: baseCooldownSeconds SIEMPRE es el cooldown base del hechizo sin talen
 
 SPEC PROFILES: specProfiles solo se usa cuando una spec tiene de verdad cooldown/duración/cargas BASE distintos. NO lo uses simplemente para repetir availableSpecs.
 
-MODIFIERS: investiga talentos/pasivas actuales que cambien timing o cargas. modifierSpellId debe ser el spellId real del talento/pasiva; targetSpellId el del defensivo. condition:"always" si llevar el talento basta para garantizar el cambio; "conditional" si depende de casts, procs, daño recibido, recursos o ejecución durante el combate. value usa SEGUNDOS para subtract_seconds/add_seconds/set_seconds, factor para multiply y número de cargas para charges_add. No incluyas modificadores que solo cambian el porcentaje de DR/absorb/heal si no cambian cooldown, duración o cargas.
+MODIFIERS: investiga talentos/pasivas actuales que cambien timing o cargas tanto para habilidades YA conocidas como para habilidades DESCUBIERTAS. modifierSpellId debe ser el spellId real del talento/pasiva; targetSpellId el del defensivo. condition:"always" si llevar el talento basta para garantizar el cambio; "conditional" si depende de casts, procs, daño recibido, recursos o ejecución durante el combate. value usa SEGUNDOS para subtract_seconds/add_seconds/set_seconds, factor para multiply y número de cargas para charges_add. No incluyas modificadores que solo cambian el porcentaje de DR/absorb/heal si no cambian cooldown, duración o cargas.
 
 CATEGORÍAS:
 ${CATEGORY_GLOSSARY}
@@ -102,8 +102,12 @@ Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE
       "notes": "por qué falta y cómo sirve para sobrevivir",
       "baseCooldownSeconds": number | null,
       "baseDurationSeconds": number | null,
-      "specProfiles": [],
-      "modifiers": []
+      "specProfiles": [
+        { "spec": "spec exacta", "baseCooldownSeconds": number | null, "baseDurationSeconds": number | null, "charges": number, "source": "URL o referencia" }
+      ],
+      "modifiers": [
+        { "modifierSpellId": number, "modifierName": "string", "targetSpellId": number, "specs": string[] | null, "operation": "subtract_seconds" | "add_seconds" | "multiply" | "set_seconds" | "charges_add", "value": number, "perRank": boolean, "condition": "always" | "conditional", "description": "string", "source": "URL o referencia" }
+      ]
     }
   ]
 }
@@ -596,6 +600,8 @@ Deno.serve(async (req: Request) => {
           continue;
         }
 
+        const baseCooldownMs = secondsToMs(entry.baseCooldownSeconds);
+        const baseDurationMs = secondsToMs(entry.baseDurationSeconds);
         const { error: insertError } = await supabase.from('cooldown_catalog').insert({
           class: entry.class,
           spec: availableSpecs.join('/'),
@@ -604,8 +610,8 @@ Deno.serve(async (req: Request) => {
           category: entry.category,
           survival_type: entry.survivalType,
           inferred_survival_type: entry.survivalType,
-          base_cooldown_ms: secondsToMs(entry.baseCooldownSeconds),
-          base_duration_ms: secondsToMs(entry.baseDurationSeconds),
+          base_cooldown_ms: baseCooldownMs,
+          base_duration_ms: baseDurationMs,
           reviewed: false,
           ai_classification: {
             confidence: entry.confidence,
@@ -621,8 +627,6 @@ Deno.serve(async (req: Request) => {
         });
         if (insertError) throw insertError;
 
-        // missingDefensives in v5 are required to include the arrays, so an
-        // empty [] intentionally clears any impossible pre-existing rows.
         await applyReferenceRows(entry.class, entry.spellId, profilesResult.rows, modifiersResult.rows);
         knownSpellIds.add(entry.spellId);
         affectedClasses.add(entry.class);
@@ -633,6 +637,20 @@ Deno.serve(async (req: Request) => {
           specs: availableSpecs,
           category: entry.category,
           survivalType: entry.survivalType,
+        });
+        // Keep the existing Angular result UI useful without requiring a UI
+        // migration: discoveries also appear in the normal "applied" banner.
+        applied.push({
+          spellId: entry.spellId,
+          name: entry.name.trim(),
+          class: entry.class,
+          survivalType: entry.survivalType,
+          confidence: entry.confidence,
+          sources,
+          notes: entry.notes ?? '',
+          baseCooldownMs,
+          baseDurationMs,
+          materialChanged: true,
         });
       }
 
