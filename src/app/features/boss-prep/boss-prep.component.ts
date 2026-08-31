@@ -737,10 +737,25 @@ export class BossPrepComponent {
     }
   }
 
-  /** §"si actualiza un defensivo tendrá también que sacar ahí alguna clase de aviso" (feedback real, 2026-08-31): true si algún defensivo de esta spec se editó DESPUÉS de la asignación más vieja de esta spec — la cascada se generó con datos que ya no son los actuales. */
+  /**
+   * §"si actualiza un defensivo tendrá también que sacar ahí alguna clase
+   * de aviso" (feedback real, 2026-08-31) + bug real encontrado en vivo
+   * (2026-08-31, "el mistweaver no tiene ese defensivo" — Dampen Harm
+   * asignado a Mistweaver 2 minutos ANTES de que se corrigiera
+   * spec_override para excluirla): la comparación de fechas por sí sola no
+   * detectaba esto — solo miraba defensivos que SIGUEN siendo válidos para
+   * la spec, así que un defensivo que dejó de aplicar (spec_override
+   * cambiado, no solo cooldown/duración editados) desaparecía de esa
+   * lista y su updated_at nunca llegaba a compararse. Primero se comprueba
+   * lo más fuerte y objetivo: ¿algún defensivo YA ASIGNADO ya no es
+   * siquiera válido para esta spec? Si es así, es inequívocamente viejo,
+   * sin necesitar comparar fechas.
+   */
   assignmentsStaleFor(cls: string, spec: string): boolean {
     const relevantAssignments = this.assignments().filter((a) => a.class === cls && a.spec === spec);
     if (!relevantAssignments.length) return false;
+    const validSpellIds = new Set(defensivesForSpec(this.cooldownCatalog(), cls, spec).map((cd) => cd.spell_id));
+    if (relevantAssignments.some((a) => !validSpellIds.has(a.defensive_spell_id))) return true;
     const oldestAssignmentEdit = relevantAssignments.map((a) => a.updated_at).sort()[0];
     const catalogEdits = defensivesForSpec(this.cooldownCatalog(), cls, spec)
       .map((cd) => cd.updated_at)
