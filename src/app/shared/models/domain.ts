@@ -377,6 +377,8 @@ export interface CooldownCatalogRow {
   inferred_survival_type: DefensiveSurvivalType | null;
   ai_classification: { confidence: 'high' | 'medium'; sources: string[]; notes: string; classifiedAt: string } | null;
   reviewed: boolean;
+  /** §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31): true = ya no cuenta como defensivo real (rediseñado en un parche posterior) — corrección manual, nunca la toca el extractor de WoWAnalyzer ni un resync. defensivesForSpec/DefensiveCatalogService.listAll() lo filtran. */
+  excluded: boolean;
 }
 
 /**

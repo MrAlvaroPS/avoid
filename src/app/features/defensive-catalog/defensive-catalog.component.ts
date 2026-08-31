@@ -92,6 +92,7 @@ export class DefensiveCatalogComponent {
     applied: { spellId: number; name: string; survivalType: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
+    suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
   } | null>(null);
 
@@ -125,7 +126,7 @@ export class DefensiveCatalogComponent {
 
   async onEdit(
     row: CooldownCatalogRow,
-    patch: Partial<Pick<CooldownCatalogRow, 'survival_type' | 'reviewed' | 'base_cooldown_ms' | 'base_duration_ms' | 'spec_override'>>,
+    patch: Partial<Pick<CooldownCatalogRow, 'survival_type' | 'reviewed' | 'base_cooldown_ms' | 'base_duration_ms' | 'spec_override' | 'excluded'>>,
   ): Promise<void> {
     const className = this.selectedClass();
     if (!className) return;
@@ -143,6 +144,7 @@ export class DefensiveCatalogComponent {
         ...('base_cooldown_ms' in patch ? { baseCooldownMs: patch.base_cooldown_ms } : {}),
         ...('base_duration_ms' in patch ? { baseDurationMs: patch.base_duration_ms } : {}),
         ...('spec_override' in patch ? { specOverride: patch.spec_override } : {}),
+        ...('excluded' in patch ? { excluded: patch.excluded } : {}),
       });
       this.defensives.update((list) => list.map((d) => (d.spell_id === row.spell_id ? { ...d, ...patch, reviewed: patch.reviewed ?? true } : d)));
       // §"se calculan de nuevo?" (feedback real, 2026-08-29) + "el dosier no
@@ -254,6 +256,49 @@ export class DefensiveCatalogComponent {
     void this.onEdit(row, { spec_override: null });
   }
 
+  // §"el greater invisibility del mago ya no es un defensivo... no tengo
+  // opción de quitarlo de ninguna manera" (feedback real, 2026-08-31):
+  // excluir es más consecuente que un toggle cualquiera (deja de contar en
+  // TODA la app — Preparación, defensive_pressure_windows futuros...) —
+  // doble clic en 5s, mismo patrón que requestDeleteAssignment. Restaurar
+  // no lleva confirmación: es la dirección "deshacer", nunca destructiva.
+  confirmingExcludeSpellId = signal<number | null>(null);
+
+  requestToggleExcluded(row: CooldownCatalogRow): void {
+    if (row.excluded) {
+      void this.onEdit(row, { excluded: false });
+      return;
+    }
+    if (this.confirmingExcludeSpellId() === row.spell_id) {
+      void this.onEdit(row, { excluded: true });
+      this.confirmingExcludeSpellId.set(null);
+      return;
+    }
+    this.confirmingExcludeSpellId.set(row.spell_id);
+    setTimeout(() => {
+      if (this.confirmingExcludeSpellId() === row.spell_id) this.confirmingExcludeSpellId.set(null);
+    }, 5000);
+  }
+
+  /** §sugerencia de la IA (stillDefensive:false) — nunca se aplica sola, este es el único sitio que de verdad escribe `excluded`. confirmedSuggestions solo es UI local (qué botón ya se pulsó en esta sesión), la fuente de verdad sigue siendo cooldown_catalog.excluded. */
+  confirmedSuggestions = signal<Set<number>>(new Set());
+
+  async confirmSuggestedExclusion(s: { spellId: number; name: string; class: string; notes: string }): Promise<void> {
+    if (!s.class || this.confirmedSuggestions().has(s.spellId)) return;
+    this.savingSpellId.set(s.spellId);
+    this.error.set(null);
+    try {
+      const res = await this.edgeFunctions.saveDefensiveEdit({ class: s.class, spellId: s.spellId, excluded: true, reviewed: true });
+      this.confirmedSuggestions.update((set) => new Set(set).add(s.spellId));
+      if (this.selectedClass() === s.class) this.defensives.update((list) => list.map((d) => (d.spell_id === s.spellId ? { ...d, excluded: true, reviewed: true } : d)));
+      if (res.pullIds?.length) void this.runReanalysisQueue(s.name, res.pullIds);
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.savingSpellId.set(null);
+    }
+  }
+
   specsForClassOf(row: CooldownCatalogRow): string[] {
     return specsForClass(row.class);
   }
@@ -329,6 +374,7 @@ export class DefensiveCatalogComponent {
         applied: res.applied,
         skippedLowConfidence: res.skippedLowConfidence,
         skippedUndetermined: res.skippedUndetermined,
+        suggestedExclusions: res.suggestedExclusions,
         invalid: res.invalid,
       });
     } catch (err) {

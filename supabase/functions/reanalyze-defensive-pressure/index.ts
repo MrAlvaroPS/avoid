@@ -101,7 +101,8 @@ Deno.serve(async (req: Request) => {
 
     const { data: catalogRows } = await supabase
       .from('cooldown_catalog')
-      .select('class,spec,spec_override,spell_id,name,category,base_cooldown_ms,base_duration_ms,survival_type');
+      .select('class,spec,spec_override,spell_id,name,category,base_cooldown_ms,base_duration_ms,survival_type')
+      .eq('excluded', false);
     const cooldownCatalog: CooldownCatalog = (catalogRows ?? []).map((r) => ({
       spellId: r.spell_id,
       name: r.name,

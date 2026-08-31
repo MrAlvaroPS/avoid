@@ -25,7 +25,15 @@ export function defensiveSpecApplies(cd: Pick<CooldownCatalogRow, 'spec' | 'spec
     .includes(playerSpec);
 }
 
-/** Catálogo completo -> lo que de verdad puede llevar esta class+spec (sin resolver talentos aquí, a diferencia de defensivesForClass en el servidor — esta pantalla es de curación/planificación, no de un pull concreto con un build real). */
+/**
+ * Catálogo completo -> lo que de verdad puede llevar esta class+spec (sin
+ * resolver talentos aquí, a diferencia de defensivesForClass en el
+ * servidor — esta pantalla es de curación/planificación, no de un pull
+ * concreto con un build real). Filtra `excluded` aquí también (no solo en
+ * DefensiveCatalogService.listAll()) por si algún día se pasa un catálogo
+ * sin filtrar previamente — más barato blindarlo aquí que confiar en que
+ * cada caller ya lo hizo.
+ */
 export function defensivesForSpec(catalog: CooldownCatalogRow[], wclClass: string, spec: string): CooldownCatalogRow[] {
-  return catalog.filter((cd) => cd.class === wclClass && defensiveSpecApplies(cd, spec));
+  return catalog.filter((cd) => cd.class === wclClass && !cd.excluded && defensiveSpecApplies(cd, spec));
 }

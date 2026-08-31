@@ -271,6 +271,8 @@ export class EdgeFunctionsService {
     applied: { spellId: number; name: string; survivalType: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
+    /** §"que lo sugiera, no que lo borre solo" (feedback real, 2026-08-31): la IA cree que ya no es un defensivo real — nunca se aplica sola, un humano confirma fila por fila con el botón "excluir" manual. */
+    suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
   }> {
     return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
@@ -301,6 +303,8 @@ export class EdgeFunctionsService {
     baseDurationMs?: number | null;
     /** Corrección manual de qué specs tienen este defensivo — ver spec_override en cooldown_catalog. undefined = no tocar, null = borrar la corrección. */
     specOverride?: string[] | null;
+    /** §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31) — ver excluded en cooldown_catalog. undefined = no tocar. */
+    excluded?: boolean;
   }): Promise<{ ok: true; pullIds?: string[] }> {
     return this.invoke('save-defensive-edit', edit);
   }

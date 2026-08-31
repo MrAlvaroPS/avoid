@@ -115,6 +115,7 @@ Deno.serve(async (req: Request) => {
       .from('cooldown_catalog')
       .select('spell_id, base_duration_ms')
       .eq('survival_type', 'mitigation')
+      .eq('excluded', false)
       .not('base_duration_ms', 'is', null);
     const mitigationDurationBySpellId = new Map<number, number>((mitigationRows ?? []).map((r) => [r.spell_id as number, r.base_duration_ms as number]));
 

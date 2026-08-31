@@ -60,7 +60,9 @@ function buildSystemPrompt(className: string | null): string {
     : `de TODAS las clases de World of Warcraft retail (la lista trae defensivos de varias clases a la vez — cada entrada indica su "class"; investiga cada habilidad en el contexto de SU clase real, no asumas que todas comparten mecanismo)`;
   return `Eres un investigador experto en World of Warcraft retail. HOY es ${todayIso()} — contrasta cada dato contra el PARCHE VIGENTE HOY, nunca contra un parche/expansión anterior que puedas recordar de tu entrenamiento: cooldowns, duraciones y hasta el propio mecanismo de una habilidad cambian entre parches, y una respuesta desactualizada falsea los datos tanto como una inventada (§"hay varios que son viejos y están falseando datos", feedback real). Si una fuente que consultas no deja claro de qué parche es, prioriza la más reciente y dilo en "sources". Tu tarea es, para cada defensivo/cooldown de supervivencia ${scope}: (1) clasificar qué le hace al daño entrante durante una mecánica de raid, y (2) resolver su cooldown base y duración del efecto en segundos — investigando en fuentes reales, A DÍA DE HOY (Wowhead —tooltip, que trae "Cooldown" y "Lasts X sec" como números concretos—, Icy Veins, Warcraft Logs, la documentación oficial de Blizzard). Busca por el NOMBRE de la habilidad (y su "class") — el spellId solo sirve para identificarla en tu respuesta.
 
-Para CADA habilidad, contrasta al menos una fuente real (idealmente el tooltip de Wowhead, que ya trae el cooldown y la duración como números literales cuando existen). Si el efecto de supervivencia es ambiguo o mezcla varios mecanismos sin que ninguno domine, marca confidence:"low" (o survivalType:null si de verdad no puedes decidir) — un humano revisará cualquier respuesta con confidence "low".
+Para CADA habilidad, contrasta al menos DOS fuentes reales (idealmente el tooltip de Wowhead, que ya trae el cooldown y la duración como números literales cuando existen). Si el efecto de supervivencia es ambiguo o mezcla varios mecanismos sin que ninguno domine, marca confidence:"low" (o survivalType:null si de verdad no puedes decidir) — un humano revisará cualquier respuesta con confidence "low".
+
+Antes de clasificar, comprueba primero si la habilidad SIGUE siendo un defensivo de verdad HOY: algunas se han rediseñado entre parches y perdieron por completo el efecto de mitigación/absorción/curación/emergencia que tenían antes (ej. pasaron a ser puramente utilidad, movilidad, o se quitaron del juego). Si es el caso, pon "stillDefensive": false y explica en "notes" qué es ahora en su lugar (o que ya no existe) — no fuerces un survivalType solo por mantenerla clasificada como si nada. Si sigue siendo un defensivo real (la inmensa mayoría de los casos), pon "stillDefensive": true y clasifícala normalmente.
 
 Sobre baseCooldownSeconds/baseDurationSeconds: usa el número BASE del tooltip (sin contar talentos que lo reduzcan/aumenten — ese ajuste ya se calcula aparte). null si la habilidad no tiene cooldown propio (ej. un recurso que se genera pasivamente) o si de verdad varía sin un valor base fijo (ej. depende 100% de haste sin ningún número de referencia). No inventes un número si no lo encontraste en una fuente real — currentBaseCooldownMs/currentBaseDurationMs en la lista de abajo ya te dicen qué campos siguen sin resolver (null) en nuestra base de datos, priorízalos, pero también corrige un valor existente si contrastando la fuente ves que está mal.
 
@@ -71,16 +73,17 @@ Responde ÚNICAMENTE con JSON válido (sin texto, sin markdown, sin backticks): 
 [
   {
     "spellId": number,
+    "stillDefensive": boolean,
     "survivalType": "mitigation" | "absorption" | "sustain" | "emergency" | null,
     "confidence": "high" | "medium" | "low",
     "sources": string[],
-    "notes": "string breve explicando el mecanismo concreto (qué le hace al daño, no solo qué hace la habilidad)",
+    "notes": "string breve explicando el mecanismo concreto (qué le hace al daño, no solo qué hace la habilidad) — si stillDefensive es false, explica aquí qué es la habilidad ahora en su lugar",
     "baseCooldownSeconds": number | null,
     "baseDurationSeconds": number | null
   }
 ]
 
-Antes de responder, comprueba habilidad por habilidad que cada objeto contiene literalmente las siete claves. Responde solo con el array JSON.`;
+Antes de responder, comprueba habilidad por habilidad que cada objeto contiene literalmente las ocho claves. Responde solo con el array JSON.`;
 }
 
 interface DefensiveForPrompt {
@@ -95,6 +98,7 @@ interface DefensiveForPrompt {
 
 interface ClassificationEntry {
   spellId: number;
+  stillDefensive?: boolean;
   survivalType: string | null;
   confidence: 'high' | 'medium' | 'low';
   sources: string[];
@@ -156,8 +160,8 @@ Deno.serve(async (req: Request) => {
         currentInferredSurvivalType: d.inferred_survival_type,
       }));
       const systemPrompt = buildSystemPrompt(body.class ?? null);
-      const userMessage = `Alcance: ${scopeLabel}\nDefensivos a clasificar (${list.length}):\n${JSON.stringify(list, null, 2)}\n\nRECORDATORIO FINAL: devuelve exactamente ${list.length} objetos, uno por cada spellId de la lista, con las cinco claves spellId/survivalType/confidence/sources/notes en todos. No omitas ninguno.`;
-      return jsonResponse({ ok: true, promptVersion: 2, systemPrompt, userMessage, defensiveCount: list.length });
+      const userMessage = `Alcance: ${scopeLabel}\nDefensivos a clasificar (${list.length}):\n${JSON.stringify(list, null, 2)}\n\nRECORDATORIO FINAL: devuelve exactamente ${list.length} objetos, uno por cada spellId de la lista, con las ocho claves spellId/stillDefensive/survivalType/confidence/sources/notes/baseCooldownSeconds/baseDurationSeconds en todos. No omitas ninguno.`;
+      return jsonResponse({ ok: true, promptVersion: 3, systemPrompt, userMessage, defensiveCount: list.length });
     }
 
     if (body.action === 'submit') {
@@ -176,6 +180,15 @@ Deno.serve(async (req: Request) => {
       const skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[] = [];
       const skippedUndetermined: { spellId: number; name: string }[] = [];
       const invalid: { spellId: unknown; reason: string }[] = [];
+      // §"ojo que el borrar del prompt que venga de defensivos no sea
+      // automático, que lo sugiera, vaya a ser que ahora perdamos
+      // consistencia por un mal análisis de IA" (feedback real, 2026-08-31):
+      // a diferencia de survivalType (que SÍ se aplica solo con confidence
+      // alta/media, ya asumido para esta pantalla), excluir un defensivo del
+      // catálogo entero es más irreversible en la práctica — nunca se toca
+      // `excluded` aquí, solo se junta la sugerencia para que un humano la
+      // confirme fila por fila (mismo botón "excluir" manual).
+      const suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[] = [];
 
       for (const raw of parsed) {
         const entry = raw as Partial<ClassificationEntry>;
@@ -183,7 +196,12 @@ Deno.serve(async (req: Request) => {
           invalid.push({ spellId: entry.spellId, reason: 'spellId no reconocido en esta clase' });
           continue;
         }
-        const name = defensives.find((d) => d.spell_id === entry.spellId)?.name ?? `#${entry.spellId}`;
+        const matched = defensives.find((d) => d.spell_id === entry.spellId);
+        const name = matched?.name ?? `#${entry.spellId}`;
+        if (entry.stillDefensive === false) {
+          suggestedExclusions.push({ spellId: entry.spellId, name, class: matched?.class ?? '', notes: entry.notes ?? '' });
+          continue;
+        }
         if (entry.survivalType == null) {
           skippedUndetermined.push({ spellId: entry.spellId, name });
           continue;
@@ -238,7 +256,7 @@ Deno.serve(async (req: Request) => {
         if (error) throw error;
       }
 
-      return jsonResponse({ ok: true, applied, skippedLowConfidence, skippedUndetermined, invalid });
+      return jsonResponse({ ok: true, applied, skippedLowConfidence, skippedUndetermined, suggestedExclusions, invalid });
     }
 
     return jsonResponse({ ok: false, error: `action inválida: ${body.action}` }, 400);

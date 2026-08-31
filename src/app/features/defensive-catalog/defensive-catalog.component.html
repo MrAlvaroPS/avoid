@@ -93,6 +93,22 @@
             @if (r.skippedUndetermined.length) {
               <p class="result-line meta">— {{ r.skippedUndetermined.length }} sin determinar: {{ r.skippedUndetermined.map((s) => s.name).join(', ') }}</p>
             }
+            @if (r.suggestedExclusions.length) {
+              <!-- §"que lo sugiera, no que lo borre solo" (feedback real, 2026-08-31) -->
+              <div class="suggested-exclusions">
+                <p class="result-line result-warn">⚠ La IA cree que {{ r.suggestedExclusions.length }} ya no {{ r.suggestedExclusions.length === 1 ? 'es un defensivo real' : 'son defensivos reales' }} — revisa y confirma una a una:</p>
+                @for (s of r.suggestedExclusions; track s.spellId) {
+                  <div class="suggested-exclusion-row">
+                    <span><strong>{{ s.name }}</strong> ({{ classDisplayName(s.class) }}) — {{ s.notes }}</span>
+                    @if (confirmedSuggestions().has(s.spellId)) {
+                      <span class="confirmed-note">✓ excluida</span>
+                    } @else {
+                      <button type="button" class="delete-btn" (click)="confirmSuggestedExclusion(s)">🗑 confirmar exclusión</button>
+                    }
+                  </div>
+                }
+              </div>
+            }
             @if (r.invalid.length) {
               <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada.</p>
             }
@@ -163,11 +179,12 @@
                 <th title="Qué le hace al daño entrante: mitigation/absorption/sustain/emergency">Tipo de supervivencia</th>
                 <th title="Cooldown y duración base, si el extractor pudo resolverlos">CD / Duración</th>
                 <th>Revisado</th>
+                <th title="Cuando una habilidad se rediseñó y ya no funciona como defensivo en el parche actual">Ya no es defensivo</th>
               </tr>
             </thead>
             <tbody>
               @for (d of defensives(); track d.spell_id) {
-                <tr [class.saving]="savingSpellId() === d.spell_id" [class.reviewed]="d.reviewed">
+                <tr [class.saving]="savingSpellId() === d.spell_id" [class.reviewed]="d.reviewed" [class.excluded]="d.excluded">
                   <td>
                     <!-- Sin columna de descripción propia (cooldown_catalog no la tiene) — el tooltip de Wowhead del enlace de arriba ya trae el texto real del hechizo al pasar el ratón. -->
                     <app-wowhead-link type="spell" [id]="d.spell_id" class="name"><span class="name">{{ d.name }}</span></app-wowhead-link>
@@ -255,6 +272,18 @@
                   </td>
                   <td>
                     <input type="checkbox" [checked]="d.reviewed" (change)="onEdit(d, { reviewed: $any($event.target).checked })" />
+                  </td>
+                  <td>
+                    <!-- §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31) -->
+                    <button type="button" class="delete-btn" [class.confirming]="confirmingExcludeSpellId() === d.spell_id" (click)="requestToggleExcluded(d)">
+                      @if (d.excluded) {
+                        ↺ restablecer como defensivo
+                      } @else if (confirmingExcludeSpellId() === d.spell_id) {
+                        ¿seguro?
+                      } @else {
+                        🗑 excluir
+                      }
+                    </button>
                   </td>
                 </tr>
               }
