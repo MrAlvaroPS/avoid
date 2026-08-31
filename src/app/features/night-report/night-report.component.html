@@ -28,6 +28,15 @@
         <button type="button" class="update-report-btn" [disabled]="generatingFullReport()" (click)="onUpdateFullReport()">
           @if (generatingFullReport()) { <span class="button-spinner" aria-hidden="true"></span> Actualizando… } @else { ↻ Actualizar }
         </button>
+        <button
+          type="button"
+          class="secondary-button"
+          [disabled]="recalculatingAll()"
+          (click)="onRecalculateAll()"
+          title="Recalcula ejecución de la noche, Fiabilidad y el informe entero contra los datos actuales del catálogo (defensivos, mecánicas...), saltándose todos los cachés."
+        >
+          @if (recalculatingAll()) { <span class="button-spinner" aria-hidden="true"></span> Recalculando todo… } @else { 🔄 Recalcular todo }
+        </button>
         @if (fullReport()) {
           <button type="button" class="secondary-button infographic-button" (click)="infographicOpen.set(true)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V9m5 9V5m5 13v-6m5 6V3"/></svg>
@@ -48,6 +57,9 @@
 
     @if (fullReportError(); as fe) {
       <p class="full-report-error" role="alert">No se pudo preparar el informe: {{ fe }}</p>
+    }
+    @if (recalculateAllError(); as re) {
+      <p class="full-report-error" role="alert">No se pudo recalcular todo: {{ re }}</p>
     }
 
     @if (fullReport()?.report; as r) {

@@ -284,6 +284,36 @@ export class NightReportComponent {
     await this.generateFullReport(true);
   }
 
+  /**
+   * §"no tenemos un force refresh en ningún lado... botón en el resumen de
+   * noche completa que sirva para recalcular el resumen completo y su
+   * infografía con los nuevos parámetros" (feedback real, 2026-08-31):
+   * "Actualizar" (arriba) solo fuerza generate-night-full-report — deja
+   * intactos nightScores (NightScoreCacheService) y el snapshot de roster/
+   * Fiabilidad (RosterSnapshotCacheService), los dos con su propio caché de
+   * fingerprint que "Actualizar" nunca tocaba. Este botón fuerza los tres a
+   * la vez — la vía explícita para cuando una corrección en Ajustes
+   * (defensivo, mecánica, tipo de habilidad...) tiene que verse reflejada
+   * ya, sin esperar a que el fingerprint de cada caché se dé cuenta solo.
+   */
+  recalculatingAll = signal(false);
+  recalculateAllError = signal<string | null>(null);
+
+  async onRecalculateAll(): Promise<void> {
+    if (this.recalculatingAll()) return;
+    this.recalculatingAll.set(true);
+    this.recalculateAllError.set(null);
+    try {
+      const code = this.reportCode();
+      await Promise.all([this.loadRosterSnapshot(true), this.loadNightScores(code, this.attendingPlayers(), true)]);
+      await this.generateFullReport(true);
+    } catch (err) {
+      this.recalculateAllError.set(errorMessage(err));
+    } finally {
+      this.recalculatingAll.set(false);
+    }
+  }
+
   private async generateFullReport(force: boolean): Promise<void> {
     if (this.generatingFullReport()) return;
     this.generatingFullReport.set(true);
@@ -503,15 +533,15 @@ export class NightReportComponent {
     return [...d.attendingMain.map((p) => build(p, false)), ...d.attendingTrial.map((p) => build(p, true))];
   });
 
-  private async loadRosterSnapshot(): Promise<void> {
-    const cached = this.rosterSnapshotCache.read();
+  private async loadRosterSnapshot(force = false): Promise<void> {
+    const cached = force ? null : this.rosterSnapshotCache.read();
     if (cached) {
       this.rosterPlayers.set(cached.players);
       this.rosterOffenders.set(cached.offenders);
     }
     try {
       const fingerprint = await this.rosterSnapshotCache.fingerprint();
-      if (cached?.fingerprint === fingerprint) return;
+      if (!force && cached?.fingerprint === fingerprint) return;
       const [players, offenders] = await Promise.all([
         this.reliabilityService.listPlayerReliability(),
         this.offendersService.listRepeatOffenders().catch(() => []),
@@ -525,7 +555,7 @@ export class NightReportComponent {
     }
   }
 
-  private async loadNightScores(code: string, players: NightAttendee[]): Promise<void> {
+  private async loadNightScores(code: string, players: NightAttendee[], force = false): Promise<void> {
     if (!players.length) {
       this.nightScores.set(new Map());
       return;
@@ -539,22 +569,28 @@ export class NightReportComponent {
     // los pulls de este report concreto. Una vez la noche está cerrada, no
     // vuelve a tocar Supabase para esto nunca más.
     let fingerprint: string | null = null;
-    try {
-      fingerprint = await this.nightScoreCache.fingerprint(code);
-      const cached = this.nightScoreCache.read(code);
-      if (cached && cached.fingerprint === fingerprint) {
-        this.nightScores.set(new Map(Object.entries(cached.scores)));
-        return;
+    if (!force) {
+      try {
+        fingerprint = await this.nightScoreCache.fingerprint(code);
+        const cached = this.nightScoreCache.read(code);
+        if (cached && cached.fingerprint === fingerprint) {
+          this.nightScores.set(new Map(Object.entries(cached.scores)));
+          return;
+        }
+      } catch {
+        // sigue al cálculo completo si el fingerprint ligero falla — nunca deja la tabla sin números por esto.
       }
-    } catch {
-      // sigue al cálculo completo si el fingerprint ligero falla — nunca deja la tabla sin números por esto.
     }
     const entries = await Promise.all(
       players.map(async (p): Promise<[string, number | null]> => {
         try {
           // includeEvolution=false: no hace falta la comparación con la
           // noche anterior (que recalcula TODO otra vez) solo para leer nightScore.
-          const summary = await this.nightPlayerSummaryService.load(code, p.name, false);
+          // force=true también salta el caché INTERNO de NightPlayerSummaryService
+          // (forceRefresh) — sin esto, "Recalcular todo" recalculaba este
+          // caché de arriba pero cada player.load() por debajo seguía
+          // sirviendo su propio snapshot cacheado, sin cambiar nada de verdad.
+          const summary = await this.nightPlayerSummaryService.load(code, p.name, false, force);
           return [p.name, summary.nightScore];
         } catch {
           return [p.name, null];
@@ -562,6 +598,7 @@ export class NightReportComponent {
       }),
     );
     this.nightScores.set(new Map(entries));
+    fingerprint ??= await this.nightScoreCache.fingerprint(code).catch(() => null);
     if (fingerprint) this.nightScoreCache.write(code, fingerprint, Object.fromEntries(entries));
   }
 
