@@ -32,6 +32,18 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 // boss_mechanics_candidates para todo lo demás: si un humano ya puso
 // requires_defensive a mano (requires_defensive_source='manual_override'),
 // un resync nunca lo pisa — ver el bucle de abajo.
+//
+// §"¿pico instantáneo o también un sombrero con ventana de tiempo? Si
+// durante todo el combate se sufre daño cada 2s no sirve de nada asignar
+// defensivo" (feedback real, 2026-08-31): confirmado en real (Mutilated
+// Gash/Ula'tek's Presence/Viscous Cyst, las 3 responsibility healer/raid —
+// patrón de DoT/bleed, no de golpe seco) que tomar la mediana de cada HIT
+// suelto infravalora una ventana de varios ticks. Los hits del mismo
+// objetivo se agrupan por hueco de tiempo (OCCURRENCE_GAP_MS) en
+// "ocurrencias" y se suman dentro de cada una — un pico de un solo hit
+// sigue siendo un cluster de 1, sin cambio; una ocurrencia que se alarga
+// más de MAX_OCCURRENCE_SPAN_MS se descarta entera (esa es la trampa: daño
+// repartido sin fin por todo el combate no es una ventana real).
 
 interface SyncRequest {
   bossId: string; // encounterID de WCL, como texto — igual que sync-boss-mechanics.
@@ -49,6 +61,17 @@ const REFERENCE_COUNT_BY_DIFFICULTY: Record<string, number> = { Normal: 8, Heroi
 const DEFAULT_REFERENCE_COUNT = 15;
 const REFERENCE_CONCURRENCY = 4;
 const MIN_REFERENCE_SAMPLE_FIGHTS = 5; // mismo umbral que MIN_REFERENCE_SAMPLE en _shared/mechanic-severity.ts — no un número nuevo inventado
+
+// §"¿pico instantáneo o también sombrero con ventana?" (feedback real,
+// 2026-08-31): hits del mismo objetivo separados ≤8s se tratan como la
+// MISMA ventana/ocurrencia (un DoT/bleed tickeando), se suman entre sí —
+// más separados, son ocurrencias distintas de la mecánica.
+const OCCURRENCE_GAP_MS = 8000;
+// Una "ocurrencia" que se alarga más de esto ya no es una ventana real —
+// es daño repartido por todo el combate (la trampa que señalaba el
+// feedback: "si cada 2s durante todo el combate, no sirve de nada asignar
+// defensivo") — se descarta esa muestra en vez de dejarla colar como pico.
+const MAX_OCCURRENCE_SPAN_MS = 30000;
 
 function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
@@ -226,19 +249,64 @@ Deno.serve(async (req: Request) => {
             mitigationCastsBySource.get(c.sourceID)!.push({ timestamp: c.timestamp, spellId: c.abilityGameID });
           }
 
+          // §"¿hablamos de un pico instantáneo o también de un sombrero con
+          // ventana de tiempo? Si durante todo el combate se sufre daño
+          // cada 2s no sirve de nada asignar defensivo" (feedback real,
+          // 2026-08-31): tomar la mediana de cada HIT suelto infravalora un
+          // bleed/DoT que tickea varias veces en una ventana corta (cada
+          // tick individual parece "pequeño" aunque la ventana completa sea
+          // peligrosa) — verificado en real con Mutilated Gash/Ula'tek's
+          // Presence/Viscous Cyst (las 3 con responsibility healer/raid,
+          // patrón de DoT, no de golpe seco). La corrección: agrupar los
+          // hits de un MISMO objetivo por hueco de tiempo (≤GAP = misma
+          // "ocurrencia"/sombrero, como una joroba real de la gráfica —
+          // mismo espíritu que detectDamageWindows, aplicado a la
+          // secuencia dispersa de hits de esta mecánica en vez de al buckets
+          // denso del gráfico) y sumar DENTRO de cada ocurrencia — un solo
+          // pico instantáneo sigue siendo un cluster de 1 hit, sin cambio
+          // de comportamiento para esos. MAX_OCCURRENCE_SPAN_MS es la
+          // trampa que señalaba el feedback: un "cluster" que se alarga más
+          // de eso ya no es una ventana real, es daño repartido por todo el
+          // combate (encadenado por huecos cortos sin fin) — se descarta
+          // esa muestra entera en vez de dejar que un número gigante y
+          // engañoso se cuele como "mediana".
           let qualifiedThisBundle = false;
+          const hitsByTarget = new Map<number, { timestamp: number; raw: number }[]>();
           for (const hit of bundle.damageTaken) {
             if (typeof hit.abilityGameID !== 'number' || !realIds.includes(hit.abilityGameID)) continue;
             if (typeof hit.amount !== 'number' || typeof hit.targetID !== 'number' || typeof hit.timestamp !== 'number') continue;
             qualifiedThisBundle = true;
             const raw = hit.amount + (hit.absorbed ?? 0);
             if (raw <= 0) continue;
-            const targetCasts = mitigationCastsBySource.get(hit.targetID) ?? [];
-            const mitigationActive = targetCasts.some((cast) => {
-              const duration = mitigationDurationBySpellId.get(cast.spellId)!;
-              return cast.timestamp <= hit.timestamp! && hit.timestamp! - cast.timestamp <= duration;
-            });
-            (mitigationActive ? mitigated : unmitigated).push(raw);
+            if (!hitsByTarget.has(hit.targetID)) hitsByTarget.set(hit.targetID, []);
+            hitsByTarget.get(hit.targetID)!.push({ timestamp: hit.timestamp, raw });
+          }
+          for (const [targetId, hits] of hitsByTarget) {
+            hits.sort((a, b) => a.timestamp - b.timestamp);
+            const targetCasts = mitigationCastsBySource.get(targetId) ?? [];
+            const mitigationActiveAt = (atMs: number) =>
+              targetCasts.some((cast) => {
+                const duration = mitigationDurationBySpellId.get(cast.spellId)!;
+                return cast.timestamp <= atMs && atMs - cast.timestamp <= duration;
+              });
+            let clusterStart = hits[0].timestamp;
+            let clusterLast = hits[0].timestamp;
+            let clusterSum = 0;
+            const flush = () => {
+              if (clusterSum <= 0) return;
+              if (clusterLast - clusterStart > MAX_OCCURRENCE_SPAN_MS) return; // daño repartido por todo el combate, no una ventana real — se descarta, no se usa como muestra
+              (mitigationActiveAt(clusterStart) ? mitigated : unmitigated).push(clusterSum);
+            };
+            for (const hit of hits) {
+              if (hit.timestamp - clusterLast > OCCURRENCE_GAP_MS) {
+                flush();
+                clusterStart = hit.timestamp;
+                clusterSum = 0;
+              }
+              clusterSum += hit.raw;
+              clusterLast = hit.timestamp;
+            }
+            flush();
           }
           if (qualifiedThisBundle) sampledFights++;
 

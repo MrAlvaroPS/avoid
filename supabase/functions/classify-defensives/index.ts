@@ -10,12 +10,19 @@ import { errorMessage } from '../_shared/error-message.ts';
 // vuelta aquí. Acotado SIEMPRE a una clase concreta (nunca mezcla clases),
 // igual que classify-mechanics nunca mezcla bosses+dificultad.
 //
-// No hay resync: a diferencia de category/responsibility/avoidable de
-// mecánicas, survival_type NUNCA se copia dentro de player_pull_records ni
-// pull_mechanic_events — defensive_casts/DefensiveOption solo guardan
-// spellId/name/status. Cualquier pantalla que quiera mostrar el tipo lo
-// cruza en el momento de leer contra cooldown_catalog por spell_id, así que
-// no hay snapshot histórico que quede desactualizado.
+// §corrección (2026-08-31): el comentario que había aquí decía "survival_type
+// nunca se copia... no hay snapshot que quede desactualizado" — FALSO,
+// verificado en real (Ardent Defender, tank de Paladin): defensive_pressure_
+// windows.options SÍ copia survivalType al analizar/reanalizar un pull (ver
+// evaluateWindowCoverage en damage-pressure-windows.ts), y de ahí sale si una
+// ventana sin usar cuenta como fallo. save-defensive-edit ya dispara
+// reanálisis al cambiar survival_type (no solo cooldown/duración) — ver ese
+// fichero para el porqué. reset-class-defensives (botón "restablecer
+// clasificación" en esta pantalla) también lo dispara, mismo motivo.
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
 
@@ -51,7 +58,7 @@ function buildSystemPrompt(className: string | null): string {
   const scope = className
     ? `de la clase "${className}"`
     : `de TODAS las clases de World of Warcraft retail (la lista trae defensivos de varias clases a la vez — cada entrada indica su "class"; investiga cada habilidad en el contexto de SU clase real, no asumas que todas comparten mecanismo)`;
-  return `Eres un investigador experto en World of Warcraft retail. Tu tarea es, para cada defensivo/cooldown de supervivencia ${scope}: (1) clasificar qué le hace al daño entrante durante una mecánica de raid, y (2) resolver su cooldown base y duración del efecto en segundos — investigando en fuentes reales (Wowhead —tooltip, que trae "Cooldown" y "Lasts X sec" como números concretos—, Icy Veins, Warcraft Logs, la documentación oficial de Blizzard). Busca por el NOMBRE de la habilidad (y su "class") — el spellId solo sirve para identificarla en tu respuesta.
+  return `Eres un investigador experto en World of Warcraft retail. HOY es ${todayIso()} — contrasta cada dato contra el PARCHE VIGENTE HOY, nunca contra un parche/expansión anterior que puedas recordar de tu entrenamiento: cooldowns, duraciones y hasta el propio mecanismo de una habilidad cambian entre parches, y una respuesta desactualizada falsea los datos tanto como una inventada (§"hay varios que son viejos y están falseando datos", feedback real). Si una fuente que consultas no deja claro de qué parche es, prioriza la más reciente y dilo en "sources". Tu tarea es, para cada defensivo/cooldown de supervivencia ${scope}: (1) clasificar qué le hace al daño entrante durante una mecánica de raid, y (2) resolver su cooldown base y duración del efecto en segundos — investigando en fuentes reales, A DÍA DE HOY (Wowhead —tooltip, que trae "Cooldown" y "Lasts X sec" como números concretos—, Icy Veins, Warcraft Logs, la documentación oficial de Blizzard). Busca por el NOMBRE de la habilidad (y su "class") — el spellId solo sirve para identificarla en tu respuesta.
 
 Para CADA habilidad, contrasta al menos una fuente real (idealmente el tooltip de Wowhead, que ya trae el cooldown y la duración como números literales cuando existen). Si el efecto de supervivencia es ambiguo o mezcla varios mecanismos sin que ninguno domine, marca confidence:"low" (o survivalType:null si de verdad no puedes decidir) — un humano revisará cualquier respuesta con confidence "low".
 

@@ -60,6 +60,11 @@ export class DefensiveCatalogComponent {
    * y de paso se puede enseñar el progreso real en vez de un número mudo. */
   lastReanalysis = signal<{ spellName: string; total: number; done: number; failed: number; running: boolean } | null>(null);
 
+  /** §"botón... para limpiar sus defensivos y volver a calcularlos con el prompt, porque alguno se desactualiza" (feedback real, 2026-08-31) */
+  confirmingResetClassId = signal<string | null>(null);
+  resettingClass = signal(false);
+  lastClassReset = signal<{ className: string; resetCount: number } | null>(null);
+
   // §"un desplegable para poner el tipo de defensivo que es (que también
   // deberá rellenarse solo o a través de un prompt)" (feedback real): mismo
   // patrón de dos pasos que el panel de IA de manifest.component.ts —
@@ -172,6 +177,35 @@ export class DefensiveCatalogComponent {
       this.lastReanalysis.set({ spellName, total: pullIds.length, done, failed, running: true });
     }
     this.lastReanalysis.set({ spellName, total: pullIds.length, done, failed, running: false });
+  }
+
+  /** Doble clic en 5s, mismo patrón que requestDeleteAssignment/discord-settings.component.ts. */
+  requestResetClassDefensives(className: string): void {
+    if (this.confirmingResetClassId() === className) {
+      void this.confirmResetClassDefensives(className);
+      return;
+    }
+    this.confirmingResetClassId.set(className);
+    setTimeout(() => {
+      if (this.confirmingResetClassId() === className) this.confirmingResetClassId.set(null);
+    }, 5000);
+  }
+
+  private async confirmResetClassDefensives(className: string): Promise<void> {
+    this.confirmingResetClassId.set(null);
+    this.resettingClass.set(true);
+    this.error.set(null);
+    this.lastClassReset.set(null);
+    try {
+      const res = await this.edgeFunctions.resetClassDefensives(className);
+      this.lastClassReset.set({ className, resetCount: res.resetCount });
+      if (this.selectedClass() === className) await this.loadDefensives();
+      if (res.pullIds.length) void this.runReanalysisQueue(`${classDisplayName(className)} (clase entera)`, res.pullIds);
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.resettingClass.set(false);
+    }
   }
 
   // §"no puedo editar el campo de cd (poder editarlo para que sea en

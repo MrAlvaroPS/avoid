@@ -305,6 +305,11 @@ export class EdgeFunctionsService {
     return this.invoke('save-defensive-edit', edit);
   }
 
+  /** §"botón en ajustes → defensivos en una clase para limpiar sus defensivos y volver a calcularlos con el prompt" (feedback real, 2026-08-31): borra survival_type/reviewed/ai_classification/inferred_survival_type de TODA la clase (nunca spec_override ni CD/duración) — deja la clase en "sin clasificar" para reclasificar con el prompt actualizado. */
+  async resetClassDefensives(className: string): Promise<{ ok: true; resetCount: number; pullIds: string[] }> {
+    return this.invoke('reset-class-defensives', { class: className });
+  }
+
   /**
    * Recalcula defensive_pressure_windows de UN pull ya importado contra el
    * catálogo/talentos actuales — mismo patrón que reanalyzeWipeCall, pero

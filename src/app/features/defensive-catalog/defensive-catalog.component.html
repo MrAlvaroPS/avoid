@@ -144,7 +144,14 @@
                las otras 12 clases otra vez). -->
           <div class="classify-bar">
             <button type="button" class="classify-toggle" (click)="openClassifyPanel(className)">🔎 …o clasificar solo {{ classDisplayName(className) }} con IA →</button>
+            <!-- §"botón para limpiar sus defensivos y volver a calcularlos con el prompt, porque alguno se desactualiza" (feedback real, 2026-08-31) -->
+            <button type="button" class="delete-btn" [class.confirming]="confirmingResetClassId() === className" [disabled]="resettingClass()" (click)="requestResetClassDefensives(className)">
+              {{ confirmingResetClassId() === className ? '¿seguro? (borra la clasificación de toda la clase)' : '🗑 restablecer clasificación' }}
+            </button>
           </div>
+          @if (lastClassReset() && lastClassReset()!.className === className) {
+            <p class="result-line result-ok">✓ {{ lastClassReset()!.resetCount }} defensivo{{ lastClassReset()!.resetCount === 1 ? '' : 's' }} de vuelta a "sin clasificar" — pulsa "clasificar con IA" para rellenarlos de nuevo.</p>
+          }
 
           <table class="candidates">
             <thead>
