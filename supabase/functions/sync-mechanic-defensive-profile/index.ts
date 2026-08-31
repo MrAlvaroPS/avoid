@@ -98,18 +98,37 @@ Deno.serve(async (req: Request) => {
 
     const difficultyIds = body.difficulties?.length ? body.difficulties : [3, 4, 5].filter((id) => allCandidates.some((c) => c.difficulty === WCL_DIFFICULTY_NAME_BY_ID[id]));
 
-    const results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number }[] = [];
+    const results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number; totalFightsConsumed: number; exhausted: boolean }[] = [];
 
     for (const wclDifficultyId of difficultyIds) {
       const difficultyName = WCL_DIFFICULTY_NAME_BY_ID[wclDifficultyId];
       const candidates = allCandidates.filter((c) => c.difficulty === difficultyName);
       if (!candidates.length) continue;
 
-      const referenceCount = REFERENCE_COUNT_BY_DIFFICULTY[difficultyName] ?? DEFAULT_REFERENCE_COUNT;
-      const rankings = await fetchPublicRankings(encounterId, wclDifficultyId, referenceCount);
-      const refs = await resolveTopReportRefs(rankings, referenceCount);
+      // §"muchos muchos muchos logs... si solo valoramos unos pocos, lo
+      // trampeamos" (feedback real, 2026-08-31): cada sync trae la
+      // SIGUIENTE tanda de logs de referencia, no repite los mismos —
+      // boss_reference_sync_state recuerda cuántos ya se consumieron.
+      // fetchPublicRankings solo pide metadata de ranking (barato, sin
+      // fights completos) así que pedir hasta `alreadyConsumed + batch` de
+      // golpe y quedarse con el tramo nuevo es más simple que paginar a
+      // mano, y no cuesta CPU real de más (el coste caro es procesar cada
+      // fight, no listar el ranking).
+      const { data: syncState } = await supabase.from('boss_reference_sync_state').select('reference_fights_consumed').eq('boss_id', body.bossId).eq('difficulty', difficultyName).maybeSingle();
+      const alreadyConsumed = syncState?.reference_fights_consumed ?? 0;
+      const batchSize = REFERENCE_COUNT_BY_DIFFICULTY[difficultyName] ?? DEFAULT_REFERENCE_COUNT;
+      const rankings = await fetchPublicRankings(encounterId, wclDifficultyId, alreadyConsumed + batchSize);
+      const newRankings = rankings.slice(alreadyConsumed);
+      const exhausted = newRankings.length < batchSize; // menos de una tanda completa = no hay (o casi no hay) logs nuevos más allá de este punto
+      const refs = await resolveTopReportRefs(newRankings, batchSize);
+      // Aunque no haya refs nuevas, se registra igual el intento (consumed
+      // no avanza si no hubo nada nuevo) — evita reintentar infinitamente
+      // contra un leaderboard ya agotado en cada clic.
+      await supabase
+        .from('boss_reference_sync_state')
+        .upsert({ boss_id: body.bossId, difficulty: difficultyName, reference_fights_consumed: alreadyConsumed + refs.length, last_synced_at: new Date().toISOString() }, { onConflict: 'boss_id,difficulty' });
       if (!refs.length) {
-        results.push({ difficulty: difficultyName, referenceFightsUsed: 0, mechanicsProfiled: 0 });
+        results.push({ difficulty: difficultyName, referenceFightsUsed: 0, mechanicsProfiled: 0, totalFightsConsumed: alreadyConsumed, exhausted });
         continue;
       }
 
@@ -226,21 +245,33 @@ Deno.serve(async (req: Request) => {
           }
         }
 
-        if (sampledFights < 1) continue; // ni un solo fight de referencia vio esta mecánica — nada que guardar, no sobrescribir con vacío
+        if (sampledFights < 1) continue; // ni un solo fight de referencia de ESTA tanda vio esta mecánica — no toca la fila existente
 
-        const roleTotal = tankHits + healerHits + dpsHits;
-        const roleBreakdown = roleTotal > 0 ? { tank: tankHits / roleTotal, healer: healerHits / roleTotal, dps: dpsHits / roleTotal } : null;
+        // §acumula contra lo que ya hubiera, no reemplaza — "muchos muchos
+        // muchos logs" solo funciona si cada sync SUMA a la muestra previa.
+        // reference_role_hit_breakdown pasa a guardar CONTADOS crudos (no
+        // fracciones): una fracción no se puede fusionar entre tandas sin
+        // conocer el total de cada una, un contador sí se suma sin más — la
+        // pantalla divide por el total al mostrar.
+        const { data: existing } = await supabase
+          .from('boss_mechanic_defensive_profile')
+          .select('reference_unmitigated_damage_samples, reference_mitigated_damage_samples, reference_cast_offset_ms_samples, reference_sample_fight_count, reference_role_hit_breakdown')
+          .eq('boss_id', body.bossId)
+          .eq('difficulty', difficultyName)
+          .eq('ability_id', candidate.ability_id)
+          .maybeSingle();
+        const existingBreakdown = (existing?.reference_role_hit_breakdown ?? null) as { tank: number; healer: number; dps: number } | null;
 
         const { error: upsertError } = await supabase.from('boss_mechanic_defensive_profile').upsert(
           {
             boss_id: body.bossId,
             difficulty: difficultyName,
             ability_id: candidate.ability_id,
-            reference_unmitigated_damage_samples: unmitigated,
-            reference_mitigated_damage_samples: mitigated,
-            reference_role_hit_breakdown: roleBreakdown,
-            reference_cast_offset_ms_samples: castOffsets,
-            reference_sample_fight_count: sampledFights,
+            reference_unmitigated_damage_samples: [...(existing?.reference_unmitigated_damage_samples ?? []), ...unmitigated],
+            reference_mitigated_damage_samples: [...(existing?.reference_mitigated_damage_samples ?? []), ...mitigated],
+            reference_role_hit_breakdown: { tank: (existingBreakdown?.tank ?? 0) + tankHits, healer: (existingBreakdown?.healer ?? 0) + healerHits, dps: (existingBreakdown?.dps ?? 0) + dpsHits },
+            reference_cast_offset_ms_samples: [...(existing?.reference_cast_offset_ms_samples ?? []), ...castOffsets],
+            reference_sample_fight_count: (existing?.reference_sample_fight_count ?? 0) + sampledFights,
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'boss_id,difficulty,ability_id' },
@@ -249,7 +280,7 @@ Deno.serve(async (req: Request) => {
         else console.error(`sync-mechanic-defensive-profile: fallo guardando ${candidate.name} (${difficultyName}):`, upsertError.message);
       }
 
-      results.push({ difficulty: difficultyName, referenceFightsUsed: bundles.length, mechanicsProfiled });
+      results.push({ difficulty: difficultyName, referenceFightsUsed: bundles.length, mechanicsProfiled, totalFightsConsumed: alreadyConsumed + refs.length, exhausted });
     }
 
     return jsonResponse({ ok: true, results, minReferenceSampleFights: MIN_REFERENCE_SAMPLE_FIGHTS });

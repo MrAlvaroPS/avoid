@@ -15,9 +15,10 @@ import { BossMechanicDefensiveProfileService } from '../../core/boss-mechanic-de
 import { DefensiveCatalogService } from '../../core/defensive-catalog.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
 import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
-import { ALL_CLASSES, specsForClass } from '../../shared/spec-role.util';
+import { ALL_CLASSES, specsForClass, mechanicAppliesToRole, roleFromSpec } from '../../shared/spec-role.util';
 import { defensivesForSpec } from '../../shared/defensive-spec-match.util';
 import { encodeMrtExport, spellTag, type MrtReminderInput, type MrtTrigger } from '../../shared/mrt/mrt-reminder-codec';
+import { autoAssignCascade } from '../../shared/mrt/auto-assign-cascade.util';
 import { errorMessage } from '../../shared/error-message.util';
 import type { BossMechanicCandidateRow, BossMechanicDefensiveProfileRow, MechanicDefensiveAssignmentRow, CooldownCatalogRow } from '../../shared/models/domain';
 
@@ -193,8 +194,15 @@ export class BossPrepComponent {
     try {
       const res = await this.edgeFunctions.syncMechanicDefensiveProfile(String(bossId), [difficultyId]);
       const r = res.results[0];
+      // §"muchos muchos muchos logs" (feedback real, 2026-08-31): cada
+      // sync trae la SIGUIENTE tanda, no repite — totalFightsConsumed es
+      // la muestra acumulada real, no solo esta tanda. exhausted avisa
+      // cuando el leaderboard ya no tiene más logs nuevos que dar.
       this.syncSummary.set(
-        r ? `${r.mechanicsProfiled} mecánicas perfiladas contra ${r.referenceFightsUsed} logs de referencia.` : 'Sin resultado — revisa que el boss tenga mecánicas curadas en Ajustes → Mecánicas.',
+        r
+          ? `+${r.referenceFightsUsed} logs nuevos (${r.mechanicsProfiled} mecánicas actualizadas) — ${r.totalFightsConsumed} acumulados en total.` +
+            (r.exhausted ? ' El leaderboard público no tiene (por ahora) más logs nuevos que dar.' : '')
+          : 'Sin resultado — revisa que el boss tenga mecánicas curadas en Ajustes → Mecánicas.',
       );
       await this.loadRows();
     } catch (err) {
@@ -443,6 +451,95 @@ export class BossPrepComponent {
     const profileName = `Preparación - ${this.selectedBoss()?.bossName ?? ''} ${this.selectedDifficultyName() ?? ''} - ${spec}`;
     this.exportResult.set({ class: cls, spec, text: encodeMrtExport(profileName, reminders), skippedForMissingTiming: skipped });
     this.copyStatus.set('idle');
+  }
+
+  // --- auto-asignación en cascada ---
+  // §"la app ya sabe los cooldown... puede autogenerar una nota sabiendo en
+  // qué momento empieza una habilidad o mecánica de boss... empezando en
+  // cascada: primero en las que más pico hace a toda la raid" (feedback
+  // real, 2026-08-31): impactScore = mediana de daño SIN mitigar (ya
+  // reconstruido por sync-mechanic-defensive-profile, sin sesgo de logs
+  // ya bien jugados) × reference_avg_players_hit (ya calculado por
+  // sync-boss-mechanics con correlación real por-cast) — "cuánto daño cae
+  // sobre la raid de una vez", la métrica de raid-wide que pedías. El
+  // algoritmo en sí (greedy, respeta cooldowns reales a lo largo del
+  // fight) vive en auto-assign-cascade.util.ts, testeado aparte.
+  autoAssignClass = signal<string>(this.allClasses[0]);
+  autoAssignSpec = signal<string>(specsForClass(this.allClasses[0])[0] ?? '');
+  autoAssigning = signal(false);
+  autoAssignResult = signal<{ assigned: number; candidates: number } | null>(null);
+
+  onAutoAssignClassChange(cls: string): void {
+    this.autoAssignClass.set(cls);
+    this.autoAssignSpec.set(specsForClass(cls)[0] ?? '');
+  }
+  onAutoAssignSpecChange(spec: string): void {
+    this.autoAssignSpec.set(spec);
+  }
+  specsForAutoAssignClass(): string[] {
+    return specsForClass(this.autoAssignClass());
+  }
+
+  private impactScore(candidate: BossMechanicCandidateRow, profile: BossMechanicDefensiveProfileRow | null): number {
+    const unmitigatedMedian = median(profile?.reference_unmitigated_damage_samples ?? []) ?? 0;
+    return unmitigatedMedian * (candidate.reference_avg_players_hit ?? 1);
+  }
+
+  async onAutoAssign(): Promise<void> {
+    const bossId = this.selectedEncounterId();
+    const difficulty = this.selectedDifficultyName();
+    const cls = this.autoAssignClass();
+    const spec = this.autoAssignSpec();
+    if (bossId == null || !difficulty || !spec || this.autoAssigning()) return;
+    const role = roleFromSpec(cls, spec);
+    this.autoAssigning.set(true);
+    this.autoAssignResult.set(null);
+    this.error.set(null);
+    try {
+      const mechanicInputs = this.candidates()
+        .filter((c) => mechanicAppliesToRole(c.responsibility, role))
+        .map((c) => {
+          const profile = this.profiles().find((p) => p.ability_id === c.ability_id) ?? null;
+          return { abilityId: c.ability_id, name: c.name, timeMs: median(profile?.reference_cast_offset_ms_samples ?? []), impactScore: this.impactScore(c, profile) };
+        });
+      const defensiveInputs = defensivesForSpec(this.cooldownCatalog(), cls, spec).map((cd) => ({ spellId: cd.spell_id, survivalType: cd.survival_type, baseCooldownMs: cd.base_cooldown_ms }));
+      const result = autoAssignCascade(mechanicInputs, defensiveInputs);
+      for (const a of result) {
+        await this.edgeFunctions.saveMechanicDefensiveAssignment({
+          bossId: String(bossId),
+          difficulty,
+          abilityId: a.abilityId,
+          class: cls,
+          spec,
+          defensiveSpellId: a.defensiveSpellId,
+          prewarnSeconds: 5,
+          triggerType: 'bossmod',
+        });
+      }
+      this.autoAssignResult.set({ assigned: result.length, candidates: mechanicInputs.filter((m) => m.timeMs != null).length });
+      await this.loadRows();
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.autoAssigning.set(false);
+    }
+  }
+
+  /** §"si actualiza un defensivo tendrá también que sacar ahí alguna clase de aviso" (feedback real, 2026-08-31): true si algún defensivo de esta spec se editó DESPUÉS de la asignación más vieja de esta spec — la cascada se generó con datos que ya no son los actuales. */
+  assignmentsStaleFor(cls: string, spec: string): boolean {
+    const relevantAssignments = this.assignments().filter((a) => a.class === cls && a.spec === spec);
+    if (!relevantAssignments.length) return false;
+    const oldestAssignmentEdit = relevantAssignments.map((a) => a.updated_at).sort()[0];
+    const catalogEdits = defensivesForSpec(this.cooldownCatalog(), cls, spec)
+      .map((cd) => cd.updated_at)
+      .filter((t): t is string => !!t);
+    if (!catalogEdits.length) return false;
+    return catalogEdits.some((t) => t > oldestAssignmentEdit);
+  }
+
+  roleFraction(breakdown: { tank: number; healer: number; dps: number }, key: 'tank' | 'healer' | 'dps'): number {
+    const total = breakdown.tank + breakdown.healer + breakdown.dps;
+    return total > 0 ? breakdown[key] / total : 0;
   }
 
   async copyExport(): Promise<void> {

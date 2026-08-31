@@ -366,7 +366,7 @@ export class EdgeFunctionsService {
    */
   async syncMechanicDefensiveProfile(bossId: string, difficulties?: number[]): Promise<{
     ok: true;
-    results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number }[];
+    results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number; totalFightsConsumed: number; exhausted: boolean }[];
     minReferenceSampleFights: number;
   }> {
     return this.invoke('sync-mechanic-defensive-profile', { bossId, difficulties });

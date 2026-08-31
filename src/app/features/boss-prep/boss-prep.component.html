@@ -92,7 +92,7 @@
                   </td>
                   <td>
                     @if (row.profile?.reference_role_hit_breakdown; as breakdown) {
-                      <span class="meta">tank {{ breakdown.tank | percent: '1.0-0' }} · heal {{ breakdown.healer | percent: '1.0-0' }} · dps {{ breakdown.dps | percent: '1.0-0' }}</span>
+                      <span class="meta">tank {{ roleFraction(breakdown, 'tank') | percent: '1.0-0' }} · heal {{ roleFraction(breakdown, 'healer') | percent: '1.0-0' }} · dps {{ roleFraction(breakdown, 'dps') | percent: '1.0-0' }}</span>
                     } @else {
                       <span class="meta">—</span>
                     }
@@ -228,12 +228,56 @@
             </tbody>
           </table>
 
+          <div class="export-section">
+            <h3>Auto-asignar en cascada</h3>
+            <p class="meta">
+              Asigna sola el defensivo de la spec a cada mecánica, empezando por la que más pico hace a toda la raid (daño sin mitigar × jugadores golpeados) y respetando cooldowns reales a lo
+              largo del fight — un defensivo puede cubrir varios picos si el tiempo lo permite. Nunca toca defensivos de emergencia ni con cooldown sin resolver. Revisa el resultado abajo antes de
+              exportar — no es la última palabra, es el punto de partida.
+            </p>
+            <div class="add-form-grid">
+              <label>
+                Clase
+                <select [value]="autoAssignClass()" (change)="onAutoAssignClassChange($any($event.target).value)">
+                  @for (cls of allClasses; track cls) {
+                    <option [value]="cls">{{ cls }}</option>
+                  }
+                </select>
+              </label>
+              <label>
+                Spec
+                <select [value]="autoAssignSpec()" (change)="onAutoAssignSpecChange($any($event.target).value)">
+                  @for (spec of specsForAutoAssignClass(); track spec) {
+                    <option [value]="spec">{{ spec }}</option>
+                  }
+                </select>
+              </label>
+            </div>
+            <div class="add-form-actions">
+              <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssign()">{{ autoAssigning() ? 'Auto-asignando…' : '⚡ Auto-asignar' }}</button>
+              @if (autoAssignResult(); as r) {
+                <span class="result-line result-ok">{{ r.assigned }}/{{ r.candidates }} mecánicas asignadas.</span>
+              }
+            </div>
+            @if (assignmentsStaleFor(autoAssignClass(), autoAssignSpec())) {
+              <p class="result-line result-warn">
+                ⚠ Se editó algún defensivo de {{ autoAssignClass() }} — {{ autoAssignSpec() }} después de la última asignación guardada. Se recomienda volver a auto-asignar (o revisar a mano) antes
+                de exportar.
+              </p>
+            }
+          </div>
+
           @if (specsWithAssignments().length) {
             <div class="export-section">
               <h3>Crear reminder MRT</h3>
               <div class="export-buttons">
                 @for (cs of specsWithAssignments(); track cs.class + cs.spec) {
-                  <button type="button" class="sync-btn" (click)="generateExport(cs.class, cs.spec)">{{ cs.class }} — {{ cs.spec }}</button>
+                  <button type="button" class="sync-btn" (click)="generateExport(cs.class, cs.spec)">
+                    {{ cs.class }} — {{ cs.spec }}
+                    @if (assignmentsStaleFor(cs.class, cs.spec)) {
+                      <span title="Algún defensivo de esta spec se editó después de la última asignación — revisa antes de repartir el export.">⚠</span>
+                    }
+                  </button>
                 }
               </div>
 

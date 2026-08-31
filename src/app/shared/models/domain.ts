@@ -369,6 +369,8 @@ export interface CooldownCatalogRow {
   synced_from_commit: string | null;
   synced_at: string | null;
   created_at: string;
+  /** §"si actualiza un defensivo... aviso de que se recomienda sincronizar" (feedback real, 2026-08-31) — para saber si una auto-asignación en "Preparación" quedó vieja frente a una edición posterior del catálogo. */
+  updated_at: string;
   /** Confirmado a mano o aplicado desde una clasificación IA. */
   survival_type: DefensiveSurvivalType | null;
   /** Sugerencia IA sin confirmar — nunca pisa survival_type una vez fijado a mano. */
@@ -396,6 +398,7 @@ export interface BossMechanicDefensiveProfileRow {
   reference_unmitigated_damage_samples: number[];
   /** Mismos hits pero CON un defensivo activo — delta real de mitigación observado. */
   reference_mitigated_damage_samples: number[];
+  /** Contadores CRUDOS acumulados entre sincronizaciones (no fracciones — no se pueden fusionar entre tandas sin perder precisión) — divide por la suma de los tres para el %. */
   reference_role_hit_breakdown: { tank: number; healer: number; dps: number } | null;
   /** Ms desde pull-start de cada ocurrencia observada — solo timeline/preview, nunca el trigger real (ver MrtBossmodTrigger). */
   reference_cast_offset_ms_samples: number[];
