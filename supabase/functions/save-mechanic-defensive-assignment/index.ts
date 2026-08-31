@@ -4,11 +4,21 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 
 // §Única puerta de escritura de mechanic_defensive_assignments (RLS de solo
 // lectura, ver migración 20260830130000) — mismo patrón que
-// save-unassigned-mechanic-edit. Crear/editar es un único upsert sobre la
-// unique key real (boss_id, difficulty, ability_id, class, spec): la
-// pantalla ya piensa en "un hueco de asignación por mecánica+spec", no en
-// ids opacos — más simple para el cliente que id-based create/update.
-// Borrado sigue siendo por `id` (`delete: true`).
+// save-unassigned-mechanic-edit. Crear/editar manualmente es un upsert sobre
+// la unique key real (boss_id, difficulty, ability_id, class, spec): la
+// pantalla piensa en "un hueco de asignación por mecánica+spec", no en ids
+// opacos. Borrado sigue siendo por `id` (`delete: true`).
+//
+// IMPORTANTE — garantía anti-pérdida para AUTO (2026-08-31): la cascada
+// automática manda únicamente los campos mínimos (no bossmodSpellId/notes/
+// assignedGroups), mientras que el formulario manual manda esas tres claves
+// explícitamente incluso cuando valen null. Ese contrato permite detectar la
+// escritura automática sin cambiar el payload público: AUTO usa INSERT puro
+// y NUNCA upsert. Si otra pestaña/oficial creó la misma asignación desde que
+// el cliente cargó la pantalla, el UNIQUE devuelve 23505 y respondemos 409;
+// la fila existente queda intacta, incluyendo defensivo, prewarn, trigger,
+// notas y grupos. Así la protección no depende solo de un snapshot cliente
+// potencialmente desactualizado.
 
 interface UpsertRequest {
   bossId: string;
@@ -60,25 +70,46 @@ Deno.serve(async (req: Request) => {
   const triggerType = upsertBody.triggerType ?? 'bossmod';
   if (!VALID_TRIGGER_TYPES.has(triggerType)) return jsonResponse({ ok: false, error: `triggerType inválido: ${triggerType}` }, 400);
 
+  const payload = {
+    boss_id: upsertBody.bossId,
+    difficulty: upsertBody.difficulty,
+    ability_id: upsertBody.abilityId,
+    class: upsertBody.class,
+    spec: upsertBody.spec,
+    defensive_spell_id: upsertBody.defensiveSpellId,
+    prewarn_seconds: upsertBody.prewarnSeconds ?? 5,
+    trigger_type: triggerType,
+    bossmod_spell_id: upsertBody.bossmodSpellId ?? null,
+    notes: upsertBody.notes ?? null,
+    assigned_groups: upsertBody.assignedGroups?.length ? upsertBody.assignedGroups : null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const hasOwn = (key: keyof UpsertRequest): boolean => Object.prototype.hasOwnProperty.call(upsertBody, key);
+  const automaticCreateOnly = !hasOwn('bossmodSpellId') && !hasOwn('notes') && !hasOwn('assignedGroups');
+
+  if (automaticCreateOnly) {
+    const { data: inserted, error } = await supabase
+      .from('mechanic_defensive_assignments')
+      .insert(payload)
+      .select('id')
+      .single();
+    if (error?.code === '23505') {
+      return jsonResponse(
+        {
+          ok: false,
+          error: 'La asignación ya existe. AUTO no la ha sobrescrito porque la planificación cambió desde que se cargó la pantalla; recarga Preparación y vuelve a ejecutar la cascada.',
+        },
+        409,
+      );
+    }
+    if (error) return jsonResponse({ ok: false, error: error.message }, 500);
+    return jsonResponse({ ok: true, id: inserted.id });
+  }
+
   const { data: upserted, error } = await supabase
     .from('mechanic_defensive_assignments')
-    .upsert(
-      {
-        boss_id: upsertBody.bossId,
-        difficulty: upsertBody.difficulty,
-        ability_id: upsertBody.abilityId,
-        class: upsertBody.class,
-        spec: upsertBody.spec,
-        defensive_spell_id: upsertBody.defensiveSpellId,
-        prewarn_seconds: upsertBody.prewarnSeconds ?? 5,
-        trigger_type: triggerType,
-        bossmod_spell_id: upsertBody.bossmodSpellId ?? null,
-        notes: upsertBody.notes ?? null,
-        assigned_groups: upsertBody.assignedGroups?.length ? upsertBody.assignedGroups : null,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'boss_id,difficulty,ability_id,class,spec' },
-    )
+    .upsert(payload, { onConflict: 'boss_id,difficulty,ability_id,class,spec' })
     .select('id')
     .single();
   if (error) return jsonResponse({ ok: false, error: error.message }, 500);
