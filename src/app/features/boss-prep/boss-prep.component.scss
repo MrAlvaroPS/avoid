@@ -208,11 +208,68 @@
   tr.saving {
     opacity: 0.5;
   }
+
+  // §"al pulsar sobre la fila de la mecánica... despliegue el acordeón" (feedback real, 2026-08-31)
+  tr.row-clickable {
+    cursor: pointer;
+
+    &:hover {
+      background: var(--surface-hover);
+    }
+  }
+
+  // §"identificarla fácilmente [la mecánica con asignaciones]... color ligeramente distinto" (feedback real, 2026-08-31)
+  tr.has-assignments {
+    background: color-mix(in srgb, var(--success) 5%, transparent);
+    box-shadow: inset 3px 0 0 var(--success);
+  }
 }
 
 .assignments-row td {
   background: var(--surface-2);
   padding: 12px;
+}
+
+// §"doble clasificación: al pulsarlo despliega las clases... y la fila de clase se pueda desplegar" (feedback real, 2026-08-31)
+.class-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.class-group {
+  background: var(--surface);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.class-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+}
+
+.chevron {
+  display: inline-block;
+  width: 10px;
+  color: var(--text-faint);
+}
+
+.class-group .assignments {
+  margin: 0;
 }
 
 .meta {
@@ -287,6 +344,12 @@ input[type='number'],
 
   &:hover {
     text-decoration: underline;
+  }
+
+  // §"marcando en color la parte de 'asignaciones' de la derecha" (feedback real, 2026-08-31)
+  &.has-assignments {
+    color: var(--success);
+    font-weight: 600;
   }
 }
 
@@ -425,6 +488,16 @@ input[type='number'],
 .priority-3 { background: #c9a227; }
 .priority-4 { background: #d4772a; }
 .priority-5 { background: #c0392b; }
+
+.timeline-table {
+  font-size: 12px;
+}
+.timeline-conflict {
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+.timeline-gap {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
 
 .class-cell {
   display: flex;

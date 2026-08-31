@@ -66,6 +66,8 @@
             <button type="button" class="sync-btn export-trigger" [disabled]="!hasAssignmentsForSelected()" [title]="hasAssignmentsForSelected() ? '' : 'Esta spec todavía no tiene ninguna asignación'" (click)="generateExport(autoAssignClass(), autoAssignSpec())">
               📋 Exportar reminder MRT
             </button>
+            <!-- §"cómo podemos ver los huecos que quedan libres... o si ya está asignado antes de esa habilidad" (feedback real, 2026-08-31) -->
+            <button type="button" class="sync-btn" title="Orden cronológico real del fight para esta spec: qué cubre, con qué, y si el mismo defensivo ya se habría usado antes sin tiempo de cooldown de sobra." (click)="openTimeline()">🕐 Cronología</button>
           </div>
         </div>
         @if (autoAssignResult(); as r) {
@@ -103,6 +105,7 @@
             <thead>
               <tr>
                 <th>Mecánica</th>
+                <th>Resolución</th>
                 <th title="1-5, relativo a las demás mecánicas de este boss+dificultad — 5 = de las que más pico hacen a la raid">Prioridad</th>
                 <th>Categoría / rol</th>
                 <th>Daño (sin mitigar / mitigado)</th>
@@ -114,15 +117,22 @@
             </thead>
             <tbody>
               @for (row of mechanicRows(); track row.candidate.ability_id) {
-                <tr [class.saving]="savingProfileId() === row.candidate.ability_id">
+                <tr
+                  class="row-clickable"
+                  [class.saving]="savingProfileId() === row.candidate.ability_id"
+                  [class.has-assignments]="row.assignments.length > 0"
+                  (click)="onMechanicRowClick($event, row.candidate.ability_id)"
+                >
                   <td>
                     <app-wowhead-link type="spell" [id]="row.candidate.ability_id"><strong>{{ row.candidate.name }}</strong></app-wowhead-link>
-                    <app-mechanic-resolution-icon [resolution]="row.candidate.resolution" />
                     @if (row.profile) {
                       <span class="meta">{{ row.profile.reference_sample_fight_count }} fights de referencia</span>
                     } @else {
                       <span class="meta">sin sincronizar</span>
                     }
+                  </td>
+                  <td>
+                    <app-mechanic-resolution-icon [resolution]="row.candidate.resolution" />
                   </td>
                   <td>
                     @if (row.profile?.priority; as p) {
@@ -176,56 +186,65 @@
                     }
                   </td>
                   <td>
-                    <button type="button" class="classify-toggle" (click)="toggleExpanded(row.candidate.ability_id)">
-                      {{ expandedAbilityId() === row.candidate.ability_id ? 'cerrar' : 'asignaciones (' + row.assignments.length + ')' }}
+                    <button type="button" class="classify-toggle" [class.has-assignments]="row.assignments.length > 0" (click)="toggleExpanded(row.candidate.ability_id)">
+                      {{ expandedAbilityId() === row.candidate.ability_id ? 'cerrar' : (row.assignments.length ? '✓ asignaciones (' + row.assignments.length + ')' : 'asignaciones (0)') }}
                     </button>
                   </td>
                 </tr>
                 @if (expandedAbilityId() === row.candidate.ability_id) {
                   <tr class="assignments-row">
-                    <td colspan="8">
-                      <table class="assignments">
-                        <thead>
-                          <tr>
-                            <th>Clase</th>
-                            <th>Spec</th>
-                            <th>Defensivo</th>
-                            <th>Aviso previo</th>
-                            <th>Trigger</th>
-                            <th>Grupos</th>
-                            <th>Notas</th>
-                            <th></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          @for (a of row.assignments; track a.id) {
-                            <tr>
-                              <td class="class-cell" [style.color]="classColor(a.class)">
-                                <app-class-icon [wclClass]="a.class" />
-                                {{ a.class }}
-                              </td>
-                              <td>{{ a.spec }}</td>
-                              <td>
-                                @if (defensiveFor(a.defensive_spell_id); as d) {
-                                  <app-wowhead-link type="spell" [id]="a.defensive_spell_id">{{ d.name }}</app-wowhead-link>
-                                } @else {
-                                  <app-wowhead-link type="spell" [id]="a.defensive_spell_id">#{{ a.defensive_spell_id }}</app-wowhead-link>
-                                }
-                              </td>
-                              <td>{{ a.prewarn_seconds }}s</td>
-                              <td>{{ a.trigger_type }}</td>
-                              <td class="meta">{{ a.assigned_groups?.length ? a.assigned_groups!.join(', ') : 'todos' }}</td>
-                              <td class="meta">{{ a.notes }}</td>
-                              <td>
-                                <button type="button" class="classify-toggle" (click)="openAssignmentDraft(row.candidate.ability_id, a)">editar</button>
-                                <button type="button" class="delete-btn" [class.confirming]="confirmingDeleteAssignmentId() === a.id" (click)="requestDeleteAssignment(a.id)">
-                                  {{ confirmingDeleteAssignmentId() === a.id ? '¿seguro?' : 'borrar' }}
-                                </button>
-                              </td>
-                            </tr>
-                          }
-                        </tbody>
-                      </table>
+                    <td colspan="9">
+                      <!-- §"doble clasificación: al pulsarlo despliega todas las clases... y que la fila de clase se pueda desplegar para ver las specs" (feedback real, 2026-08-31) -->
+                      <div class="class-groups">
+                        @for (grp of groupAssignmentsByClass(row.assignments); track grp.class) {
+                          <div class="class-group">
+                            <button type="button" class="class-group-header" [style.color]="classColor(grp.class)" (click)="toggleMechanicClass(row.candidate.ability_id, grp.class)">
+                              <span class="chevron">{{ isMechanicClassExpanded(row.candidate.ability_id, grp.class) ? '▾' : '▸' }}</span>
+                              <app-class-icon [wclClass]="grp.class" />
+                              {{ grp.class }} ({{ grp.rows.length }} spec{{ grp.rows.length === 1 ? '' : 's' }})
+                            </button>
+                            @if (isMechanicClassExpanded(row.candidate.ability_id, grp.class)) {
+                              <table class="assignments">
+                                <thead>
+                                  <tr>
+                                    <th>Spec</th>
+                                    <th>Defensivo</th>
+                                    <th>Aviso previo</th>
+                                    <th>Trigger</th>
+                                    <th>Grupos</th>
+                                    <th>Notas</th>
+                                    <th></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  @for (a of grp.rows; track a.id) {
+                                    <tr>
+                                      <td>{{ a.spec }}</td>
+                                      <td>
+                                        @if (defensiveFor(a.defensive_spell_id); as d) {
+                                          <app-wowhead-link type="spell" [id]="a.defensive_spell_id">{{ d.name }}</app-wowhead-link>
+                                        } @else {
+                                          <app-wowhead-link type="spell" [id]="a.defensive_spell_id">#{{ a.defensive_spell_id }}</app-wowhead-link>
+                                        }
+                                      </td>
+                                      <td>{{ a.prewarn_seconds }}s</td>
+                                      <td>{{ a.trigger_type }}</td>
+                                      <td class="meta">{{ a.assigned_groups?.length ? a.assigned_groups!.join(', ') : 'todos' }}</td>
+                                      <td class="meta">{{ a.notes }}</td>
+                                      <td>
+                                        <button type="button" class="classify-toggle" (click)="openAssignmentDraft(row.candidate.ability_id, a)">editar</button>
+                                        <button type="button" class="delete-btn" [class.confirming]="confirmingDeleteAssignmentId() === a.id" (click)="requestDeleteAssignment(a.id)">
+                                          {{ confirmingDeleteAssignmentId() === a.id ? '¿seguro?' : 'borrar' }}
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  }
+                                </tbody>
+                              </table>
+                            }
+                          </div>
+                        }
+                      </div>
 
                       @if (assignmentDraft() && assignmentDraft()!.abilityId === row.candidate.ability_id) {
                         <div class="add-form">
@@ -319,6 +338,65 @@
         <button type="button" class="sync-btn" (click)="copyExport()">
           {{ copyStatus() === 'copied' ? '✓ copiado' : copyStatus() === 'error' ? 'error al copiar' : 'copiar' }}
         </button>
+      </div>
+    </div>
+  }
+
+  @if (timelineOpen()) {
+    <div class="export-modal-backdrop" (click)="closeTimeline()">
+      <div class="export-modal" (click)="$event.stopPropagation()">
+        <div class="export-modal-header">
+          <h3>Cronología — {{ autoAssignClass() }} · {{ autoAssignSpec() }}</h3>
+          <button type="button" class="classify-toggle" (click)="closeTimeline()">✕ cerrar</button>
+        </div>
+        <p class="meta">
+          Orden real del fight (mediana de ocurrencias observadas). "en conflicto" = este mismo defensivo ya se habría usado antes y su cooldown no le habría dado tiempo a estar libre de nuevo aquí
+          — revísalo a mano. Fila vacía = esta spec no tiene nada asignado a esa mecánica.
+        </p>
+        @if (!timelineEntries().length) {
+          <p class="muted">Ninguna mecánica de esta spec tiene timing conocido todavía — sincroniza primero.</p>
+        } @else {
+          <table class="assignments timeline-table">
+            <thead>
+              <tr>
+                <th>Momento</th>
+                <th>Mecánica</th>
+                <th>Prioridad</th>
+                <th>Defensivo asignado</th>
+                <th>Cooldown</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (e of timelineEntries(); track e.abilityId) {
+                <tr [class.timeline-conflict]="e.conflict" [class.timeline-gap]="!e.assignment && e.priority && e.priority >= 3">
+                  <td>{{ formatFightTime(e.timeMs) }}</td>
+                  <td>{{ e.name }}</td>
+                  <td>
+                    @if (e.priority; as p) {
+                      <span class="priority-badge" [class]="'priority-' + p">{{ p }}</span>
+                    } @else {
+                      <span class="meta">—</span>
+                    }
+                  </td>
+                  <td>{{ e.defensiveName ?? '— sin asignar —' }}</td>
+                  <td class="meta">{{ e.cooldownMs != null ? (e.cooldownMs / 1000 | number: '1.0-0') + 's' : e.assignment ? 'desconocido' : '' }}</td>
+                  <td>
+                    @if (e.conflict) {
+                      <span class="result-warn">⚠ en conflicto</span>
+                    } @else if (e.assignment) {
+                      <span class="result-ok">✓ libre</span>
+                    } @else if (e.priority && e.priority >= 3) {
+                      <span class="result-warn">hueco (prioridad {{ e.priority }})</span>
+                    } @else {
+                      <span class="meta">sin asignar</span>
+                    }
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
       </div>
     </div>
   }

@@ -62,6 +62,18 @@ interface ExportResult {
   skippedForMissingTiming: string[];
 }
 
+interface TimelineEntry {
+  abilityId: number;
+  name: string;
+  timeMs: number;
+  priority: number | null;
+  assignment: MechanicDefensiveAssignmentRow | null;
+  defensiveName: string | null;
+  cooldownMs: number | null;
+  /** El mismo defensivo ya se habría usado antes en esta cronología y su cooldown no le habría dado tiempo a estar libre de nuevo aquí. */
+  conflict: boolean;
+}
+
 @Component({
   selector: 'app-boss-prep',
   standalone: true,
@@ -99,6 +111,8 @@ export class BossPrepComponent {
   syncState = signal<{ referenceFightsConsumed: number; lastSyncedAt: string | null } | null>(null);
 
   expandedAbilityId = signal<number | null>(null);
+  /** §"doble clasificación: al pulsar despliega las clases... y la fila de clase se pueda desplegar para ver specs" (feedback real, 2026-08-31) — clave `${abilityId}|${class}`, un solo grupo abierto a la vez por mecánica. */
+  expandedMechanicClass = signal<string | null>(null);
   savingProfileId = signal<number | null>(null);
   assignmentDraft = signal<AssignmentDraft | null>(null);
   savingAssignment = signal(false);
@@ -168,6 +182,7 @@ export class BossPrepComponent {
 
   private closeAll(): void {
     this.expandedAbilityId.set(null);
+    this.expandedMechanicClass.set(null);
     this.assignmentDraft.set(null);
     this.exportResult.set(null);
     this.syncSummary.set(null);
@@ -227,7 +242,33 @@ export class BossPrepComponent {
 
   toggleExpanded(abilityId: number): void {
     this.expandedAbilityId.set(this.expandedAbilityId() === abilityId ? null : abilityId);
+    this.expandedMechanicClass.set(null);
     this.assignmentDraft.set(null);
+  }
+
+  /** §"al pulsar sobre la fila de la mecánica... despliegue el acordeón, siempre que no sea pulsar en el desplegable de exige defensivo o requiere turnos" (feedback real, 2026-08-31): toda la fila es clicable salvo los controles interactivos propios (select/checkbox/textarea/botón "asignaciones" ya tiene su propio toggle — sin excluir BUTTON aquí se dispararían los dos handlers en el mismo click y se anularían entre sí). */
+  onMechanicRowClick(event: MouseEvent, abilityId: number): void {
+    const tag = (event.target as HTMLElement | null)?.tagName;
+    if (tag && ['SELECT', 'INPUT', 'TEXTAREA', 'BUTTON', 'OPTION', 'A'].includes(tag)) return;
+    this.toggleExpanded(abilityId);
+  }
+
+  toggleMechanicClass(abilityId: number, cls: string): void {
+    const key = `${abilityId}|${cls}`;
+    this.expandedMechanicClass.set(this.expandedMechanicClass() === key ? null : key);
+  }
+
+  isMechanicClassExpanded(abilityId: number, cls: string): boolean {
+    return this.expandedMechanicClass() === `${abilityId}|${cls}`;
+  }
+
+  groupAssignmentsByClass(rows: MechanicDefensiveAssignmentRow[]): { class: string; rows: MechanicDefensiveAssignmentRow[] }[] {
+    const byClass = new Map<string, MechanicDefensiveAssignmentRow[]>();
+    for (const r of rows) {
+      if (!byClass.has(r.class)) byClass.set(r.class, []);
+      byClass.get(r.class)!.push(r);
+    }
+    return [...byClass.entries()].map(([cls, classRows]) => ({ class: cls, rows: classRows })).sort((a, b) => a.class.localeCompare(b.class));
   }
 
   // --- edición manual del perfil (requires_defensive/group_split/reviewed) ---
@@ -489,6 +530,63 @@ export class BossPrepComponent {
 
   /** §"reubica el botón de crear reminder... que sea útil y accesible" (feedback real, 2026-08-31): reusa la misma pareja clase/spec ya visible en la cabecera en vez de una lista de botones creciendo al final de la página. */
   hasAssignmentsForSelected = computed(() => this.assignments().some((a) => a.class === this.autoAssignClass() && a.spec === this.autoAssignSpec()));
+
+  // --- cronología por spec ---
+  // §"cómo podemos ver los huecos que quedan libres... o si ya está
+  // asignado antes de esa habilidad" (feedback real, 2026-08-31): mismo
+  // recorrido que runCascadeForSpec (ordenado por timeMs, un
+  // nextAvailableMs por spellId) pero en modo DIAGNÓSTICO en vez de
+  // asignar — marca `conflict` cuando el mismo defensivo ya se habría
+  // usado antes y su cooldown no le habría dado tiempo a estar libre de
+  // nuevo, y deja huecas (assignment null) las mecánicas de esta spec sin
+  // ninguna asignación, para que el hueco se vea a simple vista en el
+  // orden cronológico real del fight.
+  timelineOpen = signal(false);
+  timelineEntries = signal<TimelineEntry[]>([]);
+
+  openTimeline(): void {
+    const cls = this.autoAssignClass();
+    const spec = this.autoAssignSpec();
+    const role = roleFromSpec(cls, spec);
+    const relevant = this.candidates()
+      .filter((c) => mechanicAppliesToRole(c.responsibility, role))
+      .map((c) => {
+        const profile = this.profiles().find((p) => p.ability_id === c.ability_id) ?? null;
+        return { candidate: c, profile, timeMs: median(profile?.reference_cast_offset_ms_samples ?? []) };
+      })
+      .filter((e): e is { candidate: BossMechanicCandidateRow; profile: BossMechanicDefensiveProfileRow | null; timeMs: number } => e.timeMs != null)
+      .sort((a, b) => a.timeMs - b.timeMs);
+
+    const nextAvailableMs = new Map<number, number>();
+    const entries: TimelineEntry[] = relevant.map((e) => {
+      const assignment = this.assignments().find((a) => a.ability_id === e.candidate.ability_id && a.class === cls && a.spec === spec) ?? null;
+      const base = { abilityId: e.candidate.ability_id, name: e.candidate.name, timeMs: e.timeMs, priority: e.profile?.priority ?? null };
+      if (!assignment) return { ...base, assignment: null, defensiveName: null, cooldownMs: null, conflict: false };
+      const cd = this.cooldownCatalog().find((c) => c.spell_id === assignment.defensive_spell_id);
+      const cooldownMs = cd?.base_cooldown_ms ?? null;
+      const prevAvailable = nextAvailableMs.get(assignment.defensive_spell_id) ?? 0;
+      const conflict = cooldownMs != null && prevAvailable > e.timeMs;
+      // solo se actualiza el próximo disponible si de verdad se pudo usar
+      // aquí — si hay conflicto, el cast no pudo pasar de verdad, así que
+      // el próximo hueco disponible sigue siendo el de antes (el conflicto
+      // se arrastra hasta que pase suficiente tiempo, como en la realidad).
+      if (!conflict && cooldownMs != null) nextAvailableMs.set(assignment.defensive_spell_id, e.timeMs + cooldownMs);
+      return { ...base, assignment, defensiveName: cd?.name ?? `#${assignment.defensive_spell_id}`, cooldownMs, conflict };
+    });
+    this.timelineEntries.set(entries);
+    this.timelineOpen.set(true);
+  }
+
+  closeTimeline(): void {
+    this.timelineOpen.set(false);
+  }
+
+  formatFightTime(ms: number): string {
+    const totalSeconds = Math.round(ms / 1000);
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
 
   // --- auto-asignación en cascada ---
   // §"la app ya sabe los cooldown... puede autogenerar una nota sabiendo en
