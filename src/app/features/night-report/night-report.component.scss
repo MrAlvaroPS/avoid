@@ -80,6 +80,14 @@
     text-transform: capitalize;
   }
 }
+.wcl-link {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: none;
+  &:hover {
+    text-decoration: underline;
+  }
+}
 .eyebrow,
 .section-kicker {
   color: var(--accent);
@@ -376,11 +384,20 @@ h4 {
 }
 
 // §tabla de asistencia con rendimiento — ver el comentario junto al markup
-// en el .html. Ancha por sus 4 columnas + nombres largos: overflow-x propio
+// en el .html. Ancha por sus 7 columnas + nombres largos: overflow-x propio
 // en vez de que la página entera se desborde en pantallas estrechas.
 .attendance-table-wrap {
   overflow-x: auto;
 }
+// §"dale un poco de formato a la tabla que los números están mal
+// alineados y tienen poca gracia visual" (feedback real, 2026-08-30):
+// columnas numéricas alineadas a la derecha (antes quedaban colgando a la
+// izquierda pese a usar fuente monoespaciada, que es justo para lo
+// contrario) + cada valor en un "chip" de color — mismo lenguaje visual que
+// .reliability-badge del dosier (fondo -soft + texto en el tono), no un
+// patrón nuevo — más fácil de escanear en una tabla de 20+ filas que texto
+// coloreado suelto. Zebra striping para no perder la fila al leer entre
+// columnas.
 .attendance-table {
   width: 100%;
   border-collapse: collapse;
@@ -388,7 +405,7 @@ h4 {
   margin-bottom: 20px;
 
   th {
-    padding: 6px 10px;
+    padding: 8px 10px;
     color: var(--text-faint);
     font-size: 9.5px;
     font-weight: 700;
@@ -397,64 +414,248 @@ h4 {
     text-align: left;
     white-space: nowrap;
   }
+  // §"centra los títulos de las columnas, excepto la de jugador" (feedback
+  // real, 2026-08-30): cabecera centrada sobre una columna de valores
+  // alineados a la derecha es intencional (no un descuido) — el valor
+  // manda la alineación fina, la cabecera solo necesita quedar sobre el
+  // centro visual de la columna.
+  th.col-num {
+    text-align: center;
+  }
   td {
-    padding: 5px 10px;
+    padding: 6px 10px;
     border-top: 1px solid rgb(255 255 255 / 6%);
     white-space: nowrap;
+    vertical-align: middle;
   }
-  td.tabular {
-    font-family: var(--font-mono);
-    font-weight: 700;
+  td.col-num {
+    text-align: center;
+  }
+  // §zebra striping vía $index del @for (no :nth-of-type — las filas de
+  // detalle desplegadas son <tr> intercaladas que romperían el conteo
+  // posicional y desplazarían el rayado cada vez que alguien despliega una fila).
+  tbody tr.attendance-row-main.row-alt {
+    background: rgb(255 255 255 / 1.8%);
   }
 }
-
-.status-pill {
+.stat-chip {
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  color: var(--text-muted);
-  background: var(--surface-2);
-  font-size: 9.5px;
+  min-width: 46px;
+  justify-content: center;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm, 6px);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-faint);
+  background: rgb(255 255 255 / 4%);
+
+  // Solo background — el color de texto ya lo fuerza la regla global
+  // .tone-danger/warning/success (!important, arriba del todo del archivo).
+  &.tone-danger {
+    background: var(--danger-soft);
+  }
+  &.tone-warning {
+    background: var(--warning-soft);
+  }
+  &.tone-success {
+    background: var(--success-soft);
+  }
+}
+// §"no hagas esto del puntito, pon el fondo del número... y el número
+// contrastado también en ese color... como en las otras columnas, pero
+// aplicado también a la de parse" (feedback real, 2026-08-30): mismo
+// patrón fondo-suave + texto-en-el-tono que .tone-danger/warning/success
+// de arriba, con las 7 bandas REALES de WCL en vez de las 3 genéricas de
+// la app — fondo a ~16% de opacidad del color real de WCL (mismo criterio
+// que --danger-soft/--warning-soft/--success-soft en styles.scss), texto
+// en el color sólido.
+.stat-chip.wcl-grey {
+  color: #c2c2c2;
+  background: rgb(157 157 157 / 16%);
+}
+.stat-chip.wcl-green {
+  color: #4ee62b;
+  background: rgb(30 255 0 / 16%);
+}
+.stat-chip.wcl-blue {
+  color: #4fa8ff;
+  background: rgb(51 153 255 / 16%);
+}
+.stat-chip.wcl-purple {
+  color: #c185ff;
+  background: rgb(179 102 255 / 16%);
+}
+.stat-chip.wcl-orange {
+  color: #ff9a33;
+  background: rgb(255 128 0 / 16%);
+}
+.stat-chip.wcl-pink {
+  color: #ff85d1;
+  background: rgb(255 102 196 / 16%);
+}
+.stat-chip.wcl-gold {
+  color: #f0da9e;
+  background: rgb(230 204 128 / 18%);
+}
+
+// §"las filas también fueran un desplegable" (feedback real, 2026-08-30):
+// mismo lenguaje visual que .boss-row-chevron (boss-accordion) — un botón
+// dedicado a expandir, nunca la fila entera (el nombre sigue siendo un <a>
+// normal en su propia celda).
+.attendance-row-main {
+  cursor: default;
+  &.expanded {
+    background: rgb(255 255 255 / 3%);
+  }
+}
+.expand-cell {
+  width: 22px;
+  padding-right: 0 !important;
+}
+.row-expand-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-faint);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  &:hover {
+    color: var(--text);
+    background: rgb(255 255 255 / 6%);
+  }
+}
+.row-expand-chevron {
+  font-size: 11px;
+  transition: transform 160ms ease;
+}
+.attendance-row-main.expanded .row-expand-chevron {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+.attendance-row-detail td {
+  padding: 0;
+  border-top: 0;
+  white-space: normal;
+}
+.attendance-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 14px 16px 36px;
+  background: rgb(0 0 0 / 15%);
+}
+.dossier-link-btn {
+  align-self: flex-start;
+  padding: 5px 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 8px;
+  font-size: 11px;
   font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
-
   &:hover {
     filter: brightness(1.15);
   }
-
-  i {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--text-faint);
+}
+// §"comparación (con la misma dificultad) de su evolución... heroico con
+// heroico y mítico con mítico" (feedback real, 2026-08-30): un bloque por
+// boss+dificultad de la noche, reusando app-trend-bars (mismo componente que
+// el progreso pull-a-pull de arriba).
+.evolution-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.evolution-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+  span {
+    color: var(--text);
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  small {
+    color: var(--text-faint);
+    font-size: 10px;
   }
 }
-.status-pill.status-action {
-  color: var(--warning);
-  background: var(--warning-soft);
-  i {
+// §"algo más visual y sabiendo lo que se compara" (feedback real,
+// 2026-08-30): mini-gráfico propio — valor SIEMPRE visible encima de cada
+// barra (nunca solo en el tooltip) + resultado (kill/wipe) debajo, para que
+// se entienda de un vistazo sin pasar el ratón por cada una. Misma familia
+// visual que .trend de app-trend-bars (barra vertical + track), pero con
+// el número de verdad pintado, que es justo lo que faltaba.
+.evolution-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding-top: 2px;
+  overflow-x: auto;
+}
+.evolution-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 34px;
+  cursor: help;
+}
+.evolution-value {
+  font-size: 11px;
+  font-weight: 700;
+}
+.evolution-track {
+  width: 20px;
+  height: 64px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+.evolution-fill {
+  width: 100%;
+  min-height: 3px;
+  border-radius: 4px 4px 0 0;
+  background: var(--text-faint);
+  transition: height 0.3s ease;
+  &.tone-danger {
+    background: var(--danger);
+  }
+  &.tone-warning {
     background: var(--warning);
   }
-}
-.status-pill.status-review {
-  color: var(--accent);
-  background: var(--accent-soft);
-  i {
-    background: var(--accent);
-  }
-}
-.status-pill.status-healthy {
-  color: var(--success);
-  background: var(--success-soft);
-  i {
+  &.tone-success {
     background: var(--success);
   }
 }
-.status-pill.status-no-data {
-  opacity: 0.72;
+.evolution-result {
+  color: var(--text-faint);
+  font-size: 9px;
+  // .tone-success ya fuerza el color (regla global !important, arriba del archivo).
+}
+.evolution-date {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+.evolution-col.is-current {
+  .evolution-track {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .evolution-date {
+    color: var(--accent);
+    font-weight: 700;
+  }
 }
 
 .plain-list {

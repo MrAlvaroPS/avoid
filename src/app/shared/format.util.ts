@@ -33,6 +33,42 @@ export function comparisonLabel(source: 'own_history' | 'world_reference' | 'fix
   return null;
 }
 
+// §3.1/§7.1: banda de color del percentil de WCL (parse) — mismo lenguaje de
+// estado (--danger/--warning/--success) que ya usa el resto de la app, no una
+// paleta categórica nueva (esto es "qué tal va", no "qué es"). Antes vivía
+// solo en player-stats-table.component.ts (percentil por pull); night-report
+// lo reutiliza tal cual para el percentil medio de la noche — mismos
+// umbrales, un único sitio que los define.
+export function percentileTone(pct: number | null): 'danger' | 'warning' | 'success' | 'neutral' {
+  if (pct == null) return 'neutral';
+  if (pct < 25) return 'danger';
+  if (pct < 75) return 'warning';
+  return 'success';
+}
+
+// §"sigue este mismo código de colores que usan en WCL para el parse: 0–24
+// gris, 25–49 verde, 50–74 azul, 75–94 morado, 95–98 naranja, 99 rosa, 100
+// dorado" (feedback real, 2026-08-30): el esquema de 3 bandas de
+// percentileTone (danger/warning/success) es el lenguaje de "qué tal va"
+// del resto de la app — para el parse en sí, la gente ya reconoce las 7
+// bandas reales de WCL (mismos colores que la rareza de objetos de WoW:
+// gris/verde/azul/morado/naranja/rosa/dorado), así que aquí se sigue ESE
+// esquema en vez de reducirlo a 3. Función aparte de percentileTone (que
+// sigue viva para live-pull/player-stats-table.component.ts, nunca tocada
+// por este cambio) — dos preguntas distintas ("¿qué tal va?" vs "¿qué
+// banda de WCL es?"), nunca la misma función con dos significados.
+export type WclParseTier = 'grey' | 'green' | 'blue' | 'purple' | 'orange' | 'pink' | 'gold';
+export function wclParseTier(pct: number | null): WclParseTier | null {
+  if (pct == null) return null;
+  if (pct >= 100) return 'gold';
+  if (pct >= 99) return 'pink';
+  if (pct >= 95) return 'orange';
+  if (pct >= 75) return 'purple';
+  if (pct >= 50) return 'blue';
+  if (pct >= 25) return 'green';
+  return 'grey';
+}
+
 const WCL_DIFFICULTY_LABEL: Record<string, string> = {
   LFR: 'lfr',
   Normal: 'normal',
