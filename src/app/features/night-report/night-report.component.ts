@@ -298,13 +298,39 @@ export class NightReportComponent {
    */
   recalculatingAll = signal(false);
   recalculateAllError = signal<string | null>(null);
+  recalculateAllProgress = signal<{ done: number; total: number } | null>(null);
 
   async onRecalculateAll(): Promise<void> {
     if (this.recalculatingAll()) return;
     this.recalculatingAll.set(true);
     this.recalculateAllError.set(null);
+    this.recalculateAllProgress.set(null);
     try {
       const code = this.reportCode();
+      // §bug real encontrado en real (2026-08-31, tank de Paladin — Divine
+      // Protection quitado de Protection en Ajustes, el dosier siguió
+      // enseñándolo como disponible incluso tras pulsar "recalcular"):
+      // bypasear el caché del CLIENTE no sirve de nada si el dato de origen
+      // en player_pull_records.defensive_pressure_windows nunca se volvió a
+      // calcular de verdad — eso solo pasa reanalizando el pull contra WCL.
+      // "Recalcular todo" tiene que disparar eso mismo, no solo releer.
+      const pullIds = await this.nightReportService.listPullIds(code);
+      let done = 0;
+      this.recalculateAllProgress.set({ done, total: pullIds.length });
+      for (const pullId of pullIds) {
+        try {
+          await this.edgeFunctions.reanalyzeDefensivePressure(pullId);
+        } catch (err) {
+          console.error(`No se pudo reanalizar defensivos del pull ${pullId} en "Recalcular todo":`, err);
+        }
+        try {
+          await this.edgeFunctions.reanalyzeUnassignedMechanics(pullId);
+        } catch (err) {
+          console.error(`No se pudo reanalizar mecánicas sin asignar del pull ${pullId} en "Recalcular todo":`, err);
+        }
+        done++;
+        this.recalculateAllProgress.set({ done, total: pullIds.length });
+      }
       await Promise.all([this.loadRosterSnapshot(true), this.loadNightScores(code, this.attendingPlayers(), true)]);
       await this.generateFullReport(true);
     } catch (err) {

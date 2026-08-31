@@ -35,7 +35,12 @@
           (click)="onRecalculateAll()"
           title="Recalcula ejecución de la noche, Fiabilidad y el informe entero contra los datos actuales del catálogo (defensivos, mecánicas...), saltándose todos los cachés."
         >
-          @if (recalculatingAll()) { <span class="button-spinner" aria-hidden="true"></span> Recalculando todo… } @else { 🔄 Recalcular todo }
+          @if (recalculatingAll()) {
+            <span class="button-spinner" aria-hidden="true"></span>
+            @if (recalculateAllProgress(); as p) { Reanalizando pulls… {{ p.done }}/{{ p.total }} } @else { Recalculando todo… }
+          } @else {
+            🔄 Recalcular todo
+          }
         </button>
         @if (fullReport()) {
           <button type="button" class="secondary-button infographic-button" (click)="infographicOpen.set(true)">

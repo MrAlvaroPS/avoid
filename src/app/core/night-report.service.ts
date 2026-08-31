@@ -120,6 +120,13 @@ export class NightReportService {
   private supabase = inject(SupabaseService);
   private wowauditRoster = inject(WowauditRosterService);
 
+  /** §"recalcular todo" (feedback real, 2026-08-31): ids de pulls de este report, para poder reanalizarlos de verdad (no solo releer el caché) desde el botón de recálculo. */
+  async listPullIds(reportCode: string): Promise<string[]> {
+    const { data, error } = await this.supabase.client.from('pulls').select('id').eq('report_code', reportCode);
+    if (error) throw error;
+    return (data ?? []).map((p) => p.id as string);
+  }
+
   async loadFullReport(reportCode: string): Promise<StoredNightFullReport | null> {
     const { data, error } = await this.supabase.client
       .from('night_full_reports')
