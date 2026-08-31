@@ -8,11 +8,18 @@
 // aquí al construir el desplegable de "qué defensivo asignar a esta spec".
 import type { CooldownCatalogRow } from './models/domain';
 
-/** cd.spec null = toda la clase; combo "Feral/Guardian" = split('/') + includes, igual que el lado Deno. */
-export function defensiveSpecApplies(catalogSpec: string | null, playerSpec: string | null): boolean {
-  if (catalogSpec == null) return true;
+/**
+ * cd.spec null = toda la clase; combo "Feral/Guardian" = split('/') +
+ * includes, igual que el lado Deno. spec_override (corrección manual, ver
+ * migración 20260831090000_cooldown_catalog_spec_override.sql) gana siempre
+ * que no sea null, aunque cd.spec diga otra cosa — mismo criterio que
+ * specApplies() en defensive-cooldowns.ts, duplicado aquí a propósito.
+ */
+export function defensiveSpecApplies(cd: Pick<CooldownCatalogRow, 'spec' | 'spec_override'>, playerSpec: string | null): boolean {
   if (playerSpec == null) return true;
-  return catalogSpec
+  if (cd.spec_override != null) return cd.spec_override.includes(playerSpec);
+  if (cd.spec == null) return true;
+  return cd.spec
     .split('/')
     .map((s) => s.trim())
     .includes(playerSpec);
@@ -20,5 +27,5 @@ export function defensiveSpecApplies(catalogSpec: string | null, playerSpec: str
 
 /** Catálogo completo -> lo que de verdad puede llevar esta class+spec (sin resolver talentos aquí, a diferencia de defensivesForClass en el servidor — esta pantalla es de curación/planificación, no de un pull concreto con un build real). */
 export function defensivesForSpec(catalog: CooldownCatalogRow[], wclClass: string, spec: string): CooldownCatalogRow[] {
-  return catalog.filter((cd) => cd.class === wclClass && defensiveSpecApplies(cd.spec, spec));
+  return catalog.filter((cd) => cd.class === wclClass && defensiveSpecApplies(cd, spec));
 }

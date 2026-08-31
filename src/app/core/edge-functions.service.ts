@@ -299,6 +299,8 @@ export class EdgeFunctionsService {
     reviewed?: boolean;
     baseCooldownMs?: number | null;
     baseDurationMs?: number | null;
+    /** Corrección manual de qué specs tienen este defensivo — ver spec_override en cooldown_catalog. undefined = no tocar, null = borrar la corrección. */
+    specOverride?: string[] | null;
   }): Promise<{ ok: true; pullIds?: string[] }> {
     return this.invoke('save-defensive-edit', edit);
   }

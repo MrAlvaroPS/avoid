@@ -358,6 +358,8 @@ export interface CooldownCatalogRow {
   id: string;
   class: string;
   spec: string | null;
+  /** Corrección manual por encima de `spec` — null = sin corregir, se deriva de `spec` tal cual (ver migración 20260831090000). Gana siempre que no sea null. */
+  spec_override: string[] | null;
   spell_id: number;
   name: string;
   /** A quién protege: personal (uno mismo), semi (uno mismo con matices), external (se lanza sobre otro) o utility. Eje distinto de survival_type. */

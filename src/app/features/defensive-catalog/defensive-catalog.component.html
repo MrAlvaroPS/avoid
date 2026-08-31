@@ -1,12 +1,12 @@
 <div class="defensive-catalog">
   <p class="intro">
     El catálogo (nombre, spec, cooldown, duración) llega solo desde el extractor real de
-    WoWAnalyzer — aquí solo confirmas <b>qué le hace cada uno al daño entrante</b>
-    (Mitigación / Absorción / Sustain / Emergencia). Que un defensivo aparezca listado en una
-    clase <b>no significa que todas sus specs lo tengan</b>: si la fila indica una spec concreta
-    solo aplica a esa spec, y aunque sea "toda la clase" puede seguir siendo un nodo de talento
-    que un jugador en concreto no tenga elegido — la disponibilidad real por jugador se calcula
-    aparte, cruzando spec + árbol de talentos.
+    WoWAnalyzer — aquí confirmas <b>qué le hace cada uno al daño entrante</b>
+    (Mitigación / Absorción / Sustain / Emergencia) y <b>qué specs lo tienen de verdad</b> (chips
+    de "Spec": el extractor/IA marca unos por defecto, corrígelos a mano cuando dejen de ser
+    ciertos — ej. un talento que cambió de árbol). Aunque una spec tenga el chip activo puede
+    seguir siendo un nodo de talento que un jugador en concreto no tenga elegido — la
+    disponibilidad real por jugador se calcula aparte, cruzando spec + árbol de talentos.
   </p>
 
   @if (error(); as e) {
@@ -173,11 +173,14 @@
                       <span class="meta">—</span>
                     }
                   </td>
-                  <td>
-                    @if (d.spec) {
-                      <span class="spec-badge">{{ d.spec }}</span>
-                    } @else {
-                      <span class="meta">toda la clase*</span>
+                  <td class="spec-cell">
+                    <div class="role-chips">
+                      @for (spec of specsForClassOf(d); track spec) {
+                        <button type="button" class="role-chip" [class.active]="specsForDefensive(d).includes(spec)" (click)="toggleDefensiveSpec(d, spec)">{{ spec }}</button>
+                      }
+                    </div>
+                    @if (d.spec_override != null) {
+                      <button type="button" class="classify-toggle reset-spec" title="Deshacer la corrección manual, volver a lo que dice el catálogo/IA" (click)="resetDefensiveSpecOverride(d)">↺ restablecer ({{ d.spec ?? 'toda la clase*' }})</button>
                     }
                   </td>
                   <td><span class="meta">{{ d.category }}</span></td>
