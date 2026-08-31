@@ -62,6 +62,10 @@
             <button type="button" class="delete-btn" [class.confirming]="confirmingResetAll()" [disabled]="resetting()" (click)="requestResetAll()">
               {{ confirmingResetAll() ? '¿seguro? (borra TODO este boss+dificultad)' : 'restablecer todo' }}
             </button>
+            <!-- §"el botón de crear reminder reubícalo... que sea útil y accesible" (feedback real, 2026-08-31): mismo par clase/spec que ya está aquí, en vez de una lista de botones al final de la página. -->
+            <button type="button" class="sync-btn export-trigger" [disabled]="!hasAssignmentsForSelected()" [title]="hasAssignmentsForSelected() ? '' : 'Esta spec todavía no tiene ninguna asignación'" (click)="generateExport(autoAssignClass(), autoAssignSpec())">
+              📋 Exportar reminder MRT
+            </button>
           </div>
         </div>
         @if (autoAssignResult(); as r) {
@@ -88,10 +92,18 @@
         } @else if (!mechanicRows().length) {
           <p class="muted">Sin mecánicas curadas todavía para esta dificultad — sincroniza primero en Ajustes → Mecánicas.</p>
         } @else {
+          <!-- §"saber que los defensivos que asignas no dejan huecos de mecánicas... sin cubrir" (feedback real, 2026-08-31) -->
+          @if (coverageGaps().length) {
+            <p class="result-line result-warn">
+              ⚠ {{ coverageGaps().length }} mecánica{{ coverageGaps().length === 1 ? '' : 's' }} exige{{ coverageGaps().length === 1 ? '' : 'n' }} defensivo y no tiene{{ coverageGaps().length === 1 ? '' : 'n' }} ninguna asignación todavía:
+              {{ coverageGaps().map((g) => g.candidate.name).join(', ') }}
+            </p>
+          }
           <table class="candidates">
             <thead>
               <tr>
                 <th>Mecánica</th>
+                <th title="1-5, relativo a las demás mecánicas de este boss+dificultad — 5 = de las que más pico hacen a la raid">Prioridad</th>
                 <th>Categoría / rol</th>
                 <th>Daño (sin mitigar / mitigado)</th>
                 <th>A quién golpea</th>
@@ -104,11 +116,19 @@
               @for (row of mechanicRows(); track row.candidate.ability_id) {
                 <tr [class.saving]="savingProfileId() === row.candidate.ability_id">
                   <td>
-                    <strong>{{ row.candidate.name }}</strong>
+                    <app-wowhead-link type="spell" [id]="row.candidate.ability_id"><strong>{{ row.candidate.name }}</strong></app-wowhead-link>
+                    <app-mechanic-resolution-icon [resolution]="row.candidate.resolution" />
                     @if (row.profile) {
                       <span class="meta">{{ row.profile.reference_sample_fight_count }} fights de referencia</span>
                     } @else {
                       <span class="meta">sin sincronizar</span>
+                    }
+                  </td>
+                  <td>
+                    @if (row.profile?.priority; as p) {
+                      <span class="priority-badge" [class]="'priority-' + p" [title]="'Prioridad ' + p + '/5, relativo a las demás mecánicas de este boss+dificultad'">{{ p }}</span>
+                    } @else {
+                      <span class="meta">—</span>
                     }
                   </td>
                   <td>
@@ -163,7 +183,7 @@
                 </tr>
                 @if (expandedAbilityId() === row.candidate.ability_id) {
                   <tr class="assignments-row">
-                    <td colspan="7">
+                    <td colspan="8">
                       <table class="assignments">
                         <thead>
                           <tr>
@@ -180,9 +200,18 @@
                         <tbody>
                           @for (a of row.assignments; track a.id) {
                             <tr>
-                              <td>{{ a.class }}</td>
+                              <td class="class-cell" [style.color]="classColor(a.class)">
+                                <app-class-icon [wclClass]="a.class" />
+                                {{ a.class }}
+                              </td>
                               <td>{{ a.spec }}</td>
-                              <td>{{ a.defensive_spell_id }}</td>
+                              <td>
+                                @if (defensiveFor(a.defensive_spell_id); as d) {
+                                  <app-wowhead-link type="spell" [id]="a.defensive_spell_id">{{ d.name }}</app-wowhead-link>
+                                } @else {
+                                  <app-wowhead-link type="spell" [id]="a.defensive_spell_id">#{{ a.defensive_spell_id }}</app-wowhead-link>
+                                }
+                              </td>
                               <td>{{ a.prewarn_seconds }}s</td>
                               <td>{{ a.trigger_type }}</td>
                               <td class="meta">{{ a.assigned_groups?.length ? a.assigned_groups!.join(', ') : 'todos' }}</td>
@@ -271,36 +300,26 @@
             </tbody>
           </table>
 
-          @if (specsWithAssignments().length) {
-            <div class="export-section">
-              <h3>Crear reminder MRT</h3>
-              <div class="export-buttons">
-                @for (cs of specsWithAssignments(); track cs.class + cs.spec) {
-                  <button type="button" class="sync-btn" (click)="generateExport(cs.class, cs.spec)">
-                    {{ cs.class }} — {{ cs.spec }}
-                    @if (assignmentsStaleFor(cs.class, cs.spec)) {
-                      <span title="Algún defensivo de esta spec se editó después de la última asignación — revisa antes de repartir el export.">⚠</span>
-                    }
-                  </button>
-                }
-              </div>
-
-              @if (exportResult()) {
-                <div class="export-result">
-                  <p class="meta">{{ exportResult()!.class }} — {{ exportResult()!.spec }}</p>
-                  @if (exportResult()!.skippedForMissingTiming.length) {
-                    <p class="result-line result-warn">Sin timing para: {{ exportResult()!.skippedForMissingTiming.join(', ') }} (usa trigger bossmod o sincroniza)</p>
-                  }
-                  <pre class="prompt-box">{{ exportResult()!.text }}</pre>
-                  <button type="button" class="sync-btn" (click)="copyExport()">
-                    {{ copyStatus() === 'copied' ? '✓ copiado' : copyStatus() === 'error' ? 'error al copiar' : 'copiar' }}
-                  </button>
-                </div>
-              }
-            </div>
-          }
         }
       }
     </section>
   </div>
+
+  @if (exportModalOpen() && exportResult(); as r) {
+    <div class="export-modal-backdrop" (click)="closeExportModal()">
+      <div class="export-modal" (click)="$event.stopPropagation()">
+        <div class="export-modal-header">
+          <h3>Reminder MRT — {{ r.class }} · {{ r.spec }}</h3>
+          <button type="button" class="classify-toggle" (click)="closeExportModal()">✕ cerrar</button>
+        </div>
+        @if (r.skippedForMissingTiming.length) {
+          <p class="result-line result-warn">Sin timing para: {{ r.skippedForMissingTiming.join(', ') }} (usa trigger bossmod o sincroniza)</p>
+        }
+        <pre class="prompt-box">{{ r.text }}</pre>
+        <button type="button" class="sync-btn" (click)="copyExport()">
+          {{ copyStatus() === 'copied' ? '✓ copiado' : copyStatus() === 'error' ? 'error al copiar' : 'copiar' }}
+        </button>
+      </div>
+    </div>
+  }
 </section>

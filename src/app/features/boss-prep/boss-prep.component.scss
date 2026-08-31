@@ -354,27 +354,6 @@ input[type='number'],
   }
 }
 
-.export-section {
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid var(--surface-2);
-
-  h3 {
-    margin: 0 0 10px;
-    font-size: 14px;
-  }
-}
-
-.export-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.export-result {
-  margin-top: 14px;
-}
-
 .prompt-box {
   background: var(--surface-2);
   border: 1px solid var(--card-border);
@@ -383,7 +362,73 @@ input[type='number'],
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 160px;
+  max-height: 320px;
   overflow-y: auto;
   margin: 6px 0 10px;
+}
+
+// §"reubica el botón de crear reminder... útil y accesible" (feedback real, 2026-08-31)
+.export-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 16px;
+  background: color-mix(in srgb, black 55%, transparent);
+}
+
+.export-modal {
+  width: min(720px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+}
+
+.export-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+
+  h3 {
+    margin: 0;
+    font-size: 14px;
+  }
+}
+
+// §"columna nueva... prioridad del 1 al 5... un fondo o algo acorde... visible a simple vista" (feedback real, 2026-08-31)
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+}
+.priority-1 { background: #3a7d3a; }
+.priority-2 { background: #6a8f2e; }
+.priority-3 { background: #c9a227; }
+.priority-4 { background: #d4772a; }
+.priority-5 { background: #c0392b; }
+
+.class-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
 }

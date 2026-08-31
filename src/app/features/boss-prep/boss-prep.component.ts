@@ -20,6 +20,10 @@ import { defensivesForSpec } from '../../shared/defensive-spec-match.util';
 import { encodeMrtExport, spellTag, type MrtReminderInput, type MrtTrigger } from '../../shared/mrt/mrt-reminder-codec';
 import { autoAssignCascade } from '../../shared/mrt/auto-assign-cascade.util';
 import { errorMessage } from '../../shared/error-message.util';
+import { classColor } from '../../shared/format.util';
+import { ClassIconComponent } from '../../shared/class-icon.component';
+import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
+import { MechanicResolutionIconComponent } from '../../shared/mechanic-resolution-icon.component';
 import type { BossMechanicCandidateRow, BossMechanicDefensiveProfileRow, MechanicDefensiveAssignmentRow, CooldownCatalogRow } from '../../shared/models/domain';
 
 // §Validado en real (2026-08-30, ver mrt-reminder-codec.ts): un export real
@@ -61,7 +65,7 @@ interface ExportResult {
 @Component({
   selector: 'app-boss-prep',
   standalone: true,
-  imports: [DecimalPipe, PercentPipe, DatePipe],
+  imports: [DecimalPipe, PercentPipe, DatePipe, ClassIconComponent, WowheadLinkComponent, MechanicResolutionIconComponent],
   templateUrl: './boss-prep.component.html',
   styleUrl: './boss-prep.component.scss',
 })
@@ -75,6 +79,7 @@ export class BossPrepComponent {
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
   readonly allClasses = ALL_CLASSES;
   readonly raidGroups = RAID_GROUPS;
+  readonly classColor = classColor;
 
   bosses = signal<KnownBoss[]>([]);
   loadingBosses = signal(true);
@@ -101,6 +106,7 @@ export class BossPrepComponent {
 
   exportResult = signal<ExportResult | null>(null);
   copyStatus = signal<'idle' | 'copied' | 'error'>('idle');
+  exportModalOpen = signal(false);
 
   selectedBoss = computed(() => this.bosses().find((b) => b.encounterId === this.selectedEncounterId()) ?? null);
   selectedDifficultyName = computed(() => (this.selectedDifficultyId() != null ? WCL_DIFFICULTY_NAME_BY_ID[this.selectedDifficultyId()!] : null));
@@ -116,11 +122,10 @@ export class BossPrepComponent {
     }));
   });
 
-  /** Cada (clase, spec) con al menos una asignación en este boss+dificultad — son los botones "Crear reminder MRT" que tiene sentido ofrecer. */
-  specsWithAssignments = computed(() => {
-    const seen = new Map<string, { class: string; spec: string }>();
-    for (const a of this.assignments()) seen.set(`${a.class}|${a.spec}`, { class: a.class, spec: a.spec });
-    return [...seen.values()].sort((a, b) => a.class.localeCompare(b.class) || a.spec.localeCompare(b.spec));
+  /** §"saber que los defensivos que asignas no dejan huecos de mecánicas... sin cubrir" (feedback real, 2026-08-31): mecánicas que SÍ exigen defensivo (auto o a mano) pero no tienen ni una sola asignación, de ninguna clase/spec, en este boss+dificultad. */
+  coverageGaps = computed(() => {
+    const assignedAbilityIds = new Set(this.assignments().map((a) => a.ability_id));
+    return this.mechanicRows().filter((r) => r.profile?.requires_defensive === true && !assignedAbilityIds.has(r.candidate.ability_id));
   });
 
   constructor() {
@@ -269,6 +274,7 @@ export class BossPrepComponent {
                 reference_role_hit_breakdown: null,
                 reference_cast_offset_ms_samples: [],
                 reference_sample_fight_count: 0,
+                priority: null,
                 requires_defensive: null,
                 requires_defensive_source: null,
                 requires_group_split: false,
@@ -474,7 +480,15 @@ export class BossPrepComponent {
     const profileName = `Preparación - ${this.selectedBoss()?.bossName ?? ''} ${this.selectedDifficultyName() ?? ''} - ${spec}`;
     this.exportResult.set({ class: cls, spec, text: encodeMrtExport(profileName, reminders), skippedForMissingTiming: skipped });
     this.copyStatus.set('idle');
+    this.exportModalOpen.set(true);
   }
+
+  closeExportModal(): void {
+    this.exportModalOpen.set(false);
+  }
+
+  /** §"reubica el botón de crear reminder... que sea útil y accesible" (feedback real, 2026-08-31): reusa la misma pareja clase/spec ya visible en la cabecera en vez de una lista de botones creciendo al final de la página. */
+  hasAssignmentsForSelected = computed(() => this.assignments().some((a) => a.class === this.autoAssignClass() && a.spec === this.autoAssignSpec()));
 
   // --- auto-asignación en cascada ---
   // §"la app ya sabe los cooldown... puede autogenerar una nota sabiendo en
@@ -640,6 +654,11 @@ export class BossPrepComponent {
   roleFraction(breakdown: { tank: number; healer: number; dps: number }, key: 'tank' | 'healer' | 'dps'): number {
     const total = breakdown.tank + breakdown.healer + breakdown.dps;
     return total > 0 ? breakdown[key] / total : 0;
+  }
+
+  /** Nombre+tooltip de Wowhead en vez del spellId crudo en la tabla de asignaciones — null si el catálogo aún no ha cargado esa fila (no debería pasar salvo carrera de carga). */
+  defensiveFor(spellId: number): CooldownCatalogRow | null {
+    return this.cooldownCatalog().find((cd) => cd.spell_id === spellId) ?? null;
   }
 
   async copyExport(): Promise<void> {

@@ -403,6 +403,8 @@ export interface BossMechanicDefensiveProfileRow {
   /** Ms desde pull-start de cada ocurrencia observada — solo timeline/preview, nunca el trigger real (ver MrtBossmodTrigger). */
   reference_cast_offset_ms_samples: number[];
   reference_sample_fight_count: number;
+  /** 1-5, relativo a las demás mecánicas de este boss+dificultad (quintil por impacto) — null = sin evidencia todavía. */
+  priority: number | null;
   requires_defensive: boolean | null;
   /** Mismo vocabulario que SeveritySource (_shared/mechanic-severity.ts) + 'manual_override'. */
   requires_defensive_source: 'own_history' | 'world_reference' | 'fixed_threshold' | 'manual_override' | null;

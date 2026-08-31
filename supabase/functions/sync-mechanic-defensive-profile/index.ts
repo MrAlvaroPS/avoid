@@ -20,15 +20,18 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 // `absorbed` en DamageTaken — `amount+absorbed` reconstruye el golpe crudo
 // aunque se absorbiera del todo, sin necesitar ningún cruce.
 //
-// Deliberadamente NO calcula un `requires_defensive` automático: eso
-// necesitaría normalizar el daño contra la vida máxima real del objetivo
-// (maxHitPoints, que WCL solo da con includeResources — payload mucho más
-// pesado, ver comentario de CPU quota en sync-boss-mechanics) para poder
-// comparar de forma justa entre roles/specs. Mismo contrato que
-// boss_mechanics_candidates: esta función solo escribe evidencia
-// (reference_*), la decisión de "esto exige defensivo" la toma un humano en
-// la pantalla mirando esa evidencia — igual que category/avoidable ya son
-// manuales ahí.
+// §"se tiene que auto poner el 'exige defensivo' cuando lo exija" +
+// "prioridad del 1 al 5... en base al daño que hace a la raid" (feedback
+// real, 2026-08-31): `priority` y `requires_defensive` SÍ se calculan aquí
+// ahora, RELATIVOS a las demás mecánicas de este mismo boss+dificultad
+// (quintil por impactScore = mediana sin mitigar × jugadores golpeados) —
+// no un umbral absoluto de daño (evitaría necesitar maxHitPoints/
+// includeResources, payload mucho más pesado, ver CPU quota en sync-boss-
+// mechanics), sino relativo a "de las mecánicas reales de ESTE boss, ¿esta
+// está entre las que más pico hacen?". Mismo contrato que
+// boss_mechanics_candidates para todo lo demás: si un humano ya puso
+// requires_defensive a mano (requires_defensive_source='manual_override'),
+// un resync nunca lo pisa — ver el bucle de abajo.
 
 interface SyncRequest {
   bossId: string; // encounterID de WCL, como texto — igual que sync-boss-mechanics.
@@ -46,6 +49,12 @@ const REFERENCE_COUNT_BY_DIFFICULTY: Record<string, number> = { Normal: 8, Heroi
 const DEFAULT_REFERENCE_COUNT = 15;
 const REFERENCE_CONCURRENCY = 4;
 const MIN_REFERENCE_SAMPLE_FIGHTS = 5; // mismo umbral que MIN_REFERENCE_SAMPLE en _shared/mechanic-severity.ts — no un número nuevo inventado
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
 
 interface DamageTakenEventLite {
   timestamp?: number;
@@ -89,7 +98,7 @@ Deno.serve(async (req: Request) => {
     // --- qué mecánicas hay que perfilar: las ya curadas por sync-boss-mechanics, no una lista nueva ---
     const { data: allCandidates, error: candidatesError } = await supabase
       .from('boss_mechanics_candidates')
-      .select('difficulty, ability_id, name')
+      .select('difficulty, ability_id, name, reference_avg_players_hit')
       .eq('boss_id', body.bossId);
     if (candidatesError) return jsonResponse({ ok: false, error: candidatesError.message }, 500);
     if (!allCandidates?.length) {
@@ -178,7 +187,18 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      let mechanicsProfiled = 0;
+      interface MechanicAccumulated {
+        candidate: (typeof candidates)[number];
+        unmitigated: number[];
+        mitigated: number[];
+        castOffsets: number[];
+        tankHits: number;
+        healerHits: number;
+        dpsHits: number;
+        sampledFights: number;
+      }
+      const accumulated: MechanicAccumulated[] = [];
+
       for (const candidate of candidates) {
         const nameKey = normalizeAbilityName(candidate.name);
         const unmitigated: number[] = [];
@@ -246,38 +266,95 @@ Deno.serve(async (req: Request) => {
         }
 
         if (sampledFights < 1) continue; // ni un solo fight de referencia de ESTA tanda vio esta mecánica — no toca la fila existente
+        accumulated.push({ candidate, unmitigated, mitigated, castOffsets, tankHits, healerHits, dpsHits, sampledFights });
+      }
 
-        // §acumula contra lo que ya hubiera, no reemplaza — "muchos muchos
-        // muchos logs" solo funciona si cada sync SUMA a la muestra previa.
-        // reference_role_hit_breakdown pasa a guardar CONTADOS crudos (no
-        // fracciones): una fracción no se puede fusionar entre tandas sin
-        // conocer el total de cada una, un contador sí se suma sin más — la
-        // pantalla divide por el total al mostrar.
-        const { data: existing } = await supabase
+      // §"que se tiene que auto poner el 'exige defensivo' cuando lo
+      // exija" + "columna nueva... prioridad del 1 al 5 dependiendo la
+      // prioridad de defensivo que tiene en base al daño que hace a la
+      // raid" (feedback real, 2026-08-31): impactScore = mediana de daño
+      // SIN mitigar × jugadores golpeados por cast (reference_avg_players_
+      // hit, ya calculado por sync-boss-mechanics con correlación real
+      // por-cast) — misma fórmula que usa el ranking de la cascada en
+      // auto-assign-cascade.util.ts (Angular), aquí en Deno porque hace
+      // falta para PERSISTIR priority/requires_defensive, no solo para
+      // rankear en el momento de exportar. Quintil RELATIVO a las demás
+      // mecánicas de ESTE boss+dificultad (no una escala absoluta — un
+      // pico "grande" en un boss puede ser "pequeño" en otro), por eso hay
+      // que tener TODAS las mecánicas de la tanda antes de poder puntuar
+      // ninguna, y por eso este bloque va después del bucle de arriba, no dentro.
+      let mechanicsProfiled = 0;
+      if (accumulated.length) {
+        // Necesita el estado existente de TODAS a la vez (merge de arrays +
+        // no pisar un requires_defensive puesto a mano) — una sola query en
+        // vez de una por mecánica.
+        const { data: existingRows } = await supabase
           .from('boss_mechanic_defensive_profile')
-          .select('reference_unmitigated_damage_samples, reference_mitigated_damage_samples, reference_cast_offset_ms_samples, reference_sample_fight_count, reference_role_hit_breakdown')
+          .select(
+            'ability_id, reference_unmitigated_damage_samples, reference_mitigated_damage_samples, reference_cast_offset_ms_samples, reference_sample_fight_count, reference_role_hit_breakdown, requires_defensive, requires_defensive_source',
+          )
           .eq('boss_id', body.bossId)
           .eq('difficulty', difficultyName)
-          .eq('ability_id', candidate.ability_id)
-          .maybeSingle();
-        const existingBreakdown = (existing?.reference_role_hit_breakdown ?? null) as { tank: number; healer: number; dps: number } | null;
+          .in(
+            'ability_id',
+            accumulated.map((a) => a.candidate.ability_id),
+          );
+        const existingByAbilityId = new Map((existingRows ?? []).map((r) => [r.ability_id as number, r]));
 
-        const { error: upsertError } = await supabase.from('boss_mechanic_defensive_profile').upsert(
-          {
+        const merged = accumulated.map((a) => {
+          const existing = existingByAbilityId.get(a.candidate.ability_id);
+          const existingBreakdown = (existing?.reference_role_hit_breakdown ?? null) as { tank: number; healer: number; dps: number } | null;
+          const unmitigated = [...((existing?.reference_unmitigated_damage_samples as number[]) ?? []), ...a.unmitigated];
+          return {
+            candidate: a.candidate,
+            unmitigated,
+            mitigated: [...((existing?.reference_mitigated_damage_samples as number[]) ?? []), ...a.mitigated],
+            castOffsets: [...((existing?.reference_cast_offset_ms_samples as number[]) ?? []), ...a.castOffsets],
+            sampleFightCount: ((existing?.reference_sample_fight_count as number) ?? 0) + a.sampledFights,
+            breakdown: { tank: (existingBreakdown?.tank ?? 0) + a.tankHits, healer: (existingBreakdown?.healer ?? 0) + a.healerHits, dps: (existingBreakdown?.dps ?? 0) + a.dpsHits },
+            existingRequiresDefensive: (existing?.requires_defensive as boolean | null) ?? null,
+            existingSource: (existing?.requires_defensive_source as string | null) ?? null,
+            impactScore: unmitigated.length ? median(unmitigated) * (a.candidate.reference_avg_players_hit ?? 1) : null,
+          };
+        });
+
+        // Rankeo solo entre las que SÍ tienen evidencia (impactScore no
+        // null) — el resto se queda con priority null, "sin datos" es un
+        // estado real, no un 1 falso.
+        const ranked = merged.filter((m) => m.impactScore != null).sort((a, b) => b.impactScore! - a.impactScore!);
+        const priorityByAbilityId = new Map<number, number>();
+        ranked.forEach((m, idx) => {
+          const priority = Math.max(1, 5 - Math.floor((idx / ranked.length) * 5));
+          priorityByAbilityId.set(m.candidate.ability_id, priority);
+        });
+
+        for (const m of merged) {
+          const priority = priorityByAbilityId.get(m.candidate.ability_id) ?? null;
+          // §"category/avoidable/... nunca se pisan en un resync" (mismo
+          // contrato que boss_mechanics_candidates, ver save-mechanic-
+          // defensive-profile-edit): si un humano ya decidió esto a mano
+          // (manual_override), el sync nunca lo vuelve a tocar.
+          const isManual = m.existingSource === 'manual_override';
+          const patch: Record<string, unknown> = {
             boss_id: body.bossId,
             difficulty: difficultyName,
-            ability_id: candidate.ability_id,
-            reference_unmitigated_damage_samples: [...(existing?.reference_unmitigated_damage_samples ?? []), ...unmitigated],
-            reference_mitigated_damage_samples: [...(existing?.reference_mitigated_damage_samples ?? []), ...mitigated],
-            reference_role_hit_breakdown: { tank: (existingBreakdown?.tank ?? 0) + tankHits, healer: (existingBreakdown?.healer ?? 0) + healerHits, dps: (existingBreakdown?.dps ?? 0) + dpsHits },
-            reference_cast_offset_ms_samples: [...(existing?.reference_cast_offset_ms_samples ?? []), ...castOffsets],
-            reference_sample_fight_count: (existing?.reference_sample_fight_count ?? 0) + sampledFights,
+            ability_id: m.candidate.ability_id,
+            reference_unmitigated_damage_samples: m.unmitigated,
+            reference_mitigated_damage_samples: m.mitigated,
+            reference_role_hit_breakdown: m.breakdown,
+            reference_cast_offset_ms_samples: m.castOffsets,
+            reference_sample_fight_count: m.sampleFightCount,
+            priority,
             updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'boss_id,difficulty,ability_id' },
-        );
-        if (!upsertError) mechanicsProfiled++;
-        else console.error(`sync-mechanic-defensive-profile: fallo guardando ${candidate.name} (${difficultyName}):`, upsertError.message);
+          };
+          if (!isManual) {
+            patch['requires_defensive'] = priority == null ? m.existingRequiresDefensive : priority >= 3;
+            patch['requires_defensive_source'] = priority == null ? m.existingSource : 'world_reference';
+          }
+          const { error: upsertError } = await supabase.from('boss_mechanic_defensive_profile').upsert(patch, { onConflict: 'boss_id,difficulty,ability_id' });
+          if (!upsertError) mechanicsProfiled++;
+          else console.error(`sync-mechanic-defensive-profile: fallo guardando ${m.candidate.name} (${difficultyName}):`, upsertError.message);
+        }
       }
 
       results.push({ difficulty: difficultyName, referenceFightsUsed: bundles.length, mechanicsProfiled, totalFightsConsumed: alreadyConsumed + refs.length, exhausted });
