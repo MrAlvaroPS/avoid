@@ -30,13 +30,23 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Repair temporary fixer escaping
+      - name: Repair temporary fixer
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('scripts/apply-pr2-consistency-fixes.mjs')
           s = p.read_text()
+          # Corrige escapes de backticks dentro de templates generados.
           s = s.replace(r"\\`", r"\`")
+          # En boss-prep hay dos filtros textualmente iguales: el primero es
+          # la timeline visible y el segundo vive dentro de la cascada, que se
+          # sustituye completa justo después. Solo este reemplazo puede usar la
+          # primera coincidencia; el resto conserva la protección anti-ambigüedad.
+          old = "if (content.indexOf(from, first + from.length) >= 0) throw new Error(`Texto ambiguo (más de una coincidencia): ${label}`);"
+          new = "if (label !== 'prep timeline requires_defensive' && content.indexOf(from, first + from.length) >= 0) throw new Error(`Texto ambiguo (más de una coincidencia): ${label}`);"
+          if old not in s:
+              raise SystemExit('No se encontró la guarda de ambigüedad esperada')
+          s = s.replace(old, new, 1)
           p.write_text(s)
           PY
           node --check scripts/apply-pr2-consistency-fixes.mjs
