@@ -274,6 +274,8 @@ export class EdgeFunctionsService {
     /** §"que lo sugiera, no que lo borre solo" (feedback real, 2026-08-31): la IA cree que ya no es un defensivo real — nunca se aplica sola, un humano confirma fila por fila con el botón "excluir" manual. */
     suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
+    /** Pulls cuyo snapshot defensivo quedó materialmente obsoleto por survival type/CD/duración aplicados por la IA. */
+    pullIds: string[];
   }> {
     return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
   }

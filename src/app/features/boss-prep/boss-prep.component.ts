@@ -549,7 +549,10 @@ export class BossPrepComponent {
     const spec = this.autoAssignSpec();
     const role = roleFromSpec(cls, spec);
     const relevant = this.candidates()
-      .filter((c) => mechanicAppliesToRole(c.responsibility, role))
+      .filter((c) => {
+        const profile = this.profiles().find((p) => p.ability_id === c.ability_id) ?? null;
+        return profile?.requires_defensive === true && mechanicAppliesToRole(c.responsibility, role);
+      })
       .map((c) => {
         const profile = this.profiles().find((p) => p.ability_id === c.ability_id) ?? null;
         return { candidate: c, profile, timeMs: median(profile?.reference_cast_offset_ms_samples ?? []) };
@@ -620,19 +623,72 @@ export class BossPrepComponent {
     return unmitigatedMedian * (candidate.reference_avg_players_hit ?? 1);
   }
 
-  /** Motor de la cascada para UNA spec — reutilizado por el botón de spec suelta y por "auto-asignar clase". No guarda progreso propio (lo hace el caller) para poder encadenar varias specs sin pisarse. */
+  /** Motor de la cascada para UNA spec. Solo rellena huecos; las asignaciones humanas existentes son inmutables y reservan su cooldown. */
   private async runCascadeForSpec(bossId: string, difficulty: string, cls: string, spec: string): Promise<{ assigned: number; candidates: number }> {
     const role = roleFromSpec(cls, spec);
+    const profilesByAbilityId = new Map(this.profiles().map((p) => [p.ability_id, p]));
+    const timeByAbilityId = new Map(
+      this.candidates().map((candidate) => [
+        candidate.ability_id,
+        median(profilesByAbilityId.get(candidate.ability_id)?.reference_cast_offset_ms_samples ?? []),
+      ]),
+    );
+
+    const existingForSpec = this.assignments().filter((a) => a.class === cls && a.spec === spec);
+    const alreadyAssignedAbilityIds = new Set(existingForSpec.map((a) => a.ability_id));
+
     const mechanicInputs = this.candidates()
-      .filter((c) => mechanicAppliesToRole(c.responsibility, role))
-      .map((c) => {
-        const profile = this.profiles().find((p) => p.ability_id === c.ability_id) ?? null;
-        return { abilityId: c.ability_id, name: c.name, timeMs: median(profile?.reference_cast_offset_ms_samples ?? []), impactScore: this.impactScore(c, profile) };
-      });
-    const defensiveInputs = defensivesForSpec(this.cooldownCatalog(), cls, spec).map((cd) => ({ spellId: cd.spell_id, survivalType: cd.survival_type, baseCooldownMs: cd.base_cooldown_ms }));
+      .filter((candidate) => {
+        const profile = profilesByAbilityId.get(candidate.ability_id) ?? null;
+        return (
+          profile?.requires_defensive === true &&
+          mechanicAppliesToRole(candidate.responsibility, role) &&
+          !alreadyAssignedAbilityIds.has(candidate.ability_id)
+        );
+      })
+      .map((candidate) => ({
+        abilityId: candidate.ability_id,
+        name: candidate.name,
+        timeMs: timeByAbilityId.get(candidate.ability_id) ?? null,
+        impactScore: this.impactScore(candidate, profilesByAbilityId.get(candidate.ability_id) ?? null),
+      }));
+
+    const reservationsBySpellId = new Map<number, number[]>();
+    const blockedBecauseTimingUnknown = new Set<number>();
+    for (const assignment of existingForSpec) {
+      const timeMs = timeByAbilityId.get(assignment.ability_id) ?? null;
+      if (timeMs == null) {
+        // Si ya hay un uso manual cuyo momento no podemos situar, ese spell
+        // no es seguro para nuevas asignaciones automáticas.
+        blockedBecauseTimingUnknown.add(assignment.defensive_spell_id);
+        continue;
+      }
+      const reservations = reservationsBySpellId.get(assignment.defensive_spell_id) ?? [];
+      reservations.push(timeMs);
+      reservationsBySpellId.set(assignment.defensive_spell_id, reservations);
+    }
+
+    const defensiveInputs = defensivesForSpec(this.cooldownCatalog(), cls, spec)
+      .filter((cd) => !blockedBecauseTimingUnknown.has(cd.spell_id))
+      .map((cd) => ({
+        spellId: cd.spell_id,
+        survivalType: cd.survival_type,
+        baseCooldownMs: cd.base_cooldown_ms,
+        reservedTimesMs: reservationsBySpellId.get(cd.spell_id) ?? [],
+      }));
+
     const result = autoAssignCascade(mechanicInputs, defensiveInputs);
-    for (const a of result) {
-      await this.edgeFunctions.saveMechanicDefensiveAssignment({ bossId, difficulty, abilityId: a.abilityId, class: cls, spec, defensiveSpellId: a.defensiveSpellId, prewarnSeconds: 5, triggerType: 'bossmod' });
+    for (const assignment of result) {
+      await this.edgeFunctions.saveMechanicDefensiveAssignment({
+        bossId,
+        difficulty,
+        abilityId: assignment.abilityId,
+        class: cls,
+        spec,
+        defensiveSpellId: assignment.defensiveSpellId,
+        prewarnSeconds: 5,
+        triggerType: 'bossmod',
+      });
     }
     return { assigned: result.length, candidates: mechanicInputs.filter((m) => m.timeMs != null).length };
   }

@@ -27,7 +27,9 @@ create table if not exists boss_mechanic_defensive_profile (
   -- Mismos hits pero CON un defensivo de %-reducción activo — delta real de
   -- mitigación observado, no supuesto.
   reference_mitigated_damage_samples numeric[] not null default '{}',
-  -- { tank: 0.1, healer: 0.05, dps: 0.85 } — fracción de hits por rol.
+  -- { tank: 12, healer: 4, dps: 84 } — CONTADORES CRUDOS acumulables de
+  -- hits por rol. La UI divide por la suma para obtener fracciones; guardar
+  -- fracciones aquí impediría fusionar tandas posteriores sin perder peso.
   reference_role_hit_breakdown jsonb,
   -- Ms desde pull-start de cada ocurrencia observada — solo para
   -- timeline/preview en la pantalla y como fallback si no hay trigger de

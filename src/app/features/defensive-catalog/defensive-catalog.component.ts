@@ -370,6 +370,12 @@ export class DefensiveCatalogComponent {
       // mismo — el resto se recarga solas al cambiar de pestaña (selectClass
       // siempre vuelve a pedir la lista, nunca sirve caché).
       await this.loadDefensives();
+      // La clasificación IA modifica los mismos campos materiales que la
+      // edición manual; por tanto usa exactamente la misma cola secuencial
+      // de reanálisis antes de dar la operación por terminada.
+      if (res.pullIds.length) {
+        await this.runReanalysisQueue(scope === 'all' ? 'clasificación IA (catálogo completo)' : `clasificación IA (${classDisplayName(scope)})`, res.pullIds);
+      }
       this.classifyResult.set({
         applied: res.applied,
         skippedLowConfidence: res.skippedLowConfidence,

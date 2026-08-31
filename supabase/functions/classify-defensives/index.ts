@@ -94,6 +94,8 @@ interface DefensiveForPrompt {
   category: string;
   currentSurvivalType: string | null;
   currentInferredSurvivalType: string | null;
+  currentBaseCooldownMs: number | null;
+  currentBaseDurationMs: number | null;
 }
 
 interface ClassificationEntry {
@@ -103,6 +105,8 @@ interface ClassificationEntry {
   confidence: 'high' | 'medium' | 'low';
   sources: string[];
   notes: string;
+  baseCooldownSeconds: number | null;
+  baseDurationSeconds: number | null;
 }
 
 Deno.serve(async (req: Request) => {
@@ -132,7 +136,7 @@ Deno.serve(async (req: Request) => {
   try {
     let query = supabase
       .from('cooldown_catalog')
-      .select('spell_id,name,class,spec,category,survival_type,inferred_survival_type')
+      .select('spell_id,name,class,spec,category,survival_type,inferred_survival_type,base_cooldown_ms,base_duration_ms')
       .order('class', { ascending: true })
       .order('name', { ascending: true });
     if (body.class) query = query.eq('class', body.class);
@@ -146,6 +150,8 @@ Deno.serve(async (req: Request) => {
       category: string;
       survival_type: string | null;
       inferred_survival_type: string | null;
+      base_cooldown_ms: number | null;
+      base_duration_ms: number | null;
     }[];
     if (!defensives.length) return jsonResponse({ ok: false, error: `${scopeLabel} todavía no tiene ningún defensivo en el catálogo — sincroniza cooldown_catalog primero (extractor de WoWAnalyzer).` }, 400);
 
@@ -158,6 +164,8 @@ Deno.serve(async (req: Request) => {
         category: d.category,
         currentSurvivalType: d.survival_type,
         currentInferredSurvivalType: d.inferred_survival_type,
+        currentBaseCooldownMs: d.base_cooldown_ms,
+        currentBaseDurationMs: d.base_duration_ms,
       }));
       const systemPrompt = buildSystemPrompt(body.class ?? null);
       const userMessage = `Alcance: ${scopeLabel}\nDefensivos a clasificar (${list.length}):\n${JSON.stringify(list, null, 2)}\n\nRECORDATORIO FINAL: devuelve exactamente ${list.length} objetos, uno por cada spellId de la lista, con las ocho claves spellId/stillDefensive/survivalType/confidence/sources/notes/baseCooldownSeconds/baseDurationSeconds en todos. No omitas ninguno.`;
@@ -176,7 +184,7 @@ Deno.serve(async (req: Request) => {
       if (!Array.isArray(parsed)) return jsonResponse({ ok: false, error: 'Se esperaba un array JSON de clasificaciones.' }, 400);
 
       const knownSpellIds = new Set(defensives.map((d) => d.spell_id));
-      const applied: { spellId: number; name: string; survivalType: string; confidence: 'high' | 'medium'; sources: string[]; notes: string }[] = [];
+      const applied: { spellId: number; name: string; class: string; survivalType: string; confidence: 'high' | 'medium'; sources: string[]; notes: string; baseCooldownMs: number | null; baseDurationMs: number | null; materialChanged: boolean }[] = [];
       const skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[] = [];
       const skippedUndetermined: { spellId: number; name: string }[] = [];
       const invalid: { spellId: unknown; reason: string }[] = [];
@@ -216,13 +224,28 @@ Deno.serve(async (req: Request) => {
           skippedLowConfidence.push({ spellId: entry.spellId, name, survivalType: entry.survivalType, notes: entry.notes ?? '' });
           continue;
         }
+        const timingValues = [entry.baseCooldownSeconds, entry.baseDurationSeconds];
+        if (timingValues.some((value) => value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0))) {
+          invalid.push({ spellId: entry.spellId, reason: 'baseCooldownSeconds/baseDurationSeconds deben ser números >= 0 o null' });
+          continue;
+        }
+        const baseCooldownMs = entry.baseCooldownSeconds == null ? null : Math.round(entry.baseCooldownSeconds * 1000);
+        const baseDurationMs = entry.baseDurationSeconds == null ? null : Math.round(entry.baseDurationSeconds * 1000);
+        const materialChanged =
+          (matched?.survival_type ?? null) !== entry.survivalType ||
+          (matched?.base_cooldown_ms ?? null) !== baseCooldownMs ||
+          (matched?.base_duration_ms ?? null) !== baseDurationMs;
         applied.push({
           spellId: entry.spellId,
           name,
+          class: matched?.class ?? '',
           survivalType: entry.survivalType,
           confidence: entry.confidence === 'high' ? 'high' : 'medium',
           sources: Array.isArray(entry.sources) ? entry.sources : [],
           notes: entry.notes ?? '',
+          baseCooldownMs,
+          baseDurationMs,
+          materialChanged,
         });
       }
 
@@ -238,25 +261,36 @@ Deno.serve(async (req: Request) => {
       // se toca aquí a propósito: sigue distinguiendo "la IA ya lo rellenó"
       // de "un humano lo ha revisado de verdad".
       const submittedAt = new Date().toISOString();
+      const affectedClasses = new Set<string>();
       for (const a of applied) {
-        // spell_id ya es único en toda la tabla (contrastado en real: 60/60
-        // filas con spell_id distinto) — en alcance "todas las clases" no
-        // hay body.class con el que filtrar, así que spell_id solo ya
-        // identifica la fila sin ambigüedad.
-        let updateQuery = supabase
-          .from('cooldown_catalog')
-          .update({
-            survival_type: a.survivalType,
-            inferred_survival_type: a.survivalType,
-            ai_classification: { confidence: a.confidence, sources: a.sources, notes: a.notes, classifiedAt: submittedAt },
-          })
-          .eq('spell_id', a.spellId);
+        const patch: Record<string, unknown> = {
+          survival_type: a.survivalType,
+          inferred_survival_type: a.survivalType,
+          base_cooldown_ms: a.baseCooldownMs,
+          base_duration_ms: a.baseDurationMs,
+          ai_classification: { confidence: a.confidence, sources: a.sources, notes: a.notes, classifiedAt: submittedAt },
+        };
+        if (a.materialChanged) {
+          patch['updated_at'] = submittedAt;
+          if (a.class) affectedClasses.add(a.class);
+        }
+        let updateQuery = supabase.from('cooldown_catalog').update(patch).eq('spell_id', a.spellId);
         if (body.class) updateQuery = updateQuery.eq('class', body.class);
         const { error } = await updateQuery;
         if (error) throw error;
       }
 
-      return jsonResponse({ ok: true, applied, skippedLowConfidence, skippedUndetermined, suggestedExclusions, invalid });
+      let pullIds: string[] = [];
+      if (affectedClasses.size) {
+        const { data: affectedRecords, error: affectedError } = await supabase
+          .from('player_pull_records')
+          .select('pull_id')
+          .in('class', [...affectedClasses]);
+        if (affectedError) throw affectedError;
+        pullIds = [...new Set((affectedRecords ?? []).map((r) => (r as { pull_id: string }).pull_id))];
+      }
+
+      return jsonResponse({ ok: true, applied, skippedLowConfidence, skippedUndetermined, suggestedExclusions, invalid, pullIds });
     }
 
     return jsonResponse({ ok: false, error: `action inválida: ${body.action}` }, 400);

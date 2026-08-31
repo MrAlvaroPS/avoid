@@ -17,6 +17,9 @@
             @if (fullReport(); as stored) {
               <span aria-hidden="true">·</span> actualizado {{ stored.generatedAt | date: 'd MMM, HH:mm' }}
             }
+            <span aria-hidden="true">·</span>
+            <!-- §"un enlace a WCL a ese mismo log, para poder abrirlo rápido en WCL" (feedback real, 2026-08-30): reportCode ES el código de informe de WCL (mismo que usa toda la app para enlazar pulls individuales), no hace falta traer nada nuevo. -->
+            <a class="wcl-link" [href]="'https://www.warcraftlogs.com/reports/' + d.reportCode" target="_blank" rel="noopener" title="Abrir este log en Warcraft Logs">Ver en WCL ↗</a>
           </p>
         </div>
       </div>
@@ -33,7 +36,7 @@
           class="secondary-button"
           [disabled]="recalculatingAll()"
           (click)="onRecalculateAll()"
-          title="Recalcula ejecución de la noche, Fiabilidad y el informe entero contra los datos actuales del catálogo (defensivos, mecánicas...), saltándose todos los cachés."
+          title="Reanaliza los pulls y reconstruye ejecución, parse, defensivos, fiabilidad, evolución e informe usando los datos actuales."
         >
           @if (recalculatingAll()) {
             <span class="button-spinner" aria-hidden="true"></span>
@@ -64,7 +67,7 @@
       <p class="full-report-error" role="alert">No se pudo preparar el informe: {{ fe }}</p>
     }
     @if (recalculateAllError(); as re) {
-      <p class="full-report-error" role="alert">No se pudo recalcular todo: {{ re }}</p>
+      <p class="full-report-error" role="alert">{{ re }}</p>
     }
 
     @if (fullReport()?.report; as r) {
@@ -187,30 +190,48 @@
             }
           </p>
         }
-        <!-- §"en lugar de ponerlo asi, podriamos ponerlo como un listado
-             breve con puntuacion de 'EJECUCIÓN DE ESTA NOCHE' y
-             'FIABILIDAD'... y en otra columna tambien 'estado'... la misma
-             información que tiene en estado del roster para esa noche...
-             si pulsas sobre el estado, te lleva a la pestaña de 'roster'...
-             si pulsas sobre el nombre te lleva a su dosier como siempre"
-             (feedback real, 2026-08-30): reemplaza la rejilla de chips de
-             presentes por una tabla con el rendimiento de cada uno — desde
-             el propio informe se ve quién necesita revisión sin abrir 20
-             dosiers. Fiabilidad/Estado son el MISMO dato que /roster
-             (attendanceRows(), ver el .ts) — nunca un cálculo paralelo. -->
+        <!-- §"más completa para ver de un vistazo información importante...
+             las filas (organizadas por rol, eso está bien) también un
+             desplegable... quitar la columna de 'estado' (eso ya se puede
+             ver en la pestaña de roster)... si pulso sobre el nombre me
+             lleva a su dosier, pero además dentro del desplegable hay un
+             botón con una flecha que dice 'ver dosier'... columnas siempre
+             visibles: el parse (WCL), ejecución de esta noche, defensivos
+             (el que también enseñamos en su dosier), fiabilidad de la noche
+             y fiabilidad a 60 días" (feedback real, 2026-08-30): reemplaza
+             la tabla plana por un acordeón — Parse/Ejecución/Defensivos son
+             de ESTE report (nightScore/nightReliability/worldRankPercent),
+             Fiabilidad-60-días es el MISMO dato que /roster
+             (attendanceRows(), ver el .ts) — nunca un cálculo paralelo.
+             Filas ya vienen ordenadas por rol (tanks→healers→dps, ver
+             night-report.service.ts), sin tocar aquí. -->
         <div class="attendance-table-wrap">
           <table class="attendance-table">
             <thead>
               <tr>
+                <th></th>
                 <th>Jugador</th>
-                <th>Ejecución de esta noche</th>
-                <th>Fiabilidad</th>
-                <th>Estado</th>
+                <th class="col-num" title="Media (redondeada) del percentil de WCL de sus kills rankeadas esta noche">Parse</th>
+                <th class="col-num">Ejecución</th>
+                <th class="col-num" title="Sub-score defensiva del breakdown de Fiabilidad — esta noche">Defensivos</th>
+                <th class="col-num">Fiabilidad noche</th>
+                <th class="col-num">Fiabilidad 60d</th>
               </tr>
             </thead>
             <tbody>
-              @for (row of attendanceRows(); track row.name) {
-                <tr>
+              @for (row of attendanceRows(); track row.name; let i = $index) {
+                <tr class="attendance-row-main" [class.expanded]="isPlayerExpanded(row.name)" [class.row-alt]="i % 2 === 1">
+                  <td class="expand-cell">
+                    <button
+                      type="button"
+                      class="row-expand-btn"
+                      (click)="togglePlayer(row.name)"
+                      [attr.aria-expanded]="isPlayerExpanded(row.name)"
+                      [attr.aria-label]="(isPlayerExpanded(row.name) ? 'Ocultar' : 'Ver') + ' detalle de ' + row.name"
+                    >
+                      <span class="row-expand-chevron" aria-hidden="true">▸</span>
+                    </button>
+                  </td>
                   <td>
                     <a class="player-chip" [style.color]="classColor(row.class)" [routerLink]="['/report', d.reportCode, 'player', row.name]">
                       <app-class-icon [wclClass]="row.class" />{{ row.name }}
@@ -219,23 +240,71 @@
                       }
                     </a>
                   </td>
-                  <td class="tabular" [class]="'tone-' + (scoreTone(row.nightScore == null ? null : row.nightScore * 100) ?? '')">
-                    {{ row.nightScore == null ? '…' : formatPct(row.nightScore * 100) }}
+                  <td class="col-num">
+                    <span class="stat-chip" [class]="'wcl-' + (wclParseTier(row.stats?.nightParse ?? null) ?? '')">
+                      {{ row.stats?.nightParse == null ? '—' : formatPct(row.stats!.nightParse!, 0) }}
+                    </span>
                   </td>
-                  <td class="tabular" [class]="'tone-' + (row.view ? scoreTone(row.view.player.overall) ?? '' : '')">
-                    {{ row.view ? row.view.player.overall + '/100' : '—' }}
+                  <td class="col-num">
+                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.stats?.nightScore == null ? null : row.stats!.nightScore! * 100) ?? '')">
+                      {{ row.stats?.nightScore == null ? '…' : formatPct(row.stats!.nightScore! * 100, 0) }}
+                    </span>
                   </td>
-                  <td>
-                    <a
-                      class="status-pill"
-                      [class]="'status-pill status-' + (row.view?.status ?? 'no-data')"
-                      routerLink="/roster"
-                      [title]="'Ver ' + row.name + ' en el roster'"
-                    >
-                      <i aria-hidden="true"></i>{{ row.view?.statusLabel ?? 'Sin datos' }}
-                    </a>
+                  <td class="col-num">
+                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.stats?.nightDefensiva ?? null) ?? '')">
+                      {{ row.stats?.nightDefensiva == null ? '—' : formatPct(row.stats!.nightDefensiva!, 0) }}
+                    </span>
+                  </td>
+                  <td class="col-num">
+                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.stats?.nightReliability ?? null) ?? '')">
+                      {{ row.stats?.nightReliability == null ? '—' : row.stats!.nightReliability }}
+                    </span>
+                  </td>
+                  <td class="col-num">
+                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.reliability60d) ?? '')">
+                      {{ row.reliability60d == null ? '—' : row.reliability60d }}
+                    </span>
                   </td>
                 </tr>
+                @if (isPlayerExpanded(row.name)) {
+                  <tr class="attendance-row-detail">
+                    <td colspan="7">
+                      <div class="attendance-detail">
+                        <a class="dossier-link-btn" [routerLink]="['/report', d.reportCode, 'player', row.name]"> Ver dosier → </a>
+                        @if (tonightBossKeys().length) {
+                          <div class="evolution-list">
+                            @for (boss of tonightBossKeys(); track boss.key) {
+                              <div class="evolution-block">
+                                <div class="evolution-heading">
+                                  <span>{{ boss.bossName }} <span class="difficulty">{{ boss.difficulty }}</span></span>
+                                  <small>Fiabilidad (mecánica + defensiva + preparación, 0-100) en este boss+dificultad — una barra por noche que lo intentó, nunca mezclado con otra dificultad. Pulsa cada barra para el desglose.</small>
+                                </div>
+                                @if (evolutionPointsFor(row.name, boss.key, d.reportCode); as points) {
+                                  @if (points.length) {
+                                    <div class="evolution-chart">
+                                      @for (p of points; track p.reportCode) {
+                                        <div class="evolution-col" [class.is-current]="p.isCurrent" [title]="p.tooltip">
+                                          <span class="evolution-value tabular" [class]="'tone-' + (scoreTone(p.overall) ?? '')">{{ p.overall }}</span>
+                                          <div class="evolution-track">
+                                            <div class="evolution-fill" [class]="'tone-' + (scoreTone(p.overall) ?? '')" [style.height.%]="p.overall"></div>
+                                          </div>
+                                          <span class="evolution-result" [class.tone-success]="p.resultIsKill">{{ p.resultLabel }}</span>
+                                          <span class="evolution-date">{{ p.dateLabel }}{{ p.isCurrent ? ' · hoy' : '' }}</span>
+                                        </div>
+                                      }
+                                    </div>
+                                  } @else {
+                                    <p class="empty-copy">Sin historial todavía en este boss+dificultad — esta es la primera vez.</p>
+                                  }
+                                }
+                              </div>
+                            }
+                          </div>
+                        }
+                      </div>
+                    </td>
+                  </tr>
+                }
               }
             </tbody>
           </table>
