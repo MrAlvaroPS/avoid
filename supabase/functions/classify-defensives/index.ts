@@ -3,110 +3,261 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { errorMessage } from '../_shared/error-message.ts';
 
-// §"pantalla nueva para clasificar defensivos... parecida a la de
-// mecánicas de bosses pero para defensivos" (feedback real): mismo patrón
-// EXACTO de dos pasos que classify-mechanics — prompt generado, el RL lo
-// pega en un chat de IA con acceso a internet, y pega la respuesta de
-// vuelta aquí. Acotado SIEMPRE a una clase concreta (nunca mezcla clases),
-// igual que classify-mechanics nunca mezcla bosses+dificultad.
-//
-// §corrección (2026-08-31): el comentario que había aquí decía "survival_type
-// nunca se copia... no hay snapshot que quede desactualizado" — FALSO,
-// verificado en real (Ardent Defender, tank de Paladin): defensive_pressure_
-// windows.options SÍ copia survivalType al analizar/reanalizar un pull (ver
-// evaluateWindowCoverage en damage-pressure-windows.ts), y de ahí sale si una
-// ventana sin usar cuenta como fallo. save-defensive-edit ya dispara
-// reanálisis al cambiar survival_type (no solo cooldown/duración) — ver ese
-// fichero para el porqué. reset-class-defensives (botón "restablecer
-// clasificación" en esta pantalla) también lo dispara, mismo motivo.
-
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
 const SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
+const CATEGORIES = new Set(['personal_defensive', 'semi_defensive', 'external_defensive', 'utility']);
+const CONFIDENCES = new Set(['high', 'medium', 'low']);
+const MODIFIER_OPERATIONS = new Set(['subtract_seconds', 'add_seconds', 'multiply', 'set_seconds', 'charges_add']);
+const MODIFIER_CONDITIONS = new Set(['always', 'conditional']);
 
-// Definiciones tal cual las escribió el usuario (feedback real) — se
-// mandan literalmente a la IA para que clasifique con el mismo criterio
-// exacto, no una paráfrasis que pueda desviarse.
 const SURVIVAL_TYPE_GLOSSARY = `- mitigation ("Mitigación"): reduce el daño que finalmente recibes ANTES de que te reste vida — DR%, armadura, reducción física/mágica específica, dodge/parry si es un defensivo activo, damage smoothing/stagger.
 - absorption ("Absorción"): añade una capa/pool de vida aparte que el daño tiene que consumir antes de afectar tu HP — escudos, barriers, absorbs, efectos tipo Ignore Pain. Se separa de mitigation porque se agota, se acumula o se rompe de una vez, no reduce un porcentaje continuo.
-- sustain ("Sustain"): repara vida ya perdida o mantiene tu HP estable con el tiempo — self-heals, HoTs, regeneración pasiva, leech, life drain, curación basada en daño infligido. El daño ya ocurrió; esto lo repara después.
-- emergency ("Emergencia"): herramienta para sobrevivir a una situación crítica o daño potencialmente letal — inmunidades, cheat death, "no puedes bajar de X% HP", "no puedes morir durante X s", aumento grande de vida máxima, curación instantánea enorme tipo panic button.
+- sustain ("Sustain"): repara vida ya perdida o mantiene tu HP estable con el tiempo — self-heals, HoTs, regeneración activa, leech/life drain activables. El daño ya ocurrió; esto lo repara después.
+- emergency ("Emergencia"): herramienta para sobrevivir a una situación crítica o daño potencialmente letal — inmunidades, cheat death, "no puedes bajar de X% HP", aumento grande temporal de vida máxima o una curación instantánea tipo panic button.
 
-Regla rápida para desambiguar: mitigation evita PARTE del daño antes de que llegue; absorption intercepta el daño con un pool adicional; sustain repara daño YA recibido; emergency evita una muerte o dispara drásticamente el margen de supervivencia. Cuando una habilidad mezcla varias (ej. un escudo que ADEMÁS cura), prioriza el efecto que define su USO principal en una mecánica de raid letal, y explica la mezcla en notes.`;
+Regla de desambiguación: mitigation evita PARTE del daño antes de que llegue; absorption intercepta daño con un pool; sustain repara HP ya perdido; emergency aumenta drásticamente el margen ante daño letal. Si mezcla mecanismos, usa el que define su uso principal y explica la mezcla en notes.`;
 
-// §"viendo que la cantidad de habilidades defensivas tampoco es
-// desorbitante, no podemos hacer un único prompt que clasifique todas las
-// specs a la vez?" (feedback real, contrastado: 60 filas en total en las 13
-// clases — cabe de sobra en un único prompt). className=null cubre el
-// catálogo entero en una sola pasada; cada entrada de la lista lleva su
-// propia "class" para que la IA investigue cada una en su clase real aunque
-// vayan mezcladas.
-// §"no poner el cd de un defensivo falsea muchísimo los datos, medias y
-// baremos... eso debería automatizarse... cuando sincronizamos los
-// defensivos o hacemos un prompt para traer los datos" (feedback real,
-// 2026-08-29): verificado en real — Fortifying Brew (Monk) tenía
-// base_cooldown_ms null pese a un cooldown de 3 min bien documentado en
-// Wowhead (captura real aportada por el usuario, con el tooltip completo).
-// El extractor de WoWAnalyzer deja null cuando el código fuente no trae un
-// número fijo (talentos/haste variable) — pero el TOOLTIP de Wowhead sí lo
-// da como número concreto para el caso base sin talentos, que es
-// justo lo que necesita esta columna. Mismo prompt, mismo flujo de
-// pegar/aplicar que ya existía para survival_type — no una pantalla nueva.
+const CATEGORY_GLOSSARY = `- personal_defensive: protege al propio caster y su uso defensivo es esencialmente personal/self-only.
+- semi_defensive: puede funcionar como un defensivo personal real al lanzarlo sobre uno mismo, aunque también pueda lanzarse sobre aliados o tenga otros usos. IMPORTANTE: un escudo targeteable como Power Word: Shield entra aquí si el Priest puede usarlo sobre sí mismo.
+- external_defensive: protege a otro jugador y no es una herramienta personal utilizable de forma equivalente por el caster.
+- utility: no aporta por sí mismo mitigación/absorción/sustain/emergencia relevante para sobrevivir una mecánica de raid.`;
+
 function buildSystemPrompt(className: string | null): string {
   const scope = className
-    ? `de la clase "${className}"`
-    : `de TODAS las clases de World of Warcraft retail (la lista trae defensivos de varias clases a la vez — cada entrada indica su "class"; investiga cada habilidad en el contexto de SU clase real, no asumas que todas comparten mecanismo)`;
-  return `Eres un investigador experto en World of Warcraft retail. HOY es ${todayIso()} — contrasta cada dato contra el PARCHE VIGENTE HOY, nunca contra un parche/expansión anterior que puedas recordar de tu entrenamiento: cooldowns, duraciones y hasta el propio mecanismo de una habilidad cambian entre parches, y una respuesta desactualizada falsea los datos tanto como una inventada (§"hay varios que son viejos y están falseando datos", feedback real). Si una fuente que consultas no deja claro de qué parche es, prioriza la más reciente y dilo en "sources". Tu tarea es, para cada defensivo/cooldown de supervivencia ${scope}: (1) clasificar qué le hace al daño entrante durante una mecánica de raid, y (2) resolver su cooldown base y duración del efecto en segundos — investigando en fuentes reales, A DÍA DE HOY (Wowhead —tooltip, que trae "Cooldown" y "Lasts X sec" como números concretos—, Icy Veins, Warcraft Logs, la documentación oficial de Blizzard). Busca por el NOMBRE de la habilidad (y su "class") — el spellId solo sirve para identificarla en tu respuesta.
+    ? `la clase "${className}"`
+    : 'TODAS las clases de World of Warcraft retail; cada entrada conocida trae su propia class';
 
-Para CADA habilidad, contrasta al menos DOS fuentes reales (idealmente el tooltip de Wowhead, que ya trae el cooldown y la duración como números literales cuando existen). Si el efecto de supervivencia es ambiguo o mezcla varios mecanismos sin que ninguno domine, marca confidence:"low" (o survivalType:null si de verdad no puedes decidir) — un humano revisará cualquier respuesta con confidence "low".
+  return `Eres un investigador experto en World of Warcraft retail. HOY es ${todayIso()}. Investiga el PARCHE RETAIL VIGENTE HOY; no uses datos de Classic ni de expansiones/parches antiguos salvo para descartarlos explícitamente.
 
-Antes de clasificar, comprueba primero si la habilidad SIGUE siendo un defensivo de verdad HOY: algunas se han rediseñado entre parches y perdieron por completo el efecto de mitigación/absorción/curación/emergencia que tenían antes (ej. pasaron a ser puramente utilidad, movilidad, o se quitaron del juego). Si es el caso, pon "stillDefensive": false y explica en "notes" qué es ahora en su lugar (o que ya no existe) — no fuerces un survivalType solo por mantenerla clasificada como si nada. Si sigue siendo un defensivo real (la inmensa mayoría de los casos), pon "stillDefensive": true y clasifícala normalmente.
+Tu trabajo tiene DOS FASES OBLIGATORIAS e independientes para ${scope}:
 
-Sobre baseCooldownSeconds/baseDurationSeconds: usa el número BASE del tooltip (sin contar talentos que lo reduzcan/aumenten — ese ajuste ya se calcula aparte). null si la habilidad no tiene cooldown propio (ej. un recurso que se genera pasivamente) o si de verdad varía sin un valor base fijo (ej. depende 100% de haste sin ningún número de referencia). No inventes un número si no lo encontraste en una fuente real — currentBaseCooldownMs/currentBaseDurationMs en la lista de abajo ya te dicen qué campos siguen sin resolver (null) en nuestra base de datos, priorízalos, pero también corrige un valor existente si contrastando la fuente ves que está mal.
+FASE 1 — AUDITAR el catálogo existente.
+Revisa CADA habilidad de knownDefensives. No des por buenos class/spec/category/cooldown/duration solo porque vengan en la entrada: son precisamente datos que pueden estar mal. Para cada habilidad verifica:
+1) si sigue siendo un defensivo real hoy;
+2) TODAS las specs que pueden tenerla hoy (baseline, árbol de clase o árbol de spec);
+3) category y survivalType;
+4) cooldown BASE sin talentos/pasivas modificadoras y duración BASE del efecto;
+5) diferencias base reales por spec, si existen;
+6) TODOS los talentos/pasivas actuales que cambian cooldown, duración o cargas.
 
-Categorías válidas para survivalType (usa EXACTAMENTE uno de estos cuatro valores, o null si no puedes determinarlo ni con baja confianza):
+FASE 2 — DESCUBRIR defensivos que FALTAN.
+NO te limites a knownDefensives. Haz una auditoría independiente del toolkit actual de cada clase/spec dentro del alcance y busca habilidades de supervivencia ausentes del listado: DR activos, inmunidades, absorbs/barriers/shields, aumentos temporales de vida, self-heals/HoTs relevantes y habilidades targeteables que también puedan lanzarse sobre uno mismo. El hecho de que WoWAnalyzer no modele una habilidad como "cooldown" NO es motivo para omitirla. Ejemplo de criterio: Power Word: Shield debe considerarse porque un Priest puede lanzárselo a sí mismo y usar el absorb antes de daño entrante.
+
+No incluyas como missingDefensive una pasiva siempre activa sin botón/ventana planificable salvo que tenga un proc defensivo con cooldown/ICD claramente utilizable por el sistema. No incluyas throughput de healer puro que no constituya una herramienta de supervivencia propia razonable.
+
+FUENTES: para CADA habilidad conocida y CADA descubrimiento contrasta al menos DOS fuentes reales y recientes. Prioriza Wowhead retail (tooltip actual), Warcraft Wiki con cambios del parche actual, documentación oficial de Blizzard, Icy Veins y fuentes técnicas actuales de clase. Busca por NOMBRE + class; usa spellId para identificar, no para asumir comportamiento.
+
+SPECS: availableSpecs es una lista explícita con los nombres exactos de TODAS las especializaciones que pueden disponer de la habilidad. Distingue "la spec puede elegirla" de "todos los jugadores de esa spec la llevan": un talento del árbol de CLASE puede estar disponible para las tres specs aunque el build concreto no lo haya seleccionado. No confundas "está en una carpeta Holy de una librería" con "solo Holy la tiene".
+
+COOLDOWNS: baseCooldownSeconds SIEMPRE es el cooldown base del hechizo sin talentos/pasivas que lo modifiquen. Nunca metas el valor ya reducido por un talento en el campo base. Ejemplo conceptual: si una habilidad tiene 90 s base y un talento resta 20 s, devuelve baseCooldownSeconds:90 y una regla modifiers subtract_seconds:20; NO devuelvas 70 como base. Lo mismo para duración/cargas. Usa null solo cuando realmente no exista un valor base resoluble. Un cooldown real de 0 se representa como 0, no null.
+
+SPEC PROFILES: specProfiles solo se usa cuando una spec tiene de verdad cooldown/duración/cargas BASE distintos. NO lo uses simplemente para repetir availableSpecs.
+
+MODIFIERS: investiga talentos/pasivas actuales que cambien timing o cargas. modifierSpellId debe ser el spellId real del talento/pasiva; targetSpellId el del defensivo. condition:"always" si llevar el talento basta para garantizar el cambio; "conditional" si depende de casts, procs, daño recibido, recursos o ejecución durante el combate. value usa SEGUNDOS para subtract_seconds/add_seconds/set_seconds, factor para multiply y número de cargas para charges_add. No incluyas modificadores que solo cambian el porcentaje de DR/absorb/heal si no cambian cooldown, duración o cargas.
+
+CATEGORÍAS:
+${CATEGORY_GLOSSARY}
+
+TIPOS DE SUPERVIVENCIA:
 ${SURVIVAL_TYPE_GLOSSARY}
 
-Responde ÚNICAMENTE con JSON válido (sin texto, sin markdown, sin backticks): un array con un objeto por CADA habilidad de la lista recibida, sin omitir ninguna, en esta forma exacta:
-[
-  {
-    "spellId": number,
-    "stillDefensive": boolean,
-    "survivalType": "mitigation" | "absorption" | "sustain" | "emergency" | null,
-    "confidence": "high" | "medium" | "low",
-    "sources": string[],
-    "notes": "string breve explicando el mecanismo concreto (qué le hace al daño, no solo qué hace la habilidad) — si stillDefensive es false, explica aquí qué es la habilidad ahora en su lugar",
-    "baseCooldownSeconds": number | null,
-    "baseDurationSeconds": number | null
-  }
-]
+Si una habilidad existente ya no es defensiva, stillDefensive:false. Nunca inventes un survivalType para conservarla. Si hay ambigüedad material, confidence:"low"; el backend no aplicará automáticamente datos low.
 
-Antes de responder, comprueba habilidad por habilidad que cada objeto contiene literalmente las ocho claves. Responde solo con el array JSON.`;
+Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE objeto raíz exacto:
+{
+  "reviewedDefensives": [
+    {
+      "spellId": number,
+      "stillDefensive": boolean,
+      "availableSpecs": string[],
+      "category": "personal_defensive" | "semi_defensive" | "external_defensive" | "utility",
+      "survivalType": "mitigation" | "absorption" | "sustain" | "emergency" | null,
+      "confidence": "high" | "medium" | "low",
+      "sources": string[],
+      "notes": "explicación breve y concreta",
+      "baseCooldownSeconds": number | null,
+      "baseDurationSeconds": number | null,
+      "specProfiles": [
+        { "spec": "spec exacta", "baseCooldownSeconds": number | null, "baseDurationSeconds": number | null, "charges": number, "source": "URL o referencia" }
+      ],
+      "modifiers": [
+        { "modifierSpellId": number, "modifierName": "string", "targetSpellId": number, "specs": string[] | null, "operation": "subtract_seconds" | "add_seconds" | "multiply" | "set_seconds" | "charges_add", "value": number, "perRank": boolean, "condition": "always" | "conditional", "description": "string", "source": "URL o referencia" }
+      ]
+    }
+  ],
+  "missingDefensives": [
+    {
+      "spellId": number,
+      "name": "nombre exacto",
+      "class": "class exacta como en knownDefensives",
+      "stillDefensive": true,
+      "availableSpecs": string[],
+      "category": "personal_defensive" | "semi_defensive" | "external_defensive" | "utility",
+      "survivalType": "mitigation" | "absorption" | "sustain" | "emergency",
+      "confidence": "high" | "medium" | "low",
+      "sources": string[],
+      "notes": "por qué falta y cómo sirve para sobrevivir",
+      "baseCooldownSeconds": number | null,
+      "baseDurationSeconds": number | null,
+      "specProfiles": [],
+      "modifiers": []
+    }
+  ]
 }
 
-interface DefensiveForPrompt {
-  spellId: number;
-  name: string;
-  class: string;
-  spec: string | null;
-  category: string;
-  currentSurvivalType: string | null;
-  currentInferredSurvivalType: string | null;
-  currentBaseCooldownMs: number | null;
-  currentBaseDurationMs: number | null;
+reviewedDefensives DEBE contener exactamente un objeto por cada spellId de knownDefensives, sin omitir ninguno. missingDefensives puede estar vacío, pero debes haber hecho la fase de descubrimiento antes de decidirlo. Todos los objetos deben incluir todas sus claves.`;
+}
+
+interface SpecProfileEntry {
+  spec: string;
+  baseCooldownSeconds: number | null;
+  baseDurationSeconds: number | null;
+  charges: number;
+  source: string;
+}
+
+interface ModifierEntry {
+  modifierSpellId: number;
+  modifierName: string;
+  targetSpellId: number;
+  specs: string[] | null;
+  operation: 'subtract_seconds' | 'add_seconds' | 'multiply' | 'set_seconds' | 'charges_add';
+  value: number;
+  perRank: boolean;
+  condition: 'always' | 'conditional';
+  description: string;
+  source: string;
 }
 
 interface ClassificationEntry {
   spellId: number;
   stillDefensive?: boolean;
+  availableSpecs?: string[];
+  category?: string;
   survivalType: string | null;
   confidence: 'high' | 'medium' | 'low';
   sources: string[];
   notes: string;
   baseCooldownSeconds: number | null;
   baseDurationSeconds: number | null;
+  specProfiles?: SpecProfileEntry[];
+  modifiers?: ModifierEntry[];
+}
+
+interface MissingDefensiveEntry extends ClassificationEntry {
+  name: string;
+  class: string;
+}
+
+interface CatalogRow {
+  spell_id: number;
+  name: string;
+  class: string;
+  spec: string | null;
+  spec_override: string[] | null;
+  category: string;
+  survival_type: string | null;
+  inferred_survival_type: string | null;
+  base_cooldown_ms: number | null;
+  base_duration_ms: number | null;
+}
+
+function secondsToMs(value: number | null | undefined): number | null {
+  return value == null ? null : Math.round(value * 1000);
+}
+
+function validNullableNonNegative(value: unknown): boolean {
+  return value == null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
+function normalizeSpecs(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const specs = [...new Set(value.filter((spec): spec is string => typeof spec === 'string').map((spec) => spec.trim()).filter(Boolean))];
+  return specs.length ? specs : null;
+}
+
+function specsToCatalogValue(specs: string[] | null, fallback: string | null): string | null {
+  if (!specs?.length) return fallback;
+  return specs.join('/');
+}
+
+function parseResponse(parsed: unknown): { reviewed: unknown[]; missing: unknown[] } | null {
+  // Backward compatibility with prompt v3/v4 responses already copied into
+  // a browser tab while this function is being deployed.
+  if (Array.isArray(parsed)) return { reviewed: parsed, missing: [] };
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as { reviewedDefensives?: unknown; missingDefensives?: unknown };
+  if (!Array.isArray(obj.reviewedDefensives) || !Array.isArray(obj.missingDefensives)) return null;
+  return { reviewed: obj.reviewedDefensives, missing: obj.missingDefensives };
+}
+
+function validateProfiles(entry: Partial<ClassificationEntry>, spellId: number): { rows: SpecProfileEntry[]; error?: string } {
+  const raw = Array.isArray(entry.specProfiles) ? entry.specProfiles : [];
+  const rows: SpecProfileEntry[] = [];
+  for (const profile of raw) {
+    if (!profile || typeof profile.spec !== 'string' || !profile.spec.trim()) return { rows: [], error: 'specProfiles contiene una spec inválida' };
+    if (!validNullableNonNegative(profile.baseCooldownSeconds) || !validNullableNonNegative(profile.baseDurationSeconds)) {
+      return { rows: [], error: 'specProfiles contiene cooldown/duración inválidos' };
+    }
+    if (typeof profile.charges !== 'number' || !Number.isInteger(profile.charges) || profile.charges <= 0) {
+      return { rows: [], error: 'specProfiles contiene charges inválidas' };
+    }
+    rows.push({
+      spec: profile.spec.trim(),
+      baseCooldownSeconds: profile.baseCooldownSeconds ?? null,
+      baseDurationSeconds: profile.baseDurationSeconds ?? null,
+      charges: profile.charges,
+      source: typeof profile.source === 'string' ? profile.source : '',
+    });
+  }
+  void spellId;
+  return { rows };
+}
+
+function validateModifiers(entry: Partial<ClassificationEntry>, spellId: number): { rows: ModifierEntry[]; error?: string } {
+  const raw = Array.isArray(entry.modifiers) ? entry.modifiers : [];
+  const rows: ModifierEntry[] = [];
+  for (const modifier of raw) {
+    if (!modifier || typeof modifier.modifierSpellId !== 'number' || !Number.isInteger(modifier.modifierSpellId) || modifier.modifierSpellId <= 0) {
+      return { rows: [], error: 'modifiers contiene modifierSpellId inválido' };
+    }
+    if (modifier.targetSpellId !== spellId) return { rows: [], error: 'modifier targetSpellId no coincide con el defensivo' };
+    if (!MODIFIER_OPERATIONS.has(modifier.operation)) return { rows: [], error: `operation inválida: ${modifier.operation}` };
+    if (!MODIFIER_CONDITIONS.has(modifier.condition)) return { rows: [], error: `condition inválida: ${modifier.condition}` };
+    if (typeof modifier.value !== 'number' || !Number.isFinite(modifier.value) || modifier.value < 0) return { rows: [], error: 'modifier value inválido' };
+    if (typeof modifier.perRank !== 'boolean') return { rows: [], error: 'modifier perRank inválido' };
+    const specs = modifier.specs == null ? null : normalizeSpecs(modifier.specs);
+    if (modifier.specs != null && !specs) return { rows: [], error: 'modifier specs inválido' };
+    rows.push({
+      modifierSpellId: modifier.modifierSpellId,
+      modifierName: typeof modifier.modifierName === 'string' ? modifier.modifierName : `#${modifier.modifierSpellId}`,
+      targetSpellId: spellId,
+      specs,
+      operation: modifier.operation,
+      value: modifier.value,
+      perRank: modifier.perRank,
+      condition: modifier.condition,
+      description: typeof modifier.description === 'string' ? modifier.description : '',
+      source: typeof modifier.source === 'string' ? modifier.source : '',
+    });
+  }
+  return { rows };
+}
+
+function modifierDbOperation(operation: ModifierEntry['operation']): 'subtract_ms' | 'add_ms' | 'multiply' | 'set_ms' | 'charges_add' {
+  if (operation === 'subtract_seconds') return 'subtract_ms';
+  if (operation === 'add_seconds') return 'add_ms';
+  if (operation === 'set_seconds') return 'set_ms';
+  return operation;
+}
+
+function modifierDbValue(modifier: ModifierEntry): number {
+  return modifier.operation === 'subtract_seconds' || modifier.operation === 'add_seconds' || modifier.operation === 'set_seconds'
+    ? Math.round(modifier.value * 1000)
+    : modifier.value;
 }
 
 Deno.serve(async (req: Request) => {
@@ -121,55 +272,53 @@ Deno.serve(async (req: Request) => {
   } catch {
     return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
   }
-  if (!body.action) {
-    return jsonResponse({ ok: false, error: 'action es obligatoria' }, 400);
-  }
-  // class es opcional a propósito: ausente/null = catálogo entero (todas
-  // las clases a la vez), ver buildSystemPrompt.
-  const scopeLabel = body.class ?? 'todas las clases';
+  if (!body.action) return jsonResponse({ ok: false, error: 'action es obligatoria' }, 400);
 
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-  );
+  const scopeLabel = body.class ?? 'todas las clases';
+  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
   try {
     let query = supabase
       .from('cooldown_catalog')
-      .select('spell_id,name,class,spec,category,survival_type,inferred_survival_type,base_cooldown_ms,base_duration_ms')
+      .select('spell_id,name,class,spec,spec_override,category,survival_type,inferred_survival_type,base_cooldown_ms,base_duration_ms')
       .order('class', { ascending: true })
       .order('name', { ascending: true });
     if (body.class) query = query.eq('class', body.class);
     const { data: rows, error: rowsError } = await query;
     if (rowsError) throw rowsError;
-    const defensives = (rows ?? []) as {
-      spell_id: number;
-      name: string;
-      class: string;
-      spec: string | null;
-      category: string;
-      survival_type: string | null;
-      inferred_survival_type: string | null;
-      base_cooldown_ms: number | null;
-      base_duration_ms: number | null;
-    }[];
-    if (!defensives.length) return jsonResponse({ ok: false, error: `${scopeLabel} todavía no tiene ningún defensivo en el catálogo — sincroniza cooldown_catalog primero (extractor de WoWAnalyzer).` }, 400);
+    const defensives = (rows ?? []) as CatalogRow[];
+
+    let profileQuery = supabase.from('defensive_spec_profiles').select('*');
+    let modifierQuery = supabase.from('defensive_modifier_rules').select('*').eq('active', true);
+    if (body.class) {
+      profileQuery = profileQuery.eq('class', body.class);
+      modifierQuery = modifierQuery.eq('class', body.class);
+    }
+    const [{ data: currentProfiles, error: profilesError }, { data: currentModifiers, error: modifiersError }] = await Promise.all([
+      profileQuery,
+      modifierQuery,
+    ]);
+    if (profilesError) throw profilesError;
+    if (modifiersError) throw modifiersError;
 
     if (body.action === 'prompt') {
-      const list: DefensiveForPrompt[] = defensives.map((d) => ({
+      const list = defensives.map((d) => ({
         spellId: d.spell_id,
         name: d.name,
         class: d.class,
-        spec: d.spec,
-        category: d.category,
+        currentSpec: d.spec,
+        manualSpecOverride: d.spec_override,
+        currentCategory: d.category,
         currentSurvivalType: d.survival_type,
         currentInferredSurvivalType: d.inferred_survival_type,
         currentBaseCooldownMs: d.base_cooldown_ms,
         currentBaseDurationMs: d.base_duration_ms,
+        currentSpecProfiles: (currentProfiles ?? []).filter((profile) => profile.spell_id === d.spell_id),
+        currentModifiers: (currentModifiers ?? []).filter((modifier) => modifier.target_spell_id === d.spell_id),
       }));
       const systemPrompt = buildSystemPrompt(body.class ?? null);
-      const userMessage = `Alcance: ${scopeLabel}\nDefensivos a clasificar (${list.length}):\n${JSON.stringify(list, null, 2)}\n\nRECORDATORIO FINAL: devuelve exactamente ${list.length} objetos, uno por cada spellId de la lista, con las ocho claves spellId/stillDefensive/survivalType/confidence/sources/notes/baseCooldownSeconds/baseDurationSeconds en todos. No omitas ninguno.`;
-      return jsonResponse({ ok: true, promptVersion: 3, systemPrompt, userMessage, defensiveCount: list.length });
+      const userMessage = `Alcance: ${scopeLabel}\nknownDefensives (${list.length} filas actuales; NO es una lista exhaustiva):\n${JSON.stringify(list, null, 2)}\n\nHaz primero la auditoría de estas ${list.length} filas y después una búsqueda INDEPENDIENTE de habilidades defensivas que falten. Si manualSpecOverride no es null, no lo interpretes como evidencia del juego: es una corrección humana que el backend preservará por encima del spec investigado. Devuelve el objeto JSON raíz reviewedDefensives + missingDefensives exactamente como pide el sistema.`;
+      return jsonResponse({ ok: true, promptVersion: 5, systemPrompt, userMessage, defensiveCount: list.length });
     }
 
     if (body.action === 'submit') {
@@ -179,67 +328,194 @@ Deno.serve(async (req: Request) => {
       try {
         parsed = JSON.parse(body.rawResponseText);
       } catch {
-        return jsonResponse({ ok: false, error: 'La respuesta pegada no es JSON válido. Revisa que sea el array completo que devolvió la IA, sin texto extra alrededor.' }, 400);
+        return jsonResponse({ ok: false, error: 'La respuesta pegada no es JSON válido. Pega únicamente el JSON completo devuelto por la IA.' }, 400);
       }
-      if (!Array.isArray(parsed)) return jsonResponse({ ok: false, error: 'Se esperaba un array JSON de clasificaciones.' }, 400);
+      const response = parseResponse(parsed);
+      if (!response) return jsonResponse({ ok: false, error: 'Se esperaba el objeto JSON v5 {reviewedDefensives, missingDefensives} (o un array v3/v4 compatible).' }, 400);
 
       const knownSpellIds = new Set(defensives.map((d) => d.spell_id));
-      const applied: { spellId: number; name: string; class: string; survivalType: string; confidence: 'high' | 'medium'; sources: string[]; notes: string; baseCooldownMs: number | null; baseDurationMs: number | null; materialChanged: boolean }[] = [];
+      const knownClasses = new Set(defensives.map((d) => d.class));
+      if (body.class) knownClasses.add(body.class);
+
+      const applied: {
+        spellId: number;
+        name: string;
+        class: string;
+        survivalType: string;
+        confidence: 'high' | 'medium';
+        sources: string[];
+        notes: string;
+        baseCooldownMs: number | null;
+        baseDurationMs: number | null;
+        materialChanged: boolean;
+      }[] = [];
+      const added: { spellId: number; name: string; class: string; specs: string[]; category: string; survivalType: string }[] = [];
       const skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[] = [];
       const skippedUndetermined: { spellId: number; name: string }[] = [];
-      const invalid: { spellId: unknown; reason: string }[] = [];
-      // §"ojo que el borrar del prompt que venga de defensivos no sea
-      // automático, que lo sugiera, vaya a ser que ahora perdamos
-      // consistencia por un mal análisis de IA" (feedback real, 2026-08-31):
-      // a diferencia de survivalType (que SÍ se aplica solo con confidence
-      // alta/media, ya asumido para esta pantalla), excluir un defensivo del
-      // catálogo entero es más irreversible en la práctica — nunca se toca
-      // `excluded` aquí, solo se junta la sugerencia para que un humano la
-      // confirme fila por fila (mismo botón "excluir" manual).
       const suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[] = [];
+      const invalid: { spellId: unknown; reason: string }[] = [];
+      const submittedAt = new Date().toISOString();
+      const affectedClasses = new Set<string>();
 
-      for (const raw of parsed) {
+      const applyReferenceRows = async (
+        className: string,
+        spellId: number,
+        profiles: SpecProfileEntry[],
+        modifiers: ModifierEntry[],
+      ): Promise<void> => {
+        // A rerun is authoritative for the researched timing layer. Removing
+        // stale profiles/rules here is what makes "actualizar con otro prompt"
+        // genuinely refresh data instead of only ever adding more rows.
+        const { error: deleteProfilesError } = await supabase
+          .from('defensive_spec_profiles')
+          .delete()
+          .eq('class', className)
+          .eq('spell_id', spellId);
+        if (deleteProfilesError) throw deleteProfilesError;
+
+        const { error: disableModifiersError } = await supabase
+          .from('defensive_modifier_rules')
+          .update({ active: false, updated_at: submittedAt })
+          .eq('class', className)
+          .eq('target_spell_id', spellId)
+          .eq('active', true);
+        if (disableModifiersError) throw disableModifiersError;
+
+        for (const profile of profiles) {
+          const { error } = await supabase.from('defensive_spec_profiles').upsert(
+            {
+              class: className,
+              spec: profile.spec,
+              spell_id: spellId,
+              base_cooldown_ms: secondsToMs(profile.baseCooldownSeconds),
+              base_duration_ms: secondsToMs(profile.baseDurationSeconds),
+              charges: profile.charges,
+              source: profile.source || 'classify-defensives v5',
+              source_note: 'Investigado por prompt v5; valor base específico de spec.',
+              verified_at: submittedAt,
+              updated_at: submittedAt,
+            },
+            { onConflict: 'class,spec,spell_id' },
+          );
+          if (error) throw error;
+        }
+
+        for (const modifier of modifiers) {
+          const { error } = await supabase.from('defensive_modifier_rules').upsert(
+            {
+              class: className,
+              specs: modifier.specs,
+              modifier_spell_id: modifier.modifierSpellId,
+              target_spell_id: spellId,
+              operation: modifierDbOperation(modifier.operation),
+              value: modifierDbValue(modifier),
+              per_rank: modifier.perRank,
+              condition: modifier.condition,
+              description: modifier.description || modifier.modifierName,
+              source: modifier.source,
+              verified_at: submittedAt,
+              active: true,
+              updated_at: submittedAt,
+            },
+            { onConflict: 'class,modifier_spell_id,target_spell_id,operation' },
+          );
+          if (error) throw error;
+        }
+      };
+
+      for (const raw of response.reviewed) {
         const entry = raw as Partial<ClassificationEntry>;
         if (typeof entry.spellId !== 'number' || !knownSpellIds.has(entry.spellId)) {
-          invalid.push({ spellId: entry.spellId, reason: 'spellId no reconocido en esta clase' });
+          invalid.push({ spellId: entry.spellId, reason: 'spellId no reconocido entre knownDefensives' });
           continue;
         }
-        const matched = defensives.find((d) => d.spell_id === entry.spellId);
-        const name = matched?.name ?? `#${entry.spellId}`;
+        const matched = defensives.find((d) => d.spell_id === entry.spellId)!;
+        const name = matched.name;
+
         if (entry.stillDefensive === false) {
-          suggestedExclusions.push({ spellId: entry.spellId, name, class: matched?.class ?? '', notes: entry.notes ?? '' });
+          suggestedExclusions.push({ spellId: entry.spellId, name, class: matched.class, notes: entry.notes ?? '' });
           continue;
         }
-        if (entry.survivalType == null) {
-          skippedUndetermined.push({ spellId: entry.spellId, name });
+        if (!CONFIDENCES.has(entry.confidence)) {
+          invalid.push({ spellId: entry.spellId, reason: `confidence inválida: ${entry.confidence}` });
           continue;
         }
-        if (!SURVIVAL_TYPES.has(entry.survivalType)) {
-          invalid.push({ spellId: entry.spellId, reason: `survivalType inválido: ${entry.survivalType}` });
-          continue;
-        }
-        // Mismo criterio que classify-mechanics: confidence "low" nunca se
-        // aplica sola, queda para revisión manual.
         if (entry.confidence === 'low') {
-          skippedLowConfidence.push({ spellId: entry.spellId, name, survivalType: entry.survivalType, notes: entry.notes ?? '' });
+          skippedLowConfidence.push({ spellId: entry.spellId, name, survivalType: entry.survivalType ?? null, notes: entry.notes ?? '' });
           continue;
         }
-        const timingValues = [entry.baseCooldownSeconds, entry.baseDurationSeconds];
-        if (timingValues.some((value) => value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0))) {
+        if (!validNullableNonNegative(entry.baseCooldownSeconds) || !validNullableNonNegative(entry.baseDurationSeconds)) {
           invalid.push({ spellId: entry.spellId, reason: 'baseCooldownSeconds/baseDurationSeconds deben ser números >= 0 o null' });
           continue;
         }
-        const baseCooldownMs = entry.baseCooldownSeconds == null ? null : Math.round(entry.baseCooldownSeconds * 1000);
-        const baseDurationMs = entry.baseDurationSeconds == null ? null : Math.round(entry.baseDurationSeconds * 1000);
+        if (entry.category != null && !CATEGORIES.has(entry.category)) {
+          invalid.push({ spellId: entry.spellId, reason: `category inválida: ${entry.category}` });
+          continue;
+        }
+        if (entry.survivalType != null && !SURVIVAL_TYPES.has(entry.survivalType)) {
+          invalid.push({ spellId: entry.spellId, reason: `survivalType inválido: ${entry.survivalType}` });
+          continue;
+        }
+        const profilesResult = validateProfiles(entry, entry.spellId);
+        if (profilesResult.error) {
+          invalid.push({ spellId: entry.spellId, reason: profilesResult.error });
+          continue;
+        }
+        const modifiersResult = validateModifiers(entry, entry.spellId);
+        if (modifiersResult.error) {
+          invalid.push({ spellId: entry.spellId, reason: modifiersResult.error });
+          continue;
+        }
+
+        const availableSpecs = normalizeSpecs(entry.availableSpecs);
+        const researchedSpec = specsToCatalogValue(availableSpecs, matched.spec);
+        // Null from the AI means "could not resolve", not "erase a verified
+        // number". A literal zero remains a real value and is preserved.
+        const baseCooldownMs = entry.baseCooldownSeconds == null ? matched.base_cooldown_ms : secondsToMs(entry.baseCooldownSeconds);
+        const baseDurationMs = entry.baseDurationSeconds == null ? matched.base_duration_ms : secondsToMs(entry.baseDurationSeconds);
+        const survivalType = entry.survivalType ?? matched.survival_type;
+        if (entry.survivalType == null) skippedUndetermined.push({ spellId: entry.spellId, name });
+        const category = entry.category ?? matched.category;
         const materialChanged =
-          (matched?.survival_type ?? null) !== entry.survivalType ||
-          (matched?.base_cooldown_ms ?? null) !== baseCooldownMs ||
-          (matched?.base_duration_ms ?? null) !== baseDurationMs;
+          matched.spec !== researchedSpec ||
+          matched.category !== category ||
+          matched.survival_type !== survivalType ||
+          matched.base_cooldown_ms !== baseCooldownMs ||
+          matched.base_duration_ms !== baseDurationMs;
+
+        const patch: Record<string, unknown> = {
+          spec: researchedSpec,
+          category,
+          base_cooldown_ms: baseCooldownMs,
+          base_duration_ms: baseDurationMs,
+          ai_classification: {
+            confidence: entry.confidence,
+            sources: Array.isArray(entry.sources) ? entry.sources : [],
+            notes: entry.notes ?? '',
+            availableSpecs,
+            promptVersion: 5,
+            classifiedAt: submittedAt,
+          },
+        };
+        if (survivalType != null) {
+          patch['survival_type'] = survivalType;
+          patch['inferred_survival_type'] = survivalType;
+        }
+        if (materialChanged) patch['updated_at'] = submittedAt;
+
+        let updateQuery = supabase.from('cooldown_catalog').update(patch).eq('spell_id', entry.spellId).eq('class', matched.class);
+        if (body.class) updateQuery = updateQuery.eq('class', body.class);
+        const { error } = await updateQuery;
+        if (error) throw error;
+
+        await applyReferenceRows(matched.class, entry.spellId, profilesResult.rows, modifiersResult.rows);
+        if (materialChanged || profilesResult.rows.length || modifiersResult.rows.length) affectedClasses.add(matched.class);
+
         applied.push({
           spellId: entry.spellId,
           name,
-          class: matched?.class ?? '',
-          survivalType: entry.survivalType,
+          class: matched.class,
+          survivalType: survivalType ?? 'sin clasificar',
           confidence: entry.confidence === 'high' ? 'high' : 'medium',
           sources: Array.isArray(entry.sources) ? entry.sources : [],
           notes: entry.notes ?? '',
@@ -249,35 +525,102 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      // §bug real reportado (2026-08-27, feedback real: "no está clasificando
-      // automáticamente el tipo de supervivencia"): la primera versión solo
-      // escribía inferred_survival_type (sugerencia) y dejaba survival_type
-      // (el que de verdad lee el desplegable) en "sin decidir" hasta un
-      // segundo clic manual de "confirmar" — mecánicas SÍ funciona así
-      // porque category/avoidable alimentan atribución de culpa, un umbral
-      // de seguridad más alto tiene sentido ahí. Para defensivos no hay ese
-      // riesgo — "rellenarse solo... a través de un prompt" significa que
-      // el prompt YA deja el valor puesto, sin un clic extra. reviewed NO
-      // se toca aquí a propósito: sigue distinguiendo "la IA ya lo rellenó"
-      // de "un humano lo ha revisado de verdad".
-      const submittedAt = new Date().toISOString();
-      const affectedClasses = new Set<string>();
-      for (const a of applied) {
-        const patch: Record<string, unknown> = {
-          survival_type: a.survivalType,
-          inferred_survival_type: a.survivalType,
-          base_cooldown_ms: a.baseCooldownMs,
-          base_duration_ms: a.baseDurationMs,
-          ai_classification: { confidence: a.confidence, sources: a.sources, notes: a.notes, classifiedAt: submittedAt },
-        };
-        if (a.materialChanged) {
-          patch['updated_at'] = submittedAt;
-          if (a.class) affectedClasses.add(a.class);
+      for (const raw of response.missing) {
+        const entry = raw as Partial<MissingDefensiveEntry>;
+        const sources = Array.isArray(entry.sources) ? entry.sources.filter((source): source is string => typeof source === 'string' && !!source.trim()) : [];
+        if (typeof entry.spellId !== 'number' || !Number.isInteger(entry.spellId) || entry.spellId <= 0) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive con spellId inválido' });
+          continue;
         }
-        let updateQuery = supabase.from('cooldown_catalog').update(patch).eq('spell_id', a.spellId);
-        if (body.class) updateQuery = updateQuery.eq('class', body.class);
-        const { error } = await updateQuery;
-        if (error) throw error;
+        if (knownSpellIds.has(entry.spellId)) continue;
+        if (typeof entry.name !== 'string' || !entry.name.trim() || typeof entry.class !== 'string' || !entry.class.trim()) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive sin name/class válidos' });
+          continue;
+        }
+        if (body.class && entry.class !== body.class) {
+          invalid.push({ spellId: entry.spellId, reason: `missingDefensive fuera del alcance ${body.class}: ${entry.class}` });
+          continue;
+        }
+        if (!body.class && !knownClasses.has(entry.class)) {
+          invalid.push({ spellId: entry.spellId, reason: `class no reconocida en el catálogo: ${entry.class}` });
+          continue;
+        }
+        if (entry.stillDefensive === false) continue;
+        if (entry.confidence !== 'high' && entry.confidence !== 'medium') {
+          skippedLowConfidence.push({ spellId: entry.spellId, name: entry.name, survivalType: entry.survivalType ?? null, notes: entry.notes ?? '' });
+          continue;
+        }
+        // Missing rows are the only place where the AI can expand the source
+        // of truth, so require the two independent references promised by the
+        // prompt before inserting anything automatically.
+        if (sources.length < 2) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive necesita al menos 2 fuentes antes de añadirse automáticamente' });
+          continue;
+        }
+        if (!entry.survivalType || !SURVIVAL_TYPES.has(entry.survivalType)) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive necesita un survivalType válido' });
+          continue;
+        }
+        if (!entry.category || !CATEGORIES.has(entry.category)) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive necesita una category válida' });
+          continue;
+        }
+        if (!validNullableNonNegative(entry.baseCooldownSeconds) || !validNullableNonNegative(entry.baseDurationSeconds)) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive con cooldown/duración inválidos' });
+          continue;
+        }
+        const availableSpecs = normalizeSpecs(entry.availableSpecs);
+        if (!availableSpecs) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive necesita availableSpecs explícitas' });
+          continue;
+        }
+        const profilesResult = validateProfiles(entry, entry.spellId);
+        if (profilesResult.error) {
+          invalid.push({ spellId: entry.spellId, reason: profilesResult.error });
+          continue;
+        }
+        const modifiersResult = validateModifiers(entry, entry.spellId);
+        if (modifiersResult.error) {
+          invalid.push({ spellId: entry.spellId, reason: modifiersResult.error });
+          continue;
+        }
+
+        const { error: insertError } = await supabase.from('cooldown_catalog').insert({
+          class: entry.class,
+          spec: availableSpecs.join('/'),
+          spell_id: entry.spellId,
+          name: entry.name.trim(),
+          category: entry.category,
+          survival_type: entry.survivalType,
+          inferred_survival_type: entry.survivalType,
+          base_cooldown_ms: secondsToMs(entry.baseCooldownSeconds),
+          base_duration_ms: secondsToMs(entry.baseDurationSeconds),
+          reviewed: false,
+          ai_classification: {
+            confidence: entry.confidence,
+            sources,
+            notes: entry.notes ?? '',
+            availableSpecs,
+            discovered: true,
+            promptVersion: 5,
+            classifiedAt: submittedAt,
+          },
+          synced_from_commit: null,
+          updated_at: submittedAt,
+        });
+        if (insertError) throw insertError;
+
+        await applyReferenceRows(entry.class, entry.spellId, profilesResult.rows, modifiersResult.rows);
+        knownSpellIds.add(entry.spellId);
+        affectedClasses.add(entry.class);
+        added.push({
+          spellId: entry.spellId,
+          name: entry.name.trim(),
+          class: entry.class,
+          specs: availableSpecs,
+          category: entry.category,
+          survivalType: entry.survivalType,
+        });
       }
 
       let pullIds: string[] = [];
@@ -287,10 +630,20 @@ Deno.serve(async (req: Request) => {
           .select('pull_id')
           .in('class', [...affectedClasses]);
         if (affectedError) throw affectedError;
-        pullIds = [...new Set((affectedRecords ?? []).map((r) => (r as { pull_id: string }).pull_id))];
+        pullIds = [...new Set((affectedRecords ?? []).map((record) => (record as { pull_id: string }).pull_id))];
       }
 
-      return jsonResponse({ ok: true, applied, skippedLowConfidence, skippedUndetermined, suggestedExclusions, invalid, pullIds });
+      return jsonResponse({
+        ok: true,
+        applied,
+        added,
+        appliedSpecProfiles: applied.reduce((sum, row) => sum + Number(row.materialChanged), 0),
+        skippedLowConfidence,
+        skippedUndetermined,
+        suggestedExclusions,
+        invalid,
+        pullIds,
+      });
     }
 
     return jsonResponse({ ok: false, error: `action inválida: ${body.action}` }, 400);
