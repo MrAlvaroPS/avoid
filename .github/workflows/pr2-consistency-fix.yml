@@ -56,7 +56,7 @@ jobs:
         run: npx vitest run --globals src/app/shared/mrt/mrt-reminder-codec.spec.ts src/app/shared/mrt/auto-assign-cascade.spec.ts
 
       - name: Type-check changed edge function
-        run: deno check supabase/functions/classify-defensives/index.ts
+        run: deno check --node-modules-dir=auto supabase/functions/classify-defensives/index.ts
 
       - name: Angular production build
         run: npm run build
