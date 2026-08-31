@@ -271,7 +271,11 @@ export class EdgeFunctionsService {
     applied: { spellId: number; name: string; survivalType: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
+    /** §"que lo sugiera, no que lo borre solo" (feedback real, 2026-08-31): la IA cree que ya no es un defensivo real — nunca se aplica sola, un humano confirma fila por fila con el botón "excluir" manual. */
+    suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
+    /** Pulls cuyo snapshot defensivo quedó materialmente obsoleto por survival type/CD/duración aplicados por la IA. */
+    pullIds: string[];
   }> {
     return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
   }
@@ -299,8 +303,17 @@ export class EdgeFunctionsService {
     reviewed?: boolean;
     baseCooldownMs?: number | null;
     baseDurationMs?: number | null;
+    /** Corrección manual de qué specs tienen este defensivo — ver spec_override en cooldown_catalog. undefined = no tocar, null = borrar la corrección. */
+    specOverride?: string[] | null;
+    /** §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31) — ver excluded en cooldown_catalog. undefined = no tocar. */
+    excluded?: boolean;
   }): Promise<{ ok: true; pullIds?: string[] }> {
     return this.invoke('save-defensive-edit', edit);
+  }
+
+  /** §"botón en ajustes → defensivos en una clase para limpiar sus defensivos y volver a calcularlos con el prompt" (feedback real, 2026-08-31): borra survival_type/reviewed/ai_classification/inferred_survival_type de TODA la clase (nunca spec_override ni CD/duración) — deja la clase en "sin clasificar" para reclasificar con el prompt actualizado. */
+  async resetClassDefensives(className: string): Promise<{ ok: true; resetCount: number; pullIds: string[] }> {
+    return this.invoke('reset-class-defensives', { class: className });
   }
 
   /**
@@ -353,6 +366,55 @@ export class EdgeFunctionsService {
     aiNotes?: string | null;
   }): Promise<{ ok: true; id?: string; pullIds: string[] }> {
     return this.invoke('save-unassigned-mechanic-edit', edit);
+  }
+
+  /**
+   * §"Preparación" (ver plan guardado, conversación real 2026-08-30):
+   * perfila daño/timing de cada mecánica ya curada de este boss+dificultad
+   * contra logs públicos de referencia — ver sync-mechanic-defensive-profile/
+   * index.ts para el porqué de separar hits mitigados/sin mitigar (evita el
+   * sesgo de "trampeadas" de un log ya bien jugado).
+   */
+  async syncMechanicDefensiveProfile(bossId: string, difficulties?: number[]): Promise<{
+    ok: true;
+    results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number; totalFightsConsumed: number; exhausted: boolean }[];
+    minReferenceSampleFights: number;
+  }> {
+    return this.invoke('sync-mechanic-defensive-profile', { bossId, difficulties });
+  }
+
+  /** Persiste los campos MANUALES de boss_mechanic_defensive_profile (requires_defensive/requires_group_split/group_split_notes/reviewed) — los reference_* solo los toca el sync. */
+  async saveMechanicDefensiveProfileEdit(edit: {
+    bossId: string;
+    difficulty: string;
+    abilityId: number;
+    requiresDefensive?: boolean | null;
+    requiresGroupSplit?: boolean;
+    groupSplitNotes?: string | null;
+    reviewed?: boolean;
+  }): Promise<{ ok: true }> {
+    return this.invoke('save-mechanic-defensive-profile-edit', edit);
+  }
+
+  /** Crear/editar (upsert por boss+dificultad+mecánica+class+spec) o borrar (`id`+`delete:true`) una asignación de defensivo — ver save-mechanic-defensive-assignment/index.ts. */
+  async saveMechanicDefensiveAssignment(
+    edit:
+      | {
+          bossId: string;
+          difficulty: string;
+          abilityId: number;
+          class: string;
+          spec: string;
+          defensiveSpellId: number;
+          prewarnSeconds?: number;
+          triggerType?: 'bossmod' | 'time';
+          bossmodSpellId?: number | null;
+          notes?: string | null;
+          assignedGroups?: number[] | null;
+        }
+      | { id: string; delete: true },
+  ): Promise<{ ok: true; id?: string }> {
+    return this.invoke('save-mechanic-defensive-assignment', edit);
   }
 
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */

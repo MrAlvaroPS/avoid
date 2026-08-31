@@ -31,6 +31,20 @@
         <button type="button" class="update-report-btn" [disabled]="generatingFullReport()" (click)="onUpdateFullReport()">
           @if (generatingFullReport()) { <span class="button-spinner" aria-hidden="true"></span> Actualizando… } @else { ↻ Actualizar }
         </button>
+        <button
+          type="button"
+          class="secondary-button"
+          [disabled]="recalculatingAll()"
+          (click)="onRecalculateAll()"
+          title="Reanaliza los pulls y reconstruye ejecución, parse, defensivos, fiabilidad, evolución e informe usando los datos actuales."
+        >
+          @if (recalculatingAll()) {
+            <span class="button-spinner" aria-hidden="true"></span>
+            @if (recalculateAllProgress(); as p) { Reanalizando pulls… {{ p.done }}/{{ p.total }} } @else { Recalculando todo… }
+          } @else {
+            🔄 Recalcular todo
+          }
+        </button>
         @if (fullReport()) {
           <button type="button" class="secondary-button infographic-button" (click)="infographicOpen.set(true)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V9m5 9V5m5 13v-6m5 6V3"/></svg>
@@ -51,6 +65,9 @@
 
     @if (fullReportError(); as fe) {
       <p class="full-report-error" role="alert">No se pudo preparar el informe: {{ fe }}</p>
+    }
+    @if (recalculateAllError(); as re) {
+      <p class="full-report-error" role="alert">{{ re }}</p>
     }
 
     @if (fullReport()?.report; as r) {

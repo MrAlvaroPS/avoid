@@ -120,6 +120,10 @@
 // leerse como la misma familia de UI en toda la app.
 .classify-bar {
   margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .classify-toggle {
   background: transparent;
@@ -288,6 +292,58 @@
   tr.saving {
     opacity: 0.5;
   }
+  // §"el greater invisibility... ya no es un defensivo" (feedback real, 2026-08-31)
+  tr.excluded {
+    opacity: 0.5;
+
+    td:first-child {
+      box-shadow: inset 3px 0 0 var(--danger);
+    }
+  }
+}
+
+// §bug real (2026-08-31, "el botón de restablecer clase sale blanco y sin
+// letras"): esta clase se usaba en la plantilla pero nunca se había
+// definido en el scss de ESTE componente (Angular encapsula por
+// componente, no se hereda de otros ficheros aunque el nombre coincida) —
+// caía al botón por defecto del navegador, que en este tema oscuro hereda
+// el color de texto claro del body sobre un fondo claro del propio botón:
+// texto blanco sobre blanco, invisible.
+.delete-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+  }
+  &.confirming {
+    background: var(--danger);
+    color: #fff;
+  }
+}
+
+.suggested-exclusions {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.suggested-exclusion-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  border-radius: 6px;
+  font-size: 12px;
 }
 
 .name {
@@ -308,15 +364,40 @@
   font-size: 10.5px;
 }
 
-.spec-badge {
-  display: inline-block;
+// §"poder seleccionar las specs... toggles, igual que en mecánicas
+// voluntarias" (feedback real, 2026-08-31) — mismo vocabulario visual que
+// .role-chips/.role-chip en unassigned-mechanics-catalog.component.scss,
+// copiado a propósito (Angular encapsula por componente, no se comparte).
+.spec-cell {
+  min-width: 180px;
+}
+
+.role-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.role-chip {
   padding: 2px 8px;
+  background: var(--surface-2);
+  border: none;
   border-radius: 20px;
-  background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--text-faint);
   font-size: 10.5px;
-  font-weight: 600;
-  white-space: nowrap;
+  cursor: pointer;
+
+  &.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+}
+
+.reset-spec {
+  display: block;
+  margin-top: 4px;
+  font-size: 10.5px;
 }
 
 select {

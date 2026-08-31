@@ -1,0 +1,507 @@
+// Mismo vocabulario visual que unassigned-mechanics-catalog.component.scss/
+// defensive-catalog.component.scss a propósito — Angular encapsula por
+// componente, así que se copian las reglas compartidas en vez de
+// importarlas (mismo criterio ya documentado en esos ficheros).
+.boss-prep {
+  display: block;
+}
+
+.intro {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 20px;
+  max-width: 900px;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.result-line {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.result-ok {
+  color: var(--success);
+}
+.result-warn {
+  color: var(--warning);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.boss-list {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 8px;
+}
+
+.boss-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.boss-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+  &.selected {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+}
+
+.detail {
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  padding: 16px;
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+
+  h2 {
+    margin: 0;
+    font-size: 15px;
+  }
+}
+
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.difficulty-tabs {
+  display: flex;
+  gap: 4px;
+
+  button {
+    padding: 4px 10px;
+    background: var(--surface-2);
+    border: none;
+    border-radius: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+
+    &.selected {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+  }
+}
+
+// §"ponlo en la cabecera a la derecha de donde vienen las dificultades... más a la vista" (feedback real, 2026-08-31)
+.auto-assign-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+
+  select {
+    background: var(--surface-2);
+    border: none;
+    border-radius: 6px;
+    color: var(--text);
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+
+  .sync-btn {
+    padding: 6px 10px;
+    font-size: 11.5px;
+  }
+}
+
+.group-field {
+  margin-top: 10px;
+
+  .meta {
+    display: block;
+    margin-bottom: 4px;
+  }
+}
+
+.sync-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.sync-btn {
+  padding: 8px 14px;
+  background: var(--accent-solid);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:disabled {
+    opacity: 0.6;
+  }
+}
+
+.candidates,
+.assignments {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+
+  th {
+    text-align: left;
+    padding: 6px 8px;
+    color: var(--text-faint);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-bottom: 1px solid var(--surface-2);
+  }
+
+  td {
+    padding: 8px;
+    vertical-align: top;
+    border-bottom: 1px solid var(--surface-2);
+  }
+
+  tr.saving {
+    opacity: 0.5;
+  }
+
+  // §"al pulsar sobre la fila de la mecánica... despliegue el acordeón" (feedback real, 2026-08-31)
+  tr.row-clickable {
+    cursor: pointer;
+
+    &:hover {
+      background: var(--surface-hover);
+    }
+  }
+
+  // §"identificarla fácilmente [la mecánica con asignaciones]... color ligeramente distinto" (feedback real, 2026-08-31)
+  tr.has-assignments {
+    background: color-mix(in srgb, var(--success) 5%, transparent);
+    box-shadow: inset 3px 0 0 var(--success);
+  }
+}
+
+.assignments-row td {
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+// §"doble clasificación: al pulsarlo despliega las clases... y la fila de clase se pueda desplegar" (feedback real, 2026-08-31)
+.class-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.class-group {
+  background: var(--surface);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.class-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+}
+
+.chevron {
+  display: inline-block;
+  width: 10px;
+  color: var(--text-faint);
+}
+
+.class-group .assignments {
+  margin: 0;
+}
+
+.meta {
+  display: block;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.group-split-cell {
+  min-width: 180px;
+}
+
+select,
+input[type='text'],
+input[type='number'],
+.notes-input {
+  background: var(--surface-2);
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.notes-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  margin-top: 4px;
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+
+  span {
+    white-space: nowrap;
+  }
+}
+
+.delete-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: 6px;
+
+  &:hover {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+  }
+  &.confirming {
+    background: var(--danger);
+    color: #fff;
+  }
+}
+
+.classify-toggle {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 4px 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+
+  // §"marcando en color la parte de 'asignaciones' de la derecha" (feedback real, 2026-08-31)
+  &.has-assignments {
+    color: var(--success);
+    font-weight: 600;
+  }
+}
+
+.add-form {
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.add-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+
+    input,
+    select {
+      background: var(--surface-2);
+      border: none;
+      border-radius: 6px;
+      color: var(--text);
+      padding: 6px 8px;
+      font-size: 12.5px;
+    }
+  }
+}
+
+.add-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+// mismo vocabulario que unassigned-mechanics-catalog/defensive-catalog (toggle chips) — copiado a propósito, Angular no comparte estilos entre componentes.
+.role-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.role-chip {
+  padding: 2px 8px;
+  background: var(--surface-2);
+  border: none;
+  border-radius: 20px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  cursor: pointer;
+
+  &.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+}
+
+.prompt-box {
+  background: var(--surface-2);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 6px 0 10px;
+}
+
+// §"reubica el botón de crear reminder... útil y accesible" (feedback real, 2026-08-31)
+.export-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 16px;
+  background: color-mix(in srgb, black 55%, transparent);
+}
+
+.export-modal {
+  width: min(720px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+}
+
+.export-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+
+  h3 {
+    margin: 0;
+    font-size: 14px;
+  }
+}
+
+// §"columna nueva... prioridad del 1 al 5... un fondo o algo acorde... visible a simple vista" (feedback real, 2026-08-31)
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+}
+.priority-1 { background: #3a7d3a; }
+.priority-2 { background: #6a8f2e; }
+.priority-3 { background: #c9a227; }
+.priority-4 { background: #d4772a; }
+.priority-5 { background: #c0392b; }
+
+.timeline-table {
+  font-size: 12px;
+}
+.timeline-conflict {
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+.timeline-gap {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.class-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}

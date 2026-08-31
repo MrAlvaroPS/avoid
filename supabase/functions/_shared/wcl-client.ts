@@ -72,9 +72,42 @@ export async function graphql<T>(query: string, variables: Record<string, unknow
     throw new Error(`WCL GraphQL error: ${json.errors.map((e) => e.message).join('; ')}`);
   }
   if (!res.ok || json.data === undefined) {
+    // §"cuando algo da el límite de WCL, ¿no podemos saber cuánto queda
+    // para resetearlo?" (feedback real, 2026-08-31): rateLimitData ya se
+    // había consultado antes a mano para calibrar cuotas (ver comentario
+    // real en sync-boss-mechanics, "verificado en real contra la cuenta de
+    // WCL") — mismo campo, ahora enriqueciendo el mensaje de error de
+    // verdad en vez de solo "probable rate limit". Best-effort: si esta
+    // segunda llamada también falla (plausible si el 429 es un throttle
+    // duro, no solo cuota agotada), se cae al mensaje genérico de siempre.
+    if (res.status === 429) {
+      const status = await getWclRateLimitStatus().catch(() => null);
+      if (status) {
+        const resetMin = Math.ceil(status.pointsResetIn / 60);
+        throw new Error(`WCL GraphQL: HTTP 429 (rate limit) — ${status.pointsSpentThisHour}/${status.limitPerHour} puntos usados esta hora, resetea en ~${resetMin} min.`);
+      }
+    }
     throw new Error(`WCL GraphQL: HTTP ${res.status} sin datos (probable rate limit) — ${JSON.stringify(json).slice(0, 300)}`);
   }
   return json.data as T;
+}
+
+const RATE_LIMIT_QUERY = `query RateLimit { rateLimitData { limitPerHour pointsSpentThisHour pointsResetIn } }`;
+
+/** Cuota real de la API v2 de WCL para este client credentials — fetch aparte (no reutiliza graphql()) para que un 429 no dependa de sí mismo. */
+export async function getWclRateLimitStatus(): Promise<{ limitPerHour: number; pointsSpentThisHour: number; pointsResetIn: number } | null> {
+  try {
+    const token = await getAccessToken();
+    const res = await fetchWithTimeout(
+      GRAPHQL_URL,
+      { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: RATE_LIMIT_QUERY }) },
+      GRAPHQL_TIMEOUT_MS,
+    );
+    const json = await res.json();
+    return json?.data?.rateLimitData ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // --- Listar reports de la guild ---

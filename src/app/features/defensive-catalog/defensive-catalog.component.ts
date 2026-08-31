@@ -11,6 +11,7 @@ import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { DefensiveCatalogService } from '../../core/defensive-catalog.service';
 import { ClassIconComponent } from '../../shared/class-icon.component';
 import { CLASS_DISPLAY_NAME, SURVIVAL_TYPE_KEYS, classDisplayName, survivalTypeMeta } from '../../shared/format.util';
+import { specsForClass } from '../../shared/spec-role.util';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import type { CooldownCatalogRow } from '../../shared/models/domain';
@@ -59,6 +60,11 @@ export class DefensiveCatalogComponent {
    * y de paso se puede enseñar el progreso real en vez de un número mudo. */
   lastReanalysis = signal<{ spellName: string; total: number; done: number; failed: number; running: boolean } | null>(null);
 
+  /** §"botón... para limpiar sus defensivos y volver a calcularlos con el prompt, porque alguno se desactualiza" (feedback real, 2026-08-31) */
+  confirmingResetClassId = signal<string | null>(null);
+  resettingClass = signal(false);
+  lastClassReset = signal<{ className: string; resetCount: number } | null>(null);
+
   // §"un desplegable para poner el tipo de defensivo que es (que también
   // deberá rellenarse solo o a través de un prompt)" (feedback real): mismo
   // patrón de dos pasos que el panel de IA de manifest.component.ts —
@@ -86,6 +92,7 @@ export class DefensiveCatalogComponent {
     applied: { spellId: number; name: string; survivalType: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
+    suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
   } | null>(null);
 
@@ -119,13 +126,12 @@ export class DefensiveCatalogComponent {
 
   async onEdit(
     row: CooldownCatalogRow,
-    patch: Partial<Pick<CooldownCatalogRow, 'survival_type' | 'reviewed' | 'base_cooldown_ms' | 'base_duration_ms'>>,
+    patch: Partial<Pick<CooldownCatalogRow, 'survival_type' | 'reviewed' | 'base_cooldown_ms' | 'base_duration_ms' | 'spec_override' | 'excluded'>>,
   ): Promise<void> {
     const className = this.selectedClass();
     if (!className) return;
     this.savingSpellId.set(row.spell_id);
-    const touchesTiming = 'base_cooldown_ms' in patch || 'base_duration_ms' in patch;
-    if (touchesTiming) this.lastReanalysis.set(null); // limpia el aviso anterior mientras se guarda el nuevo
+    this.lastReanalysis.set(null); // limpia el aviso anterior mientras se guarda el nuevo — save-defensive-edit decide de verdad si hace falta reanalizar
     try {
       const res = await this.edgeFunctions.saveDefensiveEdit({
         class: className,
@@ -134,19 +140,20 @@ export class DefensiveCatalogComponent {
         reviewed: patch.reviewed ?? true,
         // Solo se mandan si de verdad se están editando — save-defensive-edit
         // los deja tal cual cuando la clave no viene en el body, así una
-        // edición de solo survival_type/reviewed nunca borra un CD ya puesto.
+        // edición de solo survival_type/reviewed nunca borra un CD/spec_override ya puestos.
         ...('base_cooldown_ms' in patch ? { baseCooldownMs: patch.base_cooldown_ms } : {}),
         ...('base_duration_ms' in patch ? { baseDurationMs: patch.base_duration_ms } : {}),
+        ...('spec_override' in patch ? { specOverride: patch.spec_override } : {}),
+        ...('excluded' in patch ? { excluded: patch.excluded } : {}),
       });
       this.defensives.update((list) => list.map((d) => (d.spell_id === row.spell_id ? { ...d, ...patch, reviewed: patch.reviewed ?? true } : d)));
-      // §"se calculan de nuevo?" (feedback real, 2026-08-29): editar
-      // cooldown/duración deja desactualizado defensive_pressure_windows de
-      // cada pull con algún jugador de esta clase — se reanalizan uno a uno
-      // aquí mismo (ver comentario de lastReanalysis: no cabe hacerlo dentro
-      // de un edge function, agota su cuota de CPU), sin bloquear el guardado
-      // del catálogo en sí (el spinner de la fila ya se suelta en el finally
-      // de abajo; el progreso vive en su propio aviso).
-      if (touchesTiming && res.pullIds != null) {
+      // §"se calculan de nuevo?" (feedback real, 2026-08-29) + "el dosier no
+      // se actualiza con Ardent Defender" (feedback real, 2026-08-31):
+      // save-defensive-edit ya decide con el valor ANTERIOR real si cd/
+      // duración/survival_type/spec_override cambiaron de verdad — aquí solo
+      // se confía en pullIds, nunca se vuelve a decidir en el cliente qué
+      // "cuenta" como cambio de timing.
+      if (res.pullIds?.length) {
         void this.runReanalysisQueue(row.name, res.pullIds);
       }
     } catch (err) {
@@ -174,6 +181,35 @@ export class DefensiveCatalogComponent {
     this.lastReanalysis.set({ spellName, total: pullIds.length, done, failed, running: false });
   }
 
+  /** Doble clic en 5s, mismo patrón que requestDeleteAssignment/discord-settings.component.ts. */
+  requestResetClassDefensives(className: string): void {
+    if (this.confirmingResetClassId() === className) {
+      void this.confirmResetClassDefensives(className);
+      return;
+    }
+    this.confirmingResetClassId.set(className);
+    setTimeout(() => {
+      if (this.confirmingResetClassId() === className) this.confirmingResetClassId.set(null);
+    }, 5000);
+  }
+
+  private async confirmResetClassDefensives(className: string): Promise<void> {
+    this.confirmingResetClassId.set(null);
+    this.resettingClass.set(true);
+    this.error.set(null);
+    this.lastClassReset.set(null);
+    try {
+      const res = await this.edgeFunctions.resetClassDefensives(className);
+      this.lastClassReset.set({ className, resetCount: res.resetCount });
+      if (this.selectedClass() === className) await this.loadDefensives();
+      if (res.pullIds.length) void this.runReanalysisQueue(`${classDisplayName(className)} (clase entera)`, res.pullIds);
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.resettingClass.set(false);
+    }
+  }
+
   // §"no puedo editar el campo de cd (poder editarlo para que sea en
   // segundos)" (feedback real, 2026-08-29): el input trabaja en segundos
   // (más natural, así es como lo da Wowhead — "3 min cooldown", "Lasts 20
@@ -192,6 +228,79 @@ export class DefensiveCatalogComponent {
     const seconds = trimmed === '' ? null : Number(trimmed);
     if (seconds != null && (!Number.isFinite(seconds) || seconds < 0)) return;
     void this.onEdit(row, { base_duration_ms: seconds == null ? null : Math.round(seconds * 1000) });
+  }
+
+  /**
+   * §"un tank de paladin me comentó que una habilidad la tenemos puesta
+   * como suya pero ya no la tiene... poder seleccionar las specs con
+   * toggles, igual que hacemos con los roles de mecánicas voluntarias"
+   * (feedback real, 2026-08-31): specsForDefensive() da el estado EFECTIVO
+   * (spec_override si existe, si no lo que ya implicaba `spec`) — los chips
+   * se pintan contra esto, nunca contra `row.spec` directamente, para que
+   * el toggle parta siempre de lo que se ve en pantalla ahora mismo.
+   */
+  specsForDefensive(row: CooldownCatalogRow): string[] {
+    if (row.spec_override != null) return row.spec_override;
+    if (row.spec == null) return specsForClass(row.class);
+    return row.spec.split('/').map((s) => s.trim());
+  }
+
+  toggleDefensiveSpec(row: CooldownCatalogRow, spec: string): void {
+    const current = this.specsForDefensive(row);
+    const next = current.includes(spec) ? current.filter((s) => s !== spec) : [...current, spec];
+    void this.onEdit(row, { spec_override: next });
+  }
+
+  /** Vuelve a lo que dice `spec` (extractor/IA) — deshace la corrección manual. */
+  resetDefensiveSpecOverride(row: CooldownCatalogRow): void {
+    void this.onEdit(row, { spec_override: null });
+  }
+
+  // §"el greater invisibility del mago ya no es un defensivo... no tengo
+  // opción de quitarlo de ninguna manera" (feedback real, 2026-08-31):
+  // excluir es más consecuente que un toggle cualquiera (deja de contar en
+  // TODA la app — Preparación, defensive_pressure_windows futuros...) —
+  // doble clic en 5s, mismo patrón que requestDeleteAssignment. Restaurar
+  // no lleva confirmación: es la dirección "deshacer", nunca destructiva.
+  confirmingExcludeSpellId = signal<number | null>(null);
+
+  requestToggleExcluded(row: CooldownCatalogRow): void {
+    if (row.excluded) {
+      void this.onEdit(row, { excluded: false });
+      return;
+    }
+    if (this.confirmingExcludeSpellId() === row.spell_id) {
+      void this.onEdit(row, { excluded: true });
+      this.confirmingExcludeSpellId.set(null);
+      return;
+    }
+    this.confirmingExcludeSpellId.set(row.spell_id);
+    setTimeout(() => {
+      if (this.confirmingExcludeSpellId() === row.spell_id) this.confirmingExcludeSpellId.set(null);
+    }, 5000);
+  }
+
+  /** §sugerencia de la IA (stillDefensive:false) — nunca se aplica sola, este es el único sitio que de verdad escribe `excluded`. confirmedSuggestions solo es UI local (qué botón ya se pulsó en esta sesión), la fuente de verdad sigue siendo cooldown_catalog.excluded. */
+  confirmedSuggestions = signal<Set<number>>(new Set());
+
+  async confirmSuggestedExclusion(s: { spellId: number; name: string; class: string; notes: string }): Promise<void> {
+    if (!s.class || this.confirmedSuggestions().has(s.spellId)) return;
+    this.savingSpellId.set(s.spellId);
+    this.error.set(null);
+    try {
+      const res = await this.edgeFunctions.saveDefensiveEdit({ class: s.class, spellId: s.spellId, excluded: true, reviewed: true });
+      this.confirmedSuggestions.update((set) => new Set(set).add(s.spellId));
+      if (this.selectedClass() === s.class) this.defensives.update((list) => list.map((d) => (d.spell_id === s.spellId ? { ...d, excluded: true, reviewed: true } : d)));
+      if (res.pullIds?.length) void this.runReanalysisQueue(s.name, res.pullIds);
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.savingSpellId.set(null);
+    }
+  }
+
+  specsForClassOf(row: CooldownCatalogRow): string[] {
+    return specsForClass(row.class);
   }
 
   /** Confirma tal cual la sugerencia IA (inferred_survival_type) — mismo botón que confirmInferredCategory en manifest.component.ts. */
@@ -261,10 +370,17 @@ export class DefensiveCatalogComponent {
       // mismo — el resto se recarga solas al cambiar de pestaña (selectClass
       // siempre vuelve a pedir la lista, nunca sirve caché).
       await this.loadDefensives();
+      // La clasificación IA modifica los mismos campos materiales que la
+      // edición manual; por tanto usa exactamente la misma cola secuencial
+      // de reanálisis antes de dar la operación por terminada.
+      if (res.pullIds.length) {
+        await this.runReanalysisQueue(scope === 'all' ? 'clasificación IA (catálogo completo)' : `clasificación IA (${classDisplayName(scope)})`, res.pullIds);
+      }
       this.classifyResult.set({
         applied: res.applied,
         skippedLowConfidence: res.skippedLowConfidence,
         skippedUndetermined: res.skippedUndetermined,
+        suggestedExclusions: res.suggestedExclusions,
         invalid: res.invalid,
       });
     } catch (err) {

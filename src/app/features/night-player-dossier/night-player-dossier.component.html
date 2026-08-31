@@ -46,6 +46,21 @@
         <button type="button" class="copy-btn" (click)="copySummary()">
           {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord →' }}
         </button>
+        <!-- §"no tenemos un force refresh en ningún lado... también hay que
+             tenerlo en el dosier de jugador" (feedback real, 2026-08-31):
+             refreshInfographic() ya existía pero solo era alcanzable
+             abriendo antes la infografía (ver más abajo, refreshRequested) —
+             recalcula TODO el dosier (data() entero, no solo la infografía:
+             load()/refreshInfographic() llaman al mismo summaryService.load
+             con forceRefresh), así que el botón real tiene que estar aquí,
+             visible sin ningún paso previo. -->
+        <button type="button" class="copy-btn" [disabled]="refreshingInfographic()" (click)="refreshInfographic()" title="Reanaliza cada pull de esta noche contra el catálogo actual (defensivos, mecánicas...) y recalcula el dosier entero, saltándose el caché.">
+          @if (refreshingInfographic()) {
+            @if (recalculateProgress(); as p) { Reanalizando pulls… {{ p.done }}/{{ p.total }} } @else { Recalculando… }
+          } @else {
+            🔄 Recalcular dosier
+          }
+        </button>
         @if (discordChannelUrl(); as channelUrl) {
           <div class="header-actions-footnote">
             <a [href]="channelUrl" target="_blank" rel="noopener" class="discord-channel-link" title="Abrir el canal privado de este raider en Discord">🔗 Ver canal</a>

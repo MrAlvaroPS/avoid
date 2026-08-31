@@ -291,6 +291,74 @@ export class NightReportComponent {
     await this.generateFullReport(true);
   }
 
+  // Recalcula las fuentes materializadas y TODOS sus consumidores. A
+  // diferencia de "Actualizar", no se limita al informe determinista.
+  recalculatingAll = signal(false);
+  recalculateAllError = signal<string | null>(null);
+  recalculateAllProgress = signal<{ done: number; total: number } | null>(null);
+
+  async onRecalculateAll(): Promise<void> {
+    if (this.recalculatingAll()) return;
+    this.recalculatingAll.set(true);
+    this.recalculateAllError.set(null);
+    this.recalculateAllProgress.set(null);
+    try {
+      const code = this.reportCode();
+      const pullIds = await this.nightReportService.listPullIds(code);
+      const failures: string[] = [];
+      let done = 0;
+      this.recalculateAllProgress.set({ done, total: pullIds.length });
+
+      // Cada pull es una invocación independiente: evita WORKER_RESOURCE_LIMIT
+      // y, con un reintento, reduce el riesgo de dejar una noche a medias por
+      // un fallo transitorio de red/WCL. Los fallos persistentes nunca se
+      // silencian: se muestran al final.
+      for (const pullId of pullIds) {
+        for (const [label, operation] of [
+          ['defensivos', () => this.edgeFunctions.reanalyzeDefensivePressure(pullId)],
+          ['mecánicas', () => this.edgeFunctions.reanalyzeUnassignedMechanics(pullId)],
+        ] as const) {
+          let lastError: unknown = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              await operation();
+              lastError = null;
+              break;
+            } catch (err) {
+              lastError = err;
+            }
+          }
+          if (lastError != null) failures.push(`${pullId} · ${label}: ${errorMessage(lastError)}`);
+        }
+        done++;
+        this.recalculateAllProgress.set({ done, total: pullIds.length });
+      }
+
+      // Invalida también el estado EN MEMORIA de la evolución: su Set de
+      // "ya solicitado" impediría volver a entrar aunque el fingerprint
+      // persistido hubiese cambiado.
+      this.bossEvolutionRequested.clear();
+      this.bossEvolution.set(new Map());
+
+      await Promise.all([
+        this.loadRosterSnapshot(true),
+        this.loadNightAttendanceStats(code, this.attendingPlayers(), true),
+        this.prefetchBossEvolution(true),
+      ]);
+      await this.generateFullReport(true);
+
+      if (failures.length) {
+        this.recalculateAllError.set(
+          `El recálculo terminó con ${failures.length} operación(es) que siguieron fallando tras reintentar. Los datos visibles se han recargado desde el estado persistido actual, pero la noche no debe considerarse completamente reanalizada. ${failures.slice(0, 3).join(" | ")}${failures.length > 3 ? " …" : ""}`,
+        );
+      }
+    } catch (err) {
+      this.recalculateAllError.set(errorMessage(err));
+    } finally {
+      this.recalculatingAll.set(false);
+    }
+  }
+
   private async generateFullReport(force: boolean): Promise<void> {
     if (this.generatingFullReport()) return;
     this.generatingFullReport.set(true);
@@ -518,15 +586,15 @@ export class NightReportComponent {
     });
   }
 
-  private async loadRosterSnapshot(): Promise<void> {
-    const cached = this.rosterSnapshotCache.read();
+  private async loadRosterSnapshot(force = false): Promise<void> {
+    const cached = force ? null : this.rosterSnapshotCache.read();
     if (cached) {
       this.rosterPlayers.set(cached.players);
       this.rosterOffenders.set(cached.offenders);
     }
     try {
       const fingerprint = await this.rosterSnapshotCache.fingerprint();
-      if (cached?.fingerprint === fingerprint) return;
+      if (!force && cached?.fingerprint === fingerprint) return;
       const [players, offenders] = await Promise.all([
         this.reliabilityService.listPlayerReliability(),
         this.offendersService.listRepeatOffenders().catch(() => []),
@@ -536,11 +604,11 @@ export class NightReportComponent {
       const snapshot: RosterSnapshot = { fingerprint, savedAt: new Date().toISOString(), players, offenders };
       this.rosterSnapshotCache.write(snapshot);
     } catch {
-      // best-effort: si falla, la tabla sigue mostrando Ejecución de la noche sin Fiabilidad/Estado — nunca bloquea el resto del informe.
+      // best-effort: el fallo de esta optimización nunca bloquea el informe.
     }
   }
 
-  private async loadNightAttendanceStats(code: string, players: NightAttendee[]): Promise<void> {
+  private async loadNightAttendanceStats(code: string, players: NightAttendee[], force = false): Promise<void> {
     if (!players.length) {
       this.nightAttendanceStats.set(new Map());
       return;
@@ -554,15 +622,17 @@ export class NightReportComponent {
     // los pulls de este report concreto. Una vez la noche está cerrada, no
     // vuelve a tocar Supabase para esto nunca más.
     let fingerprint: string | null = null;
-    try {
-      fingerprint = await this.nightScoreCache.fingerprint(code);
-      const cached = this.nightScoreCache.read(code);
-      if (cached && cached.fingerprint === fingerprint) {
-        this.nightAttendanceStats.set(new Map(Object.entries(cached.scores)));
-        return;
+    if (!force) {
+      try {
+        fingerprint = await this.nightScoreCache.fingerprint(code);
+        const cached = this.nightScoreCache.read(code);
+        if (cached && cached.fingerprint === fingerprint) {
+          this.nightAttendanceStats.set(new Map(Object.entries(cached.scores)));
+          return;
+        }
+      } catch {
+        // sigue al cálculo completo si el fingerprint ligero falla.
       }
-    } catch {
-      // sigue al cálculo completo si el fingerprint ligero falla — nunca deja la tabla sin números por esto.
     }
     const emptyStats: CachedNightAttendanceStats = { nightScore: null, nightReliability: null, nightDefensiva: null, nightParse: null };
     const entries = await Promise.all(
@@ -570,7 +640,7 @@ export class NightReportComponent {
         try {
           // includeEvolution=false: no hace falta la comparación con la
           // noche anterior (que recalcula TODO otra vez) solo para leer estas 4 columnas.
-          const summary = await this.nightPlayerSummaryService.load(code, p.name, false);
+          const summary = await this.nightPlayerSummaryService.load(code, p.name, false, force);
           // §"el parse obtenido durante la noche (esto lo traemos de WCL)"
           // (feedback real, 2026-08-30): media del percentil de WCL sobre
           // los pulls de esta noche donde WCL pudo rankear al jugador
@@ -601,6 +671,7 @@ export class NightReportComponent {
       }),
     );
     this.nightAttendanceStats.set(new Map(entries));
+    fingerprint ??= await this.nightScoreCache.fingerprint(code).catch(() => null);
     if (fingerprint) this.nightScoreCache.write(code, fingerprint, Object.fromEntries(entries));
   }
 
@@ -638,17 +709,17 @@ export class NightReportComponent {
     return out;
   });
 
-  private async prefetchBossEvolution(): Promise<void> {
-    await Promise.all(this.tonightBossKeys().map((b) => this.loadBossEvolution(b.bossId, b.difficulty, b.key)));
+  private async prefetchBossEvolution(force = false): Promise<void> {
+    await Promise.all(this.tonightBossKeys().map((b) => this.loadBossEvolution(b.bossId, b.difficulty, b.key, force)));
   }
 
-  private async loadBossEvolution(bossId: string, difficulty: string, key: string): Promise<void> {
-    if (this.bossEvolutionRequested.has(key)) return;
+  private async loadBossEvolution(bossId: string, difficulty: string, key: string, force = false): Promise<void> {
+    if (!force && this.bossEvolutionRequested.has(key)) return;
     this.bossEvolutionRequested.add(key);
     try {
       const fingerprint = await this.bossEvolutionCache.fingerprint();
-      const cached = this.bossEvolutionCache.read(bossId, difficulty);
-      if (cached && cached.fingerprint === fingerprint) {
+      const cached = force ? null : this.bossEvolutionCache.read(bossId, difficulty);
+      if (!force && cached && cached.fingerprint === fingerprint) {
         this.bossEvolution.update((current) => new Map(current).set(key, new Map(Object.entries(cached.points))));
         return;
       }

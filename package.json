@@ -19,6 +19,7 @@
     "@angular/router": "^21.2.0",
     "@supabase/supabase-js": "^2.112.3",
     "html-to-image": "^1.11.13",
+    "pako": "^3.0.1",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },
@@ -26,6 +27,7 @@
     "@angular/build": "^21.2.12",
     "@angular/cli": "^21.2.12",
     "@angular/compiler-cli": "^21.2.0",
+    "@types/pako": "^2.0.4",
     "dotenv": "^17.4.2",
     "jsdom": "^28.0.0",
     "playwright": "^1.62.1",

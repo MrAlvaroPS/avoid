@@ -375,11 +375,39 @@ export class NightPlayerDossierComponent {
    * botón es la vía explícita para saltárselo (forceRefresh) y dejar el
    * caché puesto al día con el resultado fresco.
    */
+  recalculateProgress = signal<{ done: number; total: number } | null>(null);
+
   async refreshInfographic(): Promise<void> {
     if (this.refreshingInfographic()) return;
     this.refreshingInfographic.set(true);
     this.error.set(null);
+    this.recalculateProgress.set(null);
     try {
+      // §bug real encontrado en real (2026-08-31, tank de Paladin — Divine
+      // Protection quitado de Protection en Ajustes, el dosier siguió
+      // enseñándolo como disponible incluso tras pulsar "recalcular"):
+      // saltarse el caché del CLIENTE (forceRefresh de summaryService.load)
+      // no sirve de nada si player_pull_records.defensive_pressure_windows
+      // nunca se recalculó de verdad contra WCL — eso solo pasa reanalizando
+      // el pull. Antes de releer, se reanaliza cada pull de este jugador en
+      // este report de verdad.
+      const pullIds = this.data()?.pulls.map((p) => p.pullId) ?? [];
+      let done = 0;
+      this.recalculateProgress.set({ done, total: pullIds.length });
+      for (const pullId of pullIds) {
+        try {
+          await this.edgeFunctions.reanalyzeDefensivePressure(pullId);
+        } catch (err) {
+          console.error(`No se pudo reanalizar defensivos del pull ${pullId} al recalcular el dosier:`, err);
+        }
+        try {
+          await this.edgeFunctions.reanalyzeUnassignedMechanics(pullId);
+        } catch (err) {
+          console.error(`No se pudo reanalizar mecánicas sin asignar del pull ${pullId} al recalcular el dosier:`, err);
+        }
+        done++;
+        this.recalculateProgress.set({ done, total: pullIds.length });
+      }
       this.data.set(await this.summaryService.load(this.reportCode(), this.playerName(), true, true));
     } catch (err) {
       this.error.set(errorMessage(err));

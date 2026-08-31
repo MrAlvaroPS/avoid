@@ -358,6 +358,8 @@ export interface CooldownCatalogRow {
   id: string;
   class: string;
   spec: string | null;
+  /** Corrección manual por encima de `spec` — null = sin corregir, se deriva de `spec` tal cual (ver migración 20260831090000). Gana siempre que no sea null. */
+  spec_override: string[] | null;
   spell_id: number;
   name: string;
   /** A quién protege: personal (uno mismo), semi (uno mismo con matices), external (se lanza sobre otro) o utility. Eje distinto de survival_type. */
@@ -367,12 +369,71 @@ export interface CooldownCatalogRow {
   synced_from_commit: string | null;
   synced_at: string | null;
   created_at: string;
+  /** §"si actualiza un defensivo... aviso de que se recomienda sincronizar" (feedback real, 2026-08-31) — para saber si una auto-asignación en "Preparación" quedó vieja frente a una edición posterior del catálogo. */
+  updated_at: string;
   /** Confirmado a mano o aplicado desde una clasificación IA. */
   survival_type: DefensiveSurvivalType | null;
   /** Sugerencia IA sin confirmar — nunca pisa survival_type una vez fijado a mano. */
   inferred_survival_type: DefensiveSurvivalType | null;
   ai_classification: { confidence: 'high' | 'medium'; sources: string[]; notes: string; classifiedAt: string } | null;
   reviewed: boolean;
+  /** §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31): true = ya no cuenta como defensivo real (rediseñado en un parche posterior) — corrección manual, nunca la toca el extractor de WoWAnalyzer ni un resync. defensivesForSpec/DefensiveCatalogService.listAll() lo filtran. */
+  excluded: boolean;
+}
+
+/**
+ * Fila de boss_mechanic_defensive_profile (§"Preparación" — ver plan
+ * guardado, conversación real 2026-08-30): peligrosidad/timing por mecánica,
+ * separado de BossMechanicCandidateRow (otro consumidor: severidad de
+ * mecánica evitable) aunque comparten clave (boss_id, difficulty,
+ * ability_id). Los campos reference_* y requires_defensive(_source) SOLO los
+ * escribe sync-mechanic-defensive-profile; requires_group_split/
+ * group_split_notes/reviewed SOLO la edición manual — mismo contrato que
+ * BossMechanicCandidateRow.
+ */
+export interface BossMechanicDefensiveProfileRow {
+  id: string;
+  boss_id: string;
+  difficulty: string;
+  ability_id: number;
+  /** Daño (amount+absorbed) en hits SIN un defensivo de %-reducción activo en el objetivo — la señal cruda, no amortiguada por logs de referencia ya bien jugados. */
+  reference_unmitigated_damage_samples: number[];
+  /** Mismos hits pero CON un defensivo activo — delta real de mitigación observado. */
+  reference_mitigated_damage_samples: number[];
+  /** Contadores CRUDOS acumulados entre sincronizaciones (no fracciones — no se pueden fusionar entre tandas sin perder precisión) — divide por la suma de los tres para el %. */
+  reference_role_hit_breakdown: { tank: number; healer: number; dps: number } | null;
+  /** Ms desde pull-start de cada ocurrencia observada — solo timeline/preview, nunca el trigger real (ver MrtBossmodTrigger). */
+  reference_cast_offset_ms_samples: number[];
+  reference_sample_fight_count: number;
+  /** 1-5, relativo a las demás mecánicas de este boss+dificultad (quintil por impacto) — null = sin evidencia todavía. */
+  priority: number | null;
+  requires_defensive: boolean | null;
+  /** Mismo vocabulario que SeveritySource (_shared/mechanic-severity.ts) + 'manual_override'. */
+  requires_defensive_source: 'own_history' | 'world_reference' | 'fixed_threshold' | 'manual_override' | null;
+  requires_group_split: boolean;
+  group_split_notes: string | null;
+  reviewed: boolean;
+  updated_at: string;
+}
+
+/** Fila de mechanic_defensive_assignments — asignación curada a mano de qué defensivo de qué spec cubre qué mecánica, para el generador de reminders MRT. */
+export interface MechanicDefensiveAssignmentRow {
+  id: string;
+  boss_id: string;
+  difficulty: string;
+  ability_id: number;
+  class: string;
+  spec: string;
+  /** Referencia lógica a cooldown_catalog.spell_id para esta class+spec (sin FK, ver migración). */
+  defensive_spell_id: number;
+  prewarn_seconds: number;
+  trigger_type: 'bossmod' | 'time';
+  /** Normalmente = ability_id; distinto solo si el timer real de BigWigs/DBM usa otro spellID. */
+  bossmod_spell_id: number | null;
+  notes: string | null;
+  /** Grupos de raid (1-6) a los que aplica — null = todos/sin restringir. Solo informativo (se refleja en el texto del reminder), MRT no filtra por esto — ver migración 20260831130000. */
+  assigned_groups: number[] | null;
+  updated_at: string;
 }
 
 /** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,

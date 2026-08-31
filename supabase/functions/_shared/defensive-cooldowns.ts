@@ -16,6 +16,8 @@ export interface DefensiveCooldown {
   /** Debe coincidir con WclActor.subType (la clase, tal como la da WCL). */
   class: string;
   spec: string | null;
+  /** Corrección manual por encima de `spec` (ver spec_override en cooldown_catalog) — null = sin corregir, se deriva de `spec` tal cual. Gana siempre que no sea null, aunque `spec` diga otra cosa. */
+  specOverride: string[] | null;
   category: 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
   /** Cooldown base en ms (talentos/haste en 0), o null si el extractor no pudo resolver un valor plano — ver supabase/wowanalyzer-extractor. */
   baseCooldownMs: number | null;
@@ -41,10 +43,14 @@ export function parseActiveBuffIds(buffsField: string | undefined | null): numbe
 // solo por CLASE — `cd.spec` existe en el tipo desde el principio pero nunca
 // se comprobaba. `cd.spec` puede venir como combo "Feral/Guardian" (varias
 // specs comparten la habilidad sin ser TODA la clase) — de ahí el split.
-function specApplies(catalogSpec: string | null, playerSpec: string | null): boolean {
-  if (catalogSpec == null) return true; // compartido entre todas las specs de la clase
+function specApplies(cd: Pick<DefensiveCooldown, 'spec' | 'specOverride'>, playerSpec: string | null): boolean {
   if (playerSpec == null) return true; // spec del jugador no resuelta — mejor no ocultar de más que antes de este fix, no "adivinar" que no aplica
-  return catalogSpec
+  // §"un tank de paladin... ya no la tiene" (feedback real, 2026-08-31): la
+  // corrección manual gana siempre que exista, aunque `spec` (extractor/IA)
+  // diga otra cosa — ver spec_override en cooldown_catalog.
+  if (cd.specOverride != null) return cd.specOverride.includes(playerSpec);
+  if (cd.spec == null) return true; // compartido entre todas las specs de la clase
+  return cd.spec
     .split('/')
     .map((s) => s.trim())
     .includes(playerSpec);
@@ -77,12 +83,12 @@ function talentAllows(spellId: number, gate: TalentGate | null): boolean {
 /** Defensivos del catálogo que estaban entre los buffs activos, para la clase+spec dadas. */
 export function activeDefensives(buffsField: string | undefined | null, className: string, spec: string | null, catalog: CooldownCatalog, talentGate: TalentGate | null = null): DefensiveCooldown[] {
   const active = new Set(parseActiveBuffIds(buffsField));
-  return catalog.filter((cd) => cd.class === className && specApplies(cd.spec, spec) && active.has(cd.spellId) && talentAllows(cd.spellId, talentGate));
+  return catalog.filter((cd) => cd.class === className && specApplies(cd, spec) && active.has(cd.spellId) && talentAllows(cd.spellId, talentGate));
 }
 
 /** Todo el catálogo de una clase+spec — para calcular "cuáles NO llegó a lanzar en todo el pull". */
 export function defensivesForClass(className: string, spec: string | null, catalog: CooldownCatalog, talentGate: TalentGate | null = null): DefensiveCooldown[] {
-  return catalog.filter((cd) => cd.class === className && specApplies(cd.spec, spec) && talentAllows(cd.spellId, talentGate));
+  return catalog.filter((cd) => cd.class === className && specApplies(cd, spec) && talentAllows(cd.spellId, talentGate));
 }
 
 export type DefensiveCooldownStatus = 'active' | 'available_unused' | 'on_cooldown' | 'unknown';
