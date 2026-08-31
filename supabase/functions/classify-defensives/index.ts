@@ -185,8 +185,9 @@ function specsToCatalogValue(specs: string[] | null, fallback: string | null): s
 }
 
 function parseResponse(parsed: unknown): { reviewed: unknown[]; missing: unknown[] } | null {
-  // Backward compatibility with prompt v3/v4 responses already copied into
-  // a browser tab while this function is being deployed.
+  // Backward compatibility with a v3/v4 answer that may already be copied in
+  // a browser while this deploy happens. Legacy entries do NOT reconcile the
+  // new profile/modifier tables unless those arrays are actually present.
   if (Array.isArray(parsed)) return { reviewed: parsed, missing: [] };
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as { reviewedDefensives?: unknown; missingDefensives?: unknown };
@@ -194,7 +195,7 @@ function parseResponse(parsed: unknown): { reviewed: unknown[]; missing: unknown
   return { reviewed: obj.reviewedDefensives, missing: obj.missingDefensives };
 }
 
-function validateProfiles(entry: Partial<ClassificationEntry>, spellId: number): { rows: SpecProfileEntry[]; error?: string } {
+function validateProfiles(entry: Partial<ClassificationEntry>): { rows: SpecProfileEntry[]; error?: string } {
   const raw = Array.isArray(entry.specProfiles) ? entry.specProfiles : [];
   const rows: SpecProfileEntry[] = [];
   for (const profile of raw) {
@@ -213,7 +214,6 @@ function validateProfiles(entry: Partial<ClassificationEntry>, spellId: number):
       source: typeof profile.source === 'string' ? profile.source : '',
     });
   }
-  void spellId;
   return { rows };
 }
 
@@ -356,6 +356,8 @@ Deno.serve(async (req: Request) => {
       const invalid: { spellId: unknown; reason: string }[] = [];
       const submittedAt = new Date().toISOString();
       const affectedClasses = new Set<string>();
+      let appliedSpecProfiles = 0;
+      let appliedModifiers = 0;
 
       const applyReferenceRows = async (
         className: string,
@@ -363,9 +365,9 @@ Deno.serve(async (req: Request) => {
         profiles: SpecProfileEntry[],
         modifiers: ModifierEntry[],
       ): Promise<void> => {
-        // A rerun is authoritative for the researched timing layer. Removing
-        // stale profiles/rules here is what makes "actualizar con otro prompt"
-        // genuinely refresh data instead of only ever adding more rows.
+        // A v5 rerun is authoritative for the researched timing layer. It
+        // replaces stale spec profiles and deactivates modifier rules that no
+        // longer appear, instead of the old "only ever append" behaviour.
         const { error: deleteProfilesError } = await supabase
           .from('defensive_spec_profiles')
           .delete()
@@ -398,6 +400,7 @@ Deno.serve(async (req: Request) => {
             { onConflict: 'class,spec,spell_id' },
           );
           if (error) throw error;
+          appliedSpecProfiles++;
         }
 
         for (const modifier of modifiers) {
@@ -420,6 +423,7 @@ Deno.serve(async (req: Request) => {
             { onConflict: 'class,modifier_spell_id,target_spell_id,operation' },
           );
           if (error) throw error;
+          appliedModifiers++;
         }
       };
 
@@ -456,7 +460,7 @@ Deno.serve(async (req: Request) => {
           invalid.push({ spellId: entry.spellId, reason: `survivalType inválido: ${entry.survivalType}` });
           continue;
         }
-        const profilesResult = validateProfiles(entry, entry.spellId);
+        const profilesResult = validateProfiles(entry);
         if (profilesResult.error) {
           invalid.push({ spellId: entry.spellId, reason: profilesResult.error });
           continue;
@@ -468,6 +472,10 @@ Deno.serve(async (req: Request) => {
         }
 
         const availableSpecs = normalizeSpecs(entry.availableSpecs);
+        if (entry.availableSpecs !== undefined && !availableSpecs) {
+          invalid.push({ spellId: entry.spellId, reason: 'availableSpecs debe contener al menos una spec' });
+          continue;
+        }
         const researchedSpec = specsToCatalogValue(availableSpecs, matched.spec);
         // Null from the AI means "could not resolve", not "erase a verified
         // number". A literal zero remains a real value and is preserved.
@@ -508,8 +516,12 @@ Deno.serve(async (req: Request) => {
         const { error } = await updateQuery;
         if (error) throw error;
 
-        await applyReferenceRows(matched.class, entry.spellId, profilesResult.rows, modifiersResult.rows);
-        if (materialChanged || profilesResult.rows.length || modifiersResult.rows.length) affectedClasses.add(matched.class);
+        // v3 had no timing-reference arrays. Do not erase new v5 data if a
+        // stale v3 prompt was already copied before deployment. v4/v5 both
+        // carry these arrays, including [] when they intentionally mean none.
+        const hasReferencePayload = Array.isArray(entry.specProfiles) || Array.isArray(entry.modifiers);
+        if (hasReferencePayload) await applyReferenceRows(matched.class, entry.spellId, profilesResult.rows, modifiersResult.rows);
+        if (materialChanged) affectedClasses.add(matched.class);
 
         applied.push({
           spellId: entry.spellId,
@@ -550,9 +562,8 @@ Deno.serve(async (req: Request) => {
           skippedLowConfidence.push({ spellId: entry.spellId, name: entry.name, survivalType: entry.survivalType ?? null, notes: entry.notes ?? '' });
           continue;
         }
-        // Missing rows are the only place where the AI can expand the source
-        // of truth, so require the two independent references promised by the
-        // prompt before inserting anything automatically.
+        // Missing rows expand the source of truth, so require the two
+        // independent references promised by the prompt before auto-insert.
         if (sources.length < 2) {
           invalid.push({ spellId: entry.spellId, reason: 'missingDefensive necesita al menos 2 fuentes antes de añadirse automáticamente' });
           continue;
@@ -574,7 +585,7 @@ Deno.serve(async (req: Request) => {
           invalid.push({ spellId: entry.spellId, reason: 'missingDefensive necesita availableSpecs explícitas' });
           continue;
         }
-        const profilesResult = validateProfiles(entry, entry.spellId);
+        const profilesResult = validateProfiles(entry);
         if (profilesResult.error) {
           invalid.push({ spellId: entry.spellId, reason: profilesResult.error });
           continue;
@@ -610,6 +621,8 @@ Deno.serve(async (req: Request) => {
         });
         if (insertError) throw insertError;
 
+        // missingDefensives in v5 are required to include the arrays, so an
+        // empty [] intentionally clears any impossible pre-existing rows.
         await applyReferenceRows(entry.class, entry.spellId, profilesResult.rows, modifiersResult.rows);
         knownSpellIds.add(entry.spellId);
         affectedClasses.add(entry.class);
@@ -637,7 +650,8 @@ Deno.serve(async (req: Request) => {
         ok: true,
         applied,
         added,
-        appliedSpecProfiles: applied.reduce((sum, row) => sum + Number(row.materialChanged), 0),
+        appliedSpecProfiles,
+        appliedModifiers,
         skippedLowConfidence,
         skippedUndetermined,
         suggestedExclusions,
