@@ -40,13 +40,23 @@ describe('autoAssignCascade', () => {
 
   it('respeta reservas manuales preexistentes', () => {
     const mechanics: CascadeMechanicInput[] = [
-      { abilityId: 1, name: 'Demasiado cerca', timeMs: 120_000, impactScore: 100 },
+      // 2:10 está a solo 110s de la reserva manual de 4:00: NO cabe con CD 120s.
+      { abilityId: 1, name: 'Demasiado cerca', timeMs: 130_000, impactScore: 100 },
+      // 1:00 está a 180s de la reserva manual: sí cabe.
       { abilityId: 2, name: 'Cabe antes', timeMs: 60_000, impactScore: 90 },
     ];
     const defensives: CascadeDefensiveInput[] = [
       { spellId: 999, survivalType: 'mitigation', baseCooldownMs: 120_000, reservedTimesMs: [240_000] },
     ];
     expect(autoAssignCascade(mechanics, defensives)).toEqual([{ abilityId: 2, defensiveSpellId: 999 }]);
+  });
+
+  it('permite una reserva exactamente al cumplirse el cooldown', () => {
+    const mechanics: CascadeMechanicInput[] = [{ abilityId: 1, name: 'Justo a tiempo', timeMs: 120_000, impactScore: 100 }];
+    const defensives: CascadeDefensiveInput[] = [
+      { spellId: 999, survivalType: 'mitigation', baseCooldownMs: 120_000, reservedTimesMs: [240_000] },
+    ];
+    expect(autoAssignCascade(mechanics, defensives)).toEqual([{ abilityId: 1, defensiveSpellId: 999 }]);
   });
 
   it('con dos defensivos y dos picos simultáneos, reparte uno a cada uno', () => {
