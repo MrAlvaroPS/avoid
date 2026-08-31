@@ -13,12 +13,16 @@ import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { ManifestService } from '../../core/manifest.service';
 import { BossMechanicDefensiveProfileService } from '../../core/boss-mechanic-defensive-profile.service';
 import { DefensiveCatalogService } from '../../core/defensive-catalog.service';
+import { DefensivePlannerService, type PlannerRosterPlayer } from '../../core/defensive-planner.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
 import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
 import { ALL_CLASSES, specsForClass, mechanicAppliesToRole, roleFromSpec } from '../../shared/spec-role.util';
 import { defensivesForSpec } from '../../shared/defensive-spec-match.util';
 import { encodeMrtExport, spellTag, type MrtReminderInput, type MrtTrigger } from '../../shared/mrt/mrt-reminder-codec';
 import { autoAssignCascade } from '../../shared/mrt/auto-assign-cascade.util';
+import { reconstructMechanicOccurrences, combineOccurrencesIntoDamageWindows, type DamagePlanningWindow } from '../../shared/mrt/mechanic-occurrences.util';
+import { buildRosterDefensivePlan, type RosterDefensivePlan } from '../../shared/mrt/roster-defensive-planner.util';
+import type { EffectiveDefensive } from '../../shared/mrt/effective-defensive.util';
 import { errorMessage } from '../../shared/error-message.util';
 import { classColor } from '../../shared/format.util';
 import { ClassIconComponent } from '../../shared/class-icon.component';
@@ -74,6 +78,13 @@ interface TimelineEntry {
   conflict: boolean;
 }
 
+interface PlannerV2View {
+  player: PlannerRosterPlayer;
+  kit: EffectiveDefensive[];
+  windows: DamagePlanningWindow[];
+  plan: RosterDefensivePlan;
+}
+
 @Component({
   selector: 'app-boss-prep',
   standalone: true,
@@ -86,6 +97,7 @@ export class BossPrepComponent {
   private manifestService = inject(ManifestService);
   private profileService = inject(BossMechanicDefensiveProfileService);
   private defensiveCatalogService = inject(DefensiveCatalogService);
+  private defensivePlannerService = inject(DefensivePlannerService);
   private reportsService = inject(ReportsService);
 
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
@@ -121,6 +133,16 @@ export class BossPrepComponent {
   exportResult = signal<ExportResult | null>(null);
   copyStatus = signal<'idle' | 'copied' | 'error'>('idle');
   exportModalOpen = signal(false);
+
+  // Planner v2: PREVIEW roster-aware en paralelo a las asignaciones v1. No
+  // escribe mechanic_defensive_assignments, para poder validar el modelo
+  // nuevo sin tocar una sola asignación existente.
+  plannerV2Open = signal(false);
+  plannerV2Loading = signal(false);
+  plannerV2Players = signal<PlannerRosterPlayer[]>([]);
+  plannerV2SelectedName = signal('');
+  plannerV2Result = signal<PlannerV2View | null>(null);
+  plannerV2Error = signal<string | null>(null);
 
   selectedBoss = computed(() => this.bosses().find((b) => b.encounterId === this.selectedEncounterId()) ?? null);
   selectedDifficultyName = computed(() => (this.selectedDifficultyId() != null ? WCL_DIFFICULTY_NAME_BY_ID[this.selectedDifficultyId()!] : null));
@@ -589,6 +611,88 @@ export class BossPrepComponent {
     const m = Math.floor(totalSeconds / 60);
     const s = totalSeconds % 60;
     return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  // --- Planner v2 roster-aware (preview no destructiva) ---
+  plannerV2PlayersForSelectedClass(): PlannerRosterPlayer[] {
+    return this.plannerV2Players().filter((p) => p.className === this.autoAssignClass());
+  }
+
+  plannerV2SelectedPlayer(): PlannerRosterPlayer | null {
+    return this.plannerV2Players().find((p) => p.name === this.plannerV2SelectedName()) ?? null;
+  }
+
+  plannerV2AssignmentFor(windowId: string) {
+    return this.plannerV2Result()?.plan.assignments.find((a) => a.windowId === windowId) ?? null;
+  }
+
+  async openPlannerV2(): Promise<void> {
+    this.plannerV2Open.set(true);
+    this.plannerV2Loading.set(true);
+    this.plannerV2Error.set(null);
+    this.plannerV2Result.set(null);
+    try {
+      await this.loadCooldownCatalog();
+      await this.defensivePlannerService.refreshRules();
+      const players = await this.defensivePlannerService.listRosterPlayersWithLatestBuild();
+      this.plannerV2Players.set(players);
+      const candidates = players.filter((p) => p.className === this.autoAssignClass());
+      const preferred = candidates.find((p) => p.spec === this.autoAssignSpec() && p.talentBuild != null) ?? candidates.find((p) => p.talentBuild != null) ?? candidates[0] ?? null;
+      this.plannerV2SelectedName.set(preferred?.name ?? '');
+      if (preferred) await this.rebuildPlannerV2();
+    } catch (err) {
+      this.plannerV2Error.set(errorMessage(err));
+    } finally {
+      this.plannerV2Loading.set(false);
+    }
+  }
+
+  closePlannerV2(): void {
+    this.plannerV2Open.set(false);
+  }
+
+  async onPlannerV2PlayerChange(name: string): Promise<void> {
+    this.plannerV2SelectedName.set(name);
+    this.plannerV2Loading.set(true);
+    this.plannerV2Error.set(null);
+    try {
+      await this.rebuildPlannerV2();
+    } catch (err) {
+      this.plannerV2Error.set(errorMessage(err));
+    } finally {
+      this.plannerV2Loading.set(false);
+    }
+  }
+
+  private async rebuildPlannerV2(): Promise<void> {
+    const player = this.plannerV2SelectedPlayer();
+    if (!player?.spec || player.talentBuild == null) {
+      this.plannerV2Result.set(null);
+      if (player) this.plannerV2Error.set(`No hay un build de talentos observado todavía para ${player.name}. Importa/analiza un pull reciente antes de planificar.`);
+      return;
+    }
+
+    const role = roleFromSpec(player.className, player.spec);
+    const profilesByAbilityId = new Map(this.profiles().map((p) => [p.ability_id, p]));
+    const occurrences = this.candidates().flatMap((candidate) => {
+      const profile = profilesByAbilityId.get(candidate.ability_id) ?? null;
+      if (profile?.requires_defensive !== true || !mechanicAppliesToRole(candidate.responsibility, role)) return [];
+      return reconstructMechanicOccurrences({
+        abilityId: candidate.ability_id,
+        name: candidate.name,
+        castOffsetSamplesMs: profile.reference_cast_offset_ms_samples ?? [],
+        sampleFightCount: profile.reference_sample_fight_count ?? 0,
+        impactScore: this.impactScore(candidate, profile),
+        priority: profile.priority,
+      });
+    });
+    const windows = combineOccurrencesIntoDamageWindows(occurrences);
+    const kit = await this.defensivePlannerService.resolvePlayerKit(this.cooldownCatalog(), player);
+    const plannerDefensives = kit
+      .filter((d): d is EffectiveDefensive & { survivalType: NonNullable<EffectiveDefensive['survivalType']>; effectiveCooldownMs: number } => d.planningEligible && d.survivalType != null && d.effectiveCooldownMs != null)
+      .map((d) => ({ spellId: d.spellId, name: d.name, survivalType: d.survivalType, effectiveCooldownMs: d.effectiveCooldownMs }));
+    const plan = buildRosterDefensivePlan(windows, plannerDefensives);
+    this.plannerV2Result.set({ player, kit, windows, plan });
   }
 
   // --- auto-asignación en cascada ---

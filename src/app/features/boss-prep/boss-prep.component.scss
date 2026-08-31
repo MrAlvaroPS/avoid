@@ -505,3 +505,12 @@ input[type='number'],
   gap: 6px;
   font-weight: 600;
 }
+
+
+/* Planner v2: modal de validación roster-aware; reutiliza la estética del export/timeline. */
+.planner-v2-modal { width: min(1180px, 96vw); max-height: 92vh; overflow: auto; }
+.planner-v2-player-row { display: flex; align-items: end; gap: 16px; flex-wrap: wrap; margin: 12px 0 18px; }
+.planner-v2-player-row label { display: grid; gap: 5px; font-size: 12px; }
+.planner-v2-summary { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; padding: 10px 12px; border: 1px solid var(--border, #34303f); border-radius: 8px; margin-bottom: 16px; }
+.planner-v2-kit { margin-bottom: 22px; }
+.planner-v2-kit td:nth-child(5) { max-width: 420px; white-space: normal; }

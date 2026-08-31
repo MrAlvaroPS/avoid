@@ -68,6 +68,7 @@
             </button>
             <!-- §"cómo podemos ver los huecos que quedan libres... o si ya está asignado antes de esa habilidad" (feedback real, 2026-08-31) -->
             <button type="button" class="sync-btn" title="Orden cronológico real del fight para esta spec: qué cubre, con qué, y si el mismo defensivo ya se habría usado antes sin tiempo de cooldown de sobra." (click)="openTimeline()">🕐 Cronología</button>
+            <button type="button" class="sync-btn planner-v2-trigger" title="Preview v2: usa el roster real, el último build observado, cooldown efectivo por spec/talentos y TODAS las ocurrencias del combate. No modifica las asignaciones actuales." (click)="openPlannerV2()">🧠 Plan v2 roster</button>
           </div>
         </div>
         @if (autoAssignResult(); as r) {
@@ -400,4 +401,91 @@
       </div>
     </div>
   }
+
+  @if (plannerV2Open()) {
+    <div class="export-modal-backdrop" (click)="closePlannerV2()">
+      <div class="export-modal planner-v2-modal" (click)="$event.stopPropagation()">
+        <div class="export-modal-header">
+          <div>
+            <h3>Planificador v2 — {{ autoAssignClass() }}</h3>
+            <p class="meta">Preview no destructiva: roster + build real + CD efectivo + ocurrencias repetidas. No escribe las asignaciones v1.</p>
+          </div>
+          <button type="button" class="classify-toggle" (click)="closePlannerV2()">✕ cerrar</button>
+        </div>
+
+        <div class="planner-v2-player-row">
+          <label>Jugador real del roster
+            <select [value]="plannerV2SelectedName()" (change)="onPlannerV2PlayerChange($any($event.target).value)">
+              @for (p of plannerV2PlayersForSelectedClass(); track p.name) {
+                <option [value]="p.name">{{ p.name }} — {{ p.spec ?? 'spec sin observar' }}</option>
+              }
+            </select>
+          </label>
+          @if (plannerV2SelectedPlayer(); as p) {
+            <span class="meta">Build observado: {{ p.observedAt ? (p.observedAt | date: 'd MMM, HH:mm') : 'sin datos' }}</span>
+          }
+        </div>
+
+        @if (plannerV2Error()) { <p class="result-line result-warn">{{ plannerV2Error() }}</p> }
+        @if (plannerV2Loading()) {
+          <p class="muted">Calculando plan…</p>
+        } @else if (plannerV2Result(); as r) {
+          <div class="planner-v2-summary">
+            <strong>{{ r.player.name }} · {{ r.player.spec }}</strong>
+            <span>{{ r.plan.assignments.length }}/{{ r.windows.length }} ventanas cubiertas</span>
+            <span>{{ r.plan.uncoveredWindowIds.length }} sin hueco compatible</span>
+          </div>
+
+          <h4>Cooldowns efectivos del jugador</h4>
+          <table class="assignments planner-v2-kit">
+            <thead><tr><th>Defensivo</th><th>Base catálogo</th><th>Base spec</th><th>CD efectivo</th><th>Por qué</th><th>AUTO</th></tr></thead>
+            <tbody>
+              @for (d of r.kit; track d.spellId) {
+                <tr>
+                  <td><app-wowhead-link type="spell" [id]="d.spellId">{{ d.name }}</app-wowhead-link></td>
+                  <td>{{ d.catalogBaseCooldownMs != null ? (d.catalogBaseCooldownMs / 1000 | number: '1.0-0') + 's' : '—' }}</td>
+                  <td>{{ d.specBaseCooldownMs != null ? (d.specBaseCooldownMs / 1000 | number: '1.0-0') + 's' : '—' }}</td>
+                  <td><strong>{{ d.effectiveCooldownMs != null ? (d.effectiveCooldownMs / 1000 | number: '1.0-0') + 's' : 'desconocido' }}</strong></td>
+                  <td class="meta">{{ d.provenance.join(' · ') }}</td>
+                  <td>{{ d.planningEligible ? '✓' : '—' }} @if (!d.planningEligible) { <span class="meta">{{ d.category }}</span> }</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+
+          <h4>Plan de todo el combate</h4>
+          <p class="meta">Primero fija el pico de mayor impacto; tras cada reserva vuelve a recorrer todo el combate y reutiliza el CD antes/después siempre que llegue a recuperarse.</p>
+          <table class="assignments timeline-table">
+            <thead><tr><th>Momento</th><th>Ventana / mecánicas</th><th>Prioridad</th><th>Impacto relativo</th><th>Defensivo</th><th>CD efectivo</th><th>Estado</th></tr></thead>
+            <tbody>
+              @for (w of r.windows; track w.windowId) {
+                @if (plannerV2AssignmentFor(w.windowId); as a) {
+                  <tr>
+                    <td>{{ formatFightTime(w.timeMs) }}</td>
+                    <td>{{ w.occurrences.map(o => o.name).join(' + ') }}</td>
+                    <td>{{ w.priority ?? '—' }}</td>
+                    <td>{{ w.impactScore | number: '1.0-0' }}</td>
+                    <td><strong>{{ a.defensiveName }}</strong></td>
+                    <td>{{ a.effectiveCooldownMs / 1000 | number: '1.0-0' }}s</td>
+                    <td><span class="result-ok">✓ cubierto</span></td>
+                  </tr>
+                } @else {
+                  <tr class="timeline-gap">
+                    <td>{{ formatFightTime(w.timeMs) }}</td>
+                    <td>{{ w.occurrences.map(o => o.name).join(' + ') }}</td>
+                    <td>{{ w.priority ?? '—' }}</td>
+                    <td>{{ w.impactScore | number: '1.0-0' }}</td>
+                    <td>—</td><td>—</td><td><span class="result-warn">sin hueco compatible</span></td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        } @else if (!plannerV2PlayersForSelectedClass().length) {
+          <p class="muted">No hay jugadores de {{ autoAssignClass() }} en el roster sincronizado.</p>
+        }
+      </div>
+    </div>
+  }
+
 </section>
