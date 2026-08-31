@@ -21,6 +21,8 @@ interface UpsertRequest {
   triggerType?: 'bossmod' | 'time';
   bossmodSpellId?: number | null;
   notes?: string | null;
+  /** Grupos de raid (1-6) a los que aplica — null/undefined = todos. Solo informativo, ver migración 20260831130000. */
+  assignedGroups?: number[] | null;
 }
 interface DeleteRequest {
   id: string;
@@ -72,6 +74,7 @@ Deno.serve(async (req: Request) => {
         trigger_type: triggerType,
         bossmod_spell_id: upsertBody.bossmodSpellId ?? null,
         notes: upsertBody.notes ?? null,
+        assigned_groups: upsertBody.assignedGroups?.length ? upsertBody.assignedGroups : null,
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'boss_id,difficulty,ability_id,class,spec' },

@@ -427,6 +427,8 @@ export interface MechanicDefensiveAssignmentRow {
   /** Normalmente = ability_id; distinto solo si el timer real de BigWigs/DBM usa otro spellID. */
   bossmod_spell_id: number | null;
   notes: string | null;
+  /** Grupos de raid (1-6) a los que aplica — null = todos/sin restringir. Solo informativo (se refleja en el texto del reminder), MRT no filtra por esto — ver migración 20260831130000. */
+  assigned_groups: number[] | null;
   updated_at: string;
 }
 

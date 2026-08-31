@@ -33,4 +33,17 @@ export class BossMechanicDefensiveProfileService {
     if (error) throw error;
     return (data ?? []) as MechanicDefensiveAssignmentRow[];
   }
+
+  /** §"saber cuántos logs tenemos sincronizados (kills) para ir acumulando" (feedback real, 2026-08-31) — ver boss_reference_sync_state, migración 20260831110000. */
+  async getSyncState(bossId: string, difficulty: string): Promise<{ referenceFightsConsumed: number; lastSyncedAt: string | null } | null> {
+    const { data, error } = await this.supabase.client
+      .from('boss_reference_sync_state')
+      .select('reference_fights_consumed, last_synced_at')
+      .eq('boss_id', bossId)
+      .eq('difficulty', difficulty)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return { referenceFightsConsumed: data.reference_fights_consumed as number, lastSyncedAt: data.last_synced_at as string | null };
+  }
 }

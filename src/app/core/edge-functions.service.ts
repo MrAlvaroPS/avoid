@@ -399,6 +399,7 @@ export class EdgeFunctionsService {
           triggerType?: 'bossmod' | 'time';
           bossmodSpellId?: number | null;
           notes?: string | null;
+          assignedGroups?: number[] | null;
         }
       | { id: string; delete: true },
   ): Promise<{ ok: true; id?: string }> {

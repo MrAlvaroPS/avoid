@@ -8,7 +8,7 @@
 // propia en el nav en vez de tab de Ajustes porque así se pidió — ver
 // app.routes.ts/app.html.
 import { Component, computed, inject, signal } from '@angular/core';
-import { DecimalPipe, PercentPipe } from '@angular/common';
+import { DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { ManifestService } from '../../core/manifest.service';
 import { BossMechanicDefensiveProfileService } from '../../core/boss-mechanic-defensive-profile.service';
@@ -45,7 +45,11 @@ interface AssignmentDraft {
   triggerType: 'bossmod' | 'time';
   bossmodSpellId: string;
   notes: string;
+  /** Grupos de raid (1-6) — [] = todos/sin restringir. Ver migración 20260831130000. */
+  assignedGroups: number[];
 }
+
+const RAID_GROUPS = [1, 2, 3, 4, 5, 6];
 
 interface ExportResult {
   class: string;
@@ -57,7 +61,7 @@ interface ExportResult {
 @Component({
   selector: 'app-boss-prep',
   standalone: true,
-  imports: [DecimalPipe, PercentPipe],
+  imports: [DecimalPipe, PercentPipe, DatePipe],
   templateUrl: './boss-prep.component.html',
   styleUrl: './boss-prep.component.scss',
 })
@@ -70,6 +74,7 @@ export class BossPrepComponent {
 
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
   readonly allClasses = ALL_CLASSES;
+  readonly raidGroups = RAID_GROUPS;
 
   bosses = signal<KnownBoss[]>([]);
   loadingBosses = signal(true);
@@ -86,6 +91,7 @@ export class BossPrepComponent {
 
   syncing = signal(false);
   syncSummary = signal<string | null>(null);
+  syncState = signal<{ referenceFightsConsumed: number; lastSyncedAt: string | null } | null>(null);
 
   expandedAbilityId = signal<number | null>(null);
   savingProfileId = signal<number | null>(null);
@@ -169,14 +175,16 @@ export class BossPrepComponent {
     this.loadingRows.set(true);
     this.error.set(null);
     try {
-      const [candidates, profiles, assignments] = await Promise.all([
+      const [candidates, profiles, assignments, syncState] = await Promise.all([
         this.manifestService.listCandidates(String(bossId), difficulty),
         this.profileService.listProfiles(String(bossId), difficulty),
         this.profileService.listAssignments(String(bossId), difficulty),
+        this.profileService.getSyncState(String(bossId), difficulty),
       ]);
       this.candidates.set(candidates);
       this.profiles.set(profiles);
       this.assignments.set(assignments);
+      this.syncState.set(syncState);
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
@@ -325,7 +333,16 @@ export class BossPrepComponent {
       triggerType: existing?.trigger_type ?? 'bossmod',
       bossmodSpellId: existing?.bossmod_spell_id != null ? String(existing.bossmod_spell_id) : '',
       notes: existing?.notes ?? '',
+      assignedGroups: existing?.assigned_groups ?? [],
     });
+  }
+
+  /** Toggle chip 1-6, mismo patrón que specsForDevensive/toggleDefensiveSpec en defensive-catalog. */
+  toggleDraftGroup(group: number): void {
+    const current = this.assignmentDraft();
+    if (!current) return;
+    const next = current.assignedGroups.includes(group) ? current.assignedGroups.filter((g) => g !== group) : [...current.assignedGroups, group].sort((a, b) => a - b);
+    this.updateAssignmentDraft({ assignedGroups: next });
   }
 
   closeAssignmentDraft(): void {
@@ -374,6 +391,7 @@ export class BossPrepComponent {
         triggerType: draft.triggerType,
         bossmodSpellId: draft.bossmodSpellId.trim() ? Number(draft.bossmodSpellId.trim()) : null,
         notes: draft.notes.trim() || null,
+        assignedGroups: draft.assignedGroups.length ? draft.assignedGroups : null,
       });
       this.closeAssignmentDraft();
       await this.loadRows();
@@ -432,10 +450,15 @@ export class BossPrepComponent {
         trigger = { type: 'pull', delayTimeSeconds: Math.round(offsetMs / 1000) };
       }
 
+      // §"un desplegable para asignar un grupo... 1-6" (feedback real,
+      // 2026-08-31): MRT no filtra por grupo de raid (el protocolo
+      // validado en real no trae ese campo) — se refleja como texto en el
+      // propio mensaje, para que el raider lo lea aunque MRT no lo aplique solo.
+      const groupPrefix = a.assigned_groups?.length ? `[Grupo${a.assigned_groups.length > 1 ? 's' : ''} ${a.assigned_groups.join(',')}] ` : '';
       reminders.push({
         uid: `avoid_${bossId}_${mrtDifficultyId}_${a.ability_id}_${cls}_${spec}`.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
         name: `${candidateName} - ${spec}`,
-        message: `${spellTag(a.defensive_spell_id)} ${defensiveName}`.trim(),
+        message: `${groupPrefix}${spellTag(a.defensive_spell_id)} ${defensiveName}`.trim(),
         bossId: Number(bossId),
         difficultyId: mrtDifficultyId,
         players: [],
@@ -485,43 +508,120 @@ export class BossPrepComponent {
     return unmitigatedMedian * (candidate.reference_avg_players_hit ?? 1);
   }
 
+  /** Motor de la cascada para UNA spec — reutilizado por el botón de spec suelta y por "auto-asignar clase". No guarda progreso propio (lo hace el caller) para poder encadenar varias specs sin pisarse. */
+  private async runCascadeForSpec(bossId: string, difficulty: string, cls: string, spec: string): Promise<{ assigned: number; candidates: number }> {
+    const role = roleFromSpec(cls, spec);
+    const mechanicInputs = this.candidates()
+      .filter((c) => mechanicAppliesToRole(c.responsibility, role))
+      .map((c) => {
+        const profile = this.profiles().find((p) => p.ability_id === c.ability_id) ?? null;
+        return { abilityId: c.ability_id, name: c.name, timeMs: median(profile?.reference_cast_offset_ms_samples ?? []), impactScore: this.impactScore(c, profile) };
+      });
+    const defensiveInputs = defensivesForSpec(this.cooldownCatalog(), cls, spec).map((cd) => ({ spellId: cd.spell_id, survivalType: cd.survival_type, baseCooldownMs: cd.base_cooldown_ms }));
+    const result = autoAssignCascade(mechanicInputs, defensiveInputs);
+    for (const a of result) {
+      await this.edgeFunctions.saveMechanicDefensiveAssignment({ bossId, difficulty, abilityId: a.abilityId, class: cls, spec, defensiveSpellId: a.defensiveSpellId, prewarnSeconds: 5, triggerType: 'bossmod' });
+    }
+    return { assigned: result.length, candidates: mechanicInputs.filter((m) => m.timeMs != null).length };
+  }
+
   async onAutoAssign(): Promise<void> {
     const bossId = this.selectedEncounterId();
     const difficulty = this.selectedDifficultyName();
-    const cls = this.autoAssignClass();
     const spec = this.autoAssignSpec();
     if (bossId == null || !difficulty || !spec || this.autoAssigning()) return;
-    const role = roleFromSpec(cls, spec);
     this.autoAssigning.set(true);
     this.autoAssignResult.set(null);
     this.error.set(null);
     try {
-      const mechanicInputs = this.candidates()
-        .filter((c) => mechanicAppliesToRole(c.responsibility, role))
-        .map((c) => {
-          const profile = this.profiles().find((p) => p.ability_id === c.ability_id) ?? null;
-          return { abilityId: c.ability_id, name: c.name, timeMs: median(profile?.reference_cast_offset_ms_samples ?? []), impactScore: this.impactScore(c, profile) };
-        });
-      const defensiveInputs = defensivesForSpec(this.cooldownCatalog(), cls, spec).map((cd) => ({ spellId: cd.spell_id, survivalType: cd.survival_type, baseCooldownMs: cd.base_cooldown_ms }));
-      const result = autoAssignCascade(mechanicInputs, defensiveInputs);
-      for (const a of result) {
-        await this.edgeFunctions.saveMechanicDefensiveAssignment({
-          bossId: String(bossId),
-          difficulty,
-          abilityId: a.abilityId,
-          class: cls,
-          spec,
-          defensiveSpellId: a.defensiveSpellId,
-          prewarnSeconds: 5,
-          triggerType: 'bossmod',
-        });
-      }
-      this.autoAssignResult.set({ assigned: result.length, candidates: mechanicInputs.filter((m) => m.timeMs != null).length });
+      // §"esto tiene que reactualizar bien, si cambiamos un defensivo (cd)
+      // tiene que recalcularlo de verdad" (feedback real, 2026-08-31):
+      // cooldownCatalog() se carga UNA vez al entrar en la pantalla — si
+      // editaste un CD en Ajustes en otra pestaña sin recargar Preparación,
+      // la cascada usaría el valor viejo. Refrescar aquí siempre, no confiar
+      // en que el usuario haya recargado la página.
+      await this.loadCooldownCatalog();
+      const r = await this.runCascadeForSpec(String(bossId), difficulty, this.autoAssignClass(), spec);
+      this.autoAssignResult.set(r);
       await this.loadRows();
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
       this.autoAssigning.set(false);
+    }
+  }
+
+  /** §"un botón para auto-asignar la clase (en lugar de tener que elegir spec)" (feedback real, 2026-08-31): corre la misma cascada para cada spec real de la clase elegida, una detrás de otra. */
+  async onAutoAssignClass(): Promise<void> {
+    const bossId = this.selectedEncounterId();
+    const difficulty = this.selectedDifficultyName();
+    const cls = this.autoAssignClass();
+    if (bossId == null || !difficulty || this.autoAssigning()) return;
+    this.autoAssigning.set(true);
+    this.autoAssignResult.set(null);
+    this.error.set(null);
+    try {
+      await this.loadCooldownCatalog();
+      let assigned = 0;
+      let candidates = 0;
+      for (const spec of specsForClass(cls)) {
+        const r = await this.runCascadeForSpec(String(bossId), difficulty, cls, spec);
+        assigned += r.assigned;
+        candidates += r.candidates;
+      }
+      this.autoAssignResult.set({ assigned, candidates });
+      await this.loadRows();
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.autoAssigning.set(false);
+    }
+  }
+
+  // --- restablecer (limpiar asignaciones viejas antes de recascadear) ---
+  // §"un botón de restablecer... o un botón de restablecer clase, por si hay
+  // inconsistencias o hay que limpiar lo viejo para poner lo nuevo"
+  // (feedback real, 2026-08-31): borrado secuencial reusando el mismo
+  // endpoint de borrado por id que ya usa requestDeleteAssignment — son
+  // borrados de fila normales (no llamadas a WCL), no hay cuota real de
+  // CPU/WORKER_RESOURCE_LIMIT que cuidar aquí como sí pasa con el reanálisis.
+  confirmingResetClass = signal(false);
+  confirmingResetAll = signal(false);
+  resetting = signal(false);
+
+  requestResetClass(): void {
+    if (this.confirmingResetClass()) {
+      void this.doReset(this.assignments().filter((a) => a.class === this.autoAssignClass()));
+      return;
+    }
+    this.confirmingResetClass.set(true);
+    setTimeout(() => this.confirmingResetClass.set(false), 5000);
+  }
+
+  requestResetAll(): void {
+    if (this.confirmingResetAll()) {
+      void this.doReset(this.assignments());
+      return;
+    }
+    this.confirmingResetAll.set(true);
+    setTimeout(() => this.confirmingResetAll.set(false), 5000);
+  }
+
+  private async doReset(rows: MechanicDefensiveAssignmentRow[]): Promise<void> {
+    this.confirmingResetClass.set(false);
+    this.confirmingResetAll.set(false);
+    if (!rows.length) return;
+    this.resetting.set(true);
+    this.error.set(null);
+    try {
+      for (const row of rows) {
+        await this.edgeFunctions.saveMechanicDefensiveAssignment({ id: row.id, delete: true });
+      }
+      await this.loadRows();
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.resetting.set(false);
     }
   }
 

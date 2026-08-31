@@ -33,18 +33,51 @@
           <h2>{{ selectedBoss()!.bossName }}</h2>
         </div>
 
-        <div class="difficulty-tabs" role="tablist">
-          @for (id of standardDifficultyIds; track id) {
-            <button type="button" role="tab" [class.selected]="selectedDifficultyId() === id" (click)="selectDifficulty(id)">
-              {{ difficultyLabel(id) }}
+        <div class="header-row">
+          <div class="difficulty-tabs" role="tablist">
+            @for (id of standardDifficultyIds; track id) {
+              <button type="button" role="tab" [class.selected]="selectedDifficultyId() === id" (click)="selectDifficulty(id)">
+                {{ difficultyLabel(id) }}
+              </button>
+            }
+          </div>
+
+          <!-- §"ponlo en la cabecera a la derecha de donde vienen las dificultades... así está más a la vista" (feedback real, 2026-08-31) -->
+          <div class="auto-assign-bar" title="Asigna sola el defensivo de la spec a cada mecánica, empezando por la que más pico hace a toda la raid, respetando cooldowns reales a lo largo del fight. Nunca toca defensivos de emergencia ni con cooldown sin resolver.">
+            <select [value]="autoAssignClass()" (change)="onAutoAssignClassChange($any($event.target).value)">
+              @for (cls of allClasses; track cls) {
+                <option [value]="cls">{{ cls }}</option>
+              }
+            </select>
+            <select [value]="autoAssignSpec()" (change)="onAutoAssignSpecChange($any($event.target).value)">
+              @for (spec of specsForAutoAssignClass(); track spec) {
+                <option [value]="spec">{{ spec }}</option>
+              }
+            </select>
+            <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssign()">{{ autoAssigning() ? '…' : '⚡ Auto-asignar spec' }}</button>
+            <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssignClass()">{{ autoAssigning() ? '…' : '⚡ Auto-asignar clase entera' }}</button>
+            <button type="button" class="delete-btn" [class.confirming]="confirmingResetClass()" [disabled]="resetting()" (click)="requestResetClass()">
+              {{ confirmingResetClass() ? '¿seguro? (borra todo lo de ' + autoAssignClass() + ')' : 'restablecer clase' }}
             </button>
-          }
+            <button type="button" class="delete-btn" [class.confirming]="confirmingResetAll()" [disabled]="resetting()" (click)="requestResetAll()">
+              {{ confirmingResetAll() ? '¿seguro? (borra TODO este boss+dificultad)' : 'restablecer todo' }}
+            </button>
+          </div>
         </div>
+        @if (autoAssignResult(); as r) {
+          <p class="result-line result-ok">{{ r.assigned }}/{{ r.candidates }} mecánicas asignadas.</p>
+        }
+        @if (assignmentsStaleFor(autoAssignClass(), autoAssignSpec())) {
+          <p class="result-line result-warn">⚠ Se editó algún defensivo de {{ autoAssignClass() }} — {{ autoAssignSpec() }} después de la última asignación guardada. Se recomienda volver a auto-asignar.</p>
+        }
 
         <div class="sync-row">
           <button type="button" class="sync-btn" [disabled]="syncing()" (click)="runSync()">
             {{ syncing() ? 'Sincronizando…' : '🔄 Sincronizar desde logs públicos' }}
           </button>
+          @if (syncState(); as s) {
+            <span class="meta">{{ s.referenceFightsConsumed }} logs de referencia acumulados@if (s.lastSyncedAt) { · última sync {{ s.lastSyncedAt | date: 'd MMM, HH:mm' }} }</span>
+          }
           @if (syncSummary()) {
             <span class="result-line result-ok">{{ syncSummary() }}</span>
           }
@@ -139,6 +172,7 @@
                             <th>Defensivo</th>
                             <th>Aviso previo</th>
                             <th>Trigger</th>
+                            <th>Grupos</th>
                             <th>Notas</th>
                             <th></th>
                           </tr>
@@ -151,6 +185,7 @@
                               <td>{{ a.defensive_spell_id }}</td>
                               <td>{{ a.prewarn_seconds }}s</td>
                               <td>{{ a.trigger_type }}</td>
+                              <td class="meta">{{ a.assigned_groups?.length ? a.assigned_groups!.join(', ') : 'todos' }}</td>
                               <td class="meta">{{ a.notes }}</td>
                               <td>
                                 <button type="button" class="classify-toggle" (click)="openAssignmentDraft(row.candidate.ability_id, a)">editar</button>
@@ -213,6 +248,14 @@
                               <input type="text" [value]="assignmentDraft()!.notes" (change)="onDraftNotesChange($any($event.target).value)" />
                             </label>
                           </div>
+                          <div class="group-field">
+                            <span class="meta">Grupos de raid (vacío = todos — solo informativo, ver texto del reminder exportado)</span>
+                            <div class="role-chips">
+                              @for (g of raidGroups; track g) {
+                                <button type="button" class="role-chip" [class.active]="assignmentDraft()!.assignedGroups.includes(g)" (click)="toggleDraftGroup(g)">{{ g }}</button>
+                              }
+                            </div>
+                          </div>
                           <div class="add-form-actions">
                             <button type="button" class="sync-btn" [disabled]="savingAssignment()" (click)="submitAssignmentDraft()">Guardar asignación</button>
                             <button type="button" class="classify-toggle" (click)="closeAssignmentDraft()">Cancelar</button>
@@ -227,45 +270,6 @@
               }
             </tbody>
           </table>
-
-          <div class="export-section">
-            <h3>Auto-asignar en cascada</h3>
-            <p class="meta">
-              Asigna sola el defensivo de la spec a cada mecánica, empezando por la que más pico hace a toda la raid (daño sin mitigar × jugadores golpeados) y respetando cooldowns reales a lo
-              largo del fight — un defensivo puede cubrir varios picos si el tiempo lo permite. Nunca toca defensivos de emergencia ni con cooldown sin resolver. Revisa el resultado abajo antes de
-              exportar — no es la última palabra, es el punto de partida.
-            </p>
-            <div class="add-form-grid">
-              <label>
-                Clase
-                <select [value]="autoAssignClass()" (change)="onAutoAssignClassChange($any($event.target).value)">
-                  @for (cls of allClasses; track cls) {
-                    <option [value]="cls">{{ cls }}</option>
-                  }
-                </select>
-              </label>
-              <label>
-                Spec
-                <select [value]="autoAssignSpec()" (change)="onAutoAssignSpecChange($any($event.target).value)">
-                  @for (spec of specsForAutoAssignClass(); track spec) {
-                    <option [value]="spec">{{ spec }}</option>
-                  }
-                </select>
-              </label>
-            </div>
-            <div class="add-form-actions">
-              <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssign()">{{ autoAssigning() ? 'Auto-asignando…' : '⚡ Auto-asignar' }}</button>
-              @if (autoAssignResult(); as r) {
-                <span class="result-line result-ok">{{ r.assigned }}/{{ r.candidates }} mecánicas asignadas.</span>
-              }
-            </div>
-            @if (assignmentsStaleFor(autoAssignClass(), autoAssignSpec())) {
-              <p class="result-line result-warn">
-                ⚠ Se editó algún defensivo de {{ autoAssignClass() }} — {{ autoAssignSpec() }} después de la última asignación guardada. Se recomienda volver a auto-asignar (o revisar a mano) antes
-                de exportar.
-              </p>
-            }
-          </div>
 
           @if (specsWithAssignments().length) {
             <div class="export-section">
