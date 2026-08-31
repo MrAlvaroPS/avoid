@@ -7,10 +7,10 @@ describe('autoAssignCascade', () => {
     expect(autoAssignCascade(mechanics, defensives)).toEqual([{ abilityId: 1, defensiveSpellId: 999 }]);
   });
 
-  it('un defensivo de cooldown corto cubre VARIOS picos si el tiempo lo permite (cascada real, no un único uso)', () => {
+  it('un defensivo de cooldown corto cubre VARIOS picos si el tiempo lo permite', () => {
     const mechanics: CascadeMechanicInput[] = [
       { abilityId: 1, name: 'Pico A', timeMs: 60_000, impactScore: 100 },
-      { abilityId: 2, name: 'Pico B', timeMs: 180_000, impactScore: 90 }, // 2 min después — cooldown de 90s ya recuperado
+      { abilityId: 2, name: 'Pico B', timeMs: 180_000, impactScore: 90 },
     ];
     const defensives: CascadeDefensiveInput[] = [{ spellId: 999, survivalType: 'mitigation', baseCooldownMs: 90_000 }];
     const result = autoAssignCascade(mechanics, defensives);
@@ -18,15 +18,35 @@ describe('autoAssignCascade', () => {
     expect(result).toContainEqual({ abilityId: 2, defensiveSpellId: 999 });
   });
 
-  it('respeta el orden por impacto: el pico más grande se cubre primero, dejando el segundo sin nada si el cooldown no llega', () => {
+  it('reserva primero el pico más importante pero permite un uso ANTERIOR si el cooldown recupera a tiempo', () => {
     const mechanics: CascadeMechanicInput[] = [
-      { abilityId: 1, name: 'Pico pequeño', timeMs: 30_000, impactScore: 10 },
-      { abilityId: 2, name: 'Pico grande', timeMs: 60_000, impactScore: 100 }, // solo 30s después del pequeño
+      { abilityId: 1, name: 'Pico pequeño temprano', timeMs: 60_000, impactScore: 10 },
+      { abilityId: 2, name: 'Pico prioritario', timeMs: 240_000, impactScore: 100 },
     ];
     const defensives: CascadeDefensiveInput[] = [{ spellId: 999, survivalType: 'mitigation', baseCooldownMs: 120_000 }];
     const result = autoAssignCascade(mechanics, defensives);
-    // el de más impacto (Pico grande, id 2) gana el único defensivo — el pequeño se queda sin nada, no al revés.
-    expect(result).toEqual([{ abilityId: 2, defensiveSpellId: 999 }]);
+    expect(result).toContainEqual({ abilityId: 2, defensiveSpellId: 999 });
+    expect(result).toContainEqual({ abilityId: 1, defensiveSpellId: 999 });
+  });
+
+  it('respeta el orden por impacto cuando dos reservas sí chocan', () => {
+    const mechanics: CascadeMechanicInput[] = [
+      { abilityId: 1, name: 'Pico pequeño', timeMs: 30_000, impactScore: 10 },
+      { abilityId: 2, name: 'Pico grande', timeMs: 60_000, impactScore: 100 },
+    ];
+    const defensives: CascadeDefensiveInput[] = [{ spellId: 999, survivalType: 'mitigation', baseCooldownMs: 120_000 }];
+    expect(autoAssignCascade(mechanics, defensives)).toEqual([{ abilityId: 2, defensiveSpellId: 999 }]);
+  });
+
+  it('respeta reservas manuales preexistentes', () => {
+    const mechanics: CascadeMechanicInput[] = [
+      { abilityId: 1, name: 'Demasiado cerca', timeMs: 120_000, impactScore: 100 },
+      { abilityId: 2, name: 'Cabe antes', timeMs: 60_000, impactScore: 90 },
+    ];
+    const defensives: CascadeDefensiveInput[] = [
+      { spellId: 999, survivalType: 'mitigation', baseCooldownMs: 120_000, reservedTimesMs: [240_000] },
+    ];
+    expect(autoAssignCascade(mechanics, defensives)).toEqual([{ abilityId: 2, defensiveSpellId: 999 }]);
   });
 
   it('con dos defensivos y dos picos simultáneos, reparte uno a cada uno', () => {
@@ -49,7 +69,7 @@ describe('autoAssignCascade', () => {
     expect(autoAssignCascade(mechanics, defensives)).toEqual([]);
   });
 
-  it('nunca asigna un defensivo con cooldown desconocido (null) — mejor dejarlo a mano que adivinar', () => {
+  it('nunca asigna un defensivo con cooldown desconocido (null)', () => {
     const mechanics: CascadeMechanicInput[] = [{ abilityId: 1, name: 'Pico', timeMs: 60_000, impactScore: 100 }];
     const defensives: CascadeDefensiveInput[] = [{ spellId: 999, survivalType: 'mitigation', baseCooldownMs: null }];
     expect(autoAssignCascade(mechanics, defensives)).toEqual([]);
