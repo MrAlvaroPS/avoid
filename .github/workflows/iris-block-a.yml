@@ -1,0 +1,34 @@
+name: IRIS Block A
+
+on:
+  push:
+    branches:
+      - feature/iris-causal-mechanics
+  pull_request:
+    paths:
+      - 'apps/iris-collector/**'
+      - 'packages/combat-log-contracts/**'
+      - 'packages/combat-log-parser/**'
+      - '.github/workflows/iris-block-a.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  block-a-node-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Parser regressions
+        run: node --experimental-strip-types --test packages/combat-log-parser/test/*.test.ts
+
+      - name: Collector regressions
+        run: node --experimental-strip-types --test apps/iris-collector/test/*.test.ts
