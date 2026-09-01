@@ -27,29 +27,26 @@ export async function openShadowCollector({ logPath, spoolDirectory, attachMode 
   }
 
   // poll() advances the in-memory file cursor. Records therefore remain in
-  // this queue until their journal append + fsync + checkpoint succeeds. If
-  // append N fails, N..end are retried in-process; after a process crash the
-  // durable checkpoint still points to N-1 and the tail rereads them.
+  // this queue until the whole journal batch is appended, fsynced and its
+  // checkpoint committed. On failure the queue is untouched and can retry;
+  // after process death the durable checkpoint makes the tail reread it.
   const pendingRecords = [];
 
   return {
     async collectAvailable() {
       if (!pendingRecords.length) pendingRecords.push(...(await tail.poll()));
-      const appended = [];
-      while (pendingRecords.length) {
-        const record = pendingRecords[0];
-        const event = parseCombatLogLine(record.line);
-        const persisted = await spool.append({
-          source: sourcePath,
-          fileIdentity: record.fileIdentity,
-          startOffset: record.startOffset,
-          nextOffset: record.nextOffset,
-          event,
-        });
-        pendingRecords.shift();
-        appended.push(persisted);
-      }
-      return appended;
+      if (!pendingRecords.length) return [];
+
+      const batch = pendingRecords.map((record) => ({
+        source: sourcePath,
+        fileIdentity: record.fileIdentity,
+        startOffset: record.startOffset,
+        nextOffset: record.nextOffset,
+        event: parseCombatLogLine(record.line),
+      }));
+      const persisted = await spool.appendBatch(batch);
+      pendingRecords.splice(0, batch.length);
+      return persisted;
     },
     snapshot() {
       return { tail: tail.snapshot(), spool: spool.checkpoint(), pendingRecords: pendingRecords.length };
