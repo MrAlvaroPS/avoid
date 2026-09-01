@@ -10,8 +10,8 @@ const modernAdvanced = [
   '0', '500', '1000', '20', '12.5', '44.25', '2601', '1.57', '639',
 ];
 const legacyAdvanced = [
-  'Player-1-BBBB', '0000000000000000', '800', '1000', '100', '200', '300',
-  '0', '500', '1000', '20', '12.5', '44.25', '2601', '1.57', '639', 'legacy',
+  'Player-1-BBBB', '0000000000000000', '800', '1000', '100', '200', '300', '40',
+  '0', '500', '1000', '20', '12.5', '44.25', '2601', '1.57', '639',
 ];
 
 function line(fields) {
@@ -48,6 +48,8 @@ describe('parseCombatLogLine', () => {
       '250', '-1', '4', '0', '0', '50', '1', '0', '0', '0',
     ]));
     expect(parsed.advanced.layout).toBe('legacy-17');
+    expect(parsed.advanced.absorb).toBe(40);
+    expect(parsed.advanced.powerType).toBe(0);
     expect(parsed.suffix.layout).toBe('legacy');
     expect(parsed.suffix.amount).toBe(250);
     expect(parsed.suffix.overkill).toBe(-1);
