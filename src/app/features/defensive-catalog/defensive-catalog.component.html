@@ -13,12 +13,101 @@
     <p class="error" role="alert">{{ e }}</p>
   }
 
+  <section
+    class="queue-health"
+    [class.queue-healthy]="queueHealth() === 'healthy'"
+    [class.queue-running]="queueHealth() === 'running' || queueHealth() === 'checking'"
+    [class.queue-failed]="queueHealth() === 'failed'"
+    [class.queue-unreachable]="queueHealth() === 'unreachable'"
+    [attr.aria-live]="queueHealth() === 'failed' || queueHealth() === 'unreachable' ? 'assertive' : 'polite'"
+  >
+    <div class="queue-health-main">
+      <span class="queue-health-dot" aria-hidden="true"></span>
+      <div class="queue-health-copy">
+        @switch (queueHealth()) {
+          @case ('checking') {
+            <strong>Cola defensiva · comprobando</strong>
+            <span>Verificando Edge Function, esquema y trabajo pendiente…</span>
+          }
+          @case ('healthy') {
+            <strong>Cola defensiva · operativa</strong>
+            <span>Los cambios se guardan y no hay reanálisis pendiente.</span>
+          }
+          @case ('running') {
+            <strong>Cola defensiva · trabajando</strong>
+            @if (queueStatus(); as status) {
+              <span>{{ status.pendingCount }} job{{ status.pendingCount === 1 ? '' : 's' }} pendiente{{ status.pendingCount === 1 ? '' : 's' }}; el progreso sobrevivirá al cierre de esta pestaña.</span>
+            } @else {
+              <span>Hay reanálisis persistido en curso.</span>
+            }
+          }
+          @case ('failed') {
+            <strong>Cola defensiva · requiere atención</strong>
+            @if (queueStatus(); as status) {
+              <span>{{ status.counts.retryableErrors + status.counts.blockedErrors }} job{{ status.counts.retryableErrors + status.counts.blockedErrors === 1 ? '' : 's' }} con error. El cambio canónico sí quedó guardado.</span>
+            }
+          }
+          @case ('unreachable') {
+            <strong>Cola defensiva · no accesible</strong>
+            <span>No se puede confirmar la persistencia/reanudación. No se presenta como estado v2 sano.</span>
+          }
+        }
+      </div>
+      <div class="queue-health-actions">
+        <button type="button" class="queue-link" (click)="toggleQueueDetails()" [attr.aria-expanded]="queueDetailsOpen()">
+          {{ queueDetailsOpen() ? 'Ocultar detalle' : 'Ver detalle' }}
+        </button>
+        @if (queueHealth() === 'failed' || queueHealth() === 'unreachable') {
+          <button type="button" class="queue-retry" [disabled]="queueRetrying()" (click)="retryReanalysisQueue()">
+            {{ queueRetrying() ? 'Reintentando…' : (queueHealth() === 'unreachable' ? 'Volver a comprobar' : 'Reintentar') }}
+          </button>
+        }
+      </div>
+    </div>
+
+    @if (queueDetailsOpen()) {
+      <div class="queue-health-detail">
+        @if (queueHealthError(); as healthError) {
+          <p><strong>Detalle:</strong> {{ healthError }}</p>
+        }
+        @if (queueStatus(); as status) {
+          <p>
+            En cola {{ status.counts.queued }} · ejecutando {{ status.counts.running }} ·
+            reintentables {{ status.counts.retryableErrors }} · bloqueados {{ status.counts.blockedErrors }}
+          </p>
+          @if (status.lastError; as lastError) {
+            <p><strong>Último error ({{ lastError.attempts }}/{{ status.maxAttempts }}):</strong> {{ lastError.message }}</p>
+          }
+          @if (status.batches.length) {
+            <ul class="queue-batches">
+              @for (batch of status.batches; track batch.id) {
+                <li>
+                  <span>{{ batch.reason }}</span>
+                  <span>{{ batch.completedJobs }}/{{ batch.totalJobs }} completados · {{ batch.failedJobs }} fallidos · {{ formatQueueTimestamp(batch.updatedAt) }}</span>
+                </li>
+              }
+            </ul>
+          } @else {
+            <p>No hay batches registrados.</p>
+          }
+        }
+        @if (queueActionMessage(); as actionMessage) {
+          <p class="result-ok">{{ actionMessage }}</p>
+        }
+      </div>
+    }
+  </section>
+
+  @if (reanalysisQueueWarning(); as warning) {
+    <p class="result-line result-warn" role="alert">⚠ {{ warning }}</p>
+  }
+
   <!-- §"cuando cambio la duracion y cd de un defensivo... se calculan de
        nuevo?" (feedback real, 2026-08-29): editar cooldown/duración
        reanaliza cada pull con jugadores de esta clase, uno a uno, aquí en el
-       cliente (ver defensive-catalog.component.ts) — este aviso enseña el
-       progreso real mientras corre y el resumen (con fallos, si los hubo)
-       al terminar, en vez de quedar mudo. -->
+       cliente (ver defensive-catalog.component.ts), respaldado por una cola
+       persistente que permite reanudar al volver a abrir la pantalla — este
+       aviso enseña el progreso real y el resumen final. -->
   @if (lastReanalysis(); as r) {
     <p class="result-line" [class.result-ok]="!r.running && !r.failed" [class.result-warn]="!r.running && r.failed > 0">
       @if (r.running) {

@@ -221,17 +221,29 @@
             <div class="iris-player-execution-card compact" [class]="'tone-' + defensiveTone()">
               <div
                 class="iris-player-score-ring small"
-                [style.--score]="(defensiveScore() ?? 0) + '%'"
+                [style.--score]="(defensiveHeroProgress() ?? 0) + '%'"
               >
                 <div>
-                  <strong>{{
-                    defensiveScore() == null ? '—' : formatPct(defensiveScore(), 0)
-                  }}</strong>
+                  @if (defensiveManagementV2(); as management) {
+                    <strong>
+                      @if (management.managementScore != null) {
+                        {{ formatPct(management.managementScore, 0) }}
+                      } @else if (management.planRequiredCount > 0) {
+                        {{ management.planExecutedCount }}/{{ management.planRequiredCount }}
+                      } @else if (management.criticalWindowCount > 0) {
+                        {{ management.criticalCoveredCount }}/{{ management.criticalWindowCount }}
+                      } @else {
+                        —
+                      }
+                    </strong>
+                  } @else {
+                    <strong>{{ defensiveScore() == null ? '—' : formatPct(defensiveScore(), 0) }}</strong>
+                  }
                   <span>defensivos</span>
                 </div>
               </div>
               <div class="iris-player-execution-copy">
-                <span>COBERTURA DEFENSIVA</span>
+                <span>{{ defensiveManagementV2() ? 'GESTIÓN DEFENSIVA' : 'LEGACY · COBERTURA DEFENSIVA' }}</span>
                 <strong>{{
                   defensiveTone() === 'success'
                     ? 'Sólida'
@@ -241,10 +253,19 @@
                         ? 'Necesita corrección'
                         : 'Sin muestra'
                 }}</strong>
-                <p>
-                  % de ventanas de presión reales cubiertas esta noche — 0% si nunca lanzó nada en
-                  esa ventana, parcial si lo hizo a destiempo, completo si acertó el momento.
-                </p>
+                @if (defensiveManagementV2(); as management) {
+                  <p>
+                    @if (management.mode === 'plan') {
+                      Plan ejecutado, cobertura crítica y eficiencia global; los holds correctos no penalizan.
+                    } @else {
+                      Modo: uso óptimo factible. Sin reminder publicado; solo cuentan decisiones globalmente compatibles.
+                    }
+                  </p>
+                } @else {
+                  <p>
+                    Métrica legacy de ventanas locales `covered/coverable`; se mantiene durante el rollout y no se presenta como score v2.
+                  </p>
+                }
               </div>
             </div>
           </section>
@@ -440,15 +461,76 @@
             <section class="iris-player-section iris-player-evidence iris-player-defensives">
               <div class="iris-player-section-title inline">
                 <div>
-                  <span>04 · DEFENSIVOS</span>
-                  <h2>Qué usó, cuándo, y dónde faltó</h2>
+                  <span>04 · GESTIÓN DE DEFENSIVOS</span>
+                  <h2>Plan, cobertura y eficiencia durante la noche</h2>
                 </div>
-                <p>
-                  Ventanas de presión reales (línea base propia de daño recibido) + catálogo de
-                  cooldowns y defensivos
-                </p>
+                @if (defensiveManagementV2()) {
+                  <p>Reminders publicados + casts reales + replay global de reservas y oportunidades factibles.</p>
+                } @else {
+                  <p>Fallback legacy: sensor local de pressure windows y catálogo; `coverable` aún no es un veredicto v2.</p>
+                }
               </div>
 
+              @if (defensiveManagementV2(); as management) {
+                <div class="iris-player-defensive-summary v2">
+                  <article>
+                    <strong>{{ management.planExecutedCount }}/{{ management.planRequiredCount }}</strong>
+                    <span>plan ejecutado</span>
+                    <p>slots required evaluables</p>
+                  </article>
+                  <article [class.danger]="management.criticalCoveredCount < management.criticalWindowCount">
+                    <strong>{{ management.criticalCoveredCount }}/{{ management.criticalWindowCount }}</strong>
+                    <span>cobertura crítica</span>
+                    <p>ventanas factibles protegidas</p>
+                  </article>
+                  <article class="success">
+                    <strong>{{ management.correctHoldCount }}</strong>
+                    <span>holds correctos</span>
+                    <p>disciplina de reserva, no penaliza</p>
+                  </article>
+                  <article [class.danger]="management.brokenReservationCount > 0">
+                    <strong>{{ management.brokenReservationCount }}</strong>
+                    <span>reservas rotas</span>
+                    <p>objetivo: 0</p>
+                  </article>
+                  <article>
+                    <strong>{{ management.extraUsedCount }}/{{ management.viableExtraCount }}</strong>
+                    <span>extras seguros</span>
+                    <p>usos de valor / oportunidades factibles</p>
+                  </article>
+                  <article [class.danger]="management.deathViableCdCount > 0">
+                    <strong>{{ management.deathViableCdCount }}</strong>
+                    <span>muertes con CD viable</span>
+                    <p>objetivo: 0</p>
+                  </article>
+                </div>
+
+                <p class="iris-player-miss-subheading">
+                  {{ management.mode === 'plan' ? 'Decisiones frente al plan' : 'Modo: uso óptimo factible' }}
+                </p>
+                <p class="iris-player-miss-note">
+                  {{ management.evaluatedPullCount }} pulls evaluados por {{ management.evaluatorVersion }} ·
+                  confidence {{ management.dataConfidence }}. Se priorizan hasta cinco hechos que cambian la siguiente raid.
+                </p>
+                @if (management.decisions.length) {
+                  <div class="iris-player-defensive-decisions">
+                    @for (decision of management.decisions; track decision.pullId + '|' + decision.atMs + '|' + decision.state) {
+                      <article [class]="'tone-' + defensiveDecisionTone(decision)">
+                        <div class="iris-player-decision-time">
+                          <strong>#{{ decision.pullNumber }} · {{ formatDuration(decision.atMs) }}</strong>
+                          <span>{{ decision.bossName }} · {{ decision.difficulty }}</span>
+                        </div>
+                        <div class="iris-player-decision-copy">
+                          <strong>{{ defensiveDecisionLabel(decision) }}</strong>
+                          <p>{{ defensiveDecisionCopy(decision) }}</p>
+                        </div>
+                      </article>
+                    }
+                  </div>
+                } @else {
+                  <p class="iris-player-empty-evidence">Sin decisiones defensivas accionables: no hubo reservas rotas, reminders omitidos ni extras factibles.</p>
+                }
+              } @else {
               <div class="iris-player-defensive-summary">
                 <article>
                   <strong>{{ summary().defensiveSummary.totalCasts }}</strong
@@ -749,6 +831,7 @@
                   Ninguna ventana de presión real quedó sin cubrir esta noche — ni muertes con
                   catálogo libre sin usar.
                 </p>
+              }
               }
 
               <!-- §"qué usó y cuándo... recortado a icono + total" (feedback

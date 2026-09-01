@@ -11,8 +11,8 @@ import {
   isEncounterFight,
   type WclActor,
 } from '../_shared/wcl-client.ts';
-import { activeDefensives, defensivesForClass, defensiveStatusAt, type CooldownCatalog, type TalentGate } from '../_shared/defensive-cooldowns.ts';
-import { attributeWindowAbility, detectDamageWindows, evaluateWindowCoverage } from '../_shared/damage-pressure-windows.ts';
+import { activeDefensives, defensivesForClass, type CooldownCatalog, type TalentGate } from '../_shared/defensive-cooldowns.ts';
+import { attributeWindowAbility, detectDamageWindows } from '../_shared/damage-pressure-windows.ts';
 import { getItemName, getSpecName, getCurrentBuildNamespace } from '../_shared/blizzard-client.ts';
 import { buildFromBlizzardNamespace, fetchTalentSpellLookup } from '../_shared/wago-db2-client.ts';
 import { resolveConsumableAbilityIds, buildConsumableUsage } from '../_shared/consumables.ts';
@@ -24,6 +24,17 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { detectWipeCall as detectWipeCallShared, WIPE_CALL_CONFIDENCE_THRESHOLD, type WipeCallDetection } from '../_shared/wipe-call-detection.ts';
 import { detectUnassignedMechanicOccurrences, type UnassignedMechanicCatalogEntry, type ActorLite, type GenericEvent } from '../_shared/unassigned-mechanics.ts';
+import {
+  EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+  effectiveDefensiveDataFromDatabaseRows,
+  fingerprintTalentBuild,
+  inferCurrentGameBuildObservation,
+  normalizeTalentBuild,
+  resolveEffectiveDefensiveKit,
+  type TalentBuildNode,
+} from '../_shared/effective-defensives.ts';
+import { effectiveDeathOptions, evaluateEffectiveWindowCoverage } from '../_shared/effective-defensive-state.ts';
+import { evaluateDefensivePull } from '../_shared/defensive-execution-persistence.ts';
 
 // "Engancharse a los pulls": trae fights nuevos de WCL y genera `pulls` +
 // `player_pull_records` reales. A PROPÓSITO no llama al LLM aquí — eso es
@@ -69,6 +80,7 @@ interface CastEvent {
   timestamp?: number;
   abilityGameID?: number;
   sourceID?: number;
+  targetID?: number;
 }
 interface ThroughputEvent {
   sourceID?: number;
@@ -133,14 +145,6 @@ interface DispelEvent {
   targetID?: number;
   extraAbilityGameID?: number;
   isBuff?: boolean;
-}
-
-type DefensiveStatus = 'active' | 'available_unused' | 'on_cooldown' | 'unknown';
-interface DefensiveOption {
-  spellId: number;
-  name: string;
-  status: DefensiveStatus;
-  cooldownRemainingMs?: number;
 }
 
 // Ventana de reacción para atribuir daño/muertes a un cast concreto del boss.
@@ -302,7 +306,7 @@ Deno.serve(async (req: Request) => {
       // §12.1: catálogo real de defensivos, sincronizado desde WoWAnalyzer
       // (o la semilla manual mientras no se haya sincronizado nada aún).
       // Se carga UNA VEZ por report, no por fight ni por evento.
-      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spec_override,spell_id,name,category,base_cooldown_ms,base_duration_ms,survival_type').eq('excluded', false);
+      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spec_override,spell_id,name,category,targeting_mode,base_cooldown_ms,base_duration_ms,survival_type,excluded').eq('excluded', false);
       const cooldownCatalog: CooldownCatalog = (catalogRows ?? []).map((r) => ({
         spellId: r.spell_id,
         name: r.name,
@@ -328,10 +332,12 @@ Deno.serve(async (req: Request) => {
       // caliente sin quitar el fallback (si build o caché fallan, sigue sin
       // bloquear el análisis).
       let talentSpellLookup: Map<number, number> | null = null;
+      let currentGameBuild: string | null = null;
       try {
         const namespace = await getCurrentBuildNamespace();
         if (namespace) {
           const build = buildFromBlizzardNamespace(namespace);
+          currentGameBuild = build;
           const { data: cached } = await supabase.from('talent_spell_lookup').select('entry_to_spell').eq('build', build).maybeSingle();
           if (cached) {
             talentSpellLookup = new Map(Object.entries(cached.entry_to_spell as Record<string, number>).map(([id, spellId]) => [Number(id), spellId]));
@@ -351,6 +357,28 @@ Deno.serve(async (req: Request) => {
       } catch (err) {
         console.error('No se pudieron resolver talentos a spell ID (se guardan sin resolver):', err);
       }
+
+      // Resolver v2 en shadow: las tablas secundarias se cargan best-effort y
+      // cualquier dato incompleto queda en warnings. La migración M2 sí debe
+      // preceder al despliegue porque el insert ya escribe columnas v2. El
+      // shadow no modifica death_cause ni defensive_pressure_windows.
+      const resolverShadowWarnings: string[] = [];
+      const [specProfilesResult, modifierRulesResult, overridesResult] = await Promise.all([
+        supabase.from('defensive_spec_profiles').select('*'),
+        supabase.from('defensive_modifier_rules').select('*').eq('active', true),
+        currentGameBuild
+          ? supabase.from('player_defensive_overrides').select('*').eq('game_build', currentGameBuild).eq('active', true)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (specProfilesResult.error) resolverShadowWarnings.push(`defensive_spec_profiles: ${specProfilesResult.error.message}`);
+      if (modifierRulesResult.error) resolverShadowWarnings.push(`defensive_modifier_rules: ${modifierRulesResult.error.message}`);
+      if (overridesResult.error) resolverShadowWarnings.push(`player_defensive_overrides: ${overridesResult.error.message}`);
+      const resolverData = effectiveDefensiveDataFromDatabaseRows({
+        catalogRows: catalogRows ?? [],
+        specProfileRows: specProfilesResult.data ?? [],
+        modifierRuleRows: modifierRulesResult.data ?? [],
+        overrideRows: overridesResult.data ?? [],
+      });
 
       for (const fight of batch) {
         const bossId = String(fight.encounterID);
@@ -423,6 +451,7 @@ Deno.serve(async (req: Request) => {
             pull_number: (priorPulls ?? 0) + 1,
             wipe_pct: fight.kill ? 0 : (fight.bossPercentage ?? null),
             duration_ms: fight.endTime - fight.startTime,
+            observed_at: new Date(reportDetail.startTime + fight.startTime).toISOString(),
             closed_at: new Date().toISOString(),
             raid_damage_taken_series: raidDamageTakenSeries,
             // §"fases de encuentro": disponibles directamente en `fight`, sin
@@ -668,6 +697,7 @@ Deno.serve(async (req: Request) => {
         // jugador (friendlyCastEvents llega en orden cronológico de WCL, así
         // que cada array queda ya ordenado — no hace falta un sort aparte).
         const defensiveCastTimestampsByActor = new Map<number, Map<number, number[]>>();
+        const defensiveCastEventsByActor = new Map<number, Map<number, { timestamp: number; targetID: number | null }[]>>();
         for (const raw of friendlyCastEvents) {
           const e = raw as CastEvent;
           if (typeof e.sourceID !== 'number' || typeof e.abilityGameID !== 'number') continue;
@@ -675,6 +705,13 @@ Deno.serve(async (req: Request) => {
           const perSpell = defensiveCastTimestampsByActor.get(e.sourceID)!;
           if (!perSpell.has(e.abilityGameID)) perSpell.set(e.abilityGameID, []);
           perSpell.get(e.abilityGameID)!.push(e.timestamp ?? 0);
+          if (!defensiveCastEventsByActor.has(e.sourceID)) defensiveCastEventsByActor.set(e.sourceID, new Map());
+          const perSpellEvents = defensiveCastEventsByActor.get(e.sourceID)!;
+          if (!perSpellEvents.has(e.abilityGameID)) perSpellEvents.set(e.abilityGameID, []);
+          perSpellEvents.get(e.abilityGameID)!.push({
+            timestamp: e.timestamp ?? 0,
+            targetID: typeof e.targetID === 'number' ? e.targetID : null,
+          });
         }
 
         const deathByTarget = new Map<number, { timestamp: number; killingAbilityGameID: number }>();
@@ -1005,7 +1042,8 @@ Deno.serve(async (req: Request) => {
           await supabase.from('pulls').update(pullUpdatePatch).eq('id', insertedPull.id);
         }
 
-        const playerRecords = fight.friendlyPlayers.map((actorId) => {
+        const defensiveResolutionEvaluatedAt = new Date().toISOString();
+        const playerRecords = await Promise.all(fight.friendlyPlayers.map(async (actorId) => {
           const actor = actorById.get(actorId);
           const death = deathByTarget.get(actorId);
           const mechanic = death ? mechanicById.get(death.killingAbilityGameID) : undefined;
@@ -1021,31 +1059,10 @@ Deno.serve(async (req: Request) => {
           const defensivesAtDeath = buffsSnapshotIsFresh && actor ? activeDefensives(buffsSnapshot.buffs, actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)) : [];
           const defensivesSeen = [...(defensivesSeenByTarget.get(actorId)?.entries() ?? [])].map(([spellId, name]) => ({ spellId, name }));
 
-          // §12: próximo_disponible(t) = último_cast_antes_de(t) + base_cooldown_ms.
-          // Para cada defensivo de su clase, en el momento exacto de morir:
-          // 'active' (ya lo tenía puesto — gana sobre lo demás cuando lo sabemos),
-          // 'on_cooldown' (lo lanzó hace menos de su cooldown base — no podía
-          // haberlo vuelto a usar), 'available_unused' (fuera de cooldown, o
-          // nunca lo lanzó — PODÍA haberlo usado y no lo hizo, la señal
-          // realmente accionable), o 'unknown' (el extractor no resolvió un
-          // cooldown base plano para esa spell — mejor decir "no lo sé" que
-          // inventar un número).
+          // El snapshot reciente de buffs aporta únicamente la evidencia de
+          // estado activo. Cooldown, duración y cargas se resolverán más abajo
+          // por effectiveDefensiveStateAt a partir del kit efectivo v2.
           const activeSpellIds = new Set(defensivesAtDeath.map((d) => d.spellId));
-          // §refactor (2026-08-29): la fórmula en sí (próximo_disponible(t))
-          // vive ahora en defensiveStatusAt (defensive-cooldowns.ts) — un
-          // único sitio, reutilizado también por defensive_pressure_windows
-          // más abajo. buffActiveOverride reproduce EXACTO el fallback de
-          // siempre (snapshot de buffs de WCL a ≤2s de morir, solo cuando
-          // durationMs es null) — mismo comportamiento que antes del refactor.
-          const defensiveOptions: DefensiveOption[] =
-            death && actor
-              ? defensivesForClass(actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)).map((cd) => {
-                  const casts = defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? [];
-                  const result = defensiveStatusAt(cd, casts, death.timestamp, buffsSnapshotIsFresh && activeSpellIds.has(cd.spellId));
-                  return { spellId: cd.spellId, name: cd.name, status: result.status, cooldownRemainingMs: result.cooldownRemainingMs };
-                })
-              : [];
-
           // §"picos de daño... juntando ventanas de daño sufrido + defensivos
           // que usa y tiene disponible" (feedback real, 2026-08-29): ver
           // damage-pressure-windows.ts para el diseño completo (validado
@@ -1054,19 +1071,14 @@ Deno.serve(async (req: Request) => {
           // actor (falló el graph() de arriba, o el jugador apenas recibió
           // daño) se queda en [], no tumba el resto del pull.
           const damageSeries = damageTakenSeriesByActorId.get(actorId);
-          const defensivePressureWindows =
+          const defensivePressureWindowSensor =
             damageSeries && actor
               ? (() => {
-                  const catalog = defensivesForClass(actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId));
-                  const castsBySpellId = new Map(
-                    catalog.map((cd) => [cd.spellId, defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []]),
-                  );
                   const { baselineValue, windows } = detectDamageWindows(damageSeries.points, damageSeries.pointStart, damageSeries.pointIntervalMs);
                   const actorDamageEvents = damageEventsByTarget.get(actorId) ?? [];
                   return {
                     baselineValue,
                     windows: windows.map((w) => {
-                      const coverage = evaluateWindowCoverage(w.startMs, w.endMs, catalog, castsBySpellId);
                       // §"relacionar 'pico de daño recibido' con una
                       // habilidad del boss, de forma veraz" (feedback real,
                       // 2026-08-29): MISMA resolución de nombre que ya usa
@@ -1082,9 +1094,6 @@ Deno.serve(async (req: Request) => {
                         endMs: w.endMs - fight.startTime,
                         peakMs: w.peakMs - fight.startTime,
                         peakValue: w.peakValue,
-                        covered: coverage.covered,
-                        coverable: coverage.coverable,
-                        options: coverage.options,
                         mechanicId: dominant?.abilityGameID ?? null,
                         mechanicName: dominant ? (dominantMechanic?.name ?? abilityNameById.get(dominant.abilityGameID) ?? null) : null,
                       };
@@ -1092,6 +1101,104 @@ Deno.serve(async (req: Request) => {
                   };
                 })()
               : { baselineValue: 0, windows: [] };
+
+          const observedBuild = inferCurrentGameBuildObservation({
+            currentGameBuild,
+            reportStartTimeMs: reportDetail.startTime,
+            fightStartTimeMs: fight.startTime,
+          });
+          const rawTalentBuild = normalizeTalentBuild(
+            (combatantInfoByActor.get(actorId)?.talentTree?.map((node) => {
+              const n = node as { id?: number; rank?: number; nodeID?: number };
+              return { id: n.id ?? 0, nodeID: n.nodeID ?? 0, rank: n.rank ?? 0 };
+            }) ?? null) as TalentBuildNode[] | null,
+          );
+          const shadowTalentLookup = observedBuild.gameBuild === currentGameBuild ? talentSpellLookup : null;
+          const talentBuild = normalizeTalentBuild(
+            rawTalentBuild?.map((node) => {
+              const spellId = shadowTalentLookup?.get(node.id);
+              return spellId ? { ...node, spellId } : node;
+            }) ?? null,
+          );
+          const playerSpec = resolveSpec(actorId);
+          const talentBuildFingerprint = actor && observedBuild.gameBuild
+            ? await fingerprintTalentBuild(actor.subType, playerSpec, observedBuild.gameBuild, talentBuild)
+            : null;
+          const resolvedKit = actor
+            ? resolveEffectiveDefensiveKit(
+                {
+                  className: actor.subType,
+                  specName: playerSpec,
+                  talentBuild,
+                  buildFingerprint: talentBuildFingerprint,
+                  gameBuild: observedBuild.gameBuild,
+                  gameBuildConfidence: observedBuild.confidence,
+                  playerIdentity: { playerName: actor.name },
+                  allTalentSpellIds: shadowTalentLookup ? new Set(shadowTalentLookup.values()) : null,
+                  talentLookupComplete: shadowTalentLookup != null,
+                },
+                resolverData,
+              )
+            : [];
+          const legacyKit = actor ? defensivesForClass(actor.subType, playerSpec, cooldownCatalog, talentGateForActor(actorId)) : [];
+          const legacyBySpellId = new Map(legacyKit.map((entry) => [entry.spellId, entry]));
+          const resolutionDifferences = resolvedKit
+            .map((entry) => {
+              const legacy = legacyBySpellId.get(entry.spellId);
+              const changed =
+                Boolean(legacy) !== entry.eligible ||
+                (legacy?.baseCooldownMs ?? null) !== entry.effectiveCooldownMs ||
+                (legacy?.durationMs ?? null) !== entry.effectiveDurationMs;
+              return changed
+                ? {
+                    spellId: entry.spellId,
+                    legacyEligible: Boolean(legacy),
+                    resolvedEligible: entry.eligible,
+                    legacyCooldownMs: legacy?.baseCooldownMs ?? null,
+                    resolvedCooldownMs: entry.effectiveCooldownMs,
+                    legacyDurationMs: legacy?.durationMs ?? null,
+                    resolvedDurationMs: entry.effectiveDurationMs,
+                    confidence: entry.confidence,
+                  }
+                : null;
+            })
+            .filter((entry) => entry != null);
+          const resolvedCastsBySpellId = new Map(
+            resolvedKit.map((entry) => [entry.spellId, defensiveCastTimestampsByActor.get(actorId)?.get(entry.spellId) ?? []]),
+          );
+          const defensivePressureWindowsV2 = {
+            baselineValue: defensivePressureWindowSensor.baselineValue,
+            windows: defensivePressureWindowSensor.windows.map((window) => ({
+              ...window,
+              ...evaluateEffectiveWindowCoverage(
+                window.startMs + fight.startTime,
+                window.endMs + fight.startTime,
+                resolvedKit,
+                resolvedCastsBySpellId,
+              ),
+            })),
+          };
+          const deathDefensiveOptionsV2 =
+            death && actor && !bossMeleeOnNonTank
+              ? effectiveDeathOptions(resolvedKit, resolvedCastsBySpellId, death.timestamp, activeSpellIds)
+              : death
+                ? []
+                : null;
+          const defensivePressureWindows = {
+            baselineValue: defensivePressureWindowsV2.baselineValue,
+            windows: defensivePressureWindowsV2.windows.map((window) => ({
+              ...window,
+              // Alias de compatibilidad; nunca vuelve a calcularse desde el
+              // cooldown base ni se usa como autoridad de scoring v2.
+              coverable: window.availableOpportunity,
+            })),
+          };
+          const defensiveOptions = (deathDefensiveOptionsV2 ?? []).map((option) => ({
+            spellId: option.spellId,
+            name: option.name,
+            status: option.status,
+            cooldownRemainingMs: option.cooldownRemainingMs,
+          }));
           return {
             pull_id: insertedPull.id,
             player_name: actor?.name ?? `#${actorId}`,
@@ -1173,20 +1280,40 @@ Deno.serve(async (req: Request) => {
             // su clase durante el pull completo (no solo el estado en el
             // instante de morir, que vive aparte en death_cause.defensiveOptions).
             defensive_casts: actor
-              ? defensivesForClass(actor.subType, resolveSpec(actorId), cooldownCatalog, talentGateForActor(actorId)).map((cd) => ({
+              ? resolvedKit.filter((defensive) => defensive.eligible).map((cd) => ({
                   spellId: cd.spellId,
                   name: cd.name,
                   timestampsMs: (defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []).map((t) => t - fight.startTime),
+                  events: (defensiveCastEventsByActor.get(actorId)?.get(cd.spellId) ?? []).map((event) => ({
+                    timestampMs: event.timestamp - fight.startTime,
+                    targetActorId: event.targetID,
+                    targetName: event.targetID == null ? null : (actorById.get(event.targetID)?.name ?? null),
+                  })),
                 }))
               : [],
             consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent, defensivePressureWindows.windows),
             defensive_pressure_windows: defensivePressureWindows,
-            talent_build:
-              combatantInfoByActor.get(actorId)?.talentTree?.map((node) => {
-                const n = node as { id?: number; rank?: number; nodeID?: number };
-                const spellId = typeof n.id === 'number' ? talentSpellLookup?.get(n.id) : undefined;
-                return spellId ? { ...n, spellId } : n;
-              }) ?? null,
+            talent_build: talentBuild,
+            talent_build_fingerprint: talentBuildFingerprint,
+            game_build: observedBuild.gameBuild,
+            game_build_source: observedBuild.source,
+            game_build_confidence: observedBuild.confidence,
+            defensive_resolution_version: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+            defensive_resolution_evaluated_at: defensiveResolutionEvaluatedAt,
+            death_defensive_options_v2: deathDefensiveOptionsV2,
+            defensive_pressure_windows_v2: defensivePressureWindowsV2,
+            defensive_resolution_shadow: actor
+              ? {
+                  resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+                  authoritative: false,
+                  kit: resolvedKit,
+                  differencesFromLegacy: resolutionDifferences,
+                  warnings: [
+                    ...resolverShadowWarnings,
+                    ...(observedBuild.gameBuild ? [] : ['No se puede asociar este pull histórico a un game_build exacto.']),
+                  ],
+                }
+              : null,
             // Los trinkets (índices 12/13) llevan `name` inyectado — el resto
             // del gear se guarda tal cual, sin resolver (17 ítems × ~25
             // jugadores sería demasiadas llamadas para lo que aporta; los
@@ -1201,11 +1328,29 @@ Deno.serve(async (req: Request) => {
             world_rank_percent: actor ? (playerRankings?.get(actor.name)?.rankPercent ?? null) : null,
             world_total_parses: actor ? (playerRankings?.get(actor.name)?.totalParses ?? null) : null,
           };
-        });
+        }));
 
         if (playerRecords.length) {
           const { error: recError } = await supabase.from('player_pull_records').insert(playerRecords);
           if (recError) throw recError;
+        }
+
+        // Bloque F: se hace después de persistir game_build por jugador para
+        // poder comprobar compatibilidad. Usa observed_at, nunca closed_at,
+        // y materializa también un binding explícito no-plan cuando no había
+        // ninguna versión publicada al comenzar el fight.
+        const { error: planBindingError } = await supabase.rpc('bind_pull_to_current_defensive_plan', {
+          p_pull_id: insertedPull.id,
+        });
+        if (planBindingError) console.error('analyze-report: no se pudo ligar el plan defensivo desplegado', planBindingError.message);
+        else {
+          try {
+            await evaluateDefensivePull(supabase, insertedPull.id);
+          } catch (evaluationError) {
+            // Rollout aditivo: durante la ventana entre desplegar la función y
+            // aplicar M8, el import principal no debe perder el pull.
+            console.error('analyze-report: evaluación defensiva v2 no disponible (no bloqueante)', evaluationError);
+          }
         }
 
         // Timeline raid-wide (pull_mechanic_events): un cast del boss de una
@@ -1231,8 +1376,13 @@ Deno.serve(async (req: Request) => {
           damage_hits: number;
           healing_received: number;
           used_defensive_spell_id: number | null;
+          max_hit_points: number | null;
         }
-        function buildPlayerHitDetails(hitTargets: Map<number, { total: number; hits: number }>, t0: number, windowEnd: number): PlayerHitDetail[] {
+        function buildPlayerHitDetails(
+          hitTargets: Map<number, { total: number; hits: number; maxHitPoints: number | null }>,
+          t0: number,
+          windowEnd: number,
+        ): PlayerHitDetail[] {
           const out: PlayerHitDetail[] = [];
           for (const [targetId, dmg] of hitTargets) {
             const actor = actorById.get(targetId);
@@ -1261,7 +1411,14 @@ Deno.serve(async (req: Request) => {
                 }
               }
             }
-            out.push({ name, damage_taken: dmg.total, damage_hits: dmg.hits, healing_received: healingReceived, used_defensive_spell_id: usedDefensiveSpellId });
+            out.push({
+              name,
+              damage_taken: dmg.total,
+              damage_hits: dmg.hits,
+              healing_received: healingReceived,
+              used_defensive_spell_id: usedDefensiveSpellId,
+              max_hit_points: dmg.maxHitPoints,
+            });
           }
           return out;
         }
@@ -1369,16 +1526,20 @@ Deno.serve(async (req: Request) => {
             continue;
           }
 
-          const hitTargets = new Map<number, { total: number; hits: number }>();
+          const hitTargets = new Map<number, { total: number; hits: number; maxHitPoints: number | null }>();
           for (const rawDamage of damageEvents) {
             const e = rawDamage as DamageEvent;
             if (e.abilityGameID !== abilityId) continue;
             const t = e.timestamp ?? 0;
             if (t < t0 || t > windowEnd) continue;
             if (typeof e.targetID !== 'number') continue;
-            const cur = hitTargets.get(e.targetID) ?? { total: 0, hits: 0 };
+            const cur = hitTargets.get(e.targetID) ?? { total: 0, hits: 0, maxHitPoints: null };
             cur.total += e.amount ?? 0;
             cur.hits += 1;
+            const observedMaxHitPoints = e.maxHitPoints ?? e.resources?.maxHitPoints;
+            if (typeof observedMaxHitPoints === 'number' && observedMaxHitPoints > 0) {
+              cur.maxHitPoints = Math.max(cur.maxHitPoints ?? 0, observedMaxHitPoints);
+            }
             hitTargets.set(e.targetID, cur);
           }
 
@@ -1472,11 +1633,15 @@ Deno.serve(async (req: Request) => {
             const t0 = instance[0].timestamp ?? 0;
             const windowEnd = instance.at(-1)!.timestamp ?? 0;
 
-            const hitTargets = new Map<number, { total: number; hits: number }>();
+            const hitTargets = new Map<number, { total: number; hits: number; maxHitPoints: number | null }>();
             for (const e of instance) {
-              const cur = hitTargets.get(e.targetID!) ?? { total: 0, hits: 0 };
+              const cur = hitTargets.get(e.targetID!) ?? { total: 0, hits: 0, maxHitPoints: null };
               cur.total += e.amount ?? 0;
               cur.hits += 1;
+              const observedMaxHitPoints = e.maxHitPoints ?? e.resources?.maxHitPoints;
+              if (typeof observedMaxHitPoints === 'number' && observedMaxHitPoints > 0) {
+                cur.maxHitPoints = Math.max(cur.maxHitPoints ?? 0, observedMaxHitPoints);
+              }
               hitTargets.set(e.targetID!, cur);
             }
 

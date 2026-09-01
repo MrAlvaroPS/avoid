@@ -1480,6 +1480,9 @@ app-night-player-infographic {
     grid-template-columns: repeat(4, 1fr);
     gap: 13px;
   }
+  .iris-player-defensive-summary.v2 {
+    grid-template-columns: repeat(3, 1fr);
+  }
   .iris-player-defensive-summary article {
     padding: 18px 20px;
     background: rgb(255 255 255 / 3%);
@@ -1506,6 +1509,36 @@ app-night-player-infographic {
   }
   .iris-player-defensive-summary p {
     margin: 5px 0 0;
+    color: #aca2b1;
+    font-size: 14px;
+  }
+  .iris-player-defensive-decisions {
+    display: grid;
+    gap: 11px;
+  }
+  .iris-player-defensive-decisions article {
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr);
+    gap: 20px;
+    padding: 15px 18px;
+    background: rgb(255 255 255 / 3%);
+    border: 1px solid rgb(255 255 255 / 7%);
+    border-left: 4px solid #77717d;
+    border-radius: 12px;
+  }
+  .iris-player-defensive-decisions article.tone-success { border-left-color: #5fc185; }
+  .iris-player-defensive-decisions article.tone-warning { border-left-color: #d6aa5e; }
+  .iris-player-defensive-decisions article.tone-danger { border-left-color: #de5d72; }
+  .iris-player-decision-time strong,
+  .iris-player-decision-copy strong {
+    display: block;
+    color: #eee7f0;
+    font-size: 16px;
+  }
+  .iris-player-decision-time span,
+  .iris-player-decision-copy p {
+    display: block;
+    margin: 4px 0 0;
     color: #aca2b1;
     font-size: 14px;
   }

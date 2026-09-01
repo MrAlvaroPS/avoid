@@ -47,9 +47,69 @@ function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow 
     // null por defecto (mismo criterio): mechanicScoreFor no suma ningún
     // bonus de mecánica sin asignar salvo que un test lo pida explícitamente.
     unassigned_mechanic_success_count: null,
+    defensive_management_score_v2: null,
+    defensive_management_decision_count: null,
+    defensive_required_count: null,
+    defensive_required_success_count: null,
+    defensive_broken_reservation_count: null,
+    defensive_death_viable_cd_count: null,
+    defensive_evaluation_confidence: null,
+    defensive_evaluator_version: null,
     ...overrides,
   };
 }
+
+describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
+  const v2 = (score: number): Partial<ReliabilityInputRow> => ({
+    defensive_management_score_v2: score,
+    defensive_management_decision_count: 2,
+    defensive_required_count: 1,
+    defensive_required_success_count: score > 0 ? 1 : 0,
+    defensive_broken_reservation_count: 0,
+    defensive_death_viable_cd_count: 0,
+    defensive_evaluation_confidence: 'verified',
+    defensive_evaluator_version: 'defensive-execution-evaluator@2.1.0',
+  });
+
+  it('mantiene v1 como score visible con el feature flag apagado y calcula shadow', () => {
+    const result = computeReliabilityBreakdown(
+      [row({ defensive_use_opportunity: true, used_defensive_in_pull: true, ...v2(25) })],
+      NOW,
+    );
+    expect(result?.breakdown.defensiva).toBe(100);
+    expect(result?.defensiveShadowComparison).toEqual({
+      legacyScore: 100,
+      v2Score: 25,
+      delta: -75,
+      comparablePullCount: 1,
+      evaluatorVersions: ['defensive-execution-evaluator@2.1.0'],
+    });
+  });
+
+  it('usa exclusivamente v2 para una fila fiable cuando el flag está encendido', () => {
+    const result = computeReliabilityBreakdown(
+      [row({ defensive_use_opportunity: true, used_defensive_in_pull: true, ...v2(25) })],
+      NOW,
+      { defensiveV2Enabled: true },
+    );
+    expect(result?.breakdown.defensiva).toBe(25);
+  });
+
+  it('hace fallback atómico a v1 si v2 no está completo o no es fiable', () => {
+    const incomplete = computeReliabilityBreakdown(
+      [row({ defensive_use_opportunity: true, used_defensive_in_pull: true, ...v2(10), defensive_required_count: null })],
+      NOW,
+      { defensiveV2Enabled: true },
+    );
+    const uncertain = computeReliabilityBreakdown(
+      [row({ defensive_use_opportunity: true, used_defensive_in_pull: false, ...v2(100), defensive_evaluation_confidence: 'uncertain' })],
+      NOW,
+      { defensiveV2Enabled: true },
+    );
+    expect(incomplete?.breakdown.defensiva).toBe(100);
+    expect(uncertain?.breakdown.defensiva).toBe(0);
+  });
+});
 
 describe('computeReliabilityBreakdown defensiva', () => {
   it('valora un defensivo usado durante el try aunque no haya muerte', () => {

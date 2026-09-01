@@ -1,6 +1,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
+import { enqueueDefensiveReanalysis } from '../_shared/defensive-reanalysis-queue.ts';
 
 // §"necesito un botón en ajustes → defensivos en una clase para limpiar
 // sus defensivos y volver a calcularlos con el prompt, porque alguno se
@@ -42,10 +43,41 @@ Deno.serve(async (req: Request) => {
 
   // §mismo motivo que save-defensive-edit: borrar survival_type deja
   // desactualizado defensive_pressure_windows de cada pull con algún
-  // jugador de esta clase — se devuelven los pullIds para que el cliente
-  // los reanalice en secuencia (nunca en bucle dentro de un edge function).
-  const { data: affectedRecords } = await supabase.from('player_pull_records').select('pull_id').eq('class', body.class);
+  // jugador de esta clase — se registran jobs durables y el cliente los
+  // reanaliza en secuencia (nunca en bucle dentro de un edge function).
+  const { data: affectedRecords, error: affectedError } = await supabase
+    .from('player_pull_records')
+    .select('pull_id')
+    .eq('class', body.class);
   const pullIds = [...new Set((affectedRecords ?? []).map((r) => (r as { pull_id: string }).pull_id))];
 
-  return jsonResponse({ ok: true, resetCount: updated?.length ?? 0, pullIds });
+  let reanalysisBatchId: string | null = null;
+  let reanalysisJobs: { id: string; pullId: string }[] = [];
+  let reanalysisQueueError: string | null = affectedError
+    ? `No se pudieron descubrir los pulls afectados: ${affectedError.message}`
+    : null;
+  if (pullIds.length) {
+    try {
+      const queued = await enqueueDefensiveReanalysis(supabase, {
+        pullIds,
+        reason: `reset_defensive_class:${body.class}`,
+        scope: { kind: 'class_reset', class: body.class },
+        requestedBy: guard.userId,
+      });
+      reanalysisBatchId = queued.batchId;
+      reanalysisJobs = queued.jobs;
+    } catch (queueError) {
+      reanalysisQueueError = queueError instanceof Error ? queueError.message : String(queueError);
+      console.error('No se pudo persistir la cola de reanálisis:', queueError);
+    }
+  }
+
+  return jsonResponse({
+    ok: true,
+    resetCount: updated?.length ?? 0,
+    pullIds,
+    reanalysisBatchId,
+    reanalysisJobs,
+    reanalysisQueueError,
+  });
 });

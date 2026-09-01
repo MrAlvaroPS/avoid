@@ -187,6 +187,8 @@ export interface MrtBossmodTrigger {
   timeLeftSeconds: number;
   spellId?: number;
   pattern?: string;
+  /** Contador de la ocurrencia en el timer de BigWigs/DBM. Solo se emite cuando ha sido validado empíricamente. */
+  counter?: string;
 }
 
 export type MrtTrigger = MrtPullTrigger | MrtBossmodTrigger;
@@ -214,7 +216,7 @@ function serializeTrigger(trigger: MrtTrigger): Uint8Array {
   const fields: unknown[] =
     trigger.type === 'pull'
       ? [PULL_EVENT, '', trigger.delayTimeSeconds, '', ''] // event, andor, delayTime, activeTime, invert
-      : [BOSSMOD_EVENT, '', trigger.timeLeftSeconds, trigger.spellId ?? '', trigger.pattern ?? '', '', '', '', '', '']; // event, andor, bwtimeleft, spellID, pattFind, counter, cbehavior, delayTime, activeTime, invert
+      : [BOSSMOD_EVENT, '', trigger.timeLeftSeconds, trigger.spellId ?? '', trigger.pattern ?? '', trigger.counter ?? '', '', '', '', '']; // event, andor, bwtimeleft, spellID, pattFind, counter, cbehavior, delayTime, activeTime, invert
   while (fields.length && (fields[fields.length - 1] === '' || fields[fields.length - 1] == null)) fields.pop();
   return joinBytes(fields.map(escapeMrtValue), D2);
 }
@@ -227,7 +229,13 @@ function deserializeTrigger(bytes: Uint8Array): MrtDecodedTrigger {
     return { type: 'pull', delayTimeSeconds: num(raw[2]) ?? 0 };
   }
   if (event === BOSSMOD_EVENT) {
-    return { type: 'bossmod', timeLeftSeconds: num(raw[2]) ?? 0, spellId: num(raw[3]), pattern: raw[4] || undefined };
+    return {
+      type: 'bossmod',
+      timeLeftSeconds: num(raw[2]) ?? 0,
+      spellId: num(raw[3]),
+      pattern: raw[4] || undefined,
+      ...(raw[5] ? { counter: raw[5] } : {}),
+    };
   }
   return { type: 'unknown', event, rawFields: raw };
 }

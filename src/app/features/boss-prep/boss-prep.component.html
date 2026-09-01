@@ -4,6 +4,140 @@
     infografía) + asignación de defensivo por spec + generador de reminders para MRT.
   </p>
 
+  <section
+    class="v2-readiness"
+    [class.readiness-ready]="v2Readiness()?.state === 'ready'"
+    [class.readiness-partial]="v2Readiness()?.state === 'partial'"
+    [class.readiness-missing]="v2Readiness()?.state === 'missing' || v2ReadinessError()"
+    aria-live="polite"
+  >
+    <div class="readiness-header">
+      <div>
+        <strong>Defensivos v2 · readiness técnico</strong>
+        @if (v2ReadinessLoading()) {
+          <span>Comprobando endpoint, migraciones y backfill…</span>
+        } @else if (v2ReadinessError(); as readinessError) {
+          <span>Diagnóstico no accesible. Las capacidades v2 quedan deshabilitadas; el template por spec sigue disponible.</span>
+        } @else if (v2Readiness(); as readiness) {
+          @switch (readiness.state) {
+            @case ('ready') { <span>Esquema y backfill listos para activar las capacidades v2.</span> }
+            @case ('partial') { <span>Esquema disponible; backfill incompleto. Dosier/Fiabilidad v2 siguen bloqueados.</span> }
+            @case ('missing') { <span>Falta al menos un endpoint o migración. Las capacidades afectadas no usarán un fallback que parezca v2.</span> }
+          }
+        }
+      </div>
+      <div class="readiness-actions">
+        <button type="button" class="readiness-link" (click)="toggleV2ReadinessDetails()" [attr.aria-expanded]="v2ReadinessDetailsOpen()">
+          {{ v2ReadinessDetailsOpen() ? 'Ocultar' : 'Detalle' }}
+        </button>
+        @if (!v2ReadinessLoading() && (v2ReadinessError() || v2Readiness()?.state !== 'ready')) {
+          <button type="button" class="readiness-retry" (click)="retryV2Readiness()">Volver a comprobar</button>
+        }
+      </div>
+    </div>
+
+    @if (v2ReadinessDetailsOpen()) {
+      <div class="readiness-detail">
+        @if (v2ReadinessError(); as readinessError) {
+          <p class="result-line result-warn"><strong>Error:</strong> {{ readinessError }}</p>
+        }
+        @if (v2Readiness(); as readiness) {
+          <ul class="readiness-checks">
+            @for (check of readiness.checks; track check.id) {
+              <li [class]="'check-' + check.state">
+                <span class="readiness-check-state">{{ check.state === 'ready' ? '✓' : (check.state === 'partial' ? '◐' : '!') }}</span>
+                <span>
+                  <strong>{{ check.label }}</strong> · {{ check.detail }}
+                  @if (check.requiredMigration && check.state !== 'ready') {
+                    <small>Requiere: {{ check.requiredMigration }}</small>
+                  }
+                </span>
+              </li>
+            }
+          </ul>
+          <p class="readiness-capabilities">
+            Jugador {{ readiness.capabilities.playerMode ? '✓' : 'bloqueado' }} ·
+            Override {{ readiness.capabilities.playerOverride ? '✓' : 'bloqueado' }} ·
+            Plan {{ readiness.capabilities.planManagement ? '✓' : 'bloqueado' }} ·
+            Evaluator {{ readiness.capabilities.evaluator ? '✓' : 'bloqueado' }} ·
+            Sección 04 {{ readiness.capabilities.infographic ? '✓' : 'bloqueada' }} ·
+            Fiabilidad {{ readiness.capabilities.reliability ? '✓' : 'bloqueada' }}
+          </p>
+        }
+      </div>
+    }
+  </section>
+
+  <section class="controlled-backfill">
+    <div class="controlled-backfill-header">
+      <div>
+        <strong>Backfill controlado</strong>
+        <span>Reanaliza una muestra reciente del boss seleccionado, un pull por invocación, y audita cinco casos sensibles.</span>
+      </div>
+      <div class="controlled-backfill-actions">
+        <label>
+          Muestra
+          <input
+            type="number"
+            min="5"
+            max="10"
+            [value]="backfillSampleSize()"
+            [disabled]="backfillRunning()"
+            (change)="onBackfillSampleSize($any($event.target).value)"
+          />
+        </label>
+        <button
+          type="button"
+          class="sync-btn"
+          [disabled]="backfillRunning() || !selectedBoss() || v2Readiness()?.capabilities?.evaluator !== true"
+          [title]="v2Readiness()?.capabilities?.evaluator === true ? '' : 'Requiere resolver, plan M7 y evaluator M8 listos'"
+          (click)="startControlledBackfill()"
+        >
+          {{ backfillRunning() ? 'Reanalizando…' : 'Iniciar / reanudar muestra' }}
+        </button>
+      </div>
+    </div>
+
+    @if (!selectedBoss()) {
+      <p class="muted">Selecciona primero un boss y dificultad.</p>
+    } @else if (v2Readiness()?.capabilities?.evaluator !== true) {
+      <p class="result-line result-warn">Bloqueado por seguridad: la muestra necesita Resolver y builds, Plan M7 y Evaluator M8 en estado ✓. Revisa arriba la primera fila marcada con “!”.</p>
+    }
+    @if (backfillError(); as sampleError) {
+      <p class="result-line result-warn" role="alert">⚠ {{ sampleError }}</p>
+    }
+    @if (backfillProgress(); as progress) {
+      <div class="backfill-progress" role="progressbar" [attr.aria-valuenow]="progress.completed" [attr.aria-valuemin]="0" [attr.aria-valuemax]="progress.total">
+        <span [style.width.%]="backfillProgressPercent()"></span>
+      </div>
+      <div class="backfill-progress-meta">
+        <span>{{ progress.completed }}/{{ progress.total }} completados@if (progress.running) { · 1 ejecutando }@if (progress.failed) { · {{ progress.failed }} fallidos }</span>
+        @if (backfillBatchId(); as batchId) {
+          <span>Batch {{ batchId }}@if (backfillReused()) { · reanudado }</span>
+        }
+        <button type="button" class="readiness-link" [disabled]="backfillRunning()" (click)="refreshControlledBackfillReport()">Actualizar informe</button>
+        @if (progress.failed) {
+          <button type="button" class="readiness-retry" [disabled]="backfillRunning()" (click)="retryControlledBackfillFailures()">Reintentar fallidos</button>
+        }
+      </div>
+    }
+    @if (backfillAudit().length) {
+      @if (backfillProgress(); as progress) {
+        @if (progress.completed !== progress.total || progress.failed > 0) {
+          <p class="result-line result-warn">Informe provisional: no puede usarse como aceptación mientras el batch no termine completo y sin fallos.</p>
+        }
+      }
+      <ul class="backfill-audit">
+        @for (audit of backfillAudit(); track audit.id) {
+          <li [class]="'audit-' + audit.state">
+            <span>{{ audit.state === 'passed' ? '✓' : (audit.state === 'failed' ? '!' : '○') }}</span>
+            <div><strong>{{ audit.label }}</strong><small>{{ audit.detail }}</small></div>
+          </li>
+        }
+      </ul>
+    }
+  </section>
+
   @if (error()) {
     <p class="error">{{ error() }}</p>
   }
@@ -33,6 +167,23 @@
           <h2>{{ selectedBoss()!.bossName }}</h2>
         </div>
 
+        <div class="assignment-view-switch" role="group" aria-label="Vista de asignación">
+          <span>Vista de asignación</span>
+          <button type="button" [class.selected]="assignmentView() === 'spec'" (click)="selectAssignmentView('spec')">Por spec</button>
+          <button
+            type="button"
+            [class.selected]="assignmentView() === 'player'"
+            [disabled]="v2Readiness()?.capabilities?.playerMode !== true"
+            [title]="v2Readiness()?.capabilities?.playerMode === true ? '' : 'Requiere endpoint del resolver y M1–M3 listos'"
+            (click)="selectAssignmentView('player')"
+          >Por jugador</button>
+        </div>
+        @if (assignmentView() === 'spec') {
+          <p class="assignment-view-note">Template reutilizable de clase/spec. Muestra valores base/spec y puede variar según el build; AUTO aquí no es un plan desplegado ni entra en scoring.</p>
+        } @else {
+          <p class="assignment-view-note">El jugador seleccionado solo filtra lo que ves. El solver y el plan siguen siendo globales para todo el roster.</p>
+        }
+
         <div class="header-row">
           <div class="difficulty-tabs" role="tablist">
             @for (id of standardDifficultyIds; track id) {
@@ -43,7 +194,8 @@
           </div>
 
           <!-- §"ponlo en la cabecera a la derecha de donde vienen las dificultades... así está más a la vista" (feedback real, 2026-08-31) -->
-          <div class="auto-assign-bar" title="Asigna sola el defensivo de la spec a cada mecánica, empezando por la que más pico hace a toda la raid, respetando cooldowns reales a lo largo del fight. Nunca toca defensivos de emergencia ni con cooldown sin resolver.">
+          @if (assignmentView() === 'spec') {
+          <div class="auto-assign-bar" title="Template por spec: asigna defensivos base a mecánicas. No crea ni publica un plan v2.">
             <select [value]="autoAssignClass()" (change)="onAutoAssignClassChange($any($event.target).value)">
               @for (cls of allClasses; track cls) {
                 <option [value]="cls">{{ cls }}</option>
@@ -54,8 +206,8 @@
                 <option [value]="spec">{{ spec }}</option>
               }
             </select>
-            <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssign()">{{ autoAssigning() ? '…' : '⚡ Auto-asignar spec' }}</button>
-            <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssignClass()">{{ autoAssigning() ? '…' : '⚡ Auto-asignar clase entera' }}</button>
+            <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssign()">{{ autoAssigning() ? '…' : '⚡ AUTO template spec' }}</button>
+            <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssignClass()">{{ autoAssigning() ? '…' : '⚡ AUTO template clase' }}</button>
             <button type="button" class="delete-btn" [class.confirming]="confirmingResetClass()" [disabled]="resetting()" (click)="requestResetClass()">
               {{ confirmingResetClass() ? '¿seguro? (borra todo lo de ' + autoAssignClass() + ')' : 'restablecer clase' }}
             </button>
@@ -69,7 +221,138 @@
             <!-- §"cómo podemos ver los huecos que quedan libres... o si ya está asignado antes de esa habilidad" (feedback real, 2026-08-31) -->
             <button type="button" class="sync-btn" title="Orden cronológico real del fight para esta spec: qué cubre, con qué, y si el mismo defensivo ya se habría usado antes sin tiempo de cooldown de sobra." (click)="openTimeline()">🕐 Cronología</button>
           </div>
+          } @else {
+            <div class="player-select-bar">
+              <select
+                [value]="selectedPlayerCharacterId() ?? ''"
+                [disabled]="loadingPreparationPlayers()"
+                (change)="selectPreparationPlayer($any($event.target).value)"
+              >
+                <option value="">Selecciona jugador…</option>
+                @for (player of preparationPlayers(); track player.characterId) {
+                  <option [value]="player.characterId">{{ player.name }} · {{ player.className }}{{ player.specName ? ' · ' + player.specName : '' }}</option>
+                }
+              </select>
+              <button type="button" class="sync-btn" [disabled]="!selectedPreparationPlayer() || loadingSelectedPlayerKit()" (click)="openTimeline()">🕐 Cronología del jugador</button>
+            </div>
+          }
         </div>
+        @if (assignmentView() === 'player') {
+          @if (preparationPlayersError(); as rosterError) {
+            <p class="result-line result-warn" role="alert">⚠ No se pudo cargar roster/builds: {{ rosterError }}</p>
+          } @else if (loadingPreparationPlayers()) {
+            <p class="muted">Cargando roster y último build observado…</p>
+          }
+          @if (selectedPreparationPlayer(); as player) {
+            <div class="player-build-summary" [class]="'build-' + selectedPlayerBuildState()">
+              <div>
+                <strong>{{ player.name }} · {{ player.className }}{{ player.specName ? ' · ' + player.specName : '' }}</strong>
+                <span>{{ playerBuildStateLabel() }}</span>
+              </div>
+              <p>
+                Build {{ selectedPlayerKit()?.sourceBuild?.gameBuild ?? player.gameBuild ?? 'desconocido' }} ·
+                fuente {{ selectedPlayerKit()?.sourceBuild?.source ?? player.buildSource ?? 'sin evidencia' }} ·
+                observado {{ (selectedPlayerKit()?.sourceBuild?.observedAt ?? player.observedAt) ? ((selectedPlayerKit()?.sourceBuild?.observedAt ?? player.observedAt) | date: 'd MMM y, HH:mm') : '—' }}
+              </p>
+              @if (loadingSelectedPlayerKit()) {
+                <span class="muted">Resolviendo kit efectivo en backend…</span>
+              } @else if (selectedPlayerKitError(); as kitError) {
+                <span class="result-warn">No se pudo resolver el kit: {{ kitError }}</span>
+              } @else if (selectedPlayerKit(); as resolved) {
+                <span class="meta">{{ resolved.kit.length }} defensivos resueltos · {{ resolved.resolverVersion }}@if (resolved.warnings.length) { · {{ resolved.warnings.length }} avisos }</span>
+              }
+              @if (selectedPlayerBuildState() === 'changed_after_draft') {
+                <p class="result-line result-warn">⚠ El build observado cambió después del borrador activo. El borrador debe regenerarse antes de publicar.</p>
+              }
+            </div>
+          }
+        }
+        @if (assignmentView() === 'player' && selectedPlayerKit(); as resolvedKit) {
+          <section class="effective-kit">
+            <div class="effective-kit-header">
+              <div>
+                <strong>Kit efectivo del jugador</strong>
+                <span>Valores resueltos por backend; el catálogo base permanece intacto.</span>
+              </div>
+              @if (activePlanVersion()?.status === 'published') {
+                <span class="published-frozen">Plan publicado congelado</span>
+              }
+            </div>
+            @if (!exactOverrideScopeReady()) {
+              <p class="result-line result-warn">⚠ Sin fingerprint fiable no se guardan overrides reutilizables. Solo podrá corregirse el snapshot de un borrador v2.</p>
+            }
+            @if (draftInvalidatedByOverride()) {
+              <p class="result-line result-warn">⚠ Los valores cambiaron después del borrador. Confirma una nueva generación global antes de publicar.</p>
+            }
+            @if (overrideResult(); as savedResult) {
+              <p class="result-line result-ok">{{ savedResult }}</p>
+            }
+
+            <div class="effective-kit-grid">
+              @for (defensive of selectedPlayerEffectiveKit(); track defensive.spellId) {
+                <article class="effective-defensive" [class.has-manual]="defensiveHasManualOverride(defensive)">
+                  <div class="effective-defensive-title">
+                    <app-wowhead-link type="spell" [id]="defensive.spellId"><strong>{{ defensive.name }}</strong></app-wowhead-link>
+                    <span>{{ defensiveHasManualOverride(defensive) ? 'Manual' : defensive.confidence }}</span>
+                  </div>
+                  <div class="effective-values">
+                    <div>
+                      <small>CD efectivo</small>
+                      <strong>{{ defensive.effectiveCooldownMs != null ? (defensive.effectiveCooldownMs / 1000) + 's' : '—' }}</strong>
+                      <span>Base {{ defensiveBaseValue(defensive, 'cooldown_ms') != null ? (defensiveBaseValue(defensive, 'cooldown_ms')! / 1000) + 's' : '—' }} · {{ defensiveDeltaLabel(defensive, 'cooldown_ms') }}</span>
+                    </div>
+                    <div>
+                      <small>Duración efectiva</small>
+                      <strong>{{ defensive.effectiveDurationMs != null ? (defensive.effectiveDurationMs / 1000) + 's' : '—' }}</strong>
+                      <span>Base {{ defensiveBaseValue(defensive, 'duration_ms') != null ? (defensiveBaseValue(defensive, 'duration_ms')! / 1000) + 's' : '—' }} · {{ defensiveDeltaLabel(defensive, 'duration_ms') }}</span>
+                    </div>
+                  </div>
+                  <p class="effective-meta">{{ defensive.charges }} carga{{ defensive.charges === 1 ? '' : 's' }}@if (defensive.rechargeMs != null) { · recharge {{ defensive.rechargeMs / 1000 }}s } · target {{ defensive.targetingMode }}</p>
+                  <div class="effective-actions">
+                    <button type="button" class="readiness-link" (click)="toggleKitInspector(defensive.spellId)">{{ expandedKitSpellId() === defensive.spellId ? 'Ocultar cálculo' : 'Ver cálculo' }}</button>
+                    <button type="button" class="readiness-link" [disabled]="!exactOverrideScopeReady() || savingOverride()" (click)="beginOverrideEdit(defensive)">Ajustar efectivo</button>
+                    @if (defensiveHasManualOverride(defensive)) {
+                      <button type="button" class="readiness-link danger-link" [disabled]="savingOverride()" (click)="requestDeactivateOverride(defensive)">
+                        {{ overrideConfirmKey() === 'deactivate:' + defensive.spellId ? 'Confirmar automático' : 'Restablecer automático' }}
+                      </button>
+                    }
+                  </div>
+
+                  @if (expandedKitSpellId() === defensive.spellId) {
+                    <ol class="resolver-chain">
+                      @for (step of defensive.provenance; track $index) {
+                        <li>
+                          <span>{{ step.kind }}</span>
+                          <strong>{{ step.field }}</strong>
+                          <span>{{ formatResolutionValue(step.field, step.before) }} → {{ formatResolutionValue(step.field, step.after) }}</span>
+                          <small>{{ step.description }}@if (step.source) { · {{ step.source }} }</small>
+                        </li>
+                      }
+                    </ol>
+                    @if (defensive.conditionalModifiers.length) {
+                      <p class="result-line result-warn">Modificadores condicionales no aplicados como garantía: {{ defensive.conditionalModifiers.map((step) => step.description).join(' · ') }}</p>
+                    }
+                  }
+
+                  @if (editingOverrideSpellId() === defensive.spellId) {
+                    <div class="override-editor">
+                      <label>CD efectivo (s)<input type="number" min="0" step="0.1" [value]="overrideCooldownSeconds()" (input)="overrideCooldownSeconds.set($any($event.target).value)" /></label>
+                      <label>Duración efectiva (s)<input type="number" min="0" step="0.1" [value]="overrideDurationSeconds()" (input)="overrideDurationSeconds.set($any($event.target).value)" /></label>
+                      <label class="override-reason">Motivo auditable<textarea rows="2" [value]="overrideReason()" (input)="overrideReason.set($any($event.target).value)" placeholder="Qué se verificó y dónde"></textarea></label>
+                      <p>Scope: {{ selectedPreparationPlayer()!.name }} · {{ resolvedKit.sourceBuild.gameBuild }} · fingerprint exacto. No reanaliza históricos automáticamente.</p>
+                      <div class="effective-actions">
+                        <button type="button" class="sync-btn" [disabled]="savingOverride()" (click)="requestSaveOverride(defensive)">
+                          {{ savingOverride() ? 'Guardando…' : (overrideConfirmKey() === 'save:' + defensive.spellId ? 'Confirmar e invalidar borrador' : 'Guardar override') }}
+                        </button>
+                        <button type="button" class="readiness-link" [disabled]="savingOverride()" (click)="cancelOverrideEdit()">Cancelar</button>
+                      </div>
+                    </div>
+                  }
+                </article>
+              }
+            </div>
+          </section>
+        }
         @if (autoAssignResult(); as r) {
           <p class="result-line result-ok">{{ r.assigned }}/{{ r.candidates }} mecánicas asignadas.</p>
         }
@@ -334,6 +617,9 @@
         @if (r.skippedForMissingTiming.length) {
           <p class="result-line result-warn">Sin timing para: {{ r.skippedForMissingTiming.join(', ') }} (usa trigger bossmod o sincroniza)</p>
         }
+        @if (r.timeFallbacks.length) {
+          <p class="result-line result-warn">Trigger bossmod degradado de forma segura a tiempo de pull (counter no verificado): {{ r.timeFallbacks.join(', ') }}</p>
+        }
         <pre class="prompt-box">{{ r.text }}</pre>
         <button type="button" class="sync-btn" (click)="copyExport()">
           {{ copyStatus() === 'copied' ? '✓ copiado' : copyStatus() === 'error' ? 'error al copiar' : 'copiar' }}
@@ -346,12 +632,19 @@
     <div class="export-modal-backdrop" (click)="closeTimeline()">
       <div class="export-modal" (click)="$event.stopPropagation()">
         <div class="export-modal-header">
-          <h3>Cronología — {{ autoAssignClass() }} · {{ autoAssignSpec() }}</h3>
+          <h3>{{ timelineTitle() }}</h3>
           <button type="button" class="classify-toggle" (click)="closeTimeline()">✕ cerrar</button>
         </div>
         <p class="meta">
-          Orden real del fight (mediana de ocurrencias observadas). "en conflicto" = este mismo defensivo ya se habría usado antes y su cooldown no le habría dado tiempo a estar libre de nuevo aquí
-          — revísalo a mano. Fila vacía = esta spec no tiene nada asignado a esa mecánica.
+          @if (activePlanVersion(); as plan) {
+            Salida del solver {{ plan.solver_version }} · versión {{ plan.status }} · calidad {{ plan.planning_quality }}. Los cooldowns son los snapshots con los que se creó el plan.
+          } @else {
+            @if (assignmentView() === 'spec') {
+              Fallback legacy por template. "en conflicto" = este mismo defensivo ya se habría usado antes y su cooldown no habría vuelto a tiempo.
+            } @else {
+              Sin draft v2 global. La vista por jugador no calcula una cascada local con base cooldown.
+            }
+          }
         </p>
         @if (!timelineEntries().length) {
           <p class="muted">Ninguna mecánica de esta spec tiene timing conocido todavía — sincroniza primero.</p>
@@ -368,7 +661,7 @@
               </tr>
             </thead>
             <tbody>
-              @for (e of timelineEntries(); track e.abilityId) {
+              @for (e of timelineEntries(); track e.trackKey) {
                 <tr [class.timeline-conflict]="e.conflict" [class.timeline-gap]="!e.assignment && e.priority && e.priority >= 3">
                   <td>{{ formatFightTime(e.timeMs) }}</td>
                   <td>{{ e.name }}</td>

@@ -18,6 +18,7 @@ import {
 import { toBlob, toCanvas } from 'html-to-image';
 import {
   type NightDefensiveCast,
+  type NightDefensiveDecision,
   type NightDeathRow,
   type NightMechanicDefensiveStat,
   type NightMechanicFailRow,
@@ -25,6 +26,7 @@ import {
   type NightPlayerSummary,
   type NightPressurePullSummary,
 } from '../../core/night-player-summary.service';
+import { DefensiveFeatureFlagsService } from '../../core/defensive-feature-flags.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { errorMessage } from '../../shared/error-message.util';
 import type { MechanicCategory } from '../../shared/models/domain';
@@ -148,6 +150,7 @@ const MECH_CONTENT_WIDTH = SHEET_WIDTH - 2 * (78 + 26 + 30);
 })
 export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, OnDestroy {
   private edgeFunctions = inject(EdgeFunctionsService);
+  private defensiveFlags = inject(DefensiveFeatureFlagsService);
   private cdr = inject(ChangeDetectorRef);
 
   summary = input.required<NightPlayerSummary>();
@@ -202,11 +205,25 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   // ratio real cubiertas/cubribles con el mismo never_touched=0/mistimed=
   // crédito parcial/covered=ratio que ya vimos y arreglamos hoy. Reutilizarlo
   // aquí evita una segunda fórmula que pudiera divergir de la de Fiabilidad.
-  readonly defensiveScore = computed(
-    () => this.summary().nightReliability?.breakdown.defensiva ?? null,
+  readonly defensiveManagementV2 = computed(() =>
+    this.defensiveFlags.enabled('defensiveInfographicV2') ? this.summary().defensiveManagementV2 : null,
   );
+  readonly defensiveScore = computed(() =>
+    this.defensiveManagementV2()?.managementScore ?? this.summary().nightReliability?.breakdown.defensiva ?? null,
+  );
+  readonly defensiveHeroProgress = computed(() => {
+    const v2 = this.defensiveManagementV2();
+    if (!v2) return this.defensiveScore();
+    if (v2.managementScore != null) return v2.managementScore;
+    if (v2.planRequiredCount > 0) return (v2.planExecutedCount / v2.planRequiredCount) * 100;
+    if (v2.criticalWindowCount > 0) return (v2.criticalCoveredCount / v2.criticalWindowCount) * 100;
+    return null;
+  });
   readonly defensiveTone = computed(() => {
-    const score = this.defensiveScore();
+    const v2 = this.defensiveManagementV2();
+    if (v2?.brokenReservationCount || v2?.deathViableCdCount) return 'danger';
+    if (v2?.reminderMissedCount) return 'warning';
+    const score = this.defensiveHeroProgress();
     return score == null ? 'neutral' : score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
   });
 
@@ -527,6 +544,59 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     rootCauseMeta(death.rootCause)?.label ??
     mechanicCategoryMeta(death.category)?.label ??
     'Causa no clasificada';
+
+  defensiveDecisionLabel(decision: NightDefensiveDecision): string {
+    const labels: Record<NightDefensiveDecision['state'], string> = {
+      plan_covered: 'Plan cubierto',
+      covered_with_substitution: 'Sustitución válida',
+      correct_hold: 'Hold correcto',
+      safe_extra_use: 'Uso extra seguro',
+      missed_extra_opportunity: 'Oportunidad factible',
+      plan_broken: 'Reserva rota',
+      reminder_missed: 'Reminder omitido',
+      death_with_viable_cd: 'Muerte con alternativa',
+      no_feasible_alternative: 'Sin alternativa factible',
+      uncertain_data: 'Dato incierto',
+    };
+    return labels[decision.state];
+  }
+
+  defensiveDecisionTone(decision: NightDefensiveDecision): 'success' | 'warning' | 'danger' | 'neutral' {
+    if (decision.state === 'plan_broken' || decision.state === 'reminder_missed' || decision.state === 'death_with_viable_cd') return 'danger';
+    if (decision.state === 'missed_extra_opportunity' || decision.state === 'covered_with_substitution') return 'warning';
+    if (decision.state === 'correct_hold' || decision.state === 'safe_extra_use' || decision.state === 'plan_covered') return 'success';
+    return 'neutral';
+  }
+
+  defensiveDecisionCopy(decision: NightDefensiveDecision): string {
+    const planned = decision.plannedSpellName ?? (decision.plannedSpellId ? `#${decision.plannedSpellId}` : 'el defensivo asignado');
+    const actual = decision.actualSpellName ?? (decision.actualSpellId ? `#${decision.actualSpellId}` : 'el cooldown');
+    const mechanic = decision.mechanicName ?? (decision.abilityId ? `mecánica #${decision.abilityId}` : 'esta presión');
+    const untilFuture = decision.relatedFutureAtMs == null ? null : Math.max(0, decision.relatedFutureAtMs - decision.atMs);
+    switch (decision.state) {
+      case 'plan_broken':
+        if (decision.reason === 'TARGET_MISMATCH') return `${actual} se lanzó sobre otro target y no cubrió ${mechanic}.`;
+        return `${actual} se usó${decision.actualCastAtMs == null ? '' : ` ${formatDuration(Math.max(0, decision.atMs - decision.actualCastAtMs))} antes`}; faltaban ${formatDuration(decision.cooldownRemainingMs ?? 0)} al llegar ${mechanic}.`;
+      case 'reminder_missed':
+        return `${planned} estaba realmente listo en la ventana de ${mechanic}, pero no se lanzó.`;
+      case 'covered_with_substitution':
+        return `${actual} cubrió el slot de ${planned}. La cobertura fue correcta${decision.reason === 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT' ? ', pero consumió una reserva posterior' : ' sin coste futuro detectado'}.`;
+      case 'correct_hold':
+        return `${decision.candidateSpellNames.join(' / ') || 'El cooldown'} estaba listo, pero usarlo habría roto la reserva${untilFuture == null ? ' posterior' : ` ${formatDuration(untilFuture)} después`}.`;
+      case 'safe_extra_use':
+        return `${actual} aportó cobertura adicional y recuperó sin romper una reserva superior.`;
+      case 'missed_extra_opportunity':
+        return `Había una secuencia segura con ${decision.candidateSpellNames.join(' / ') || 'un defensivo disponible'} para cubrir ${mechanic}.`;
+      case 'death_with_viable_cd':
+        return `La muerte tenía una alternativa globalmente viable: ${decision.candidateSpellNames.join(' / ') || 'un defensivo propio'}.`;
+      case 'no_feasible_alternative':
+        return `No había una secuencia defensiva mejor sin sacrificar la siguiente mecánica crítica.`;
+      case 'plan_covered':
+        return `${planned} cubrió correctamente ${mechanic}.`;
+      case 'uncertain_data':
+        return 'Build, target o timing insuficiente para afirmar una decisión.';
+    }
+  }
 
   // §"cuando le doy al boton de actualizar y enviar todas las infografias
   // se estan perdiendo iconos de mecanicas y habilidades" (feedback real,

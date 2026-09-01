@@ -5,6 +5,14 @@
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import type { GenerateNightFullReportResult } from '../shared/models/night-full-report';
+import type {
+  DefensivePlanDraftInput,
+  DefensivePlanVersionRow,
+  DefensiveResolutionConfidence,
+  PlayerPullDefensiveEvaluationRow,
+  PullDefensivePlanBindingRow,
+  ResolvedPlayerDefensiveKitResult,
+} from '../shared/models/domain';
 
 export interface AnalyzeReportResult {
   ok: true;
@@ -13,6 +21,102 @@ export interface AnalyzeReportResult {
   newestPullId: string | null;
   /** §"la noche duplicada... dos personas subieron el mismo log" (bug real, arreglado a mano): report_code de otro report ya importado que parece la misma sesión (inicio a ±6h, ≥2 bosses en común) — null = sin sospecha. Solo se calcula al crear el report, se repite igual en cada respuesta mientras exista. */
   possibleDuplicateOf: string | null;
+}
+
+export interface DefensiveReanalysisJobRef {
+  id: string;
+  pullId: string;
+}
+
+export interface DefensiveReanalysisQueueFields {
+  pullIds: string[];
+  reanalysisBatchId: string | null;
+  reanalysisJobs: DefensiveReanalysisJobRef[];
+  reanalysisQueueError: string | null;
+}
+
+export interface PendingDefensiveReanalysisJob extends DefensiveReanalysisJobRef {
+  batchId: string;
+  status: 'queued' | 'error';
+  attempts: number;
+  lastError: string | null;
+  reason: string;
+  scope: Record<string, unknown>;
+}
+
+export type DefensiveReanalysisQueueHealth = 'healthy' | 'running' | 'failed';
+
+export interface DefensiveReanalysisQueueBatchStatus {
+  id: string;
+  reason: string;
+  scope: Record<string, unknown>;
+  status: 'queued' | 'running' | 'completed' | 'completed_with_errors';
+  totalJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface DefensiveReanalysisQueueStatusResult {
+  ok: true;
+  health: DefensiveReanalysisQueueHealth;
+  counts: {
+    queued: number;
+    running: number;
+    retryableErrors: number;
+    blockedErrors: number;
+  };
+  pendingCount: number;
+  maxAttempts: number;
+  lastError: {
+    jobId: string;
+    batchId: string;
+    pullId: string;
+    attempts: number;
+    message: string;
+    updatedAt: string;
+  } | null;
+  batches: DefensiveReanalysisQueueBatchStatus[];
+}
+
+export type DefensiveV2ReadinessState = 'ready' | 'partial' | 'missing';
+
+export interface DefensiveV2ReadinessCheck {
+  id: 'resolver_endpoint' | 'override_endpoint' | 'resolver_schema' | 'override_audit' | 'plan_schema' | 'evaluator_schema' | 'reliability_v2' | 'backfill';
+  label: string;
+  state: DefensiveV2ReadinessState;
+  detail: string;
+  requiredMigration: string | null;
+  completed?: number;
+  total?: number;
+}
+
+export interface DefensiveV2ReadinessResult {
+  ok: true;
+  state: DefensiveV2ReadinessState;
+  checkedAt: string;
+  evaluatorVersion: string;
+  resolverVersion: string | null;
+  checks: DefensiveV2ReadinessCheck[];
+  capabilities: {
+    playerMode: boolean;
+    playerOverride: boolean;
+    planManagement: boolean;
+    evaluator: boolean;
+    infographic: boolean;
+    reliability: boolean;
+  };
+}
+
+export interface ControlledDefensiveBackfillAuditCase {
+  id: 'fade_modifier' | 'unchanged_base' | 'charges_recharge' | 'external_target' | 'unknown_build';
+  label: string;
+  state: 'passed' | 'failed' | 'not_observed';
+  observed: number;
+  detail: string;
 }
 
 export interface PullBriefRow {
@@ -259,13 +363,116 @@ export class EdgeFunctionsService {
   // className=null => catálogo entero (todas las clases en un único prompt,
   // feedback real: "la cantidad de habilidades defensivas no es
   // desorbitante... un único prompt que clasifique todas las specs a la vez").
-  async getDefensiveClassificationPrompt(className: string | null): Promise<{ ok: true; promptVersion: number; systemPrompt: string; userMessage: string; defensiveCount: number }> {
+  async resolvePlayerDefensiveKit(params: {
+    playerName?: string;
+    characterId?: number;
+    className?: string;
+    specName?: string | null;
+    talentBuild?: { id: number; nodeID: number; rank: number; spellId?: number }[] | null;
+    buildFingerprint?: string | null;
+    gameBuild?: string | null;
+    gameBuildConfidence?: DefensiveResolutionConfidence;
+    includeExternal?: boolean;
+  }): Promise<ResolvedPlayerDefensiveKitResult> {
+    return this.invoke<ResolvedPlayerDefensiveKitResult>('resolve-player-defensive-kit', params);
+  }
+
+  async managePlayerDefensiveOverride(params: {
+    action: 'save' | 'deactivate';
+    characterId: number;
+    playerName: string;
+    className: string;
+    specName: string;
+    spellId: number;
+    gameBuild: string;
+    buildFingerprint: string;
+    effectiveCooldownMs?: number | null;
+    effectiveDurationMs?: number | null;
+    reason: string;
+  }): Promise<{
+    ok: true;
+    action: 'save' | 'deactivate';
+    override: Record<string, unknown>;
+    automatic: { effectiveCooldownMs: number | null; effectiveDurationMs: number | null };
+    historicalReanalysisScheduled: false;
+    draftInvalidated: true;
+  }> {
+    return this.invoke('manage-player-defensive-override', params);
+  }
+
+  /**
+   * Diagnóstico técnico explícito: combina la existencia real del endpoint
+   * del resolver con schema M1–M9 y cobertura de backfill. Si el propio
+   * diagnóstico no está desplegado se rechaza; nunca devuelve un falso ready.
+   */
+  async defensiveV2Readiness(): Promise<DefensiveV2ReadinessResult> {
+    type SchemaReadiness = Omit<DefensiveV2ReadinessResult, 'resolverVersion'> & {
+      checks: Exclude<DefensiveV2ReadinessCheck, { id: 'resolver_endpoint' }>[];
+    };
+    const [schema, resolver, overrideEndpoint] = await Promise.all([
+      this.invoke<SchemaReadiness>('defensive-v2-readiness', {}),
+      this.invoke<{ ok: true; resolverVersion: string }>('resolve-player-defensive-kit', { action: 'health' })
+        .then((result) => ({ ready: true as const, result }))
+        .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
+      this.invoke<{ ok: true; overrideVersion: string }>('manage-player-defensive-override', { action: 'health' })
+        .then((result) => ({ ready: true as const, result }))
+        .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
+    ]);
+    const resolverCheck: DefensiveV2ReadinessCheck = resolver.ready
+      ? {
+          id: 'resolver_endpoint',
+          label: 'Endpoint del resolver',
+          state: 'ready',
+          detail: resolver.result.resolverVersion,
+          requiredMigration: null,
+        }
+      : {
+          id: 'resolver_endpoint',
+          label: 'Endpoint del resolver',
+          state: 'missing',
+          detail: resolver.error,
+          requiredMigration: 'Desplegar resolve-player-defensive-kit',
+        };
+    const capabilities = {
+      playerMode: resolver.ready && schema.capabilities.playerMode,
+      playerOverride: resolver.ready && overrideEndpoint.ready && schema.capabilities.playerOverride,
+      planManagement: resolver.ready && schema.capabilities.planManagement,
+      evaluator: resolver.ready && schema.capabilities.evaluator,
+      infographic: resolver.ready && schema.capabilities.infographic,
+      reliability: resolver.ready && schema.capabilities.reliability,
+    };
+    const overrideEndpointCheck: DefensiveV2ReadinessCheck = overrideEndpoint.ready
+      ? {
+          id: 'override_endpoint',
+          label: 'Endpoint de override',
+          state: 'ready',
+          detail: overrideEndpoint.result.overrideVersion,
+          requiredMigration: null,
+        }
+      : {
+          id: 'override_endpoint',
+          label: 'Endpoint de override',
+          state: 'missing',
+          detail: overrideEndpoint.error,
+          requiredMigration: 'Desplegar manage-player-defensive-override',
+        };
+    return {
+      ...schema,
+      state: !resolver.ready || !overrideEndpoint.ready ? 'missing' : schema.state,
+      resolverVersion: resolver.ready ? resolver.result.resolverVersion : null,
+      checks: [resolverCheck, overrideEndpointCheck, ...schema.checks],
+      capabilities,
+    };
+  }
+
+  async getDefensiveClassificationPrompt(className: string | null): Promise<{ ok: true; promptVersion: number; gameBuild: string; systemPrompt: string; userMessage: string; defensiveCount: number }> {
     return this.invoke('classify-defensives', { class: className, action: 'prompt' });
   }
 
   async submitDefensiveClassification(
     className: string | null,
     rawResponseText: string,
+    expectedGameBuild: string | null,
   ): Promise<{
     ok: true;
     applied: { spellId: number; name: string; survivalType: string }[];
@@ -275,9 +482,8 @@ export class EdgeFunctionsService {
     suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
     /** Pulls cuyo snapshot defensivo quedó materialmente obsoleto por survival type/CD/duración aplicados por la IA. */
-    pullIds: string[];
-  }> {
-    return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
+  } & DefensiveReanalysisQueueFields> {
+    return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText, expectedGameBuild });
   }
 
   /**
@@ -292,9 +498,9 @@ export class EdgeFunctionsService {
    * pulls de Monk): reanalizarlos todos DENTRO de esta misma llamada (o
    * encadenando invocaciones en el propio backend) agotaba la cuota de CPU
    * del edge function (WORKER_RESOURCE_LIMIT) y la respuesta nunca llegaba.
-   * Por eso esta función ya NO reanaliza nada — solo devuelve la lista, y es
-   * quien la llama (ver reanalyzeDefensivePressure más abajo, usado en
-   * defensive-catalog.component.ts) quien la recorre en secuencia.
+   * Por eso esta función ya NO reanaliza nada: registra batch+jobs durables y
+   * devuelve también la lista compatible de pulls. El cliente procesa una
+   * invocación por pull y puede retomar los jobs tras cerrar la pestaña.
    */
   async saveDefensiveEdit(edit: {
     class: string;
@@ -307,12 +513,12 @@ export class EdgeFunctionsService {
     specOverride?: string[] | null;
     /** §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31) — ver excluded en cooldown_catalog. undefined = no tocar. */
     excluded?: boolean;
-  }): Promise<{ ok: true; pullIds?: string[] }> {
+  }): Promise<{ ok: true } & DefensiveReanalysisQueueFields> {
     return this.invoke('save-defensive-edit', edit);
   }
 
   /** §"botón en ajustes → defensivos en una clase para limpiar sus defensivos y volver a calcularlos con el prompt" (feedback real, 2026-08-31): borra survival_type/reviewed/ai_classification/inferred_survival_type de TODA la clase (nunca spec_override ni CD/duración) — deja la clase en "sin clasificar" para reclasificar con el prompt actualizado. */
-  async resetClassDefensives(className: string): Promise<{ ok: true; resetCount: number; pullIds: string[] }> {
+  async resetClassDefensives(className: string): Promise<{ ok: true; resetCount: number } & DefensiveReanalysisQueueFields> {
     return this.invoke('reset-class-defensives', { class: className });
   }
 
@@ -324,8 +530,46 @@ export class EdgeFunctionsService {
    * defensive-catalog.component.ts tras editar un cooldown/duración —
    * nunca en bucle dentro de un edge function (ver saveDefensiveEdit).
    */
-  async reanalyzeDefensivePressure(pullId: string): Promise<{ ok: true; pullId: string; updated: number; skipped: number }> {
-    return this.invoke('reanalyze-defensive-pressure', { pullId });
+  async reanalyzeDefensivePressure(
+    pullId: string,
+    jobId?: string,
+  ): Promise<{ ok: true; pullId: string; updated: number; skipped: number; alreadyDone?: boolean; jobId?: string | null }> {
+    return this.invoke('reanalyze-defensive-pressure', { pullId, ...(jobId ? { jobId } : {}) });
+  }
+
+  async pendingDefensiveReanalysisJobs(
+    batchId?: string,
+    limit = 100,
+  ): Promise<{ ok: true; jobs: PendingDefensiveReanalysisJob[]; blockedCount: number; maxAttempts: number }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'pending', batchId: batchId ?? null, limit });
+  }
+
+  async defensiveReanalysisQueueStatus(batchId?: string): Promise<DefensiveReanalysisQueueStatusResult> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'status', batchId: batchId ?? null });
+  }
+
+  /** Reutiliza el batch y su progreso; solo reencola jobs fallidos. */
+  async retryDefensiveReanalysisQueue(
+    batchId?: string,
+  ): Promise<{ ok: true; retriedCount: number; batchIds: string[]; maxAttempts: number }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'retry', batchId: batchId ?? null });
+  }
+
+  async startControlledDefensiveBackfill(params: {
+    bossId: string;
+    difficulty: string;
+    sampleSize: number;
+  }): Promise<{ ok: true; batchId: string; reused: boolean; pullIds: string[]; jobs: DefensiveReanalysisJobRef[] }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'start_sample', ...params });
+  }
+
+  async controlledDefensiveBackfillReport(batchId: string): Promise<{
+    ok: true;
+    batchId: string;
+    progress: { total: number; completed: number; running: number; failed: number };
+    cases: ControlledDefensiveBackfillAuditCase[];
+  }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'sample_report', batchId });
   }
 
   /**
@@ -377,10 +621,71 @@ export class EdgeFunctionsService {
    */
   async syncMechanicDefensiveProfile(bossId: string, difficulties?: number[]): Promise<{
     ok: true;
-    results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number; totalFightsConsumed: number; exhausted: boolean }[];
+    results: {
+      difficulty: string;
+      referenceFightsUsed: number;
+      mechanicsProfiled: number;
+      /** Ausente solo si el frontend habla temporalmente con el sync legacy durante el rollout. */
+      occurrenceProfilesUpdated?: number;
+      totalFightsConsumed: number;
+      exhausted: boolean;
+    }[];
     minReferenceSampleFights: number;
   }> {
     return this.invoke('sync-mechanic-defensive-profile', { bossId, difficulties });
+  }
+
+  async syncLocalDefensiveProfile(bossId: string, difficulty: string): Promise<{
+    ok: true;
+    bossId: string;
+    difficulty: string;
+    eligiblePulls: number;
+    profilesUpdated: number;
+    syncRevision: string;
+  }> {
+    return this.invoke('sync-local-defensive-profile', { bossId, difficulty });
+  }
+
+  async createDefensivePlanDraft(input: DefensivePlanDraftInput): Promise<{ ok: true; plan: DefensivePlanVersionRow }> {
+    return this.invoke('manage-defensive-plan', { action: 'create_draft', ...input });
+  }
+
+  async generateDefensivePlan(input: {
+    bossId: string;
+    difficulty: string;
+    name: string;
+    mode: 'full' | 'partial' | 'no_plan';
+    members: {
+      playerName: string;
+      playerKey?: string;
+      raidGroup?: number | null;
+      role?: 'tank' | 'healer' | 'dps';
+      included?: boolean;
+    }[];
+    reservations?: Record<string, unknown>[];
+    maxSearchNodes?: number;
+    supersedesId?: string | null;
+    notes?: string | null;
+  }): Promise<{ ok: true; plan: DefensivePlanVersionRow; solver: Record<string, unknown> }> {
+    return this.invoke('generate-defensive-plan', input);
+  }
+
+  async publishDefensivePlan(planVersionId: string): Promise<{ ok: true; plan: DefensivePlanVersionRow }> {
+    return this.invoke('manage-defensive-plan', { action: 'publish', planVersionId });
+  }
+
+  async bindDefensivePlanToPull(
+    planVersionId: string,
+    pullId: string,
+    reason: string,
+  ): Promise<{ ok: true; binding: PullDefensivePlanBindingRow }> {
+    return this.invoke('manage-defensive-plan', { action: 'bind_pull', planVersionId, pullId, reason });
+  }
+
+  async evaluateDefensiveExecution(
+    pullId: string,
+  ): Promise<{ ok: true; pullId: string; evaluations: PlayerPullDefensiveEvaluationRow[] }> {
+    return this.invoke('evaluate-defensive-execution', { pullId });
   }
 
   /** Persiste los campos MANUALES de boss_mechanic_defensive_profile (requires_defensive/requires_group_split/group_split_notes/reviewed) — los reference_* solo los toca el sync. */

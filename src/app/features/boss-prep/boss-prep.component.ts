@@ -9,22 +9,42 @@
 // app.routes.ts/app.html.
 import { Component, computed, inject, signal } from '@angular/core';
 import { DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
-import { EdgeFunctionsService } from '../../core/edge-functions.service';
+import {
+  EdgeFunctionsService,
+  type ControlledDefensiveBackfillAuditCase,
+  type DefensiveReanalysisJobRef,
+  type DefensiveV2ReadinessResult,
+} from '../../core/edge-functions.service';
 import { ManifestService } from '../../core/manifest.service';
 import { BossMechanicDefensiveProfileService } from '../../core/boss-mechanic-defensive-profile.service';
 import { DefensiveCatalogService } from '../../core/defensive-catalog.service';
+import {
+  DefensivePreparationRosterService,
+  type DefensivePreparationPlayer,
+} from '../../core/defensive-preparation-roster.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
 import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
 import { ALL_CLASSES, specsForClass, mechanicAppliesToRole, roleFromSpec } from '../../shared/spec-role.util';
 import { defensivesForSpec } from '../../shared/defensive-spec-match.util';
 import { encodeMrtExport, spellTag, type MrtReminderInput, type MrtTrigger } from '../../shared/mrt/mrt-reminder-codec';
+import { exportDeployedPlanToMrt } from '../../shared/mrt/deployed-plan-mrt';
 import { autoAssignCascade } from '../../shared/mrt/auto-assign-cascade.util';
 import { errorMessage } from '../../shared/error-message.util';
 import { classColor } from '../../shared/format.util';
 import { ClassIconComponent } from '../../shared/class-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import { MechanicResolutionIconComponent } from '../../shared/mechanic-resolution-icon.component';
-import type { BossMechanicCandidateRow, BossMechanicDefensiveProfileRow, MechanicDefensiveAssignmentRow, CooldownCatalogRow } from '../../shared/models/domain';
+import type {
+  BossMechanicCandidateRow,
+  BossMechanicDefensiveProfileRow,
+  CooldownCatalogRow,
+  DefensivePlanMemberRow,
+  DefensivePlanSlotRow,
+  DefensivePlanVersionRow,
+  MechanicDefensiveAssignmentRow,
+  ResolvedDefensiveRow,
+  ResolvedPlayerDefensiveKitResult,
+} from '../../shared/models/domain';
 
 // §Validado en real (2026-08-30, ver mrt-reminder-codec.ts): un export real
 // decodificado desde el juego en Normal trajo difficultyId=14 — confirma
@@ -60,14 +80,16 @@ interface ExportResult {
   spec: string;
   text: string;
   skippedForMissingTiming: string[];
+  timeFallbacks: string[];
 }
 
 interface TimelineEntry {
+  trackKey: string;
   abilityId: number;
   name: string;
   timeMs: number;
   priority: number | null;
-  assignment: MechanicDefensiveAssignmentRow | null;
+  assignment: MechanicDefensiveAssignmentRow | DefensivePlanSlotRow | null;
   defensiveName: string | null;
   cooldownMs: number | null;
   /** El mismo defensivo ya se habría usado antes en esta cronología y su cooldown no le habría dado tiempo a estar libre de nuevo aquí. */
@@ -86,6 +108,7 @@ export class BossPrepComponent {
   private manifestService = inject(ManifestService);
   private profileService = inject(BossMechanicDefensiveProfileService);
   private defensiveCatalogService = inject(DefensiveCatalogService);
+  private defensivePreparationRoster = inject(DefensivePreparationRosterService);
   private reportsService = inject(ReportsService);
 
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
@@ -97,12 +120,52 @@ export class BossPrepComponent {
   loadingBosses = signal(true);
   selectedEncounterId = signal<number | null>(null);
   selectedDifficultyId = signal<number | null>(null);
+  assignmentView = signal<'spec' | 'player'>('spec');
+  preparationPlayers = signal<DefensivePreparationPlayer[]>([]);
+  loadingPreparationPlayers = signal(false);
+  preparationPlayersError = signal<string | null>(null);
+  selectedPlayerCharacterId = signal<number | null>(null);
+  selectedPlayerKit = signal<ResolvedPlayerDefensiveKitResult | null>(null);
+  loadingSelectedPlayerKit = signal(false);
+  selectedPlayerKitError = signal<string | null>(null);
+  private selectedPlayerKitRequestId = 0;
+  expandedKitSpellId = signal<number | null>(null);
+  editingOverrideSpellId = signal<number | null>(null);
+  overrideCooldownSeconds = signal('');
+  overrideDurationSeconds = signal('');
+  overrideReason = signal('');
+  overrideConfirmKey = signal<string | null>(null);
+  savingOverride = signal(false);
+  overrideResult = signal<string | null>(null);
+  draftInvalidatedByOverride = signal(false);
 
   candidates = signal<BossMechanicCandidateRow[]>([]);
   profiles = signal<BossMechanicDefensiveProfileRow[]>([]);
   assignments = signal<MechanicDefensiveAssignmentRow[]>([]);
+  planVersions = signal<DefensivePlanVersionRow[]>([]);
+  activePlanVersion = signal<DefensivePlanVersionRow | null>(null);
+  planMembers = signal<DefensivePlanMemberRow[]>([]);
+  planSlots = signal<DefensivePlanSlotRow[]>([]);
   loadingRows = signal(false);
   error = signal<string | null>(null);
+
+  v2Readiness = signal<DefensiveV2ReadinessResult | null>(null);
+  v2ReadinessLoading = signal(true);
+  v2ReadinessError = signal<string | null>(null);
+  v2ReadinessDetailsOpen = signal(false);
+  private v2ReadinessTask: Promise<void> | null = null;
+
+  backfillSampleSize = signal(5);
+  backfillBatchId = signal<string | null>(null);
+  backfillRunning = signal(false);
+  backfillProgress = signal<{ total: number; completed: number; running: number; failed: number } | null>(null);
+  backfillAudit = signal<ControlledDefensiveBackfillAuditCase[]>([]);
+  backfillError = signal<string | null>(null);
+  backfillReused = signal(false);
+  backfillProgressPercent = computed(() => {
+    const progress = this.backfillProgress();
+    return progress?.total ? Math.round((progress.completed / progress.total) * 100) : 0;
+  });
 
   cooldownCatalog = signal<CooldownCatalogRow[]>([]);
 
@@ -124,6 +187,44 @@ export class BossPrepComponent {
 
   selectedBoss = computed(() => this.bosses().find((b) => b.encounterId === this.selectedEncounterId()) ?? null);
   selectedDifficultyName = computed(() => (this.selectedDifficultyId() != null ? WCL_DIFFICULTY_NAME_BY_ID[this.selectedDifficultyId()!] : null));
+  selectedPreparationPlayer = computed(
+    () => this.preparationPlayers().find((player) => player.characterId === this.selectedPlayerCharacterId()) ?? null,
+  );
+  selectedPlayerBuildState = computed<'fresh_verified' | 'inferred' | 'stale' | 'unknown' | 'changed_after_draft'>(() => {
+    const player = this.selectedPreparationPlayer();
+    if (!player) return 'unknown';
+    const draft = this.activePlanVersion()?.status === 'draft' ? this.activePlanVersion() : null;
+    const member = draft
+      ? this.planMembers().find(
+          (candidate) =>
+            candidate.character_id === player.characterId ||
+            candidate.player_name.toLocaleLowerCase() === player.name.toLocaleLowerCase(),
+        )
+      : null;
+    if (
+      member?.build_fingerprint &&
+      player.buildFingerprint &&
+      member.build_fingerprint !== player.buildFingerprint
+    ) {
+      return 'changed_after_draft';
+    }
+    return player.freshness;
+  });
+  selectedPlayerEffectiveKit = computed(() =>
+    (this.selectedPlayerKit()?.kit ?? []).filter((defensive) => defensive.eligible),
+  );
+  exactOverrideScopeReady = computed(() => {
+    const source = this.selectedPlayerKit()?.sourceBuild;
+    const player = this.selectedPreparationPlayer();
+    const state = this.selectedPlayerBuildState();
+    return Boolean(
+      player?.specName &&
+      this.v2Readiness()?.capabilities.playerOverride === true &&
+      source?.gameBuild &&
+      source.fingerprint &&
+      (state === 'fresh_verified' || state === 'inferred' || state === 'changed_after_draft'),
+    );
+  });
 
   /** Mecánica + su perfil de daño/timing (si ya se sincronizó) + sus asignaciones — una fila de la tabla. */
   mechanicRows = computed(() => {
@@ -145,6 +246,317 @@ export class BossPrepComponent {
   constructor() {
     void this.loadBosses();
     void this.loadCooldownCatalog();
+    void this.ensureV2Readiness();
+  }
+
+  private ensureV2Readiness(): Promise<void> {
+    this.v2ReadinessTask ??= this.loadV2Readiness();
+    return this.v2ReadinessTask;
+  }
+
+  private async loadV2Readiness(): Promise<void> {
+    this.v2ReadinessLoading.set(true);
+    this.v2ReadinessError.set(null);
+    try {
+      const readiness = await this.edgeFunctions.defensiveV2Readiness();
+      this.v2Readiness.set(readiness);
+      if (!readiness.capabilities.playerMode && this.assignmentView() === 'player') this.assignmentView.set('spec');
+      if (readiness.capabilities.playerMode && !this.preparationPlayers().length) {
+        void this.loadPreparationPlayers();
+      }
+    } catch (err) {
+      this.v2Readiness.set(null);
+      this.v2ReadinessError.set(errorMessage(err));
+      if (this.assignmentView() === 'player') this.assignmentView.set('spec');
+    } finally {
+      this.v2ReadinessLoading.set(false);
+    }
+  }
+
+  selectAssignmentView(view: 'spec' | 'player'): void {
+    this.assignmentView.set(view);
+    this.timelineEntries.set([]);
+    if (view === 'player' && this.v2Readiness()?.capabilities.playerMode && !this.preparationPlayers().length) {
+      void this.loadPreparationPlayers();
+    }
+  }
+
+  private async loadPreparationPlayers(): Promise<void> {
+    if (this.loadingPreparationPlayers()) return;
+    this.loadingPreparationPlayers.set(true);
+    this.preparationPlayersError.set(null);
+    try {
+      const players = await this.defensivePreparationRoster.listPlayers();
+      this.preparationPlayers.set(players);
+      if (this.selectedPlayerCharacterId() != null && !players.some((player) => player.characterId === this.selectedPlayerCharacterId())) {
+        this.selectedPlayerCharacterId.set(null);
+        this.selectedPlayerKit.set(null);
+      }
+    } catch (err) {
+      this.preparationPlayersError.set(errorMessage(err));
+      this.preparationPlayers.set([]);
+    } finally {
+      this.loadingPreparationPlayers.set(false);
+    }
+  }
+
+  async selectPreparationPlayer(rawCharacterId: string): Promise<void> {
+    const requestId = ++this.selectedPlayerKitRequestId;
+    const characterId = Number(rawCharacterId);
+    this.selectedPlayerCharacterId.set(Number.isInteger(characterId) && characterId > 0 ? characterId : null);
+    this.selectedPlayerKit.set(null);
+    this.selectedPlayerKitError.set(null);
+    this.loadingSelectedPlayerKit.set(false);
+    this.expandedKitSpellId.set(null);
+    this.editingOverrideSpellId.set(null);
+    this.overrideResult.set(null);
+    const player = this.selectedPreparationPlayer();
+    if (!player) return;
+    this.loadingSelectedPlayerKit.set(true);
+    try {
+      const resolved = await this.edgeFunctions.resolvePlayerDefensiveKit({
+          playerName: player.name,
+          characterId: player.characterId,
+          className: player.className,
+          includeExternal: true,
+        });
+      if (requestId === this.selectedPlayerKitRequestId && this.selectedPlayerCharacterId() === player.characterId) {
+        this.selectedPlayerKit.set(resolved);
+      }
+    } catch (err) {
+      if (requestId === this.selectedPlayerKitRequestId) this.selectedPlayerKitError.set(errorMessage(err));
+    } finally {
+      if (requestId === this.selectedPlayerKitRequestId) this.loadingSelectedPlayerKit.set(false);
+    }
+  }
+
+  playerBuildStateLabel(): string {
+    switch (this.selectedPlayerBuildState()) {
+      case 'fresh_verified': return 'Fresco · verificado';
+      case 'inferred': return 'Inferido';
+      case 'stale': return 'Desactualizado';
+      case 'changed_after_draft': return 'Cambió después del borrador';
+      default: return 'Build desconocido';
+    }
+  }
+
+  toggleKitInspector(spellId: number): void {
+    this.expandedKitSpellId.set(this.expandedKitSpellId() === spellId ? null : spellId);
+  }
+
+  defensiveBaseValue(defensive: ResolvedDefensiveRow, field: 'cooldown_ms' | 'duration_ms'): number | null {
+    const step = defensive.provenance.find((item) => item.kind === 'catalog_base' && item.field === field);
+    return typeof step?.after === 'number' ? step.after : null;
+  }
+
+  defensiveAutomaticValue(defensive: ResolvedDefensiveRow, field: 'cooldown_ms' | 'duration_ms'): number | null {
+    const override = defensive.provenance.find((item) => item.kind === 'player_override' && item.field === field);
+    const value = override ? override.before : field === 'cooldown_ms' ? defensive.effectiveCooldownMs : defensive.effectiveDurationMs;
+    return typeof value === 'number' ? value : null;
+  }
+
+  defensiveHasManualOverride(defensive: ResolvedDefensiveRow): boolean {
+    return defensive.provenance.some((step) => step.kind === 'player_override');
+  }
+
+  defensiveDeltaMs(defensive: ResolvedDefensiveRow, field: 'cooldown_ms' | 'duration_ms'): number | null {
+    const base = this.defensiveBaseValue(defensive, field);
+    const automatic = this.defensiveAutomaticValue(defensive, field);
+    return base == null || automatic == null ? null : automatic - base;
+  }
+
+  defensiveDeltaLabel(defensive: ResolvedDefensiveRow, field: 'cooldown_ms' | 'duration_ms'): string {
+    const delta = this.defensiveDeltaMs(defensive, field);
+    if (delta == null || delta === 0) return 'sin cambio automático';
+    return `${delta > 0 ? '+' : '−'}${Math.abs(delta) / 1000}s por build`;
+  }
+
+  beginOverrideEdit(defensive: ResolvedDefensiveRow): void {
+    this.editingOverrideSpellId.set(defensive.spellId);
+    this.overrideCooldownSeconds.set(defensive.effectiveCooldownMs == null ? '' : String(defensive.effectiveCooldownMs / 1000));
+    this.overrideDurationSeconds.set(defensive.effectiveDurationMs == null ? '' : String(defensive.effectiveDurationMs / 1000));
+    this.overrideReason.set('');
+    this.overrideConfirmKey.set(null);
+    this.overrideResult.set(null);
+  }
+
+  cancelOverrideEdit(): void {
+    this.editingOverrideSpellId.set(null);
+    this.overrideConfirmKey.set(null);
+  }
+
+  requestSaveOverride(defensive: ResolvedDefensiveRow): void {
+    const key = `save:${defensive.spellId}`;
+    if (this.overrideConfirmKey() !== key) {
+      this.overrideConfirmKey.set(key);
+      return;
+    }
+    void this.persistPlayerOverride(defensive, 'save');
+  }
+
+  requestDeactivateOverride(defensive: ResolvedDefensiveRow): void {
+    const key = `deactivate:${defensive.spellId}`;
+    if (this.overrideConfirmKey() !== key) {
+      this.overrideConfirmKey.set(key);
+      this.overrideReason.set('Restablecer el valor automático verificado.');
+      return;
+    }
+    void this.persistPlayerOverride(defensive, 'deactivate');
+  }
+
+  private async persistPlayerOverride(defensive: ResolvedDefensiveRow, action: 'save' | 'deactivate'): Promise<void> {
+    const player = this.selectedPreparationPlayer();
+    const source = this.selectedPlayerKit()?.sourceBuild;
+    if (!player?.specName || !source?.gameBuild || !source.fingerprint || !this.exactOverrideScopeReady()) {
+      this.selectedPlayerKitError.set('No hay fingerprint fiable; solo se permite una corrección de snapshot de borrador.');
+      return;
+    }
+    const cooldownSeconds = this.overrideCooldownSeconds().trim() === '' ? null : Number(this.overrideCooldownSeconds());
+    const durationSeconds = this.overrideDurationSeconds().trim() === '' ? null : Number(this.overrideDurationSeconds());
+    if (
+      action === 'save' &&
+      ((cooldownSeconds != null && (!Number.isFinite(cooldownSeconds) || cooldownSeconds < 0)) ||
+        (durationSeconds != null && (!Number.isFinite(durationSeconds) || durationSeconds < 0)) ||
+        (cooldownSeconds == null && durationSeconds == null))
+    ) {
+      this.selectedPlayerKitError.set('Introduce cooldown o duración efectivos válidos.');
+      return;
+    }
+    if (!this.overrideReason().trim()) {
+      this.selectedPlayerKitError.set('El motivo auditable es obligatorio.');
+      return;
+    }
+    this.savingOverride.set(true);
+    this.selectedPlayerKitError.set(null);
+    try {
+      await this.edgeFunctions.managePlayerDefensiveOverride({
+        action,
+        characterId: player.characterId,
+        playerName: player.name,
+        className: player.className,
+        specName: player.specName,
+        spellId: defensive.spellId,
+        gameBuild: source.gameBuild,
+        buildFingerprint: source.fingerprint,
+        ...(action === 'save'
+          ? {
+              effectiveCooldownMs: cooldownSeconds == null ? null : Math.round(cooldownSeconds * 1000),
+              effectiveDurationMs: durationSeconds == null ? null : Math.round(durationSeconds * 1000),
+            }
+          : {}),
+        reason: this.overrideReason().trim(),
+      });
+      const resultMessage = action === 'save'
+        ? 'Override exacto guardado. El borrador activo queda stale; no se reanalizó histórico.'
+        : 'Override desactivado. Se restauró el cálculo automático; el borrador activo queda stale.';
+      this.draftInvalidatedByOverride.set(true);
+      this.editingOverrideSpellId.set(null);
+      this.overrideConfirmKey.set(null);
+      await this.selectPreparationPlayer(String(player.characterId));
+      this.overrideResult.set(resultMessage);
+    } catch (err) {
+      this.selectedPlayerKitError.set(errorMessage(err));
+    } finally {
+      this.savingOverride.set(false);
+    }
+  }
+
+  formatResolutionValue(field: string, value: number | string | boolean | null): string {
+    if (value == null) return '—';
+    if (typeof value === 'number' && ['cooldown_ms', 'duration_ms', 'recharge_ms'].includes(field)) return `${value / 1000}s`;
+    return String(value);
+  }
+
+  async retryV2Readiness(): Promise<void> {
+    this.v2ReadinessTask = null;
+    await this.ensureV2Readiness();
+    if (this.selectedEncounterId() != null) await this.loadRows();
+  }
+
+  toggleV2ReadinessDetails(): void {
+    this.v2ReadinessDetailsOpen.update((open) => !open);
+  }
+
+  onBackfillSampleSize(raw: string): void {
+    const value = Math.floor(Number(raw));
+    if (Number.isInteger(value) && value >= 5 && value <= 10) this.backfillSampleSize.set(value);
+  }
+
+  async startControlledBackfill(): Promise<void> {
+    const bossId = this.selectedEncounterId();
+    const difficulty = this.selectedDifficultyName();
+    if (bossId == null || !difficulty || this.backfillRunning()) return;
+    if (this.v2Readiness()?.capabilities.evaluator !== true) {
+      this.backfillError.set('Resolver, M7 y M8 deben estar listos antes de ejecutar un backfill v2.');
+      return;
+    }
+    this.backfillRunning.set(true);
+    this.backfillError.set(null);
+    this.backfillAudit.set([]);
+    try {
+      const started = await this.edgeFunctions.startControlledDefensiveBackfill({
+        bossId: String(bossId),
+        difficulty,
+        sampleSize: this.backfillSampleSize(),
+      });
+      this.backfillBatchId.set(started.batchId);
+      this.backfillReused.set(started.reused);
+      this.backfillProgress.set({ total: started.pullIds.length, completed: 0, running: 0, failed: 0 });
+      await this.runControlledBackfillJobs(started.jobs);
+    } catch (err) {
+      this.backfillError.set(errorMessage(err));
+    } finally {
+      this.backfillRunning.set(false);
+    }
+  }
+
+  private async runControlledBackfillJobs(jobs: DefensiveReanalysisJobRef[]): Promise<void> {
+    let completed = 0;
+    let failed = 0;
+    const total = Math.max(this.backfillProgress()?.total ?? 0, jobs.length);
+    for (const job of jobs) {
+      this.backfillProgress.set({ total, completed, running: 1, failed });
+      try {
+        await this.edgeFunctions.reanalyzeDefensivePressure(job.pullId, job.id);
+        completed++;
+      } catch (err) {
+        failed++;
+        console.error(`Falló el pull ${job.pullId} del backfill controlado:`, err);
+      }
+      this.backfillProgress.set({ total, completed, running: 0, failed });
+    }
+    await this.refreshControlledBackfillReport();
+    this.v2ReadinessTask = null;
+    await this.ensureV2Readiness();
+  }
+
+  async refreshControlledBackfillReport(): Promise<void> {
+    const batchId = this.backfillBatchId();
+    if (!batchId) return;
+    try {
+      const report = await this.edgeFunctions.controlledDefensiveBackfillReport(batchId);
+      this.backfillProgress.set(report.progress);
+      this.backfillAudit.set(report.cases);
+      this.backfillError.set(null);
+    } catch (err) {
+      this.backfillError.set(errorMessage(err));
+    }
+  }
+
+  async retryControlledBackfillFailures(): Promise<void> {
+    const batchId = this.backfillBatchId();
+    if (!batchId || this.backfillRunning()) return;
+    this.backfillRunning.set(true);
+    this.backfillError.set(null);
+    try {
+      await this.edgeFunctions.retryDefensiveReanalysisQueue(batchId);
+      const pending = await this.edgeFunctions.pendingDefensiveReanalysisJobs(batchId, 10);
+      await this.runControlledBackfillJobs(pending.jobs);
+    } catch (err) {
+      this.backfillError.set(errorMessage(err));
+    } finally {
+      this.backfillRunning.set(false);
+    }
   }
 
   async loadBosses(): Promise<void> {
@@ -186,6 +598,11 @@ export class BossPrepComponent {
     this.assignmentDraft.set(null);
     this.exportResult.set(null);
     this.syncSummary.set(null);
+    this.backfillBatchId.set(null);
+    this.backfillProgress.set(null);
+    this.backfillAudit.set([]);
+    this.backfillError.set(null);
+    this.backfillReused.set(false);
   }
 
   async loadRows(): Promise<void> {
@@ -195,16 +612,32 @@ export class BossPrepComponent {
     this.loadingRows.set(true);
     this.error.set(null);
     try {
-      const [candidates, profiles, assignments, syncState] = await Promise.all([
+      await this.ensureV2Readiness();
+      const planManagementReady = this.v2Readiness()?.capabilities.planManagement === true;
+      const [candidates, profiles, assignments, syncState, planVersions] = await Promise.all([
         this.manifestService.listCandidates(String(bossId), difficulty),
         this.profileService.listProfiles(String(bossId), difficulty),
         this.profileService.listAssignments(String(bossId), difficulty),
         this.profileService.getSyncState(String(bossId), difficulty),
+        planManagementReady
+          ? this.profileService.listPlanVersions(String(bossId), difficulty)
+          : Promise.resolve([] as DefensivePlanVersionRow[]),
       ]);
       this.candidates.set(candidates);
       this.profiles.set(profiles);
       this.assignments.set(assignments);
       this.syncState.set(syncState);
+      this.planVersions.set(planVersions);
+      const activePlan = planVersions[0] ?? null;
+      this.activePlanVersion.set(activePlan);
+      if (activePlan) {
+        const contents = await this.profileService.getPlanContents(activePlan.id);
+        this.planMembers.set(contents.members);
+        this.planSlots.set(contents.slots);
+      } else {
+        this.planMembers.set([]);
+        this.planSlots.set([]);
+      }
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
@@ -221,6 +654,9 @@ export class BossPrepComponent {
     this.syncSummary.set(null);
     try {
       const res = await this.edgeFunctions.syncMechanicDefensiveProfile(String(bossId), [difficultyId]);
+      const difficulty = this.selectedDifficultyName();
+      if (!difficulty) throw new Error('No se pudo resolver la dificultad seleccionada.');
+      const local = await this.edgeFunctions.syncLocalDefensiveProfile(String(bossId), difficulty);
       const r = res.results[0];
       // §"muchos muchos muchos logs" (feedback real, 2026-08-31): cada
       // sync trae la SIGUIENTE tanda, no repite — totalFightsConsumed es
@@ -228,7 +664,7 @@ export class BossPrepComponent {
       // cuando el leaderboard ya no tiene más logs nuevos que dar.
       this.syncSummary.set(
         r
-          ? `+${r.referenceFightsUsed} logs nuevos (${r.mechanicsProfiled} mecánicas actualizadas) — ${r.totalFightsConsumed} acumulados en total.` +
+          ? `+${r.referenceFightsUsed} logs world (${r.mechanicsProfiled} mecánicas y ${r.occurrenceProfilesUpdated ?? 0} ocurrencias); evidencia local reconstruida desde ${local.eligiblePulls} pulls (${local.profilesUpdated} perfiles) — ${r.totalFightsConsumed} world acumulados.` +
             (r.exhausted ? ' El leaderboard público no tiene (por ahora) más logs nuevos que dar.' : '')
           : 'Sin resultado — revisa que el boss tenga mecánicas curadas en Ajustes → Mecánicas.',
       );
@@ -473,11 +909,68 @@ export class BossPrepComponent {
 
   // --- export MRT ---
 
-  generateExport(cls: string, spec: string): void {
+  async generateExport(cls: string, spec: string): Promise<void> {
     const bossId = this.selectedEncounterId();
     const wclDifficultyId = this.selectedDifficultyId();
     if (bossId == null || wclDifficultyId == null) return;
     const mrtDifficultyId = MRT_DIFFICULTY_ID_BY_WCL_DIFFICULTY_ID[wclDifficultyId] ?? wclDifficultyId;
+
+    const publishedPlan = this.planVersions().find((plan) => plan.status === 'published') ?? null;
+    if (publishedPlan) {
+      try {
+        const contents = this.activePlanVersion()?.id === publishedPlan.id
+          ? { members: this.planMembers(), slots: this.planSlots() }
+          : await this.profileService.getPlanContents(publishedPlan.id);
+        const selectedMembers = contents.members.filter((member) => member.included && member.class === cls && member.spec === spec);
+        const selectedKeys = new Set(selectedMembers.map((member) => member.player_key));
+        const selectedSlots = contents.slots.filter((slot) => slot.assigned_player_key != null && selectedKeys.has(slot.assigned_player_key));
+        const exported = exportDeployedPlanToMrt(
+          {
+            id: publishedPlan.id,
+            name: publishedPlan.name,
+            bossId: Number(bossId),
+            difficultyId: mrtDifficultyId,
+          },
+          selectedMembers.map((member) => ({ playerKey: member.player_key, playerName: member.player_name })),
+          selectedSlots.map((slot) => ({
+            id: slot.id,
+            abilityId: slot.ability_id,
+            occurrenceIndex: slot.occurrence_index,
+            occurrenceTimeMs: slot.occurrence_time_ms,
+            coverageStatus: slot.coverage_status,
+            assignedPlayerKey: slot.assigned_player_key,
+            defensiveSpellId: slot.defensive_spell_id,
+            prewarnMs: slot.prewarn_ms,
+            triggerMode: slot.trigger_mode,
+            bossmodSpellId: slot.bossmod_spell_id,
+            bossmodCounter: slot.bossmod_counter,
+            bossmodCounterVerified: slot.bossmod_counter_verified,
+            assignedGroups: slot.assigned_groups,
+          })),
+          new Map(this.candidates().map((candidate) => [candidate.ability_id, candidate.name])),
+          new Map(this.cooldownCatalog().map((defensive) => [defensive.spell_id, defensive.name])),
+        );
+        const slotById = new Map(contents.slots.map((slot) => [slot.id, slot]));
+        this.exportResult.set({
+          class: cls,
+          spec,
+          text: exported.text,
+          skippedForMissingTiming: [],
+          timeFallbacks: exported.timeFallbackSlotIds.map((id) => {
+            const slot = slotById.get(id);
+            return slot
+              ? `${this.candidates().find((candidate) => candidate.ability_id === slot.ability_id)?.name ?? slot.ability_id} #${slot.occurrence_index}`
+              : id;
+          }),
+        });
+        this.copyStatus.set('idle');
+        this.exportModalOpen.set(true);
+        return;
+      } catch (err) {
+        this.error.set(errorMessage(err));
+        return;
+      }
+    }
 
     const reminders: MrtReminderInput[] = [];
     const skipped: string[] = [];
@@ -519,7 +1012,7 @@ export class BossPrepComponent {
       return;
     }
     const profileName = `Preparación - ${this.selectedBoss()?.bossName ?? ''} ${this.selectedDifficultyName() ?? ''} - ${spec}`;
-    this.exportResult.set({ class: cls, spec, text: encodeMrtExport(profileName, reminders), skippedForMissingTiming: skipped });
+    this.exportResult.set({ class: cls, spec, text: encodeMrtExport(profileName, reminders), skippedForMissingTiming: skipped, timeFallbacks: [] });
     this.copyStatus.set('idle');
     this.exportModalOpen.set(true);
   }
@@ -547,6 +1040,58 @@ export class BossPrepComponent {
   openTimeline(): void {
     const cls = this.autoAssignClass();
     const spec = this.autoAssignSpec();
+    if (this.planSlots().length) {
+      const membersByKey = new Map(this.planMembers().map((member) => [member.player_key, member]));
+      const selectedPlayer = this.selectedPreparationPlayer();
+      const relevantPlayerKeys = new Set(
+        this.planMembers()
+          .filter((member) => {
+            if (!member.included) return false;
+            if (this.assignmentView() === 'spec') return member.class === cls && member.spec === spec;
+            return Boolean(
+              selectedPlayer &&
+              (member.character_id === selectedPlayer.characterId ||
+                member.player_name.toLocaleLowerCase() === selectedPlayer.name.toLocaleLowerCase()),
+            );
+          })
+          .map((member) => member.player_key),
+      );
+      const entries: TimelineEntry[] = this.planSlots()
+        .filter((slot) =>
+          this.assignmentView() === 'spec'
+            ? slot.assigned_player_key == null || relevantPlayerKeys.has(slot.assigned_player_key)
+            : (slot.assigned_player_key != null && relevantPlayerKeys.has(slot.assigned_player_key)) ||
+              (slot.target_player_key != null && relevantPlayerKeys.has(slot.target_player_key)),
+        )
+        .map((slot) => {
+          const member = slot.assigned_player_key ? membersByKey.get(slot.assigned_player_key) : null;
+          const defensiveName = slot.defensive_spell_id
+            ? this.cooldownCatalog().find((entry) => entry.spell_id === slot.defensive_spell_id)?.name ?? `#${slot.defensive_spell_id}`
+            : null;
+          return {
+            trackKey: `${slot.ability_id}:${slot.occurrence_index}:${slot.slot_index}`,
+            abilityId: slot.ability_id,
+            name: `${this.candidates().find((candidate) => candidate.ability_id === slot.ability_id)?.name ?? `Mecánica ${slot.ability_id}`} #${slot.occurrence_index}`,
+            timeMs: slot.occurrence_time_ms,
+            priority: slot.priority,
+            assignment: slot.coverage_status === 'uncovered' || slot.coverage_status === 'excluded' ? null : slot,
+            defensiveName: defensiveName ? `${member?.player_name ?? slot.assigned_player_key} · ${defensiveName}` : null,
+            cooldownMs: slot.effective_cooldown_ms_snapshot,
+            conflict: false,
+          };
+        })
+        .sort((left, right) => left.timeMs - right.timeMs || left.abilityId - right.abilityId || left.trackKey.localeCompare(right.trackKey));
+      this.timelineEntries.set(entries);
+      this.timelineOpen.set(true);
+      return;
+    }
+    if (this.assignmentView() === 'player') {
+      // La vista por jugador no fabrica una cascada local desde el catálogo.
+      // Hasta que exista un draft v2 global solo puede mostrar el kit resuelto.
+      this.timelineEntries.set([]);
+      this.timelineOpen.set(true);
+      return;
+    }
     const role = roleFromSpec(cls, spec);
     const relevant = this.candidates()
       .filter((c) => {
@@ -564,7 +1109,7 @@ export class BossPrepComponent {
     const entries: TimelineEntry[] = relevant.map((e) => {
       const assignment = this.assignments().find((a) => a.ability_id === e.candidate.ability_id && a.class === cls && a.spec === spec) ?? null;
       const base = { abilityId: e.candidate.ability_id, name: e.candidate.name, timeMs: e.timeMs, priority: e.profile?.priority ?? null };
-      if (!assignment) return { ...base, assignment: null, defensiveName: null, cooldownMs: null, conflict: false };
+      if (!assignment) return { ...base, trackKey: String(e.candidate.ability_id), assignment: null, defensiveName: null, cooldownMs: null, conflict: false };
       const cd = this.cooldownCatalog().find((c) => c.spell_id === assignment.defensive_spell_id);
       const cooldownMs = cd?.base_cooldown_ms ?? null;
       const prevAvailable = nextAvailableMs.get(assignment.defensive_spell_id) ?? 0;
@@ -574,7 +1119,7 @@ export class BossPrepComponent {
       // el próximo hueco disponible sigue siendo el de antes (el conflicto
       // se arrastra hasta que pase suficiente tiempo, como en la realidad).
       if (!conflict && cooldownMs != null) nextAvailableMs.set(assignment.defensive_spell_id, e.timeMs + cooldownMs);
-      return { ...base, assignment, defensiveName: cd?.name ?? `#${assignment.defensive_spell_id}`, cooldownMs, conflict };
+      return { ...base, trackKey: String(e.candidate.ability_id), assignment, defensiveName: cd?.name ?? `#${assignment.defensive_spell_id}`, cooldownMs, conflict };
     });
     this.timelineEntries.set(entries);
     this.timelineOpen.set(true);
@@ -582,6 +1127,13 @@ export class BossPrepComponent {
 
   closeTimeline(): void {
     this.timelineOpen.set(false);
+  }
+
+  timelineTitle(): string {
+    const player = this.selectedPreparationPlayer();
+    return this.assignmentView() === 'player'
+      ? `Cronología — ${player?.name ?? 'sin jugador'}`
+      : `Cronología — ${this.autoAssignClass()} · ${this.autoAssignSpec()}`;
   }
 
   formatFightTime(ms: number): string {

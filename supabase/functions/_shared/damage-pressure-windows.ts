@@ -109,7 +109,7 @@ export interface DamageWindowOption {
 
 export interface DamageWindowCoverage {
   covered: boolean;
-  /** Solo tiene sentido cuando !covered — había algo que pulsar (fuera de 'emergency') y no se pulsó. */
+  /** @deprecated Compatibilidad v1; el evaluator v2 decide oportunidades. */
   coverable: boolean;
   options: DamageWindowOption[];
 }

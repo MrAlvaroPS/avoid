@@ -2,6 +2,9 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { errorMessage } from '../_shared/error-message.ts';
+import { getCurrentBuildNamespace } from '../_shared/blizzard-client.ts';
+import { buildFromBlizzardNamespace } from '../_shared/wago-db2-client.ts';
+import { enqueueDefensiveReanalysis } from '../_shared/defensive-reanalysis-queue.ts';
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -9,9 +12,12 @@ function todayIso(): string {
 
 const SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
 const CATEGORIES = new Set(['personal_defensive', 'semi_defensive', 'external_defensive', 'utility']);
+const TARGETING_MODES = new Set(['self', 'ally', 'both', 'raid', 'unknown']);
 const CONFIDENCES = new Set<unknown>(['high', 'medium', 'low']);
 const MODIFIER_OPERATIONS = new Set(['subtract_seconds', 'add_seconds', 'multiply', 'set_seconds', 'charges_add']);
 const MODIFIER_CONDITIONS = new Set(['always', 'conditional']);
+const MODIFIER_EFFECT_FIELDS = new Set(['cooldown_ms', 'duration_ms', 'charges', 'recharge_ms']);
+const PROMPT_VERSION = 7;
 
 const SURVIVAL_TYPE_GLOSSARY = `- mitigation ("Mitigación"): reduce el daño que finalmente recibes ANTES de que te reste vida — DR%, armadura, reducción física/mágica específica, dodge/parry si es un defensivo activo, damage smoothing/stagger.
 - absorption ("Absorción"): añade una capa/pool de vida aparte que el daño tiene que consumir antes de afectar tu HP — escudos, barriers, absorbs, efectos tipo Ignore Pain. Se separa de mitigation porque se agota, se acumula o se rompe de una vez, no reduce un porcentaje continuo.
@@ -20,17 +26,21 @@ const SURVIVAL_TYPE_GLOSSARY = `- mitigation ("Mitigación"): reduce el daño qu
 
 Regla de desambiguación: mitigation evita PARTE del daño antes de que llegue; absorption intercepta daño con un pool; sustain repara HP ya perdido; emergency aumenta drásticamente el margen ante daño letal. Si mezcla mecanismos, usa el que define su uso principal y explica la mezcla en notes.`;
 
-const CATEGORY_GLOSSARY = `- personal_defensive: protege al propio caster y su uso defensivo es esencialmente personal/self-only.
-- semi_defensive: puede funcionar como un defensivo personal real al lanzarlo sobre uno mismo, aunque también pueda lanzarse sobre aliados o tenga otros usos. IMPORTANTE: un escudo targeteable como Power Word: Shield entra aquí si el Priest puede usarlo sobre sí mismo.
-- external_defensive: protege a otro jugador y no es una herramienta personal utilizable de forma equivalente por el caster.
-- utility: no aporta por sí mismo mitigación/absorción/sustain/emergencia relevante para sobrevivir una mecánica de raid.`;
+const CATEGORY_GLOSSARY = `- personal_defensive: recurso personal; protege al caster y su targetingMode debe ser self.
+- semi_defensive: recurso personal compartible; puede proteger al caster o a un aliado de forma equivalente y su targetingMode debe ser both. Power Word: Shield entra aquí si el Priest puede lanzárselo a sí mismo.
+- external_defensive: recurso de raid, NO un defensivo personal del caster. Su targetingMode debe ser ally si se lanza sobre una persona (ejemplo: Pain Suppression) o raid si crea una cobertura de grupo/área (ejemplo: Anti-Magic Zone). Aunque el caster pueda beneficiarse al estar dentro del área, no lo reclasifiques como personal o semi.
+- utility: no aporta por sí mismo mitigación/absorción/sustain/emergencia relevante para sobrevivir una mecánica de raid.
 
-function buildSystemPrompt(className: string | null): string {
+targetingMode y category son obligatorios y no son sinónimos: targetingMode describe a quién puede proteger realmente el spell; category decide si el sistema puede contarlo como recurso personal. Nunca contabilices external_defensive como cobertura personal del caster.`;
+
+function buildSystemPrompt(className: string | null, gameBuild: string): string {
   const scope = className
     ? `la clase "${className}"`
     : 'TODAS las clases de World of Warcraft retail; cada entrada conocida trae su propia class';
 
   return `Eres un investigador experto en World of Warcraft retail. HOY es ${todayIso()}. Investiga el PARCHE RETAIL VIGENTE HOY; no uses datos de Classic ni de expansiones/parches antiguos salvo para descartarlos explícitamente.
+
+GAME BUILD OBJETIVO: ${gameBuild}. Debes copiar este valor literalmente en gameBuild del objeto JSON raíz. Si vale legacy-current, la aplicación no pudo verificar el build exacto y conservará las reglas con confidence de fallback.
 
 Tu trabajo tiene DOS FASES OBLIGATORIAS e independientes para ${scope}:
 
@@ -56,7 +66,7 @@ COOLDOWNS: baseCooldownSeconds SIEMPRE es el cooldown base del hechizo sin talen
 
 SPEC PROFILES: specProfiles solo se usa cuando una spec tiene de verdad cooldown/duración/cargas BASE distintos. NO lo uses simplemente para repetir availableSpecs.
 
-MODIFIERS: investiga talentos/pasivas actuales que cambien timing o cargas tanto para habilidades YA conocidas como para habilidades DESCUBIERTAS. modifierSpellId debe ser el spellId real del talento/pasiva; targetSpellId el del defensivo. condition:"always" si llevar el talento basta para garantizar el cambio; "conditional" si depende de casts, procs, daño recibido, recursos o ejecución durante el combate. value usa SEGUNDOS para subtract_seconds/add_seconds/set_seconds, factor para multiply y número de cargas para charges_add. No incluyas modificadores que solo cambian el porcentaje de DR/absorb/heal si no cambian cooldown, duración o cargas.
+MODIFIERS: investiga talentos/pasivas actuales que cambien timing o cargas tanto para habilidades YA conocidas como para habilidades DESCUBIERTAS. modifierSpellId debe ser el spellId real del talento/pasiva; targetSpellId el del defensivo. effectField es OBLIGATORIO y declara el campo afectado: cooldown_ms, duration_ms, charges o recharge_ms. condition:"always" si llevar el talento basta para garantizar el cambio; "conditional" si depende de casts, procs, daño recibido, recursos o ejecución durante el combate. value usa SEGUNDOS para subtract_seconds/add_seconds/set_seconds, factor para multiply y número de cargas para charges_add. charges_add exige effectField:"charges"; las demás operaciones no pueden apuntar a charges. No incluyas modificadores que solo cambian el porcentaje de DR/absorb/heal si no cambian cooldown, duración o cargas.
 
 CATEGORÍAS:
 ${CATEGORY_GLOSSARY}
@@ -68,6 +78,7 @@ Si una habilidad existente ya no es defensiva, stillDefensive:false. Nunca inven
 
 Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE objeto raíz exacto:
 {
+  "gameBuild": "${gameBuild}",
   "reviewedDefensives": [
     {
       "spellId": number,
@@ -84,7 +95,7 @@ Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE
         { "spec": "spec exacta", "baseCooldownSeconds": number | null, "baseDurationSeconds": number | null, "charges": number, "source": "URL o referencia" }
       ],
       "modifiers": [
-        { "modifierSpellId": number, "modifierName": "string", "targetSpellId": number, "specs": string[] | null, "operation": "subtract_seconds" | "add_seconds" | "multiply" | "set_seconds" | "charges_add", "value": number, "perRank": boolean, "condition": "always" | "conditional", "description": "string", "source": "URL o referencia" }
+        { "modifierSpellId": number, "modifierName": "string", "targetSpellId": number, "specs": string[] | null, "effectField": "cooldown_ms" | "duration_ms" | "charges" | "recharge_ms", "operation": "subtract_seconds" | "add_seconds" | "multiply" | "set_seconds" | "charges_add", "value": number, "perRank": boolean, "condition": "always" | "conditional", "description": "string", "source": "URL o referencia" }
       ]
     }
   ],
@@ -106,7 +117,7 @@ Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE
         { "spec": "spec exacta", "baseCooldownSeconds": number | null, "baseDurationSeconds": number | null, "charges": number, "source": "URL o referencia" }
       ],
       "modifiers": [
-        { "modifierSpellId": number, "modifierName": "string", "targetSpellId": number, "specs": string[] | null, "operation": "subtract_seconds" | "add_seconds" | "multiply" | "set_seconds" | "charges_add", "value": number, "perRank": boolean, "condition": "always" | "conditional", "description": "string", "source": "URL o referencia" }
+        { "modifierSpellId": number, "modifierName": "string", "targetSpellId": number, "specs": string[] | null, "effectField": "cooldown_ms" | "duration_ms" | "charges" | "recharge_ms", "operation": "subtract_seconds" | "add_seconds" | "multiply" | "set_seconds" | "charges_add", "value": number, "perRank": boolean, "condition": "always" | "conditional", "description": "string", "source": "URL o referencia" }
       ]
     }
   ]
@@ -128,6 +139,9 @@ interface ModifierEntry {
   modifierName: string;
   targetSpellId: number;
   specs: string[] | null;
+  effectField: 'cooldown_ms' | 'duration_ms' | 'charges' | 'recharge_ms';
+  /** Respuestas v5 ya copiadas no traían effectField; nunca se guardan como regla exacta. */
+  effectFieldWasExplicit: boolean;
   operation: 'subtract_seconds' | 'add_seconds' | 'multiply' | 'set_seconds' | 'charges_add';
   value: number;
   perRank: boolean;
@@ -188,15 +202,19 @@ function specsToCatalogValue(specs: string[] | null, fallback: string | null): s
   return specs.join('/');
 }
 
-function parseResponse(parsed: unknown): { reviewed: unknown[]; missing: unknown[] } | null {
+function parseResponse(parsed: unknown): { reviewed: unknown[]; missing: unknown[]; gameBuild: string | null } | null {
   // Backward compatibility with a v3/v4 answer that may already be copied in
   // a browser while this deploy happens. Legacy entries do NOT reconcile the
   // new profile/modifier tables unless those arrays are actually present.
-  if (Array.isArray(parsed)) return { reviewed: parsed, missing: [] };
+  if (Array.isArray(parsed)) return { reviewed: parsed, missing: [], gameBuild: null };
   if (!parsed || typeof parsed !== 'object') return null;
-  const obj = parsed as { reviewedDefensives?: unknown; missingDefensives?: unknown };
+  const obj = parsed as { gameBuild?: unknown; reviewedDefensives?: unknown; missingDefensives?: unknown };
   if (!Array.isArray(obj.reviewedDefensives) || !Array.isArray(obj.missingDefensives)) return null;
-  return { reviewed: obj.reviewedDefensives, missing: obj.missingDefensives };
+  return {
+    reviewed: obj.reviewedDefensives,
+    missing: obj.missingDefensives,
+    gameBuild: typeof obj.gameBuild === 'string' && obj.gameBuild.trim() ? obj.gameBuild.trim() : null,
+  };
 }
 
 function validateProfiles(entry: Partial<ClassificationEntry>): { rows: SpecProfileEntry[]; error?: string } {
@@ -221,7 +239,11 @@ function validateProfiles(entry: Partial<ClassificationEntry>): { rows: SpecProf
   return { rows };
 }
 
-function validateModifiers(entry: Partial<ClassificationEntry>, spellId: number): { rows: ModifierEntry[]; error?: string } {
+function validateModifiers(
+  entry: Partial<ClassificationEntry>,
+  spellId: number,
+  requireExplicitEffectField: boolean,
+): { rows: ModifierEntry[]; error?: string } {
   const raw = Array.isArray(entry.modifiers) ? entry.modifiers : [];
   const rows: ModifierEntry[] = [];
   for (const modifier of raw) {
@@ -231,6 +253,19 @@ function validateModifiers(entry: Partial<ClassificationEntry>, spellId: number)
     if (modifier.targetSpellId !== spellId) return { rows: [], error: 'modifier targetSpellId no coincide con el defensivo' };
     if (!MODIFIER_OPERATIONS.has(modifier.operation)) return { rows: [], error: `operation inválida: ${modifier.operation}` };
     if (!MODIFIER_CONDITIONS.has(modifier.condition)) return { rows: [], error: `condition inválida: ${modifier.condition}` };
+    const effectFieldWasExplicit = typeof modifier.effectField === 'string' && MODIFIER_EFFECT_FIELDS.has(modifier.effectField);
+    if (requireExplicitEffectField && !effectFieldWasExplicit) {
+      return { rows: [], error: 'effectField es obligatorio en respuestas v6 versionadas' };
+    }
+    const effectField = effectFieldWasExplicit
+      ? modifier.effectField as ModifierEntry['effectField']
+      : modifier.operation === 'charges_add'
+        ? 'charges'
+        : 'cooldown_ms';
+    if (modifier.effectField != null && !effectFieldWasExplicit) return { rows: [], error: `effectField inválido: ${modifier.effectField}` };
+    if ((modifier.operation === 'charges_add') !== (effectField === 'charges')) {
+      return { rows: [], error: `operation ${modifier.operation} incompatible con effectField ${effectField}` };
+    }
     if (typeof modifier.value !== 'number' || !Number.isFinite(modifier.value) || modifier.value < 0) return { rows: [], error: 'modifier value inválido' };
     if (typeof modifier.perRank !== 'boolean') return { rows: [], error: 'modifier perRank inválido' };
     const specs = modifier.specs == null ? null : normalizeSpecs(modifier.specs);
@@ -240,6 +275,8 @@ function validateModifiers(entry: Partial<ClassificationEntry>, spellId: number)
       modifierName: typeof modifier.modifierName === 'string' ? modifier.modifierName : `#${modifier.modifierSpellId}`,
       targetSpellId: spellId,
       specs,
+      effectField,
+      effectFieldWasExplicit,
       operation: modifier.operation,
       value: modifier.value,
       perRank: modifier.perRank,
@@ -264,13 +301,23 @@ function modifierDbValue(modifier: ModifierEntry): number {
     : modifier.value;
 }
 
+async function resolveCurrentGameBuild(): Promise<string> {
+  try {
+    const namespace = await getCurrentBuildNamespace();
+    return namespace ? buildFromBlizzardNamespace(namespace) : 'legacy-current';
+  } catch (err) {
+    console.error('classify-defensives: no se pudo verificar el game build actual; se usará legacy-current:', err);
+    return 'legacy-current';
+  }
+}
+
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
   const guard = await requireOfficer(req);
   if (guard instanceof Response) return guard;
 
-  let body: { class?: string | null; action?: string; rawResponseText?: string };
+  let body: { class?: string | null; action?: string; rawResponseText?: string; expectedGameBuild?: string | null };
   try {
     body = await req.json();
   } catch {
@@ -306,6 +353,7 @@ Deno.serve(async (req: Request) => {
     if (modifiersError) throw modifiersError;
 
     if (body.action === 'prompt') {
+      const gameBuild = await resolveCurrentGameBuild();
       const list = defensives.map((d) => ({
         spellId: d.spell_id,
         name: d.name,
@@ -320,9 +368,9 @@ Deno.serve(async (req: Request) => {
         currentSpecProfiles: (currentProfiles ?? []).filter((profile) => profile.spell_id === d.spell_id),
         currentModifiers: (currentModifiers ?? []).filter((modifier) => modifier.target_spell_id === d.spell_id),
       }));
-      const systemPrompt = buildSystemPrompt(body.class ?? null);
+      const systemPrompt = buildSystemPrompt(body.class ?? null, gameBuild);
       const userMessage = `Alcance: ${scopeLabel}\nknownDefensives (${list.length} filas actuales; NO es una lista exhaustiva):\n${JSON.stringify(list, null, 2)}\n\nHaz primero la auditoría de estas ${list.length} filas y después una búsqueda INDEPENDIENTE de habilidades defensivas que falten. Si manualSpecOverride no es null, no lo interpretes como evidencia del juego: es una corrección humana que el backend preservará por encima del spec investigado. Devuelve el objeto JSON raíz reviewedDefensives + missingDefensives exactamente como pide el sistema.`;
-      return jsonResponse({ ok: true, promptVersion: 5, systemPrompt, userMessage, defensiveCount: list.length });
+      return jsonResponse({ ok: true, promptVersion: 6, gameBuild, systemPrompt, userMessage, defensiveCount: list.length });
     }
 
     if (body.action === 'submit') {
@@ -335,7 +383,20 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ ok: false, error: 'La respuesta pegada no es JSON válido. Pega únicamente el JSON completo devuelto por la IA.' }, 400);
       }
       const response = parseResponse(parsed);
-      if (!response) return jsonResponse({ ok: false, error: 'Se esperaba el objeto JSON v5 {reviewedDefensives, missingDefensives} (o un array v3/v4 compatible).' }, 400);
+      if (!response) return jsonResponse({ ok: false, error: 'Se esperaba el objeto JSON v6 {gameBuild, reviewedDefensives, missingDefensives} (o una respuesta legacy compatible).' }, 400);
+      const researchGameBuild = response.gameBuild ?? 'legacy-current';
+      if (researchGameBuild !== 'legacy-current' && !/^\d+\.\d+\.\d+\.\d+$/.test(researchGameBuild)) {
+        return jsonResponse({ ok: false, error: `gameBuild inválido: ${researchGameBuild}` }, 400);
+      }
+      if (response.gameBuild && body.expectedGameBuild !== response.gameBuild) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: `La respuesta pertenece a ${response.gameBuild}, pero el prompt abierto pertenece a ${body.expectedGameBuild ?? 'un build desconocido'}. Genera un prompt nuevo.`,
+          },
+          409,
+        );
+      }
 
       const knownSpellIds = new Set(defensives.map((d) => d.spell_id));
       const knownClasses = new Set(defensives.map((d) => d.class));
@@ -376,7 +437,8 @@ Deno.serve(async (req: Request) => {
           .from('defensive_spec_profiles')
           .delete()
           .eq('class', className)
-          .eq('spell_id', spellId);
+          .eq('spell_id', spellId)
+          .eq('game_build', researchGameBuild);
         if (deleteProfilesError) throw deleteProfilesError;
 
         const { error: disableModifiersError } = await supabase
@@ -384,6 +446,7 @@ Deno.serve(async (req: Request) => {
           .update({ active: false, updated_at: submittedAt })
           .eq('class', className)
           .eq('target_spell_id', spellId)
+          .eq('game_build', researchGameBuild)
           .eq('active', true);
         if (disableModifiersError) throw disableModifiersError;
 
@@ -396,12 +459,14 @@ Deno.serve(async (req: Request) => {
               base_cooldown_ms: secondsToMs(profile.baseCooldownSeconds),
               base_duration_ms: secondsToMs(profile.baseDurationSeconds),
               charges: profile.charges,
-              source: profile.source || 'classify-defensives v5',
-              source_note: 'Investigado por prompt v5; valor base específico de spec.',
+              recharge_ms: null,
+              game_build: researchGameBuild,
+              source: profile.source || 'classify-defensives v6',
+              source_note: 'Investigado por prompt v6; valor base específico de spec.',
               verified_at: submittedAt,
               updated_at: submittedAt,
             },
-            { onConflict: 'class,spec,spell_id' },
+            { onConflict: 'class,spec,spell_id,game_build' },
           );
           if (error) throw error;
           appliedSpecProfiles++;
@@ -415,16 +480,19 @@ Deno.serve(async (req: Request) => {
               modifier_spell_id: modifier.modifierSpellId,
               target_spell_id: spellId,
               operation: modifierDbOperation(modifier.operation),
+              effect_field: modifier.effectField,
               value: modifierDbValue(modifier),
               per_rank: modifier.perRank,
               condition: modifier.condition,
               description: modifier.description || modifier.modifierName,
               source: modifier.source,
+              game_build: modifier.effectFieldWasExplicit ? researchGameBuild : 'legacy-current',
+              application_order: 100,
               verified_at: submittedAt,
               active: true,
               updated_at: submittedAt,
             },
-            { onConflict: 'class,modifier_spell_id,target_spell_id,operation' },
+            { onConflict: 'class,modifier_spell_id,target_spell_id,operation,effect_field,game_build' },
           );
           if (error) throw error;
           appliedModifiers++;
@@ -469,7 +537,7 @@ Deno.serve(async (req: Request) => {
           invalid.push({ spellId: entry.spellId, reason: profilesResult.error });
           continue;
         }
-        const modifiersResult = validateModifiers(entry, entry.spellId);
+        const modifiersResult = validateModifiers(entry, entry.spellId, response.gameBuild != null);
         if (modifiersResult.error) {
           invalid.push({ spellId: entry.spellId, reason: modifiersResult.error });
           continue;
@@ -505,7 +573,7 @@ Deno.serve(async (req: Request) => {
             sources: Array.isArray(entry.sources) ? entry.sources : [],
             notes: entry.notes ?? '',
             availableSpecs,
-            promptVersion: 5,
+            promptVersion: 6,
             classifiedAt: submittedAt,
           },
         };
@@ -594,7 +662,7 @@ Deno.serve(async (req: Request) => {
           invalid.push({ spellId: entry.spellId, reason: profilesResult.error });
           continue;
         }
-        const modifiersResult = validateModifiers(entry, entry.spellId);
+        const modifiersResult = validateModifiers(entry, entry.spellId, response.gameBuild != null);
         if (modifiersResult.error) {
           invalid.push({ spellId: entry.spellId, reason: modifiersResult.error });
           continue;
@@ -619,7 +687,7 @@ Deno.serve(async (req: Request) => {
             notes: entry.notes ?? '',
             availableSpecs,
             discovered: true,
-            promptVersion: 5,
+            promptVersion: 6,
             classifiedAt: submittedAt,
           },
           synced_from_commit: null,
@@ -655,13 +723,41 @@ Deno.serve(async (req: Request) => {
       }
 
       let pullIds: string[] = [];
+      let pullDiscoveryError: string | null = null;
       if (affectedClasses.size) {
         const { data: affectedRecords, error: affectedError } = await supabase
           .from('player_pull_records')
           .select('pull_id')
           .in('class', [...affectedClasses]);
-        if (affectedError) throw affectedError;
-        pullIds = [...new Set((affectedRecords ?? []).map((record) => (record as { pull_id: string }).pull_id))];
+        if (affectedError) {
+          pullDiscoveryError = `No se pudieron descubrir los pulls afectados: ${affectedError.message}`;
+        } else {
+          pullIds = [...new Set((affectedRecords ?? []).map((record) => (record as { pull_id: string }).pull_id))];
+        }
+      }
+
+      let reanalysisBatchId: string | null = null;
+      let reanalysisJobs: { id: string; pullId: string }[] = [];
+      let reanalysisQueueError: string | null = pullDiscoveryError;
+      if (pullIds.length) {
+        try {
+          const queued = await enqueueDefensiveReanalysis(supabase, {
+            pullIds,
+            reason: `classify_defensives:${[...affectedClasses].sort().join(',')}`,
+            scope: {
+              kind: 'classification',
+              classes: [...affectedClasses].sort(),
+              gameBuild: researchGameBuild,
+              promptVersion: 6,
+            },
+            requestedBy: guard.userId,
+          });
+          reanalysisBatchId = queued.batchId;
+          reanalysisJobs = queued.jobs;
+        } catch (queueError) {
+          reanalysisQueueError = queueError instanceof Error ? queueError.message : String(queueError);
+          console.error('No se pudo persistir la cola de reanálisis:', queueError);
+        }
       }
 
       return jsonResponse({
@@ -670,11 +766,15 @@ Deno.serve(async (req: Request) => {
         added,
         appliedSpecProfiles,
         appliedModifiers,
+        gameBuild: researchGameBuild,
         skippedLowConfidence,
         skippedUndetermined,
         suggestedExclusions,
         invalid,
         pullIds,
+        reanalysisBatchId,
+        reanalysisJobs,
+        reanalysisQueueError,
       });
     }
 

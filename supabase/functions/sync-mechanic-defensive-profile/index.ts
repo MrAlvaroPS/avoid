@@ -3,6 +3,11 @@ import { fetchPublicRankings, resolveTopReportRefs, getFightEvents, getReportAbi
 import { normalizeAbilityName, buildAbilityIdsByName } from '../_shared/ability-name-match.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
+import {
+  groupMechanicOccurrenceOffsets,
+  mechanicOccurrenceOffsetsForFight,
+  summarizeOccurrenceOffsets,
+} from '../_shared/mechanic-occurrences.ts';
 
 // §"Preparación" (ver plan guardado, conversación real 2026-08-30): perfil
 // de daño/timing por mecánica, para poder generar reminders de MRT sin
@@ -44,6 +49,11 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 // sigue siendo un cluster de 1, sin cambio; una ocurrencia que se alarga
 // más de MAX_OCCURRENCE_SPAN_MS se descarta entera (esa es la trampa: daño
 // repartido sin fin por todo el combate no es una ventana real).
+//
+// Gestión defensiva v2, bloque D: el array legacy de offsets se mantiene para
+// el frontend actual, pero además se reconstruye #1..#N dentro de cada fight y
+// se agrega en boss_mechanic_occurrence_profile. Nunca se infiere #N desde la
+// posición global del array mezclado ni se toca el template por spec.
 
 interface SyncRequest {
   bossId: string; // encounterID de WCL, como texto — igual que sync-boss-mechanics.
@@ -131,7 +141,14 @@ Deno.serve(async (req: Request) => {
 
     const difficultyIds = body.difficulties?.length ? body.difficulties : [3, 4, 5].filter((id) => allCandidates.some((c) => c.difficulty === WCL_DIFFICULTY_NAME_BY_ID[id]));
 
-    const results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number; totalFightsConsumed: number; exhausted: boolean }[] = [];
+    const results: {
+      difficulty: string;
+      referenceFightsUsed: number;
+      mechanicsProfiled: number;
+      occurrenceProfilesUpdated: number;
+      totalFightsConsumed: number;
+      exhausted: boolean;
+    }[] = [];
 
     for (const wclDifficultyId of difficultyIds) {
       const difficultyName = WCL_DIFFICULTY_NAME_BY_ID[wclDifficultyId];
@@ -161,7 +178,14 @@ Deno.serve(async (req: Request) => {
         .from('boss_reference_sync_state')
         .upsert({ boss_id: body.bossId, difficulty: difficultyName, reference_fights_consumed: alreadyConsumed + refs.length, last_synced_at: new Date().toISOString() }, { onConflict: 'boss_id,difficulty' });
       if (!refs.length) {
-        results.push({ difficulty: difficultyName, referenceFightsUsed: 0, mechanicsProfiled: 0, totalFightsConsumed: alreadyConsumed, exhausted });
+        results.push({
+          difficulty: difficultyName,
+          referenceFightsUsed: 0,
+          mechanicsProfiled: 0,
+          occurrenceProfilesUpdated: 0,
+          totalFightsConsumed: alreadyConsumed,
+          exhausted,
+        });
         continue;
       }
 
@@ -221,7 +245,12 @@ Deno.serve(async (req: Request) => {
         dpsHits: number;
         sampledFights: number;
       }
+      interface MechanicOccurrenceAccumulated {
+        candidate: (typeof candidates)[number];
+        offsetsByOccurrence: Map<number, number[]>;
+      }
       const accumulated: MechanicAccumulated[] = [];
+      const occurrenceAccumulated: MechanicOccurrenceAccumulated[] = [];
 
       for (const candidate of candidates) {
         const nameKey = normalizeAbilityName(candidate.name);
@@ -232,10 +261,22 @@ Deno.serve(async (req: Request) => {
         let healerHits = 0;
         let dpsHits = 0;
         let sampledFights = 0;
+        const occurrenceOffsetsByFight: number[][] = [];
 
         for (const bundle of bundles) {
           const realIds = bundle.idsByName.get(nameKey);
           if (!realIds?.length) continue;
+
+          // Unidad temporal v2: ordenar dentro de CADA fight y alinear #1 con
+          // #1, #2 con #2, etc. entre referencias. castOffsets conserva el
+          // array legacy para el dual-read de Preparación.
+          const occurrenceOffsets = mechanicOccurrenceOffsetsForFight(
+            bundle.enemyCasts,
+            realIds,
+            bundle.startTime,
+          );
+          castOffsets.push(...occurrenceOffsets);
+          if (occurrenceOffsets.length) occurrenceOffsetsByFight.push(occurrenceOffsets);
 
           // Casts de mitigación por CASTER (sourceID) — un cast real solo
           // puede venir de quien de verdad lo tiene, no hace falta saber su
@@ -311,16 +352,6 @@ Deno.serve(async (req: Request) => {
           }
           if (qualifiedThisBundle) sampledFights++;
 
-          // Timing de la mecánica REAL (cast del boss), no del hit — un cast
-          // puede golpear a varios jugadores a la vez, eso sería la misma
-          // "ocurrencia" contada varias veces. Solo preview/timeline en la
-          // pantalla, nunca el trigger real (ver MrtBossmodTrigger).
-          for (const cast of bundle.enemyCasts) {
-            if (typeof cast.abilityGameID !== 'number' || !realIds.includes(cast.abilityGameID)) continue;
-            if (typeof cast.timestamp !== 'number') continue;
-            castOffsets.push(cast.timestamp - bundle.startTime);
-          }
-
           if (bundle.damageTally) {
             for (const id of realIds) {
               const tally = bundle.damageTally.get(id);
@@ -334,8 +365,13 @@ Deno.serve(async (req: Request) => {
           }
         }
 
-        if (sampledFights < 1) continue; // ni un solo fight de referencia de ESTA tanda vio esta mecánica — no toca la fila existente
-        accumulated.push({ candidate, unmitigated, mitigated, castOffsets, tankHits, healerHits, dpsHits, sampledFights });
+        const offsetsByOccurrence = groupMechanicOccurrenceOffsets(occurrenceOffsetsByFight);
+        if (offsetsByOccurrence.size) occurrenceAccumulated.push({ candidate, offsetsByOccurrence });
+        // El perfil de peligrosidad legacy sigue exigiendo daño observado;
+        // las ocurrencias pueden existir aunque DamageTaken no haya mapeado.
+        if (sampledFights >= 1) {
+          accumulated.push({ candidate, unmitigated, mitigated, castOffsets, tankHits, healerHits, dpsHits, sampledFights });
+        }
       }
 
       // §"que se tiene que auto poner el 'exige defensivo' cuando lo
@@ -426,7 +462,73 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      results.push({ difficulty: difficultyName, referenceFightsUsed: bundles.length, mechanicsProfiled, totalFightsConsumed: alreadyConsumed + refs.length, exhausted });
+      let occurrenceProfilesUpdated = 0;
+      if (occurrenceAccumulated.length) {
+        const occurrenceAbilityIds = occurrenceAccumulated.map((entry) => entry.candidate.ability_id);
+        const { data: existingOccurrences, error: existingOccurrencesError } = await supabase
+          .from('boss_mechanic_occurrence_profile')
+          .select('ability_id,occurrence_index,sample_offsets_ms,sample_fight_count')
+          .eq('boss_id', body.bossId)
+          .eq('difficulty', difficultyName)
+          .in('ability_id', occurrenceAbilityIds);
+        if (existingOccurrencesError) throw existingOccurrencesError;
+        const existingByKey = new Map(
+          (existingOccurrences ?? []).map((row) => [
+            `${row.ability_id}:${row.occurrence_index}`,
+            row as {
+              ability_id: number;
+              occurrence_index: number;
+              sample_offsets_ms: number[];
+              sample_fight_count: number;
+            },
+          ]),
+        );
+
+        for (const occurrence of occurrenceAccumulated) {
+          for (const [occurrenceIndex, newOffsets] of [...occurrence.offsetsByOccurrence.entries()].sort(
+            ([left], [right]) => left - right,
+          )) {
+            const existing = existingByKey.get(`${occurrence.candidate.ability_id}:${occurrenceIndex}`);
+            const sampleOffsets = [...(existing?.sample_offsets_ms ?? []), ...newOffsets];
+            const summary = summarizeOccurrenceOffsets(sampleOffsets);
+            if (!summary) continue;
+            const { error: occurrenceUpsertError } = await supabase
+              .from('boss_mechanic_occurrence_profile')
+              .upsert(
+                {
+                  boss_id: body.bossId,
+                  difficulty: difficultyName,
+                  ability_id: occurrence.candidate.ability_id,
+                  occurrence_index: occurrenceIndex,
+                  median_offset_ms: summary.medianOffsetMs,
+                  p10_offset_ms: summary.p10OffsetMs,
+                  p90_offset_ms: summary.p90OffsetMs,
+                  sample_offsets_ms: sampleOffsets,
+                  sample_fight_count: (existing?.sample_fight_count ?? 0) + newOffsets.length,
+                  updated_at: new Date().toISOString(),
+                },
+                { onConflict: 'boss_id,difficulty,ability_id,occurrence_index' },
+              );
+            if (occurrenceUpsertError) {
+              console.error(
+                `sync-mechanic-defensive-profile: fallo guardando ${occurrence.candidate.name} #${occurrenceIndex} (${difficultyName}):`,
+                occurrenceUpsertError.message,
+              );
+            } else {
+              occurrenceProfilesUpdated++;
+            }
+          }
+        }
+      }
+
+      results.push({
+        difficulty: difficultyName,
+        referenceFightsUsed: bundles.length,
+        mechanicsProfiled,
+        occurrenceProfilesUpdated,
+        totalFightsConsumed: alreadyConsumed + refs.length,
+        exhausted,
+      });
     }
 
     return jsonResponse({ ok: true, results, minReferenceSampleFights: MIN_REFERENCE_SAMPLE_FIGHTS });

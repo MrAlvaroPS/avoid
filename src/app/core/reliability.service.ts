@@ -36,6 +36,7 @@ import { AttendanceService, type RealAttendanceEntry } from './attendance.servic
 import { mechanicScoreFor } from './pull-analysis.service';
 import { gearPreparationDetails } from '../shared/gear-preparation.util';
 import type { DeathCause, WclGearItem } from '../shared/models/domain';
+import { DefensiveFeatureFlagsService } from './defensive-feature-flags.service';
 
 const WINDOW_DAYS = 60; // "varias noches o semanas", no los 21 días de una versión anterior
 const HALF_LIFE_DAYS = 10; // un pull de hace 10 días pesa la mitad que uno de hoy
@@ -57,6 +58,8 @@ export interface PlayerReliability {
     preparacion: number | null;
   };
   consistency: PlayerConsistency | null;
+  /** Comparación interna v1/v2 sobre los mismos pulls; no altera el score mientras el flag siga apagado. */
+  defensiveShadowComparison: DefensiveReliabilityShadowComparison | null;
   /** Snapshot de preparación al inicio de la última noche observada. */
   latestGemCount: number | null;
   latestGemmedSlotCount: number | null;
@@ -184,6 +187,15 @@ export interface ReliabilityInputRow {
    * dos tiempos); 0 real (no "sin dato") en cuanto la columna existe, la
    * vista ya lo garantiza con count(*) sobre un array posiblemente vacío. */
   unassigned_mechanic_success_count: number | null;
+  /** Bloque K: snapshot semántico v2. Todos permanecen null hasta backfill fiable. */
+  defensive_management_score_v2: number | null;
+  defensive_management_decision_count: number | null;
+  defensive_required_count: number | null;
+  defensive_required_success_count: number | null;
+  defensive_broken_reservation_count: number | null;
+  defensive_death_viable_cd_count: number | null;
+  defensive_evaluation_confidence: string | null;
+  defensive_evaluator_version: string | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -199,6 +211,50 @@ export interface ReliabilityBreakdown {
     preparacion: number | null;
   };
   consistency: PlayerConsistency | null;
+  defensiveShadowComparison: DefensiveReliabilityShadowComparison | null;
+}
+
+export interface DefensiveReliabilityShadowComparison {
+  legacyScore: number | null;
+  v2Score: number;
+  delta: number | null;
+  comparablePullCount: number;
+  evaluatorVersions: string[];
+}
+
+export interface ReliabilityComputationOptions {
+  defensiveV2Enabled?: boolean;
+}
+
+function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
+  const score = row.defensive_management_score_v2;
+  const decisionCount = row.defensive_management_decision_count;
+  const requiredCount = row.defensive_required_count;
+  const requiredSuccessCount = row.defensive_required_success_count;
+  const brokenCount = row.defensive_broken_reservation_count;
+  const deathCount = row.defensive_death_viable_cd_count;
+  if (
+    score == null ||
+    !Number.isFinite(score) ||
+    score < 0 ||
+    score > 100 ||
+    decisionCount == null ||
+    decisionCount < 1 ||
+    requiredCount == null ||
+    requiredSuccessCount == null ||
+    requiredSuccessCount < 0 ||
+    requiredSuccessCount > requiredCount ||
+    brokenCount == null ||
+    brokenCount < 0 ||
+    deathCount == null ||
+    deathCount < 0 ||
+    !row.defensive_evaluator_version ||
+    (row.defensive_evaluation_confidence !== 'verified' &&
+      row.defensive_evaluation_confidence !== 'inferred')
+  ) {
+    return null;
+  }
+  return score / 100;
 }
 
 export interface PlayerConsistency {
@@ -224,6 +280,7 @@ export interface PlayerConsistency {
 export function computeReliabilityBreakdown(
   rows: ReliabilityInputRow[],
   now: number,
+  options: ReliabilityComputationOptions = {},
 ): ReliabilityBreakdown | null {
   if (!rows.length) return null;
 
@@ -256,6 +313,11 @@ export function computeReliabilityBreakdown(
   let mecSum = 0;
   let defWeight = 0;
   let defSum = 0;
+  let shadowLegacyWeight = 0;
+  let shadowLegacySum = 0;
+  let shadowV2Weight = 0;
+  let shadowV2Sum = 0;
+  const shadowEvaluatorVersions = new Set<string>();
   let prepWeight = 0;
   let prepSum = 0;
   const pullExecution: { value: number; weight: number }[] = [];
@@ -286,8 +348,6 @@ export function computeReliabilityBreakdown(
     let pullDefensiveSum = 0;
     let pullDefensiveWeight = 0;
     if (r.used_defensive_when_died != null) {
-      defSum += (r.used_defensive_when_died ? 1 : 0) * w * 2;
-      defWeight += w * 2;
       pullDefensiveSum += (r.used_defensive_when_died ? 1 : 0) * 2;
       pullDefensiveWeight += 2;
     }
@@ -320,18 +380,36 @@ export function computeReliabilityBreakdown(
         const covered = r.defensive_window_covered_count ?? 0;
         const executionValue =
           covered > 0 ? covered / windowTotal : r.defensive_window_used_anything ? DEFENSIVE_MISTIMED_CREDIT : 0;
-        defSum += executionValue * w;
-        defWeight += w;
         pullDefensiveSum += executionValue;
         pullDefensiveWeight += 1;
       }
     } else if (r.defensive_use_opportunity) {
       // Fallback: pull sin backfill de ventanas todavía, o schema anterior a
       // WINDOW_RELIABILITY_COLUMNS — mismo booleano de siempre.
-      defSum += (r.used_defensive_in_pull ? 1 : 0) * w;
-      defWeight += w;
       pullDefensiveSum += r.used_defensive_in_pull ? 1 : 0;
       pullDefensiveWeight += 1;
+    }
+    const legacyDefensiveExecution =
+      pullDefensiveWeight > 0 ? pullDefensiveSum / pullDefensiveWeight : null;
+    const v2DefensiveExecution = reliableV2DefensiveScore(r);
+    const useV2ForPull = options.defensiveV2Enabled === true && v2DefensiveExecution != null;
+    if (useV2ForPull) {
+      // Selección atómica: si v2 es fiable, esta fila no aporta ninguna
+      // señal defensiva legacy al score efectivo.
+      defSum += v2DefensiveExecution * w;
+      defWeight += w;
+    } else if (legacyDefensiveExecution != null) {
+      // Conserva exactamente la ponderación legacy (muerte x2 + ventana x1)
+      // cuando el flag está apagado o esta fila todavía no tiene backfill.
+      defSum += pullDefensiveSum * w;
+      defWeight += pullDefensiveWeight * w;
+    }
+    if (v2DefensiveExecution != null && legacyDefensiveExecution != null) {
+      shadowV2Sum += v2DefensiveExecution * w;
+      shadowV2Weight += w;
+      if (r.defensive_evaluator_version) shadowEvaluatorVersions.add(r.defensive_evaluator_version);
+      shadowLegacySum += legacyDefensiveExecution * w;
+      shadowLegacyWeight += w;
     }
     const preparationSlots = r.enchantable_slot_count + r.gemmable_slot_count;
     if (preparationSlots > 0 && isFirstPullOfNight(r)) {
@@ -339,8 +417,9 @@ export function computeReliabilityBreakdown(
       prepWeight += w;
     }
     const mechanicExecution = mecScore * 100;
+    const selectedDefensiveExecution = useV2ForPull ? v2DefensiveExecution : legacyDefensiveExecution;
     const defensiveExecution =
-      pullDefensiveWeight > 0 ? (pullDefensiveSum / pullDefensiveWeight) * 100 : null;
+      selectedDefensiveExecution == null ? null : selectedDefensiveExecution * 100;
     pullExecution.push({
       value:
         defensiveExecution == null
@@ -393,10 +472,35 @@ export function computeReliabilityBreakdown(
       sampleSize: pullExecution.length,
     };
   }
+  const v2ShadowScore = shadowV2Weight > 0 ? (shadowV2Sum / shadowV2Weight) * 100 : null;
+  const legacyShadowScore = shadowLegacyWeight > 0 ? (shadowLegacySum / shadowLegacyWeight) * 100 : null;
+  const defensiveShadowComparison: DefensiveReliabilityShadowComparison | null =
+    v2ShadowScore == null
+      ? null
+      : {
+          legacyScore: legacyShadowScore,
+          v2Score: Math.round(v2ShadowScore * 100) / 100,
+          delta:
+            legacyShadowScore == null
+              ? null
+              : Math.round((v2ShadowScore - legacyShadowScore) * 100) / 100,
+          comparablePullCount: rows.filter((row) => {
+            if (reliableV2DefensiveScore(row) == null) return false;
+            return (
+              row.used_defensive_when_died != null ||
+              ((row.defensive_window_coverable_count ?? 0) +
+                (row.defensive_window_covered_count ?? 0) >
+                0) ||
+              (row.defensive_window_coverable_count == null && row.defensive_use_opportunity)
+            );
+          }).length,
+          evaluatorVersions: [...shadowEvaluatorVersions].sort(),
+        };
   return {
     overall,
     breakdown: { mecanica, defensiva, preparacion },
     consistency,
+    defensiveShadowComparison,
   };
 }
 
@@ -432,8 +536,12 @@ export function effectiveAxisWeights(breakdown: {
 }
 
 /** Wrapper de compatibilidad — player-detail.service.ts solo necesita el número, no el desglose. */
-export function computeOverall(rows: ReliabilityInputRow[], now: number): number | null {
-  return computeReliabilityBreakdown(rows, now)?.overall ?? null;
+export function computeOverall(
+  rows: ReliabilityInputRow[],
+  now: number,
+  options: ReliabilityComputationOptions = {},
+): number | null {
+  return computeReliabilityBreakdown(rows, now, options)?.overall ?? null;
 }
 
 // §12.5 "flecha de tendencia": diferencia mínima para no marcar como
@@ -461,6 +569,8 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
 // unassigned_mechanic_success_count es la más nueva de la vista — escalón
 // propio por encima de WINDOW_RELIABILITY_COLUMNS, mismo motivo de siempre
 // (frontend puede llegar antes que la migración).
+const V2_RELIABILITY_COLUMNS =
+  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version';
 const UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count';
 const WINDOW_RELIABILITY_COLUMNS =
@@ -509,7 +619,7 @@ function isReliabilitySchemaTransitionError(
   return (
     error.code === '42703' ||
     error.code === 'PGRST204' ||
-    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count/i.test(
+    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count|defensive_management_score_v2|defensive_management_decision_count|defensive_required_count|defensive_required_success_count|defensive_broken_reservation_count|defensive_death_viable_cd_count|defensive_evaluation_confidence|defensive_evaluator_version/i.test(
       message,
     )
   );
@@ -520,6 +630,13 @@ export class ReliabilityService {
   private supabase = inject(SupabaseService);
   private wowauditRoster = inject(WowauditRosterService);
   private attendanceService = inject(AttendanceService);
+  private defensiveFlags = inject(DefensiveFeatureFlagsService);
+
+  private reliabilityComputationOptions(): ReliabilityComputationOptions {
+    return {
+      defensiveV2Enabled: this.defensiveFlags.enabled('defensiveReliabilityV2'),
+    };
+  }
 
   /**
    * Compatibilidad de despliegue: el frontend puede llegar antes que la
@@ -543,9 +660,13 @@ export class ReliabilityService {
       return await query;
     };
 
-    let response = await run(UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS);
-    let schemaLevel: 'unassigned' | 'window' | 'ratio' | 'current' | 'defensive' | 'legacy' =
-      'unassigned';
+    let response = await run(V2_RELIABILITY_COLUMNS);
+    let schemaLevel: 'v2' | 'unassigned' | 'window' | 'ratio' | 'current' | 'defensive' | 'legacy' =
+      'v2';
+    if (response.error && isReliabilitySchemaTransitionError(response.error)) {
+      response = await run(UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS);
+      schemaLevel = 'unassigned';
+    }
     if (response.error && isReliabilitySchemaTransitionError(response.error)) {
       response = await run(WINDOW_RELIABILITY_COLUMNS);
       schemaLevel = 'window';
@@ -567,43 +688,47 @@ export class ReliabilityService {
       schemaLevel = 'legacy';
     }
     if (response.error) throw response.error;
-    return ((response.data ?? []) as unknown as Partial<ReliabilityInputRow>[]).map((row) => ({
+    return ((response.data ?? []) as unknown as Partial<ReliabilityInputRow>[]).map((row) => {
+      const hasCurrentSchema = ['v2', 'unassigned', 'window', 'ratio', 'current'].includes(schemaLevel);
+      const hasRatioSchema = ['v2', 'unassigned', 'window', 'ratio'].includes(schemaLevel);
+      const hasWindowSchema = ['v2', 'unassigned', 'window'].includes(schemaLevel);
+      return {
       ...(row as ReliabilityInputRow),
       used_defensive_in_pull:
         schemaLevel === 'legacy' ? false : row.used_defensive_in_pull === true,
       defensive_use_opportunity:
         schemaLevel === 'legacy' ? false : row.defensive_use_opportunity === true,
-      gemmed_slot_count: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmed_slot_count ?? 0) : 0,
-      gemmable_slot_count: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.gemmable_slot_count ?? 0) : 0,
+      gemmed_slot_count: hasCurrentSchema ? Number(row.gemmed_slot_count ?? 0) : 0,
+      gemmable_slot_count: hasCurrentSchema ? Number(row.gemmable_slot_count ?? 0) : 0,
       // null (no 0) en los escalones de fallback a propósito —
       // computeReliabilityBreakdown/mechanicScoreFor lo leen como "sin dato
       // todavía" en vez de "0 fallos"/"0 elegibles" (ver el comentario ahí).
       personal_mechanic_fail_count:
-        schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? Number(row.personal_mechanic_fail_count ?? 0) : null,
+        hasCurrentSchema ? Number(row.personal_mechanic_fail_count ?? 0) : null,
       // null en fallback (igual criterio): isFirstPullOfNight trata
       // cualquier fila como "primera" cuando no hay report_code/pull_number.
-      report_code: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.report_code ?? null) : null,
-      pull_number: schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' || schemaLevel === 'current' ? (row.pull_number ?? null) : null,
+      report_code: hasCurrentSchema ? (row.report_code ?? null) : null,
+      pull_number: hasCurrentSchema ? (row.pull_number ?? null) : null,
       // §"consistente... contemplar muchas posibilidades distintas"
       // (feedback real, 2026-08-28): null en los 3 escalones de fallback
       // más antiguos — mechanicScoreFor cae al conteo plano de siempre
       // (personal_mechanic_fail_count) en vez de asumir "sin oportunidades
       // ratio" silenciosamente.
       avoidable_mechanic_eligible_count:
-        schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
+        hasRatioSchema ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
       avoidable_mechanic_fail_count:
-        schemaLevel === 'unassigned' || schemaLevel === 'window' || schemaLevel === 'ratio' ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
+        hasRatioSchema ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
       // §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback
       // real, 2026-08-29): null en TODOS los escalones de fallback anteriores
       // a WINDOW_RELIABILITY_COLUMNS — computeReliabilityBreakdown cae al
       // booleano de siempre (defensive_use_opportunity/used_defensive_in_pull)
       // en vez de asumir "sin ventanas" silenciosamente.
       defensive_window_coverable_count:
-        schemaLevel === 'unassigned' || schemaLevel === 'window' ? Number(row.defensive_window_coverable_count ?? 0) : null,
+        hasWindowSchema ? Number(row.defensive_window_coverable_count ?? 0) : null,
       defensive_window_covered_count:
-        schemaLevel === 'unassigned' || schemaLevel === 'window' ? Number(row.defensive_window_covered_count ?? 0) : null,
+        hasWindowSchema ? Number(row.defensive_window_covered_count ?? 0) : null,
       defensive_window_used_anything:
-        schemaLevel === 'unassigned' || schemaLevel === 'window' ? row.defensive_window_used_anything === true : null,
+        hasWindowSchema ? row.defensive_window_used_anything === true : null,
       // §"subir su porcentaje de mecanicas por haberlo hecho con éxito"
       // (feedback real, 2026-08-29): null SOLO en el escalón anterior a esta
       // columna — a diferencia de avoidable_mechanic_*, no depende de ningún
@@ -611,8 +736,37 @@ export class ReliabilityService {
       // desde que se creó la tabla), así que en cuanto la columna existe
       // siempre es un número real, nunca "sin dato todavía".
       unassigned_mechanic_success_count:
-        schemaLevel === 'unassigned' ? Number(row.unassigned_mechanic_success_count ?? 0) : null,
-    }));
+        schemaLevel === 'v2' || schemaLevel === 'unassigned' ? Number(row.unassigned_mechanic_success_count ?? 0) : null,
+      defensive_management_score_v2:
+        schemaLevel === 'v2' && row.defensive_management_score_v2 != null
+          ? Number(row.defensive_management_score_v2)
+          : null,
+      defensive_management_decision_count:
+        schemaLevel === 'v2' && row.defensive_management_decision_count != null
+          ? Number(row.defensive_management_decision_count)
+          : null,
+      defensive_required_count:
+        schemaLevel === 'v2' && row.defensive_required_count != null
+          ? Number(row.defensive_required_count)
+          : null,
+      defensive_required_success_count:
+        schemaLevel === 'v2' && row.defensive_required_success_count != null
+          ? Number(row.defensive_required_success_count)
+          : null,
+      defensive_broken_reservation_count:
+        schemaLevel === 'v2' && row.defensive_broken_reservation_count != null
+          ? Number(row.defensive_broken_reservation_count)
+          : null,
+      defensive_death_viable_cd_count:
+        schemaLevel === 'v2' && row.defensive_death_viable_cd_count != null
+          ? Number(row.defensive_death_viable_cd_count)
+          : null,
+      defensive_evaluation_confidence:
+        schemaLevel === 'v2' ? (row.defensive_evaluation_confidence ?? null) : null,
+      defensive_evaluator_version:
+        schemaLevel === 'v2' ? (row.defensive_evaluator_version ?? null) : null,
+      };
+    });
   }
 
   async getPlayerReliabilityInputs(
@@ -895,7 +1049,8 @@ export class ReliabilityService {
     // attendanceNightsTotal más abajo, informativo) a partir de reports
     // REALMENTE importados en Avoid desde el inicio de season
     // (attendance.service.ts), no del calendario propio de wowaudit.
-    const result = computeReliabilityBreakdown(rows, now);
+    const computationOptions = this.reliabilityComputationOptions();
+    const result = computeReliabilityBreakdown(rows, now, computationOptions);
     const overall = result?.overall ?? 0;
     const { mecanica, defensiva, preparacion } = result?.breakdown ?? {
       mecanica: null,
@@ -998,10 +1153,12 @@ export class ReliabilityService {
     const olderScore = computeOverall(
       rows.filter((r) => new Date(r.closed_at).getTime() < midpoint),
       now,
+      computationOptions,
     );
     const newerScore = computeOverall(
       rows.filter((r) => new Date(r.closed_at).getTime() >= midpoint),
       now,
+      computationOptions,
     );
     let trend: PlayerReliability['trend'] = null;
     if (olderScore != null && newerScore != null) {
@@ -1014,6 +1171,7 @@ export class ReliabilityService {
       overall,
       breakdown: { mecanica, defensiva, preparacion },
       consistency: result?.consistency ?? null,
+      defensiveShadowComparison: result?.defensiveShadowComparison ?? null,
       latestGemCount,
       latestGemmedSlotCount,
       latestGemmableSlotCount,
@@ -1079,16 +1237,22 @@ export class ReliabilityService {
         overall: 0,
         breakdown: { mecanica: null, defensiva: null, preparacion: null },
         consistency: null,
+        defensiveShadowComparison: null,
         sampleSize: 0,
       };
 
-    const result = computeReliabilityBreakdown(rows, Date.now());
+    const result = computeReliabilityBreakdown(
+      rows,
+      Date.now(),
+      this.reliabilityComputationOptions(),
+    );
     return result
       ? { ...result, sampleSize: rows.length }
       : {
           overall: 0,
           breakdown: { mecanica: null, defensiva: null, preparacion: null },
           consistency: null,
+          defensiveShadowComparison: null,
           sampleSize: 0,
         };
   }
@@ -1189,7 +1353,11 @@ export class ReliabilityService {
     for (const [playerName, byReport] of byPlayerReport) {
       const points: BossDifficultyEvolutionPoint[] = [];
       for (const [reportCode, rows] of byReport) {
-        const breakdown = computeReliabilityBreakdown(rows, now);
+        const breakdown = computeReliabilityBreakdown(
+          rows,
+          now,
+          this.reliabilityComputationOptions(),
+        );
         if (!breakdown) continue;
         const wipePcts = rows.map((r) => wipePctByPullId.get(r.pull_id)).filter((v): v is number => v != null);
         const kill = wipePcts.some((v) => v === 0);
