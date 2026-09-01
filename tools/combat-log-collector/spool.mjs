@@ -30,9 +30,9 @@ async function readJson(file) {
  * Durable local shadow spool.
  *
  * Ordering invariant:
- *   1. append full NDJSON record
- *   2. fsync journal
- *   3. atomically advance state
+ *   1. append one or more full NDJSON records
+ *   2. fsync journal once for the batch
+ *   3. atomically advance state to the last record
  *
  * The journal is authoritative during recovery. If a crash happens after
  * step 2 but before step 3, recovery can safely advance from the last valid
@@ -122,34 +122,45 @@ export class DurableCombatLogSpool {
     return persisted;
   }
 
-  async append({ source, fileIdentity, startOffset, nextOffset, event }) {
+  async append(item) {
+    const records = await this.appendBatch([item]);
+    return records[0];
+  }
+
+  async appendBatch(items) {
     if (!this.journal) throw new Error('Spool is not open');
-    const sequence = this.sequence + 1;
-    const record = {
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const collectedAt = new Date().toISOString();
+    const records = items.map((item, index) => ({
       version: 1,
-      sequence,
-      source,
-      fileIdentity,
-      startOffset,
-      nextOffset,
-      collectedAt: new Date().toISOString(),
-      event,
-    };
-    await this.journal.write(`${JSON.stringify(record)}\n`);
+      sequence: this.sequence + index + 1,
+      source: item.source,
+      fileIdentity: item.fileIdentity,
+      startOffset: item.startOffset,
+      nextOffset: item.nextOffset,
+      collectedAt,
+      event: item.event,
+    }));
+
+    // One write and one fsync per poll batch. The checkpoint does not advance
+    // until every record in this buffer is durable.
+    await this.journal.write(records.map((record) => `${JSON.stringify(record)}\n`).join(''));
     await this.journal.sync();
 
+    const last = records.at(-1);
     const state = {
       version: 1,
-      sequence,
-      source,
-      fileIdentity,
-      sourceOffset: nextOffset,
-      updatedAt: record.collectedAt,
+      sequence: last.sequence,
+      source: last.source,
+      fileIdentity: last.fileIdentity,
+      sourceOffset: last.nextOffset,
+      updatedAt: last.collectedAt,
     };
     await this.#writeStateAtomic(state);
-    this.sequence = sequence;
+    this.sequence = last.sequence;
     this.state = state;
-    return record;
+    return records;
   }
 
   async #writeStateAtomic(state) {
