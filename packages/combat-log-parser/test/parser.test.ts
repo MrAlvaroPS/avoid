@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { toWireEvent } from '../../combat-log-contracts/src/index.ts';
 import { CombatLogParser, CombatLogTimestampResolver, tokenizeCombatLogCsv } from '../src/index.ts';
@@ -24,6 +25,16 @@ test('COMBAT_LOG_VERSION updates format state and preserves build provenance', (
   assert.deepEqual(parser.getFormatState(), { logFormatVersion: 19, advancedEnabled: true, gameBuild: '12.0.5', projectId: 1 });
   assert.equal(event.gameBuild, '12.0.5');
   assert.equal(event.timestamp, Date.UTC(2026, 10, 21, 11, 1, 34, 71));
+});
+
+test('explicit year and sub-millisecond timestamp are preserved from the real corpus format', () => {
+  const parser = new CombatLogParser(new CombatLogTimestampResolver({ referenceDate: new Date('2026-08-31T00:00:00Z'), fixedOffsetMinutes: 120 }));
+  const event = parser.parseLine(
+    '8/31/2026 22:28:54.3302  COMBAT_LOG_VERSION,19,ADVANCED_LOG_ENABLED,1,BUILD_VERSION,12.0.5,PROJECT_ID,1',
+    context(),
+  );
+  assert.equal(event.rawTimestamp, '8/31/2026 22:28:54.3302');
+  assert.ok(Math.abs(event.timestamp - (Date.UTC(2026, 7, 31, 20, 28, 54, 330) + 0.2)) < 0.001);
 });
 
 test('advanced SWING_DAMAGE binds snapshot through explicit infoGuid', () => {
@@ -84,4 +95,29 @@ test('wire conversion serializes bigint sequences as decimal strings', () => {
   assert.equal(wire.sequence, '9007199254740993');
   assert.equal(wire.rawRef.sequence, '9007199254740993');
   assert.doesNotThrow(() => JSON.stringify(wire));
+});
+
+test('sanitized Coiling corpus covers advanced, non-advanced aura and unverified absorb layouts', async () => {
+  const raw = await readFile(new URL('./fixtures/coiling-occurrence-1-sanitized.txt', import.meta.url), 'utf8');
+  const lines = raw.trim().split(/\r?\n/);
+  const parser = new CombatLogParser(new CombatLogTimestampResolver({ referenceDate: new Date('2026-08-31T00:00:00Z'), fixedOffsetMinutes: 120 }));
+  parser.hydrateFormatState({ logFormatVersion: 19, advancedEnabled: true, gameBuild: '12.0.5', projectId: 1 });
+  const events = lines.map((line, index) => parser.parseLine(line, context(BigInt(index + 1))));
+
+  assert.equal(events[0].eventType, 'SPELL_PERIODIC_HEAL');
+  assert.equal(events[0].payload.kind, 'heal');
+  assert.equal(events[0].advanced?.describesActor, 'target');
+  assert.equal(events[0].advanced?.mapId, 2607);
+
+  assert.equal(events[1].eventType, 'SPELL_AURA_REFRESH');
+  assert.equal(events[1].payload.kind, 'aura');
+  if (events[1].payload.kind === 'aura') {
+    assert.equal(events[1].payload.operation, 'refresh');
+    assert.equal(events[1].payload.auraType, 'DEBUFF');
+  }
+  assert.equal(events[1].advanced, undefined);
+
+  assert.equal(events[2].eventType, 'SPELL_ABSORBED');
+  assert.equal(events[2].payload.kind, 'unknown');
+  if (events[2].payload.kind === 'unknown') assert.equal(events[2].payload.reason, 'schema_not_verified');
 });
