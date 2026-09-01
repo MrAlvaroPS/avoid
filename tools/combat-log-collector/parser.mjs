@@ -9,8 +9,7 @@ const DAMAGE_EVENTS = new Set([
 ]);
 const HEAL_EVENTS = new Set(['SPELL_HEAL', 'SPELL_PERIODIC_HEAL', 'SPELL_HEAL_SUPPORT']);
 
-/** CSV parser for Blizzard combat-log payloads. It preserves empty fields and
- * supports quoted commas / doubled quotes instead of splitting on commas. */
+/** CSV parser for Blizzard combat-log payloads. */
 export function parseCsv(input) {
   const out = [];
   let value = '';
@@ -24,14 +23,12 @@ export function parseCsv(input) {
       } else {
         quoted = !quoted;
       }
-      continue;
-    }
-    if (ch === ',' && !quoted) {
+    } else if (ch === ',' && !quoted) {
       out.push(value);
       value = '';
-      continue;
+    } else {
+      value += ch;
     }
-    value += ch;
   }
   out.push(value);
   return out;
@@ -39,11 +36,9 @@ export function parseCsv(input) {
 
 export function splitCombatLogLine(line) {
   const trimmed = line.replace(/[\r\n]+$/, '');
-  const match = trimmed.match(/^(.*?)\s{2,}|^(.*?)\t+/);
+  const match = trimmed.match(/^(.*?)(?:\s{2,}|\t+)(.*)$/);
   if (!match) return { timestampText: null, payload: trimmed };
-  const boundary = match[0].length;
-  const timestampText = (match[1] ?? match[2] ?? '').trim();
-  return { timestampText: timestampText || null, payload: trimmed.slice(boundary) };
+  return { timestampText: match[1].trim() || null, payload: match[2] };
 }
 
 function asNumber(value) {
@@ -60,17 +55,20 @@ function asBoolean(value) {
 
 function parseAdvanced(fields) {
   if (fields.length !== 17 && fields.length !== 19) return null;
+  const common = {
+    infoGuid: fields[0] || null,
+    ownerGuid: fields[1] || null,
+    currentHp: asNumber(fields[2]),
+    maxHp: asNumber(fields[3]),
+    attackPower: asNumber(fields[4]),
+    spellPower: asNumber(fields[5]),
+    armor: asNumber(fields[6]),
+    absorb: asNumber(fields[7]),
+  };
   if (fields.length === 19) {
     return {
       layout: 'modern-19',
-      infoGuid: fields[0] || null,
-      ownerGuid: fields[1] || null,
-      currentHp: asNumber(fields[2]),
-      maxHp: asNumber(fields[3]),
-      attackPower: asNumber(fields[4]),
-      spellPower: asNumber(fields[5]),
-      armor: asNumber(fields[6]),
-      absorb: asNumber(fields[7]),
+      ...common,
       reserved1: asNumber(fields[8]),
       reserved2: asNumber(fields[9]),
       powerType: asNumber(fields[10]),
@@ -85,35 +83,27 @@ function parseAdvanced(fields) {
       raw: fields,
     };
   }
+  // Legacy advanced logging is the same semantic block without the two
+  // reserved modern slots between absorb and powerType.
   return {
     layout: 'legacy-17',
-    infoGuid: fields[0] || null,
-    ownerGuid: fields[1] || null,
-    currentHp: asNumber(fields[2]),
-    maxHp: asNumber(fields[3]),
-    attackPower: asNumber(fields[4]),
-    spellPower: asNumber(fields[5]),
-    armor: asNumber(fields[6]),
-    absorb: null,
+    ...common,
     reserved1: null,
     reserved2: null,
-    powerType: asNumber(fields[7]),
-    currentPower: asNumber(fields[8]),
-    maxPower: asNumber(fields[9]),
-    powerCost: asNumber(fields[10]),
-    positionX: asNumber(fields[11]),
-    positionY: asNumber(fields[12]),
-    uiMapId: asNumber(fields[13]),
-    facing: asNumber(fields[14]),
-    itemLevelOrLevel: asNumber(fields[15]),
-    legacyExtra: fields[16] ?? null,
+    powerType: asNumber(fields[8]),
+    currentPower: asNumber(fields[9]),
+    maxPower: asNumber(fields[10]),
+    powerCost: asNumber(fields[11]),
+    positionX: asNumber(fields[12]),
+    positionY: asNumber(fields[13]),
+    uiMapId: asNumber(fields[14]),
+    facing: asNumber(fields[15]),
+    itemLevelOrLevel: asNumber(fields[16]),
     raw: fields,
   };
 }
 
 function parseDamageSuffix(fields) {
-  // Modern retail inserts rawAmount after baseAmount. Older logs begin with
-  // amount,overkill. We use length + numeric shape but keep raw in all cases.
   if (fields.length >= 11) {
     return {
       layout: 'modern',
@@ -185,22 +175,17 @@ function suffixMinimum(event) {
   if (DAMAGE_EVENTS.has(event)) return 10;
   if (HEAL_EVENTS.has(event)) return 4;
   if (event === 'SWING_DAMAGE' || event === 'SWING_DAMAGE_LANDED') return 10;
-  if (event === 'ENVIRONMENTAL_DAMAGE') return 11; // env type + damage suffix
+  if (event === 'ENVIRONMENTAL_DAMAGE') return 11;
   return null;
 }
 
 function resolveAdvancedAndSuffix(event, remainder) {
   const minimum = suffixMinimum(event);
   if (minimum == null) return { advanced: null, suffixFields: remainder, advancedFieldCount: 0 };
-
-  // Prefer modern when both are structurally possible. Reject a candidate if
-  // it would leave fewer than the known minimum suffix fields.
   for (const length of [19, 17]) {
     if (remainder.length - length < minimum) continue;
     const advanced = parseAdvanced(remainder.slice(0, length));
     if (!advanced) continue;
-    // infoGUID is the strongest cheap sanity check: advanced data identifies
-    // a unit and therefore normally starts with a GUID-like token.
     if (advanced.infoGuid && !/^(Player|Creature|Pet|Vehicle|GameObject|0000000000000000|-)/.test(advanced.infoGuid)) continue;
     return { advanced, suffixFields: remainder.slice(length), advancedFieldCount: length };
   }
@@ -208,10 +193,9 @@ function resolveAdvancedAndSuffix(event, remainder) {
 }
 
 function parseSpellAbsorbed(fields) {
-  // SPELL_ABSORBED is not an ordinary *_DAMAGE suffix. After the common
-  // header it has two well-known shapes. Preserve unknown shapes verbatim.
-  // Spell attack: damage spell(3), absorber(4), absorb spell(3), amount,
-  // totalAmount, critical. Physical/swing attack omits damage spell(3).
+  // This event is special: despite its SPELL_ name, the combat-log grammar
+  // does not have the normal spell prefix. Its first optional three fields
+  // describe the damage spell only for the spell-attack variant.
   if (fields.length >= 13 && asNumber(fields[0]) != null) {
     return {
       layout: 'spell-attack',
@@ -253,7 +237,6 @@ export function parseCombatLogLine(line) {
     for (let i = 2; i + 1 < fields.length; i += 2) metadata[fields[i]] = fields[i + 1];
     return { ...base, kind: 'metadata', version: asNumber(fields[1]), metadata };
   }
-
   if (fields.length < 9) return { ...base, kind: 'raw', payloadFields: fields.slice(1) };
 
   const common = {
@@ -267,17 +250,15 @@ export function parseCombatLogLine(line) {
     destRaidFlags: fields[8] || null,
   };
 
-  let cursor = 9;
-  let spell = null;
-  if (SPELL_PREFIX_EVENTS.test(event)) {
-    if (fields.length >= cursor + 3) {
-      spell = { id: asNumber(fields[cursor]), name: fields[cursor + 1] || null, school: asNumber(fields[cursor + 2]) };
-      cursor += 3;
-    }
+  if (event === 'SPELL_ABSORBED') {
+    return { ...base, kind: 'event', common, spell: null, advanced: null, advancedFieldCount: 0, suffix: parseSpellAbsorbed(fields.slice(9)) };
   }
 
-  if (event === 'SPELL_ABSORBED') {
-    return { ...base, kind: 'event', common, spell: null, advanced: null, suffix: parseSpellAbsorbed(fields.slice(cursor)) };
+  let cursor = 9;
+  let spell = null;
+  if (SPELL_PREFIX_EVENTS.test(event) && fields.length >= cursor + 3) {
+    spell = { id: asNumber(fields[cursor]), name: fields[cursor + 1] || null, school: asNumber(fields[cursor + 2]) };
+    cursor += 3;
   }
 
   const resolved = resolveAdvancedAndSuffix(event, fields.slice(cursor));
