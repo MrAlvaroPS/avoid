@@ -69,20 +69,37 @@ export class DurableCombatLogSpool {
 
     let last = null;
     const lines = journalText.split('\n');
-    for (const line of lines) {
+    const lastNonEmptyIndex = (() => {
+      for (let i = lines.length - 1; i >= 0; i -= 1) if (lines[i].trim()) return i;
+      return -1;
+    })();
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i];
       if (!line.trim()) continue;
       try {
         const record = JSON.parse(line);
-        if (Number.isInteger(record.sequence) && record.sequence > (last?.sequence ?? 0)) last = record;
+        if (!Number.isInteger(record.sequence) || record.sequence < 1) {
+          throw new Error('invalid sequence');
+        }
+        if (last && record.sequence <= last.sequence) {
+          throw new Error('non-monotonic sequence');
+        }
+        last = record;
       } catch {
-        // A torn final write must not poison all earlier durable records.
-        // Non-final corruption is surfaced because silently skipping it could
-        // create an untraceable hole in the event stream.
-        if (line !== lines.at(-1)) throw new Error('Corrupt non-final record in combat-log spool');
+        // Only a torn final physical record is recoverable. Corruption in the
+        // middle would create an untraceable hole, so fail closed.
+        if (i !== lastNonEmptyIndex) throw new Error('Corrupt non-final record in combat-log spool');
       }
     }
 
-    if (last && last.sequence >= (persisted.sequence ?? 0)) {
+    const journalSequence = last?.sequence ?? 0;
+    const stateSequence = Number.isInteger(persisted.sequence) ? persisted.sequence : 0;
+    if (stateSequence > journalSequence) {
+      throw new Error('Combat-log spool state is ahead of its durable journal');
+    }
+
+    if (last && journalSequence >= stateSequence) {
       return {
         version: 1,
         sequence: last.sequence,
