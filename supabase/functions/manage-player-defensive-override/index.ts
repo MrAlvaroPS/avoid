@@ -103,7 +103,7 @@ Deno.serve(async (req: Request) => {
     const [catalogResult, profilesResult, rulesResult] = await Promise.all([
       supabase
         .from('cooldown_catalog')
-        .select('class,spec,spec_override,spell_id,name,category,survival_type,targeting_mode,base_cooldown_ms,base_duration_ms,excluded')
+        .select('class,spec,spec_override,spell_id,name,category,survival_type,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build,base_cooldown_ms,base_duration_ms,excluded')
         .eq('class', className)
         .eq('excluded', false),
       supabase.from('defensive_spec_profiles').select('*').eq('class', className),

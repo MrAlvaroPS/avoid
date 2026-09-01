@@ -15,6 +15,7 @@ function defensive(spellId: number, cooldownMs = 20_000, overrides: Partial<Reso
     category: 'personal_defensive',
     survivalType: 'mitigation',
     targetingMode: 'self',
+    activationMode: 'active',
     effectiveCooldownMs: cooldownMs,
     effectiveDurationMs: 5_000,
     charges: 1,
@@ -127,6 +128,30 @@ describe('defensive execution evaluator', () => {
       }),
     );
     expect(result.events[0]).toEqual(expect.objectContaining({ state: 'plan_broken', reason: 'TARGET_MISMATCH', coverageOutcome: 'uncovered' }));
+  });
+
+  it('evaluates a semi defensive only when the published plan opted into it', () => {
+    const semi = defensive(17, 15_000, { category: 'semi_defensive', targetingMode: 'both' });
+    const planned = evaluateDefensiveExecution(
+      input({
+        kit: [semi],
+        slots: [slot({ defensiveSpellId: 17 })],
+        casts: [{ sourcePlayerKey: 'player:a', spellId: 17, timeMs: 99_000, targetPlayerKey: 'player:a' }],
+      }),
+    );
+    const noPlan = evaluateDefensiveExecution(
+      input({
+        mode: 'no_plan',
+        planVersionId: null,
+        kit: [semi],
+        slots: [],
+        windows: [window()],
+        casts: [{ sourcePlayerKey: 'player:a', spellId: 17, timeMs: 84_000, targetPlayerKey: 'player:a' }],
+      }),
+    );
+
+    expect(planned.events[0].state).toBe('plan_covered');
+    expect(noPlan.events[0].state).toBe('no_feasible_alternative');
   });
 
   it('never emits a punitive state when data confidence is uncertain', () => {

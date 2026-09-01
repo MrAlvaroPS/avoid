@@ -119,15 +119,12 @@
     </p>
   }
 
-  <!-- §"la cantidad de habilidades defensivas no es desorbitante, ¿no
-       podemos hacer un único prompt que clasifique todas las specs a la vez
-       y rellene toda la tabla de golpe?" (feedback real, contrastado: 60
-       filas en total en las 13 clases — cabe de sobra en un solo prompt).
-       Vive a nivel de página, no dentro de una clase concreta: clasificar
-       "todo" no depende de cuál esté seleccionada. -->
+  <!-- La salida completa creció al incorporar builds, perfiles, reglas y
+       targets. Se procesa por clase para que una respuesta truncada no deje
+       media auditoría aplicada. -->
   <div class="classify-bar">
     @if (!classifyPanelOpen()) {
-      <button type="button" class="classify-toggle all" (click)="openClassifyPanel('all')">🔎 Clasificar TODOS los defensivos (todas las clases) con una sola IA →</button>
+      <span class="meta">La auditoría IA se ejecuta por clase: evita respuestas truncadas y permite revisar cada bloque antes de continuar.</span>
     }
   </div>
 
@@ -140,7 +137,7 @@
       } @else {
         <div class="classify-step">
           <span class="step-label"
-            >1. Prompt v{{ classifyPromptVersion() ?? '—' }} · Alcance: {{ classifyScope() === 'all' ? 'todas las clases' : classDisplayName(classifyScope()!) }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyDefensiveCount() }} defensivos). Clasificará
+            >1. Prompt v{{ classifyPromptVersion() ?? '—' }} · Alcance: {{ classDisplayName(classifyScope()!) }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyDefensiveCount() }} defensivos). Clasificará
             cada habilidad según qué le hace al daño entrante, contrastándolo contra su tooltip real.</span
           >
           <pre class="prompt-box">{{ classifyFullPrompt }}</pre>
@@ -151,7 +148,7 @@
           <textarea
             class="paste-box"
             rows="6"
-            placeholder="Pega aquí el array JSON de clasificaciones…"
+            placeholder="Pega aquí el objeto JSON completo (también acepta un único bloque ```json)…"
             [value]="classifyPasteText()"
             (input)="classifyPasteText.set($any($event.target).value)"
           ></textarea>
@@ -248,7 +245,7 @@
                clase (ej. tras añadir una habilidad nueva sin reclasificar
                las otras 12 clases otra vez). -->
           <div class="classify-bar">
-            <button type="button" class="classify-toggle" (click)="openClassifyPanel(className)">🔎 …o clasificar solo {{ classDisplayName(className) }} con IA →</button>
+            <button type="button" class="classify-toggle" (click)="openClassifyPanel(className)">🔎 Clasificar {{ classDisplayName(className) }} con IA →</button>
             <!-- §"botón para limpiar sus defensivos y volver a calcularlos con el prompt, porque alguno se desactualiza" (feedback real, 2026-08-31) -->
             <button type="button" class="delete-btn" [class.confirming]="confirmingResetClassId() === className" [disabled]="resettingClass()" (click)="requestResetClassDefensives(className)">
               {{ confirmingResetClassId() === className ? '¿seguro? (borra la clasificación de toda la clase)' : '🗑 restablecer clasificación' }}
@@ -264,7 +261,8 @@
                 <th>Defensivo</th>
                 <th title="Razonamiento de la IA al clasificarlo, si vino de ese flujo">IA</th>
                 <th title="Spec concreta, o toda la clase si está vacío">Spec</th>
-                <th title="A quién protege — personal/semi/external/utility, ya venía del catálogo">Categoría</th>
+                <th title="Rol del recurso: personal, semi, external o utility. Editable si la clasificación automática vino mal.">Categoría</th>
+                <th title="A quién puede proteger realmente: self, ally, both, raid o unknown.">Target</th>
                 <th title="Qué le hace al daño entrante: mitigation/absorption/sustain/emergency">Tipo de supervivencia</th>
                 <th title="Cooldown y duración base, si el extractor pudo resolverlos">CD / Duración</th>
                 <th>Revisado</th>
@@ -296,7 +294,20 @@
                       <button type="button" class="classify-toggle reset-spec" title="Deshacer la corrección manual, volver a lo que dice el catálogo/IA" (click)="resetDefensiveSpecOverride(d)">↺ restablecer ({{ d.spec ?? 'toda la clase*' }})</button>
                     }
                   </td>
-                  <td><span class="meta">{{ d.category }}</span></td>
+                  <td>
+                    <select [value]="d.category" (change)="onDefensiveCategoryChange(d, $any($event.target).value)">
+                      @for (category of defensiveCategories; track category) {
+                        <option [value]="category">{{ defensiveCategoryLabel(category) }}</option>
+                      }
+                    </select>
+                  </td>
+                  <td>
+                    <select [value]="d.targeting_mode" (change)="onEdit(d, { targeting_mode: $any($event.target).value })">
+                      @for (targetingMode of defensiveTargetingModes; track targetingMode) {
+                        <option [value]="targetingMode">{{ targetingMode }}</option>
+                      }
+                    </select>
+                  </td>
                   <td>
                     <select (change)="onEdit(d, { survival_type: $any($event.target).value || null })">
                       <option value="" [selected]="!d.survival_type">Sin decidir</option>

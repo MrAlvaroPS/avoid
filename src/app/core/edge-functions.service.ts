@@ -85,7 +85,7 @@ export interface DefensiveReanalysisQueueStatusResult {
 export type DefensiveV2ReadinessState = 'ready' | 'partial' | 'missing';
 
 export interface DefensiveV2ReadinessCheck {
-  id: 'resolver_endpoint' | 'override_endpoint' | 'resolver_schema' | 'override_audit' | 'plan_schema' | 'evaluator_schema' | 'reliability_v2' | 'backfill';
+  id: 'resolver_endpoint' | 'override_endpoint' | 'generator_endpoint' | 'resolver_schema' | 'override_audit' | 'plan_schema' | 'evaluator_schema' | 'reliability_v2' | 'backfill';
   label: string;
   state: DefensiveV2ReadinessState;
   detail: string;
@@ -360,9 +360,8 @@ export class EdgeFunctionsService {
   }
 
   /** §"pantalla nueva para clasificar defensivos... parecida a la de mecánicas" — mismo patrón de prompt/pegar-respuesta que classify-mechanics, acotado a una clase. */
-  // className=null => catálogo entero (todas las clases en un único prompt,
-  // feedback real: "la cantidad de habilidades defensivas no es
-  // desorbitante... un único prompt que clasifique todas las specs a la vez").
+  // La UI trabaja por clase para que cada investigación sea verificable y la
+  // respuesta no se trunque. El endpoint rechaza el alcance global.
   async resolvePlayerDefensiveKit(params: {
     playerName?: string;
     characterId?: number;
@@ -409,12 +408,15 @@ export class EdgeFunctionsService {
     type SchemaReadiness = Omit<DefensiveV2ReadinessResult, 'resolverVersion'> & {
       checks: Exclude<DefensiveV2ReadinessCheck, { id: 'resolver_endpoint' }>[];
     };
-    const [schema, resolver, overrideEndpoint] = await Promise.all([
+    const [schema, resolver, overrideEndpoint, generatorEndpoint] = await Promise.all([
       this.invoke<SchemaReadiness>('defensive-v2-readiness', {}),
       this.invoke<{ ok: true; resolverVersion: string }>('resolve-player-defensive-kit', { action: 'health' })
         .then((result) => ({ ready: true as const, result }))
         .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
       this.invoke<{ ok: true; overrideVersion: string }>('manage-player-defensive-override', { action: 'health' })
+        .then((result) => ({ ready: true as const, result }))
+        .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
+      this.invoke<{ ok: true; generatorVersion: string }>('generate-defensive-plan', { action: 'health' })
         .then((result) => ({ ready: true as const, result }))
         .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
     ]);
@@ -436,7 +438,7 @@ export class EdgeFunctionsService {
     const capabilities = {
       playerMode: resolver.ready && schema.capabilities.playerMode,
       playerOverride: resolver.ready && overrideEndpoint.ready && schema.capabilities.playerOverride,
-      planManagement: resolver.ready && schema.capabilities.planManagement,
+      planManagement: resolver.ready && generatorEndpoint.ready && schema.capabilities.planManagement,
       evaluator: resolver.ready && schema.capabilities.evaluator,
       infographic: resolver.ready && schema.capabilities.infographic,
       reliability: resolver.ready && schema.capabilities.reliability,
@@ -456,11 +458,26 @@ export class EdgeFunctionsService {
           detail: overrideEndpoint.error,
           requiredMigration: 'Desplegar manage-player-defensive-override',
         };
+    const generatorEndpointCheck: DefensiveV2ReadinessCheck = generatorEndpoint.ready
+      ? {
+          id: 'generator_endpoint',
+          label: 'Generador de planes',
+          state: 'ready',
+          detail: generatorEndpoint.result.generatorVersion,
+          requiredMigration: null,
+        }
+      : {
+          id: 'generator_endpoint',
+          label: 'Generador de planes',
+          state: 'missing',
+          detail: generatorEndpoint.error,
+          requiredMigration: 'Desplegar generate-defensive-plan',
+        };
     return {
       ...schema,
-      state: !resolver.ready || !overrideEndpoint.ready ? 'missing' : schema.state,
+      state: !resolver.ready || !overrideEndpoint.ready || !generatorEndpoint.ready ? 'missing' : schema.state,
       resolverVersion: resolver.ready ? resolver.result.resolverVersion : null,
-      checks: [resolverCheck, overrideEndpointCheck, ...schema.checks],
+      checks: [resolverCheck, overrideEndpointCheck, generatorEndpointCheck, ...schema.checks],
       capabilities,
     };
   }
@@ -506,6 +523,8 @@ export class EdgeFunctionsService {
     class: string;
     spellId: number;
     survivalType?: string | null;
+    category?: 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
+    targetingMode?: 'self' | 'ally' | 'both' | 'raid' | 'unknown';
     reviewed?: boolean;
     baseCooldownMs?: number | null;
     baseDurationMs?: number | null;
@@ -662,6 +681,7 @@ export class EdgeFunctionsService {
       role?: 'tank' | 'healer' | 'dps';
       included?: boolean;
     }[];
+    resourceSelections?: { playerName: string; spellIds: number[] }[];
     reservations?: Record<string, unknown>[];
     maxSearchNodes?: number;
     supersedesId?: string | null;

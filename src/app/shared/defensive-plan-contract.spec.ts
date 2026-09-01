@@ -13,7 +13,7 @@ function validDraft(): CreateDraftRequest {
     planMode: 'full',
     planningQuality: 'optimal',
     solverVersion: 'defensive-plan-solver@2.0.0',
-    resolverVersion: 'effective-defensives@2.0.0',
+    resolverVersion: 'effective-defensives@2.1.0',
     rosterSnapshotAt: '2026-09-01T00:00:00.000Z',
     members: [
       {
@@ -21,7 +21,7 @@ function validDraft(): CreateDraftRequest {
         playerName: 'Alda',
         class: 'Priest',
         spec: 'Discipline',
-        resolverVersion: 'effective-defensives@2.0.0',
+        resolverVersion: 'effective-defensives@2.1.0',
         buildConfidence: 'verified',
         effectiveKit: [],
       },

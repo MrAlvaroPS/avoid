@@ -73,9 +73,11 @@ export function auditControlledDefensiveBackfill(records: AuditRecord[]): Contro
   const entries = records.flatMap((record) => kitFor(record).map((entry) => ({ record, entry })));
 
   const fade = entries.filter(({ entry }) => entry.spellId === 586 || entry.name.trim().toLowerCase() === 'fade');
-  const fadePassed = fade.filter(({ entry }) => {
-    const hasModifier = (entry.provenance ?? []).some((step) => step.kind === 'modifier' && step.field === 'cooldown_ms');
-    return baseValue(entry, 'cooldown_ms') === 30_000 && entry.effectiveCooldownMs === 20_000 && hasModifier;
+  const fadeWithModifier = fade.filter(({ entry }) =>
+    (entry.provenance ?? []).some((step) => step.kind === 'modifier' && step.field === 'cooldown_ms'),
+  );
+  const fadePassed = fadeWithModifier.filter(({ entry }) => {
+    return baseValue(entry, 'cooldown_ms') === 30_000 && entry.effectiveCooldownMs === 20_000;
   }).length;
 
   const unchanged = entries.filter(({ entry }) => {
@@ -131,8 +133,13 @@ export function auditControlledDefensiveBackfill(records: AuditRecord[]): Contro
     detail: observed === 0 ? 'El sample no contiene este caso; ampliar o escoger pulls dirigidos.' : `${passed}/${observed} ${successDetail}`,
   });
 
+  const fadeResult = result('fade_modifier', 'Fade 30 s → 20 s con modificador', fadeWithModifier.length, fadePassed, 'resoluciones correctas.');
+  if (!fadeWithModifier.length && fade.length) {
+    fadeResult.detail = `${fade.length} kits contienen Fade base, pero ninguno expone una regla de talento aplicada; revisa la regla creada por el prompt y el spellId del talento antes de usar este caso como prueba.`;
+  }
+
   return [
-    result('fade_modifier', 'Fade 30 s → 20 s con modificador', fade.length, fadePassed, 'resoluciones correctas.'),
+    fadeResult,
     result('unchanged_base', 'Base = efectivo sin modificadores', unchanged.length, unchangedPassed, 'resoluciones sin cambios coherentes.'),
     result('charges_recharge', 'Dos cargas y recharge', charged.length, chargedPassed, 'defensivos con recharge válido.'),
     result('external_target', 'External no cuenta como personal propio', externalObserved, externalPassed, 'muertes sin falsa oportunidad personal.'),

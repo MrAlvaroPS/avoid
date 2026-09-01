@@ -24,6 +24,8 @@ import { enqueueDefensiveReanalysis } from '../_shared/defensive-reanalysis-queu
 // — cambiar qué specs tienen un defensivo SÍ afecta ese cálculo, igual que
 // cooldown/duración. Las tres cosas disparan reanálisis ahora.
 const VALID_SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
+const VALID_CATEGORIES = new Set(['personal_defensive', 'semi_defensive', 'external_defensive', 'utility']);
+const VALID_TARGETING_MODES = new Set(['self', 'ally', 'both', 'raid', 'unknown']);
 
 // §"no puedo editar el campo de cd... no poner el cd de un defensivo falsea
 // muchísimo los datos, medias y baremos" (feedback real, 2026-08-29):
@@ -37,6 +39,8 @@ interface EditRequest {
   class: string;
   spellId: number;
   survivalType?: string | null;
+  category?: string;
+  targetingMode?: string;
   reviewed?: boolean;
   baseCooldownMs?: number | null;
   baseDurationMs?: number | null;
@@ -71,6 +75,12 @@ Deno.serve(async (req: Request) => {
   if (body.survivalType && !VALID_SURVIVAL_TYPES.has(body.survivalType)) {
     return jsonResponse({ ok: false, error: `survivalType inválido: ${body.survivalType}` }, 400);
   }
+  if (body.category != null && !VALID_CATEGORIES.has(body.category)) {
+    return jsonResponse({ ok: false, error: `category inválida: ${body.category}` }, 400);
+  }
+  if (body.targetingMode != null && !VALID_TARGETING_MODES.has(body.targetingMode)) {
+    return jsonResponse({ ok: false, error: `targetingMode inválido: ${body.targetingMode}` }, 400);
+  }
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
@@ -84,7 +94,20 @@ Deno.serve(async (req: Request) => {
   // cada vez que alguien marca un checkbox sin cambiar nada más. Se lee el
   // valor ANTERIOR real y se compara contra el nuevo — la única forma
   // correcta de saber qué cambió de verdad.
-  const { data: before } = await supabase.from('cooldown_catalog').select('survival_type, spec_override, excluded').eq('class', body.class).eq('spell_id', body.spellId).maybeSingle();
+  const { data: before } = await supabase.from('cooldown_catalog').select('survival_type, category, targeting_mode, spec_override, excluded').eq('class', body.class).eq('spell_id', body.spellId).maybeSingle();
+  if (!before) return jsonResponse({ ok: false, error: 'Defensivo no encontrado.' }, 404);
+
+  const nextCategory = body.category ?? before.category;
+  const nextTargetingMode = body.targetingMode ?? before.targeting_mode;
+  if (nextCategory === 'personal_defensive' && nextTargetingMode !== 'self') {
+    return jsonResponse({ ok: false, error: 'personal_defensive requiere target self.' }, 400);
+  }
+  if (nextCategory === 'semi_defensive' && nextTargetingMode !== 'both') {
+    return jsonResponse({ ok: false, error: 'semi_defensive requiere target both.' }, 400);
+  }
+  if (nextCategory === 'external_defensive' && !['ally', 'raid', 'unknown'].includes(nextTargetingMode)) {
+    return jsonResponse({ ok: false, error: 'external_defensive requiere target ally, raid o unknown.' }, 400);
+  }
 
   // §"editarlo para que sea en segundos" (feedback real, 2026-08-29): el
   // componente ya convierte segundos->ms antes de llamar aquí — esta
@@ -104,6 +127,8 @@ Deno.serve(async (req: Request) => {
     updated_at: new Date().toISOString(),
   };
   if ('survivalType' in body) patch['survival_type'] = body.survivalType ?? null;
+  if ('category' in body) patch['category'] = body.category;
+  if ('targetingMode' in body) patch['targeting_mode'] = body.targetingMode;
   if ('baseCooldownMs' in body) patch['base_cooldown_ms'] = body.baseCooldownMs;
   if ('baseDurationMs' in body) patch['base_duration_ms'] = body.baseDurationMs;
   if ('specOverride' in body) patch['spec_override'] = body.specOverride;
@@ -120,6 +145,8 @@ Deno.serve(async (req: Request) => {
   }
 
   const survivalTypeChanged = 'survivalType' in body && (before?.survival_type ?? null) !== (body.survivalType ?? null);
+  const categoryChanged = 'category' in body && before.category !== body.category;
+  const targetingModeChanged = 'targetingMode' in body && before.targeting_mode !== body.targetingMode;
   const specOverrideChanged = 'specOverride' in body && !sameStringArray(before?.spec_override as string[] | null | undefined, body.specOverride);
   const excludedChanged = 'excluded' in body && (before?.excluded ?? false) !== (body.excluded ?? false);
 
@@ -151,7 +178,7 @@ Deno.serve(async (req: Request) => {
   // la pestaña, otra sesión recupera los jobs que sigan pendientes.
   let pullIds: string[] = [];
   let pullDiscoveryError: string | null = null;
-  if ('baseCooldownMs' in body || 'baseDurationMs' in body || survivalTypeChanged || specOverrideChanged || excludedChanged) {
+  if ('baseCooldownMs' in body || 'baseDurationMs' in body || survivalTypeChanged || categoryChanged || targetingModeChanged || specOverrideChanged || excludedChanged) {
     const { data: affectedRecords, error: affectedError } = await supabase
       .from('player_pull_records')
       .select('pull_id')

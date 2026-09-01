@@ -15,6 +15,7 @@ function defensive(overrides: Partial<ResolvedDefensive> = {}): ResolvedDefensiv
     category: 'personal_defensive',
     survivalType: 'mitigation',
     targetingMode: 'self',
+    activationMode: 'active',
     effectiveCooldownMs: 20_000,
     effectiveDurationMs: 5_000,
     charges: 1,
@@ -22,7 +23,7 @@ function defensive(overrides: Partial<ResolvedDefensive> = {}): ResolvedDefensiv
     eligible: true,
     buildFingerprint: 'sha256:test',
     gameBuild: '12.1.0.68914',
-    resolverVersion: 'effective-defensives@2.0.0',
+    resolverVersion: 'effective-defensives@2.1.0',
     confidence: 'verified',
     provenance: [],
     conditionalModifiers: [],
@@ -67,6 +68,13 @@ describe('effective v2 materialization', () => {
   it('excludes external defensives from personal death options', () => {
     const external = defensive({ spellId: 33206, name: 'Pain Suppression', category: 'external_defensive', targetingMode: 'ally' });
     const options = effectiveDeathOptions([defensive(), external], new Map(), 10_000);
+
+    expect(options.map((option) => option.spellId)).toEqual([586]);
+  });
+
+  it('also excludes semi defensives unless a published plan opted into them', () => {
+    const semi = defensive({ spellId: 17, name: 'Power Word: Shield', category: 'semi_defensive', targetingMode: 'both' });
+    const options = effectiveDeathOptions([defensive(), semi], new Map(), 10_000);
 
     expect(options.map((option) => option.spellId)).toEqual([586]);
   });

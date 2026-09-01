@@ -7,11 +7,12 @@
  * modo que su contrato se puede probar también desde la suite de Angular.
  */
 
-export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.0.0';
+export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 export type DefensiveCategory = 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
 export type DefensiveTargetingMode = 'self' | 'ally' | 'both' | 'raid' | 'unknown';
+export type DefensiveActivationMode = 'active' | 'passive';
 export type DefensiveResolutionConfidence = 'verified' | 'inferred' | 'fallback' | 'uncertain';
 export type DefensiveEffectField = 'cooldown_ms' | 'duration_ms' | 'charges' | 'recharge_ms';
 export type DefensiveModifierOperation = 'set_ms' | 'multiply' | 'add_ms' | 'subtract_ms' | 'charges_add';
@@ -32,6 +33,9 @@ export interface EffectiveDefensiveCatalogEntry {
   category: DefensiveCategory;
   survivalType: 'mitigation' | 'absorption' | 'sustain' | 'emergency' | null;
   targetingMode: DefensiveTargetingMode;
+  activationMode: DefensiveActivationMode;
+  passiveConversionSpellIds: number[];
+  activationGameBuild: string;
   baseCooldownMs: number | null;
   baseDurationMs: number | null;
   excluded?: boolean;
@@ -123,8 +127,8 @@ export interface ObservedGameBuild {
 }
 
 export interface ResolutionStep {
-  kind: 'catalog_base' | 'eligibility' | 'spec_profile' | 'modifier' | 'conditional_modifier' | 'player_override' | 'validation';
-  field: DefensiveEffectField | 'eligible' | 'targeting_mode';
+  kind: 'catalog_base' | 'eligibility' | 'availability_rule' | 'spec_profile' | 'modifier' | 'conditional_modifier' | 'player_override' | 'validation';
+  field: DefensiveEffectField | 'eligible' | 'targeting_mode' | 'activation_mode';
   before: number | string | boolean | null;
   after: number | string | boolean | null;
   operation?: DefensiveModifierOperation;
@@ -142,6 +146,7 @@ export interface ResolvedDefensive {
   category: DefensiveCategory;
   survivalType: 'mitigation' | 'absorption' | 'sustain' | 'emergency' | null;
   targetingMode: DefensiveTargetingMode;
+  activationMode: DefensiveActivationMode;
   effectiveCooldownMs: number | null;
   effectiveDurationMs: number | null;
   charges: number;
@@ -212,6 +217,11 @@ export function effectiveDefensiveDataFromDatabaseRows(rows: EffectiveDefensiveD
       category: row['category'] as DefensiveCategory,
       survivalType: nullableString(row['survival_type']) as EffectiveDefensiveCatalogEntry['survivalType'],
       targetingMode: (nullableString(row['targeting_mode']) ?? 'unknown') as DefensiveTargetingMode,
+      activationMode: (nullableString(row['activation_mode']) ?? 'active') as DefensiveActivationMode,
+      passiveConversionSpellIds: Array.isArray(row['passive_conversion_spell_ids'])
+        ? row['passive_conversion_spell_ids'].map(Number).filter(positiveInteger)
+        : [],
+      activationGameBuild: nullableString(row['activation_game_build']) ?? LEGACY_GAME_BUILD,
       baseCooldownMs: nullableNumber(row['base_cooldown_ms']),
       baseDurationMs: nullableNumber(row['base_duration_ms']),
       excluded: row['excluded'] === true,
@@ -447,6 +457,7 @@ export function resolveEffectiveDefensiveKit(
       let charges = 1;
       let rechargeMs: number | null = null;
       let targetingMode = TARGETING_MODES.has(entry.targetingMode) ? entry.targetingMode : 'unknown';
+      let activationMode: DefensiveActivationMode = entry.activationMode === 'passive' ? 'passive' : 'active';
       const provenance: ResolutionStep[] = [
         {
           kind: 'catalog_base',
@@ -471,6 +482,51 @@ export function resolveEffectiveDefensiveKit(
         },
       ];
       const conditionalModifiers: ResolutionStep[] = [];
+
+      if (activationMode === 'passive') {
+        eligible = false;
+        provenance.push({
+          kind: 'eligibility',
+          field: 'activation_mode',
+          before: 'active',
+          after: 'passive',
+          description: 'El catálogo actual define la habilidad como pasiva; no existe un botón asignable.',
+          gameBuild: entry.activationGameBuild,
+        });
+      }
+
+      if (entry.passiveConversionSpellIds.length) {
+        const activationBuildMatches = input.gameBuild != null && entry.activationGameBuild === input.gameBuild;
+        if (!activationBuildMatches || normalizedBuild == null || unresolvedSelectedNodes) {
+          eligible = false;
+          confidence = weakerConfidence(confidence, 'uncertain');
+          provenance.push({
+            kind: 'availability_rule',
+            field: 'eligible',
+            before: true,
+            after: false,
+            description: !activationBuildMatches
+              ? 'La conversión activa/pasiva no está verificada para este build; se excluye del plan por seguridad.'
+              : 'No se puede resolver con certeza si el talento convierte esta habilidad en pasiva; se excluye del plan por seguridad.',
+            gameBuild: entry.activationGameBuild,
+          });
+        } else {
+          const selectedConverter = entry.passiveConversionSpellIds.find((spellId) => ranks.has(spellId));
+          if (selectedConverter != null) {
+            eligible = false;
+            activationMode = 'passive';
+            provenance.push({
+              kind: 'availability_rule',
+              field: 'activation_mode',
+              before: 'active',
+              after: 'passive',
+              source: `talent:${selectedConverter}`,
+              description: 'Un talento seleccionado convierte la habilidad en pasiva o elimina el botón activo.',
+              gameBuild: entry.activationGameBuild,
+            });
+          }
+        }
+      }
 
       if (input.talentLookupComplete === false) {
         confidence = weakerConfidence(confidence, 'fallback');
@@ -789,6 +845,7 @@ export function resolveEffectiveDefensiveKit(
         category: entry.category,
         survivalType: entry.survivalType,
         targetingMode,
+        activationMode,
         effectiveCooldownMs: cooldownMs,
         effectiveDurationMs: durationMs,
         charges,

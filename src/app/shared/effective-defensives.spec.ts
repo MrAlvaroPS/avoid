@@ -23,6 +23,9 @@ const fade: EffectiveDefensiveCatalogEntry = {
   category: 'personal_defensive',
   survivalType: 'mitigation',
   targetingMode: 'self',
+  activationMode: 'active',
+  passiveConversionSpellIds: [],
+  activationGameBuild: GAME_BUILD,
   baseCooldownMs: 30_000,
   baseDurationMs: 10_000,
 };
@@ -107,6 +110,28 @@ describe('resolveEffectiveDefensiveKit', () => {
     );
 
     expect(resolved.eligible).toBe(false);
+  });
+
+  it('marks an active defensive passive and ineligible when its conversion talent is selected', () => {
+    const conversionSpellId = 999001;
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: conversionSpellId }] }),
+      data({ catalog: [{ ...fade, passiveConversionSpellIds: [conversionSpellId] }] }),
+    );
+
+    expect(resolved.activationMode).toBe('passive');
+    expect(resolved.eligible).toBe(false);
+    expect(resolved.provenance).toContainEqual(expect.objectContaining({ kind: 'availability_rule', field: 'activation_mode' }));
+  });
+
+  it('excludes a conditional active/passive defensive when its rule belongs to another build', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input(),
+      data({ catalog: [{ ...fade, passiveConversionSpellIds: [999001], activationGameBuild: '12.0.0.60000' }] }),
+    );
+
+    expect(resolved.eligible).toBe(false);
+    expect(resolved.confidence).toBe('uncertain');
   });
 
   it('does not invent ineligibility when the talent build is missing', () => {

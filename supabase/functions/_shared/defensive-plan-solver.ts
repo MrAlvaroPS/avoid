@@ -199,6 +199,9 @@ function targetSemanticsApply(
 ): boolean {
   if (defensive.category === 'utility') return false;
   if (defensive.category === 'external_defensive') {
+    if (defensive.targetingMode === 'raid') {
+      return occurrence.demandType === 'raid' && targetPlayerKey == null;
+    }
     return (
       occurrence.demandType === 'external' &&
       targetPlayerKey != null &&

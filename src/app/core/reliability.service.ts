@@ -38,6 +38,9 @@ import { gearPreparationDetails } from '../shared/gear-preparation.util';
 import type { DeathCause, WclGearItem } from '../shared/models/domain';
 import { DefensiveFeatureFlagsService } from './defensive-feature-flags.service';
 
+const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.2.0';
+const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
+
 const WINDOW_DAYS = 60; // "varias noches o semanas", no los 21 días de una versión anterior
 const HALF_LIFE_DAYS = 10; // un pull de hace 10 días pesa la mitad que uno de hoy
 const AXIS_WEIGHTS = { mecanica: 0.4, defensiva: 0.3, preparacion: 0.2 } as const;
@@ -196,6 +199,7 @@ export interface ReliabilityInputRow {
   defensive_death_viable_cd_count: number | null;
   defensive_evaluation_confidence: string | null;
   defensive_evaluator_version: string | null;
+  defensive_resolver_version: string | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -248,7 +252,8 @@ function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
     brokenCount < 0 ||
     deathCount == null ||
     deathCount < 0 ||
-    !row.defensive_evaluator_version ||
+    row.defensive_evaluator_version !== REQUIRED_DEFENSIVE_EVALUATOR_VERSION ||
+    row.defensive_resolver_version !== REQUIRED_DEFENSIVE_RESOLVER_VERSION ||
     (row.defensive_evaluation_confidence !== 'verified' &&
       row.defensive_evaluation_confidence !== 'inferred')
   ) {
@@ -570,7 +575,7 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
 // propio por encima de WINDOW_RELIABILITY_COLUMNS, mismo motivo de siempre
 // (frontend puede llegar antes que la migración).
 const V2_RELIABILITY_COLUMNS =
-  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version';
+  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version, defensive_resolver_version';
 const UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count';
 const WINDOW_RELIABILITY_COLUMNS =
@@ -619,7 +624,7 @@ function isReliabilitySchemaTransitionError(
   return (
     error.code === '42703' ||
     error.code === 'PGRST204' ||
-    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count|defensive_management_score_v2|defensive_management_decision_count|defensive_required_count|defensive_required_success_count|defensive_broken_reservation_count|defensive_death_viable_cd_count|defensive_evaluation_confidence|defensive_evaluator_version/i.test(
+    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count|defensive_management_score_v2|defensive_management_decision_count|defensive_required_count|defensive_required_success_count|defensive_broken_reservation_count|defensive_death_viable_cd_count|defensive_evaluation_confidence|defensive_evaluator_version|defensive_resolver_version/i.test(
       message,
     )
   );
@@ -765,6 +770,8 @@ export class ReliabilityService {
         schemaLevel === 'v2' ? (row.defensive_evaluation_confidence ?? null) : null,
       defensive_evaluator_version:
         schemaLevel === 'v2' ? (row.defensive_evaluator_version ?? null) : null,
+      defensive_resolver_version:
+        schemaLevel === 'v2' ? (row.defensive_resolver_version ?? null) : null,
       };
     });
   }

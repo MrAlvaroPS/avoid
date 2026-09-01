@@ -306,7 +306,7 @@ Deno.serve(async (req: Request) => {
       // §12.1: catálogo real de defensivos, sincronizado desde WoWAnalyzer
       // (o la semilla manual mientras no se haya sincronizado nada aún).
       // Se carga UNA VEZ por report, no por fight ni por evento.
-      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spec_override,spell_id,name,category,targeting_mode,base_cooldown_ms,base_duration_ms,survival_type,excluded').eq('excluded', false);
+      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spec_override,spell_id,name,category,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build,base_cooldown_ms,base_duration_ms,survival_type,excluded').eq('excluded', false);
       const cooldownCatalog: CooldownCatalog = (catalogRows ?? []).map((r) => ({
         spellId: r.spell_id,
         name: r.name,

@@ -206,6 +206,10 @@
                 <option [value]="spec">{{ spec }}</option>
               }
             </select>
+            <label class="inline-field" title="Los semi-defensivos no se usan en AUTO ni aparecen en el selector salvo que los habilites expresamente.">
+              <input type="checkbox" [checked]="includeSemiInTemplateAuto()" (change)="includeSemiInTemplateAuto.set($any($event.target).checked)" />
+              <span>Permitir semi</span>
+            </label>
             <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssign()">{{ autoAssigning() ? '…' : '⚡ AUTO template spec' }}</button>
             <button type="button" class="sync-btn" [disabled]="autoAssigning()" (click)="onAutoAssignClass()">{{ autoAssigning() ? '…' : '⚡ AUTO template clase' }}</button>
             <button type="button" class="delete-btn" [class.confirming]="confirmingResetClass()" [disabled]="resetting()" (click)="requestResetClass()">
@@ -234,6 +238,13 @@
                 }
               </select>
               <button type="button" class="sync-btn" [disabled]="!selectedPreparationPlayer() || loadingSelectedPlayerKit()" (click)="openTimeline()">🕐 Cronología del jugador</button>
+              <button type="button" class="sync-btn" [disabled]="generatingPlan() || v2Readiness()?.capabilities?.planManagement !== true" (click)="generateGlobalPlan()">
+                {{ generatingPlan() ? 'Generando…' : (activePlanVersion() ? 'Regenerar borrador global' : 'Generar borrador global') }}
+              </button>
+              @if (activeDraft()) {
+                <button type="button" class="sync-btn" [disabled]="publishingPlan()" (click)="publishCurrentDraft()">{{ publishingPlan() ? 'Publicando…' : 'Publicar plan' }}</button>
+              }
+              <button type="button" class="sync-btn export-trigger" [disabled]="!publishedPlan() || !!activeDraft() || !selectedPreparationPlayer()" [title]="activeDraft() ? 'Publica primero el borrador actual; no se exporta silenciosamente el plan anterior' : 'Requiere un plan publicado'" (click)="generateSelectedPlayerExport()">📋 MRT del jugador</button>
             </div>
           }
         </div>
@@ -250,22 +261,24 @@
                 <span>{{ playerBuildStateLabel() }}</span>
               </div>
               <p>
-                Build {{ selectedPlayerKit()?.sourceBuild?.gameBuild ?? player.gameBuild ?? 'desconocido' }} ·
-                fuente {{ selectedPlayerKit()?.sourceBuild?.source ?? player.buildSource ?? 'sin evidencia' }} ·
-                observado {{ (selectedPlayerKit()?.sourceBuild?.observedAt ?? player.observedAt) ? ((selectedPlayerKit()?.sourceBuild?.observedAt ?? player.observedAt) | date: 'd MMM y, HH:mm') : '—' }}
+                Actualizado {{ (selectedPlayerKit()?.sourceBuild?.observedAt ?? player.observedAt) ? ((selectedPlayerKit()?.sourceBuild?.observedAt ?? player.observedAt) | date: 'd MMM y, HH:mm') : 'sin fecha' }} ·
+                build {{ selectedPlayerKit()?.sourceBuild?.gameBuild ?? player.gameBuild ?? 'desconocido' }}
               </p>
               @if (loadingSelectedPlayerKit()) {
                 <span class="muted">Resolviendo kit efectivo en backend…</span>
               } @else if (selectedPlayerKitError(); as kitError) {
                 <span class="result-warn">No se pudo resolver el kit: {{ kitError }}</span>
               } @else if (selectedPlayerKit(); as resolved) {
-                <span class="meta">{{ resolved.kit.length }} defensivos resueltos · {{ resolved.resolverVersion }}@if (resolved.warnings.length) { · {{ resolved.warnings.length }} avisos }</span>
+                <span class="meta">{{ selectedPlayerEligibleDefensiveCount() }} habilidades activas resueltas@if (resolved.warnings.length) { · {{ resolved.warnings.length }} avisos técnicos }</span>
               }
               @if (selectedPlayerBuildState() === 'changed_after_draft') {
                 <p class="result-line result-warn">⚠ El build observado cambió después del borrador activo. El borrador debe regenerarse antes de publicar.</p>
               }
             </div>
           }
+        }
+        @if (planActionMessage(); as planMessage) {
+          <p class="result-line result-ok">{{ planMessage }}</p>
         }
         @if (assignmentView() === 'player' && selectedPlayerKit(); as resolvedKit) {
           <section class="effective-kit">
@@ -290,11 +303,21 @@
 
             <div class="effective-kit-grid">
               @for (defensive of selectedPlayerEffectiveKit(); track defensive.spellId) {
-                <article class="effective-defensive" [class.has-manual]="defensiveHasManualOverride(defensive)">
+                <article class="effective-defensive" [class.has-manual]="defensiveHasManualOverride(defensive)" [class.unavailable]="!defensive.eligible">
                   <div class="effective-defensive-title">
                     <app-wowhead-link type="spell" [id]="defensive.spellId"><strong>{{ defensive.name }}</strong></app-wowhead-link>
-                    <span>{{ defensiveHasManualOverride(defensive) ? 'Manual' : defensive.confidence }}</span>
+                    <span>{{ defensiveConfidenceLabel(defensive) }}</span>
                   </div>
+                  <p class="effective-meta">{{ defensiveCategoryLabel(defensive.category) }} · {{ defensiveSurvivalLabel(defensive) }} · {{ defensive.activationMode === 'active' ? 'Activa' : 'Pasiva' }} · target {{ defensive.targetingMode }}@if (!defensive.eligible) { · No asignable en este build }</p>
+                  <label class="planning-resource-toggle" [class.disabled]="!planningResourceSelectable(defensive)">
+                    <input
+                      type="checkbox"
+                      [checked]="planningResourceSelected(defensive)"
+                      [disabled]="!planningResourceSelectable(defensive)"
+                      (change)="togglePlanningResource(defensive)"
+                    />
+                    <span>{{ defensive.category === 'personal_defensive' ? 'Usar en el plan' : 'Incluir excepcionalmente en el plan' }}</span>
+                  </label>
                   <div class="effective-values">
                     <div>
                       <small>CD efectivo</small>
@@ -307,7 +330,7 @@
                       <span>Base {{ defensiveBaseValue(defensive, 'duration_ms') != null ? (defensiveBaseValue(defensive, 'duration_ms')! / 1000) + 's' : '—' }} · {{ defensiveDeltaLabel(defensive, 'duration_ms') }}</span>
                     </div>
                   </div>
-                  <p class="effective-meta">{{ defensive.charges }} carga{{ defensive.charges === 1 ? '' : 's' }}@if (defensive.rechargeMs != null) { · recharge {{ defensive.rechargeMs / 1000 }}s } · target {{ defensive.targetingMode }}</p>
+                  <p class="effective-meta">{{ defensive.charges }} carga{{ defensive.charges === 1 ? '' : 's' }}@if (defensive.rechargeMs != null) { · recarga {{ defensive.rechargeMs / 1000 }}s }</p>
                   <div class="effective-actions">
                     <button type="button" class="readiness-link" (click)="toggleKitInspector(defensive.spellId)">{{ expandedKitSpellId() === defensive.spellId ? 'Ocultar cálculo' : 'Ver cálculo' }}</button>
                     <button type="button" class="readiness-link" [disabled]="!exactOverrideScopeReady() || savingOverride()" (click)="beginOverrideEdit(defensive)">Ajustar efectivo</button>
@@ -403,7 +426,7 @@
                 <tr
                   class="row-clickable"
                   [class.saving]="savingProfileId() === row.candidate.ability_id"
-                  [class.has-assignments]="row.assignments.length > 0"
+                  [class.has-assignments]="displayedAssignmentCount(row.candidate.ability_id, row.assignments.length) > 0"
                   (click)="onMechanicRowClick($event, row.candidate.ability_id)"
                 >
                   <td>
@@ -469,14 +492,52 @@
                     }
                   </td>
                   <td>
-                    <button type="button" class="classify-toggle" [class.has-assignments]="row.assignments.length > 0" (click)="toggleExpanded(row.candidate.ability_id)">
-                      {{ expandedAbilityId() === row.candidate.ability_id ? 'cerrar' : (row.assignments.length ? '✓ asignaciones (' + row.assignments.length + ')' : 'asignaciones (0)') }}
+                    <button type="button" class="classify-toggle" [class.has-assignments]="displayedAssignmentCount(row.candidate.ability_id, row.assignments.length) > 0" (click)="toggleExpanded(row.candidate.ability_id)">
+                      {{ expandedAbilityId() === row.candidate.ability_id ? 'cerrar' : (displayedAssignmentCount(row.candidate.ability_id, row.assignments.length) ? '✓ asignaciones (' + displayedAssignmentCount(row.candidate.ability_id, row.assignments.length) + ')' : 'asignaciones (0)') }}
                     </button>
                   </td>
                 </tr>
                 @if (expandedAbilityId() === row.candidate.ability_id) {
                   <tr class="assignments-row">
                     <td colspan="9">
+                      @if (activePlanVersion(); as plan) {
+                        <div class="deployed-plan-assignments">
+                          <p class="meta">Plan v2 {{ plan.status === 'published' ? 'publicado' : 'en borrador' }} · filtro {{ assignmentView() === 'player' ? (selectedPreparationPlayer()?.name ?? 'sin jugador') : autoAssignClass() + ' / ' + autoAssignSpec() }}</p>
+                          @if (visiblePlanSlotsForAbility(row.candidate.ability_id); as visibleSlots) {
+                            @if (visibleSlots.length) {
+                              <table class="assignments">
+                                <thead>
+                                  <tr>
+                                    <th>Momento</th>
+                                    <th>Jugador</th>
+                                    <th>Defensivo efectivo</th>
+                                    <th>Trigger</th>
+                                    <th>Estado</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  @for (slot of visibleSlots; track slot.id) {
+                                    <tr>
+                                      <td>{{ formatFightTime(slot.planned_cast_at_ms ?? slot.occurrence_time_ms) }} <span class="meta">(#{{ slot.occurrence_index }})</span></td>
+                                      <td>{{ planMemberFor(slot.assigned_player_key)?.player_name ?? slot.assigned_player_key }}</td>
+                                      <td><app-wowhead-link type="spell" [id]="slot.defensive_spell_id!">{{ planDefensiveName(slot.defensive_spell_id) }}</app-wowhead-link></td>
+                                      <td>{{ slot.trigger_mode }}@if (slot.trigger_mode === 'bossmod' && !slot.bossmod_counter_verified) { <span class="meta"> · fallback seguro a tiempo</span> }</td>
+                                      <td>{{ slot.coverage_status }}</td>
+                                    </tr>
+                                  }
+                                </tbody>
+                              </table>
+                            } @else {
+                              <p class="muted">El plan no asigna esta mecánica al filtro seleccionado.</p>
+                            }
+                          }
+                        </div>
+                      } @else if (assignmentView() === 'player') {
+                        <p class="muted">Todavía no existe un plan v2. Genera el borrador global para alimentar la vista por jugador y su nota MRT.</p>
+                      }
+
+                      @if (assignmentView() === 'spec') {
+                      <p class="meta">Templates reutilizables por spec (legacy): ayudan al solver, pero no son por sí solos un plan publicado.</p>
                       <!-- §"doble clasificación: al pulsarlo despliega todas las clases... y que la fila de clase se pueda desplegar para ver las specs" (feedback real, 2026-08-31) -->
                       <div class="class-groups">
                         @for (grp of groupAssignmentsByClass(row.assignments); track grp.class) {
@@ -594,6 +655,7 @@
                         </div>
                       } @else {
                         <button type="button" class="classify-toggle" (click)="openAssignmentDraft(row.candidate.ability_id)">+ asignar defensivo</button>
+                      }
                       }
                     </td>
                   </tr>

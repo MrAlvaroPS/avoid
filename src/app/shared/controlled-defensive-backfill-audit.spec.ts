@@ -69,6 +69,29 @@ describe('auditControlledDefensiveBackfill', () => {
     expect(cases.find((item) => item.id === 'external_target')?.state).toBe('failed');
   });
 
+  it('does not fail Fade when the sample only contains the base spell and no selected modifier evidence', () => {
+    const cases = auditControlledDefensiveBackfill([
+      record({
+        defensiveResolutionShadow: {
+          kit: [{
+            spellId: 586,
+            name: 'Fade',
+            effectiveCooldownMs: 30_000,
+            effectiveDurationMs: 10_000,
+            charges: 1,
+            rechargeMs: null,
+            targetingMode: 'self',
+            confidence: 'inferred',
+            provenance: [{ kind: 'catalog_base', field: 'cooldown_ms', after: 30_000 }],
+          }],
+        },
+      }),
+    ]);
+    const fade = cases.find((item) => item.id === 'fade_modifier');
+    expect(fade?.state).toBe('not_observed');
+    expect(fade?.detail).toContain('contienen Fade base');
+  });
+
   it('keeps an unknown historical build non-punitive', () => {
     const cases = auditControlledDefensiveBackfill([
       record({

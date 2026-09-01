@@ -32,10 +32,10 @@ existencia de código parcial no lo cierra.
 | 2 | Readiness de esquema y servicios | Implementado y revisado localmente | Falta desplegar y contrastar el diagnóstico contra el esquema remoto. |
 | 3 | Backfill controlado y progreso | En curso · implementación local revisada | Falta ejecutar la muestra real y observar los cinco casos dirigidos. |
 | 4 | Preparación: selector Spec/Jugador | Implementado y revisado localmente | Falta validación visual/datos reales tras desplegar readiness y resolver. |
-| 5 | Kit efectivo e override contextual | En curso · núcleo local revisado | Tarjetas, inspector y override exacto listos; falta la corrección solo-snapshot cuando no hay fingerprint y validación remota. |
-| 6 | Borrador real con solver global | Pendiente | Backend/contrato existen; la UI aún usa AUTO/cascada local en parte del flujo. |
-| 7 | Publicación y congelación | Pendiente | Persistencia existe; falta experiencia completa y guards visibles. |
-| 8 | MRT desde plan publicado | Parcial | Export v2 existe; falta consolidar el flujo visual y la degradación verificable. |
+| 5 | Kit efectivo e override contextual | En curso · ampliado y revisado localmente | Categoría/tipo/activación, opt-in y conversiones a pasiva listos; falta corrección solo-snapshot sin fingerprint y validación remota. |
+| 6 | Borrador real con solver global | En curso · núcleo local revisado | La UI ya genera el borrador global con recursos seleccionados; falta ejecutarlo con roster/perfiles reales y revisar cobertura. |
+| 7 | Publicación y congelación | En curso · núcleo local revisado | Publicación y guards visibles conectados; falta probar los rechazos stale/incompleto contra PostgreSQL real. |
+| 8 | MRT desde plan publicado | En curso · núcleo local revisado | Export exacto por jugador conectado; falta importar y disparar reminders en MRT/BigWigs/DBM real. |
 | 9 | Importación, binding y evaluator | Parcial | Backend v2 existe; falta validar con datos reales y exponer readiness/fallback. |
 | 10 | Sección 04 | Parcial | Implementada detrás de flag; falta activación controlada y validación visual real. |
 | 11 | Inspector del resolver | Parcial | El kit ya expone la cadena de provenance; falta integrarlo con el recorrido completo de borrador/evaluator. |
@@ -333,6 +333,21 @@ ni contaminar otros builds.
 - [x] Readiness separa `playerOverride` del resto de capacidades: M10 o su
       endpoint ausentes no se disfrazan con un fallback ni bloquean por sí
       solos el backfill/evaluator.
+- [x] Las tarjetas muestran en una línea compacta categoría, tipo de
+      supervivencia, target y si el recurso es activo/pasivo; las etiquetas
+      internas `INFERRED/UNCERTAIN` se traducen a estados operativos legibles.
+- [x] Cada recurso es seleccionable para el plan. Los personales elegibles
+      parten activados; semi/external parten desactivados y solo entran con
+      opt-in explícito; utility y habilidades no disponibles quedan bloqueadas.
+- [x] Añadida edición de categoría y target en Ajustes → Defensivos, con las
+      parejas coherentes `personal/self`, `semi/both` y
+      `external/(ally|raid|unknown)` y reanálisis al cambiar semántica.
+- [x] Añadida semántica versionada activa/pasiva al catálogo. Un talento
+      indicado en `passive_conversion_spell_ids` convierte el botón en pasivo
+      para ese build y el resolver lo deja visible, pero no asignable.
+- [x] El prompt v8 se genera obligatoriamente por clase, pide JSON compacto,
+      diferencia personal/semi/external y exige perfiles, modifiers y
+      conversiones activa→pasiva por build.
 
 ### Revisión
 
@@ -361,6 +376,13 @@ ni contaminar otros builds.
   reparación forward `20260901160000`, aditiva e idempotente, en vez de alterar
   el historial con `migration repair`. Añade constraint, backfill conservador,
   comentario y recarga explícita del schema PostgREST.
+- La auditoría de Fade ya no dice que el jugador no tenga Fade: distingue el
+  botón base de la regla 30→20. Si Fade existe pero ningún kit aplica el
+  modifier, el informe señala que falta/está mal el `modifierSpellId` o su
+  resolución de talento.
+- El resolver sube a `effective-defensives@2.1.0`. Fiabilidad v2 exige ahora
+  tanto evaluator como resolver exactos; las filas materializadas con 2.0 no
+  se reutilizan silenciosamente tras introducir la semántica activa/pasiva.
 
 ### Falta para cerrar el paso
 
@@ -371,12 +393,80 @@ ni contaminar otros builds.
 - [ ] Validar visualmente tarjetas, editor, doble confirmación y estado stale
       con los escenarios E2E 01–04.
 
-## Pasos 6–12
+## Paso 6 — Borrador real con solver global
 
-Cada paso tendrá aquí su objetivo, auditoría, implementación, revisión,
-comprobaciones y pendientes reales antes de marcarlo como consolidado. El orden
-de trabajo será 1 → 12; los pasos parcialmente existentes se revisarán contra
-el contrato completo, no se aceptarán por equivalencia aproximada.
+### Implementado
+
+- [x] Preparación invoca `generate-defensive-plan`; la vista Jugador deja de
+      ser un filtro sin acción y crea un borrador para todo el roster.
+- [x] El backend vuelve a resolver cada kit y recibe selecciones por jugador.
+      Sin selección explícita solo usa personales; semi/external requieren
+      opt-in y utility nunca entra al solver.
+- [x] External de raid (`targeting_mode=raid`, por ejemplo una zona de raid)
+      puede cubrir demanda raid; un external de aliado sigue exigiendo target.
+- [x] Habilidades pasivas/no elegibles nunca entran, aunque el cliente intente
+      seleccionarlas.
+- [x] En modo sin plan, semi/external tampoco crean oportunidades automáticas
+      ni castigos. Un semi solo se evalúa cuando un plan publicado demuestra
+      que el RL hizo opt-in para ese jugador/slot.
+- [x] La tabla principal muestra slots del plan v2, no los confunde con los
+      templates legacy, y filtra por spec o jugador. El aviso de huecos usa el
+      plan cuando existe.
+
+### Revisión y pendientes
+
+- Build Angular correcto; pruebas de solver para external raid y pasiva pasan;
+  `generate-defensive-plan` y consumidores del resolver empaquetan con esbuild.
+- [ ] Generar un draft real por dificultad con el roster que se usará en raid,
+      revisar todas las ocurrencias y ajustar perfiles sin cobertura.
+- [ ] Añadir, si la operativa lo necesita, selección explícita de quiénes del
+      roster forman la composición de esa noche; hoy se incluye el roster de
+      Preparación completo.
+
+## Paso 7 — Publicación y congelación
+
+### Implementado
+
+- [x] Añadidos botones visibles para regenerar borrador y publicar.
+- [x] Readiness comprueba también la salud de `generate-defensive-plan`; sin
+      endpoint no habilita falsamente la gestión de planes.
+- [x] Tras un cambio de build/override se exige regenerar; el export no usa en
+      silencio un plan publicado anterior mientras exista un draft más nuevo.
+- [x] La RPC de publicación conserva los guards ya implementados: backend
+      resolver, revisiones de perfiles/catálogo y cobertura completa en modo
+      `full`.
+
+### Revisión y pendientes
+
+- [ ] Probar en Supabase real los rechazos por cobertura incompleta, revisión
+      stale y cambio de build entre crear y publicar.
+- [ ] Confirmar que publicar no muta el plan anterior ni sus bindings.
+
+## Paso 8 — MRT desde plan publicado
+
+### Implementado
+
+- [x] Añadido `MRT del jugador` en la vista Jugador. Solo se habilita con plan
+      publicado actual y exporta el miembro exacto, no toda la spec.
+- [x] Los reminders proceden de slots congelados. Un trigger bossmod sin
+      counter verificado cae a tiempo de pull y queda avisado en el modal.
+- [x] La cronología por jugador consume los mismos slots/snapshots que el
+      export, de modo que tabla, timeline y nota no reconstruyen tres planes.
+
+### Revisión y pendientes
+
+- Las pruebas existentes verifican player exacto, UID estable, counter,
+  fallback temporal, grupos y exclusión de slots sin cubrir.
+- [ ] Importar la nota en MRT real y validar en combate los reminders de
+      Sszorak con un caso de tiempo y otro bossmod/counter confirmado.
+- [ ] Contrastar que el hechizo sugerido existe como botón en el build del
+      jugador y que el texto se dirige solo a él.
+
+## Pasos 9–12
+
+Siguen pendientes de consolidación E2E. El backend de binding/evaluator y las
+superficies visuales ya existen, pero no se cerrarán ni habilitará L hasta
+validar importación real, sección 04, inspector completo y los 25 escenarios.
 
 ## Registro cronológico
 
@@ -447,11 +537,30 @@ el contrato completo, no se aceptarán por equivalencia aproximada.
 - Validación local: build, 29/29 tests focalizados y tres bundles Edge
   correctos. Falta el snapshot efímero sin fingerprint y validación real.
 
+### 2026-09-01 — Disponibilidad, borrador, publicación y MRT conectados
+
+- Corregida la separación personal/semi/external: personales seleccionados por
+  defecto, recursos compartidos solo por opt-in y categoría editable.
+- Añadida la semántica activa/pasiva por build y el prompt v8 compacto por
+  clase para que talentos como una conversión de Healing Elixir no produzcan
+  asignaciones imposibles.
+- Corregida la auditoría de Fade: `0/12` significaba que no se aplicó la regla
+  30→20, no que los jugadores careciesen del hechizo.
+- Conectados generación global, publicación, tabla/timeline v2 y export MRT por
+  jugador. Readiness incluye la salud del generador.
+- Fiabilidad materializa solo pares evaluator/resolver vigentes. El cambio a
+  `effective-defensives@2.1.0` obliga a reanalizar antes de puntuar y evita
+  conservar resultados calculados con disponibilidad anterior.
+- Validación local: build correcto, diez Edge bundles correctos y 182/183
+  pruebas; el único fallo sigue siendo el baseline conocido de `.brand` en
+  `app.spec.ts`, fuera del flujo defensivo.
+
 ## Pendientes externos conocidos
 
 - No hay en este entorno una instancia Supabase/PostgreSQL configurada donde
   aplicar migraciones o ejecutar el backfill real.
 - Falta una muestra WCL controlada para validar los casos históricos y targets.
 - La importación manual final del MRT requiere el addon/entorno real.
-- La activación de flags seguirá apagada hasta completar readiness, backfill y
-  validación visual/E2E.
+- `defensiveReliabilityV2` debe seguir apagado hasta completar el nuevo
+  backfill y la calibración. `defensiveInfographicV2` se ha habilitado
+  localmente para prueba visual, pero no equivale a aceptar el rollout E2E.

@@ -138,6 +138,11 @@ export class BossPrepComponent {
   savingOverride = signal(false);
   overrideResult = signal<string | null>(null);
   draftInvalidatedByOverride = signal(false);
+  planningResourceSelections = signal<Record<string, number[]>>({});
+  includeSemiInTemplateAuto = signal(false);
+  generatingPlan = signal(false);
+  publishingPlan = signal(false);
+  planActionMessage = signal<string | null>(null);
 
   candidates = signal<BossMechanicCandidateRow[]>([]);
   profiles = signal<BossMechanicDefensiveProfileRow[]>([]);
@@ -210,9 +215,10 @@ export class BossPrepComponent {
     }
     return player.freshness;
   });
-  selectedPlayerEffectiveKit = computed(() =>
-    (this.selectedPlayerKit()?.kit ?? []).filter((defensive) => defensive.eligible),
-  );
+  selectedPlayerEffectiveKit = computed(() => this.selectedPlayerKit()?.kit ?? []);
+  selectedPlayerEligibleDefensiveCount = computed(() => this.selectedPlayerEffectiveKit().filter((defensive) => defensive.eligible).length);
+  activeDraft = computed(() => this.activePlanVersion()?.status === 'draft' ? this.activePlanVersion() : null);
+  publishedPlan = computed(() => this.planVersions().find((plan) => plan.status === 'published') ?? null);
   exactOverrideScopeReady = computed(() => {
     const source = this.selectedPlayerKit()?.sourceBuild;
     const player = this.selectedPreparationPlayer();
@@ -239,7 +245,13 @@ export class BossPrepComponent {
 
   /** §"saber que los defensivos que asignas no dejan huecos de mecánicas... sin cubrir" (feedback real, 2026-08-31): mecánicas que SÍ exigen defensivo (auto o a mano) pero no tienen ni una sola asignación, de ninguna clase/spec, en este boss+dificultad. */
   coverageGaps = computed(() => {
-    const assignedAbilityIds = new Set(this.assignments().map((a) => a.ability_id));
+    const assignedAbilityIds = this.planSlots().length
+      ? new Set(
+          this.planSlots()
+            .filter((slot) => slot.assigned_player_key != null && (slot.coverage_status === 'covered' || slot.coverage_status === 'partial'))
+            .map((slot) => slot.ability_id),
+        )
+      : new Set(this.assignments().map((a) => a.ability_id));
     return this.mechanicRows().filter((r) => r.profile?.requires_defensive === true && !assignedAbilityIds.has(r.candidate.ability_id));
   });
 
@@ -332,12 +344,98 @@ export class BossPrepComponent {
 
   playerBuildStateLabel(): string {
     switch (this.selectedPlayerBuildState()) {
-      case 'fresh_verified': return 'Fresco · verificado';
-      case 'inferred': return 'Inferido';
-      case 'stale': return 'Desactualizado';
+      case 'fresh_verified': return 'Actualizado · verificado';
+      case 'inferred': return 'Actualizado';
+      case 'stale': return 'Build desactualizado';
       case 'changed_after_draft': return 'Cambió después del borrador';
-      default: return 'Build desconocido';
+      default: return 'Faltan datos del build';
     }
+  }
+
+  defensiveCategoryLabel(category: ResolvedDefensiveRow['category']): string {
+    if (category === 'personal_defensive') return 'Personal';
+    if (category === 'semi_defensive') return 'Semi · opcional';
+    if (category === 'external_defensive') return 'External · opcional';
+    return 'Utility';
+  }
+
+  defensiveSurvivalLabel(defensive: ResolvedDefensiveRow): string {
+    if (defensive.survivalType === 'mitigation') return 'Mitigación';
+    if (defensive.survivalType === 'absorption') return 'Absorción';
+    if (defensive.survivalType === 'sustain') return 'Sustain';
+    if (defensive.survivalType === 'emergency') return 'Emergencia';
+    return 'Tipo sin revisar';
+  }
+
+  defensiveConfidenceLabel(defensive: ResolvedDefensiveRow): string {
+    if (this.defensiveHasManualOverride(defensive)) return 'Manual';
+    if (defensive.confidence === 'verified') return 'Verificado';
+    if (defensive.confidence === 'inferred') return 'Datos actuales';
+    if (defensive.confidence === 'fallback') return 'Fallback';
+    return 'Necesita datos';
+  }
+
+  planMemberFor(playerKey: string | null): DefensivePlanMemberRow | null {
+    if (!playerKey) return null;
+    return this.planMembers().find((member) => member.player_key === playerKey) ?? null;
+  }
+
+  visiblePlanSlotsForAbility(abilityId: number): DefensivePlanSlotRow[] {
+    const selectedPlayer = this.selectedPreparationPlayer();
+    return this.planSlots()
+      .filter((slot) => slot.ability_id === abilityId && slot.assigned_player_key != null)
+      .filter((slot) => {
+        const member = this.planMemberFor(slot.assigned_player_key);
+        if (!member?.included) return false;
+        if (this.assignmentView() === 'player') {
+          return Boolean(
+            selectedPlayer &&
+            (member.character_id === selectedPlayer.characterId ||
+              member.player_name.toLocaleLowerCase() === selectedPlayer.name.toLocaleLowerCase()),
+          );
+        }
+        return member.class === this.autoAssignClass() && member.spec === this.autoAssignSpec();
+      })
+      .sort(
+        (left, right) =>
+          left.occurrence_time_ms - right.occurrence_time_ms ||
+          left.occurrence_index - right.occurrence_index ||
+          left.slot_index - right.slot_index,
+      );
+  }
+
+  displayedAssignmentCount(abilityId: number, legacyCount: number): number {
+    return this.planSlots().length ? this.visiblePlanSlotsForAbility(abilityId).length : legacyCount;
+  }
+
+  planDefensiveName(spellId: number | null): string {
+    if (spellId == null) return '—';
+    return this.cooldownCatalog().find((entry) => entry.spell_id === spellId)?.name ?? `#${spellId}`;
+  }
+
+  planningResourceSelected(defensive: ResolvedDefensiveRow): boolean {
+    const player = this.selectedPreparationPlayer();
+    if (!player) return false;
+    const explicit = this.planningResourceSelections()[player.name.toLocaleLowerCase()];
+    return explicit ? explicit.includes(defensive.spellId) : defensive.category === 'personal_defensive';
+  }
+
+  planningResourceSelectable(defensive: ResolvedDefensiveRow): boolean {
+    return defensive.eligible && defensive.category !== 'utility';
+  }
+
+  togglePlanningResource(defensive: ResolvedDefensiveRow): void {
+    const player = this.selectedPreparationPlayer();
+    const kit = this.selectedPlayerKit()?.kit ?? [];
+    if (!player || !this.planningResourceSelectable(defensive)) return;
+    const key = player.name.toLocaleLowerCase();
+    const current = this.planningResourceSelections()[key] ?? kit
+      .filter((entry) => entry.category === 'personal_defensive' && entry.eligible)
+      .map((entry) => entry.spellId);
+    const next = current.includes(defensive.spellId)
+      ? current.filter((spellId) => spellId !== defensive.spellId)
+      : [...current, defensive.spellId].sort((left, right) => left - right);
+    this.planningResourceSelections.update((selections) => ({ ...selections, [key]: next }));
   }
 
   toggleKitInspector(spellId: number): void {
@@ -849,7 +947,14 @@ export class BossPrepComponent {
   defensivesForDraft(): CooldownCatalogRow[] {
     const draft = this.assignmentDraft();
     if (!draft) return [];
-    return defensivesForSpec(this.cooldownCatalog(), draft.class, draft.spec);
+    return this.templateDefensivesForSpec(draft.class, draft.spec);
+  }
+
+  private templateDefensivesForSpec(cls: string, spec: string): CooldownCatalogRow[] {
+    return defensivesForSpec(this.cooldownCatalog(), cls, spec).filter((defensive) =>
+      defensive.category === 'personal_defensive' ||
+      (this.includeSemiInTemplateAuto() && defensive.category === 'semi_defensive'),
+    );
   }
 
   async submitAssignmentDraft(): Promise<void> {
@@ -907,9 +1012,77 @@ export class BossPrepComponent {
     }
   }
 
+  async generateGlobalPlan(): Promise<void> {
+    const bossId = this.selectedEncounterId();
+    const difficulty = this.selectedDifficultyName();
+    const boss = this.selectedBoss();
+    if (bossId == null || !difficulty || !boss || this.generatingPlan()) return;
+    if (!this.preparationPlayers().length) {
+      this.error.set('No hay roster disponible para generar el plan. Actualiza WoWAudit/roster y vuelve a intentarlo.');
+      return;
+    }
+    this.generatingPlan.set(true);
+    this.error.set(null);
+    this.planActionMessage.set(null);
+    try {
+      const selections = this.planningResourceSelections();
+      const result = await this.edgeFunctions.generateDefensivePlan({
+        bossId: String(bossId),
+        difficulty,
+        name: `${boss.bossName} · ${difficulty}`,
+        mode: 'full',
+        members: this.preparationPlayers().map((player) => ({
+          playerName: player.name,
+          playerKey: `character:${player.characterId}`,
+          included: true,
+        })),
+        resourceSelections: Object.entries(selections).map(([normalizedName, spellIds]) => ({
+          playerName: this.preparationPlayers().find((player) => player.name.toLocaleLowerCase() === normalizedName)?.name ?? normalizedName,
+          spellIds,
+        })),
+        supersedesId: this.activePlanVersion()?.id ?? null,
+        notes: 'Generado desde Preparación. Personal seleccionado por defecto; semi/external solo con opt-in explícito.',
+      });
+      await this.loadRows();
+      const solver = result.solver as { diagnostics?: { uncoveredRequired?: unknown[] }; planningQuality?: string };
+      const uncovered = solver.diagnostics?.uncoveredRequired?.length ?? 0;
+      this.planActionMessage.set(`Borrador generado${uncovered ? ` · ${uncovered} ventanas obligatorias siguen sin cobertura` : ' · cobertura obligatoria completa'}.`);
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.generatingPlan.set(false);
+    }
+  }
+
+  async publishCurrentDraft(): Promise<void> {
+    const draft = this.activeDraft();
+    if (!draft || this.publishingPlan()) return;
+    this.publishingPlan.set(true);
+    this.error.set(null);
+    this.planActionMessage.set(null);
+    try {
+      await this.edgeFunctions.publishDefensivePlan(draft.id);
+      await this.loadRows();
+      this.planActionMessage.set('Plan publicado. Ya puedes exportar la nota MRT dirigida a cada jugador.');
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.publishingPlan.set(false);
+    }
+  }
+
+  generateSelectedPlayerExport(): void {
+    const player = this.selectedPreparationPlayer();
+    if (!player?.specName) {
+      this.error.set('El jugador necesita una spec observada para filtrar su nota MRT.');
+      return;
+    }
+    void this.generateExport(player.className, player.specName, player.name);
+  }
+
   // --- export MRT ---
 
-  async generateExport(cls: string, spec: string): Promise<void> {
+  async generateExport(cls: string, spec: string, playerName?: string): Promise<void> {
     const bossId = this.selectedEncounterId();
     const wclDifficultyId = this.selectedDifficultyId();
     if (bossId == null || wclDifficultyId == null) return;
@@ -921,7 +1094,13 @@ export class BossPrepComponent {
         const contents = this.activePlanVersion()?.id === publishedPlan.id
           ? { members: this.planMembers(), slots: this.planSlots() }
           : await this.profileService.getPlanContents(publishedPlan.id);
-        const selectedMembers = contents.members.filter((member) => member.included && member.class === cls && member.spec === spec);
+        const selectedMembers = contents.members.filter((member) =>
+          member.included &&
+          member.class === cls &&
+          member.spec === spec &&
+          (playerName == null || member.player_name.toLocaleLowerCase() === playerName.toLocaleLowerCase()),
+        );
+        if (!selectedMembers.length) throw new Error(playerName ? `${playerName} no forma parte del plan publicado.` : 'La spec no forma parte del plan publicado.');
         const selectedKeys = new Set(selectedMembers.map((member) => member.player_key));
         const selectedSlots = contents.slots.filter((slot) => slot.assigned_player_key != null && selectedKeys.has(slot.assigned_player_key));
         const exported = exportDeployedPlanToMrt(
@@ -1220,7 +1399,7 @@ export class BossPrepComponent {
       reservationsBySpellId.set(assignment.defensive_spell_id, reservations);
     }
 
-    const defensiveInputs = defensivesForSpec(this.cooldownCatalog(), cls, spec)
+    const defensiveInputs = this.templateDefensivesForSpec(cls, spec)
       .filter((cd) => !blockedBecauseTimingUnknown.has(cd.spell_id))
       .map((cd) => ({
         spellId: cd.spell_id,
@@ -1362,10 +1541,10 @@ export class BossPrepComponent {
   assignmentsStaleFor(cls: string, spec: string): boolean {
     const relevantAssignments = this.assignments().filter((a) => a.class === cls && a.spec === spec);
     if (!relevantAssignments.length) return false;
-    const validSpellIds = new Set(defensivesForSpec(this.cooldownCatalog(), cls, spec).map((cd) => cd.spell_id));
+    const validSpellIds = new Set(this.templateDefensivesForSpec(cls, spec).map((cd) => cd.spell_id));
     if (relevantAssignments.some((a) => !validSpellIds.has(a.defensive_spell_id))) return true;
     const oldestAssignmentEdit = relevantAssignments.map((a) => a.updated_at).sort()[0];
-    const catalogEdits = defensivesForSpec(this.cooldownCatalog(), cls, spec)
+    const catalogEdits = this.templateDefensivesForSpec(cls, spec)
       .map((cd) => cd.updated_at)
       .filter((t): t is string => !!t);
     if (!catalogEdits.length) return false;

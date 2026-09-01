@@ -6,7 +6,7 @@ import { isConservativeScheduleFeasible } from './defensive-plan-solver.ts';
 // @ts-ignore Same cross-runtime boundary as above.
 import { computeDefensiveManagementScore } from './defensive-management-score.ts';
 
-export const DEFENSIVE_EXECUTION_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.1.0';
+export const DEFENSIVE_EXECUTION_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.2.0';
 
 export type DefensiveExecutionState =
   | 'plan_covered'
@@ -386,7 +386,8 @@ function evaluateUnplannedWindow(
     return uncertainEvent(window.peakMs, base);
   }
 
-  const actualCoverage = coveringCasts(input, window.startMs, window.endMs, input.playerKey)[0];
+  const actualCoverage = coveringCasts(input, window.startMs, window.endMs, input.playerKey)
+    .find((entry) => entry.defensive.category === 'personal_defensive');
   if (actualCoverage) {
     const replay = counterfactual(input, actualCoverage.defensive, actualCoverage.cast.timeMs, window.priority);
     if (replay.feasible) {
@@ -417,10 +418,8 @@ function evaluateUnplannedWindow(
     (defensive) =>
       defensive.eligible &&
       trusted(defensive.confidence) &&
-      defensive.category !== 'utility' &&
-      defensive.category !== 'external_defensive' &&
-      defensive.targetingMode !== 'ally' &&
-      defensive.targetingMode !== 'unknown' &&
+      defensive.category === 'personal_defensive' &&
+      defensive.targetingMode === 'self' &&
       defensive.survivalType !== 'emergency',
   );
   const locallyReady = trustedPersonal.filter((defensive) => {
@@ -472,10 +471,8 @@ function evaluateDeath(input: DefensiveExecutionEvaluationInput, deathTimeMs: nu
     if (
       !defensive.eligible ||
       !trusted(defensive.confidence) ||
-      defensive.category === 'utility' ||
-      defensive.category === 'external_defensive' ||
-      defensive.targetingMode === 'ally' ||
-      defensive.targetingMode === 'unknown'
+      defensive.category !== 'personal_defensive' ||
+      defensive.targetingMode !== 'self'
     ) return false;
     const casts = input.casts
       .filter((cast) => cast.sourcePlayerKey === input.playerKey && cast.spellId === defensive.spellId)

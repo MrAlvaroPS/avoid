@@ -13,11 +13,12 @@ function todayIso(): string {
 const SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
 const CATEGORIES = new Set(['personal_defensive', 'semi_defensive', 'external_defensive', 'utility']);
 const TARGETING_MODES = new Set(['self', 'ally', 'both', 'raid', 'unknown']);
+const ACTIVATION_MODES = new Set(['active', 'passive']);
 const CONFIDENCES = new Set<unknown>(['high', 'medium', 'low']);
 const MODIFIER_OPERATIONS = new Set(['subtract_seconds', 'add_seconds', 'multiply', 'set_seconds', 'charges_add']);
 const MODIFIER_CONDITIONS = new Set(['always', 'conditional']);
 const MODIFIER_EFFECT_FIELDS = new Set(['cooldown_ms', 'duration_ms', 'charges', 'recharge_ms']);
-const PROMPT_VERSION = 7;
+const PROMPT_VERSION = 8;
 
 const SURVIVAL_TYPE_GLOSSARY = `- mitigation ("Mitigación"): reduce el daño que finalmente recibes ANTES de que te reste vida — DR%, armadura, reducción física/mágica específica, dodge/parry si es un defensivo activo, damage smoothing/stagger.
 - absorption ("Absorción"): añade una capa/pool de vida aparte que el daño tiene que consumir antes de afectar tu HP — escudos, barriers, absorbs, efectos tipo Ignore Pain. Se separa de mitigation porque se agota, se acumula o se rompe de una vez, no reduce un porcentaje continuo.
@@ -71,13 +72,19 @@ MODIFIERS: investiga talentos/pasivas actuales que cambien timing o cargas tanto
 CATEGORÍAS:
 ${CATEGORY_GLOSSARY}
 
+DISPONIBILIDAD ACTIVA/PASIVA:
+- activationMode:"active" significa que existe un botón planificable en la configuración base investigada; "passive" nunca puede asignarse ni generar reminder.
+- passiveConversionSpellIds contiene los spellId de talentos seleccionables que convierten ese botón en pasiva o eliminan su versión activa. Ejemplo conceptual: si Healing Elixir deja de ser botón al elegir un talento concreto, conserva activationMode:"active" y añade el spellId de ese talento conversor.
+- availableSpecs sigue siendo obligatorio: no declares una habilidad para una spec que no pueda disponer de su versión activa.
+
 TIPOS DE SUPERVIVENCIA:
 ${SURVIVAL_TYPE_GLOSSARY}
 
 Si una habilidad existente ya no es defensiva, stillDefensive:false. Nunca inventes un survivalType para conservarla. Si hay ambigüedad material, confidence:"low"; el backend no aplicará automáticamente datos low.
 
-Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE objeto raíz exacto:
+Responde ÚNICAMENTE con JSON válido y compacto, sin explicaciones. Se acepta JSON crudo (preferido) o un único bloque markdown \`\`\`json. No repitas tooltips largos: notes y description deben ser breves. Usa ESTE objeto raíz exacto:
 {
+  "promptVersion": 8,
   "gameBuild": "${gameBuild}",
   "reviewedDefensives": [
     {
@@ -85,6 +92,9 @@ Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE
       "stillDefensive": boolean,
       "availableSpecs": string[],
       "category": "personal_defensive" | "semi_defensive" | "external_defensive" | "utility",
+      "targetingMode": "self" | "ally" | "both" | "raid" | "unknown",
+      "activationMode": "active" | "passive",
+      "passiveConversionSpellIds": number[],
       "survivalType": "mitigation" | "absorption" | "sustain" | "emergency" | null,
       "confidence": "high" | "medium" | "low",
       "sources": string[],
@@ -107,6 +117,9 @@ Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE
       "stillDefensive": true,
       "availableSpecs": string[],
       "category": "personal_defensive" | "semi_defensive" | "external_defensive" | "utility",
+      "targetingMode": "self" | "ally" | "both" | "raid" | "unknown",
+      "activationMode": "active" | "passive",
+      "passiveConversionSpellIds": number[],
       "survivalType": "mitigation" | "absorption" | "sustain" | "emergency",
       "confidence": "high" | "medium" | "low",
       "sources": string[],
@@ -123,7 +136,7 @@ Responde ÚNICAMENTE con JSON válido, sin markdown ni texto alrededor, con ESTE
   ]
 }
 
-reviewedDefensives DEBE contener exactamente un objeto por cada spellId de knownDefensives, sin omitir ninguno. missingDefensives puede estar vacío, pero debes haber hecho la fase de descubrimiento antes de decidirlo. Todos los objetos deben incluir todas sus claves.`;
+reviewedDefensives DEBE contener exactamente un objeto por cada spellId de knownDefensives, sin omitir ninguno. missingDefensives puede estar vacío, pero debes haber hecho la fase de descubrimiento antes de decidirlo. Todos los objetos deben incluir todas sus claves. Devuelve el JSON minificado si tu interfaz tiene un límite de salida.`;
 }
 
 interface SpecProfileEntry {
@@ -155,6 +168,9 @@ interface ClassificationEntry {
   stillDefensive?: boolean;
   availableSpecs?: string[];
   category?: string;
+  targetingMode?: string;
+  activationMode?: string;
+  passiveConversionSpellIds?: number[];
   survivalType: string | null;
   confidence: 'high' | 'medium' | 'low';
   sources: string[];
@@ -177,6 +193,10 @@ interface CatalogRow {
   spec: string | null;
   spec_override: string[] | null;
   category: string;
+  targeting_mode: string;
+  activation_mode: string;
+  passive_conversion_spell_ids: number[];
+  activation_game_build: string;
   survival_type: string | null;
   inferred_survival_type: string | null;
   base_cooldown_ms: number | null;
@@ -197,24 +217,48 @@ function normalizeSpecs(value: unknown): string[] | null {
   return specs.length ? specs : null;
 }
 
+function normalizeSpellIds(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  if (value.some((spellId) => typeof spellId !== 'number' || !Number.isInteger(spellId) || spellId <= 0)) return null;
+  return [...new Set(value)].sort((left, right) => left - right);
+}
+
 function specsToCatalogValue(specs: string[] | null, fallback: string | null): string | null {
   if (!specs?.length) return fallback;
   return specs.join('/');
 }
 
-function parseResponse(parsed: unknown): { reviewed: unknown[]; missing: unknown[]; gameBuild: string | null } | null {
+function parseResponse(parsed: unknown): { reviewed: unknown[]; missing: unknown[]; gameBuild: string | null; promptVersion: number | null } | null {
   // Backward compatibility with a v3/v4 answer that may already be copied in
   // a browser while this deploy happens. Legacy entries do NOT reconcile the
   // new profile/modifier tables unless those arrays are actually present.
-  if (Array.isArray(parsed)) return { reviewed: parsed, missing: [], gameBuild: null };
+  if (Array.isArray(parsed)) return { reviewed: parsed, missing: [], gameBuild: null, promptVersion: null };
   if (!parsed || typeof parsed !== 'object') return null;
-  const obj = parsed as { gameBuild?: unknown; reviewedDefensives?: unknown; missingDefensives?: unknown };
+  const obj = parsed as { promptVersion?: unknown; gameBuild?: unknown; reviewedDefensives?: unknown; missingDefensives?: unknown };
   if (!Array.isArray(obj.reviewedDefensives) || !Array.isArray(obj.missingDefensives)) return null;
   return {
     reviewed: obj.reviewedDefensives,
     missing: obj.missingDefensives,
     gameBuild: typeof obj.gameBuild === 'string' && obj.gameBuild.trim() ? obj.gameBuild.trim() : null,
+    promptVersion: typeof obj.promptVersion === 'number' && Number.isInteger(obj.promptVersion) ? obj.promptVersion : null,
   };
+}
+
+function jsonPayload(raw: string): string {
+  const trimmed = raw.replace(/^\uFEFF/, '').trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
+function targetingError(category: string, targetingMode: string): string | null {
+  if (!CATEGORIES.has(category)) return `category inválida: ${category}`;
+  if (!TARGETING_MODES.has(targetingMode)) return `targetingMode inválido: ${targetingMode}`;
+  if (category === 'personal_defensive' && targetingMode !== 'self') return 'personal_defensive exige targetingMode self';
+  if (category === 'semi_defensive' && targetingMode !== 'both') return 'semi_defensive exige targetingMode both';
+  if (category === 'external_defensive' && targetingMode !== 'ally' && targetingMode !== 'raid') {
+    return 'external_defensive exige targetingMode ally o raid';
+  }
+  return null;
 }
 
 function validateProfiles(entry: Partial<ClassificationEntry>): { rows: SpecProfileEntry[]; error?: string } {
@@ -255,7 +299,7 @@ function validateModifiers(
     if (!MODIFIER_CONDITIONS.has(modifier.condition)) return { rows: [], error: `condition inválida: ${modifier.condition}` };
     const effectFieldWasExplicit = typeof modifier.effectField === 'string' && MODIFIER_EFFECT_FIELDS.has(modifier.effectField);
     if (requireExplicitEffectField && !effectFieldWasExplicit) {
-      return { rows: [], error: 'effectField es obligatorio en respuestas v6 versionadas' };
+      return { rows: [], error: `effectField es obligatorio en respuestas v${PROMPT_VERSION} versionadas` };
     }
     const effectField = effectFieldWasExplicit
       ? modifier.effectField as ModifierEntry['effectField']
@@ -324,6 +368,15 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
   }
   if (!body.action) return jsonResponse({ ok: false, error: 'action es obligatoria' }, 400);
+  if ((body.action === 'prompt' || body.action === 'submit') && !body.class?.trim()) {
+    return jsonResponse(
+      {
+        ok: false,
+        error: 'La auditoría se procesa por clase para evitar respuestas truncadas. Selecciona una clase concreta.',
+      },
+      400,
+    );
+  }
 
   const scopeLabel = body.class ?? 'todas las clases';
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
@@ -331,7 +384,7 @@ Deno.serve(async (req: Request) => {
   try {
     let query = supabase
       .from('cooldown_catalog')
-      .select('spell_id,name,class,spec,spec_override,category,survival_type,inferred_survival_type,base_cooldown_ms,base_duration_ms')
+      .select('spell_id,name,class,spec,spec_override,category,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build,survival_type,inferred_survival_type,base_cooldown_ms,base_duration_ms')
       .order('class', { ascending: true })
       .order('name', { ascending: true });
     if (body.class) query = query.eq('class', body.class);
@@ -361,6 +414,10 @@ Deno.serve(async (req: Request) => {
         currentSpec: d.spec,
         manualSpecOverride: d.spec_override,
         currentCategory: d.category,
+        currentTargetingMode: d.targeting_mode,
+        currentActivationMode: d.activation_mode,
+        currentPassiveConversionSpellIds: d.passive_conversion_spell_ids,
+        currentActivationGameBuild: d.activation_game_build,
         currentSurvivalType: d.survival_type,
         currentInferredSurvivalType: d.inferred_survival_type,
         currentBaseCooldownMs: d.base_cooldown_ms,
@@ -369,8 +426,8 @@ Deno.serve(async (req: Request) => {
         currentModifiers: (currentModifiers ?? []).filter((modifier) => modifier.target_spell_id === d.spell_id),
       }));
       const systemPrompt = buildSystemPrompt(body.class ?? null, gameBuild);
-      const userMessage = `Alcance: ${scopeLabel}\nknownDefensives (${list.length} filas actuales; NO es una lista exhaustiva):\n${JSON.stringify(list, null, 2)}\n\nHaz primero la auditoría de estas ${list.length} filas y después una búsqueda INDEPENDIENTE de habilidades defensivas que falten. Si manualSpecOverride no es null, no lo interpretes como evidencia del juego: es una corrección humana que el backend preservará por encima del spec investigado. Devuelve el objeto JSON raíz reviewedDefensives + missingDefensives exactamente como pide el sistema.`;
-      return jsonResponse({ ok: true, promptVersion: 6, gameBuild, systemPrompt, userMessage, defensiveCount: list.length });
+      const userMessage = `Alcance: ${scopeLabel}\nknownDefensives (${list.length} filas actuales; NO es una lista exhaustiva):\n${JSON.stringify(list)}\n\nAudita estas ${list.length} filas y después busca de forma INDEPENDIENTE las habilidades defensivas que falten. manualSpecOverride es una corrección humana, no evidencia del juego. Devuelve el objeto JSON v${PROMPT_VERSION} completo y compacto.`;
+      return jsonResponse({ ok: true, promptVersion: PROMPT_VERSION, gameBuild, systemPrompt, userMessage, defensiveCount: list.length });
     }
 
     if (body.action === 'submit') {
@@ -378,12 +435,12 @@ Deno.serve(async (req: Request) => {
 
       let parsed: unknown;
       try {
-        parsed = JSON.parse(body.rawResponseText);
+        parsed = JSON.parse(jsonPayload(body.rawResponseText));
       } catch {
-        return jsonResponse({ ok: false, error: 'La respuesta pegada no es JSON válido. Pega únicamente el JSON completo devuelto por la IA.' }, 400);
+        return jsonResponse({ ok: false, error: 'La respuesta pegada no es JSON válido. Pega JSON crudo o un único bloque ```json completo.' }, 400);
       }
       const response = parseResponse(parsed);
-      if (!response) return jsonResponse({ ok: false, error: 'Se esperaba el objeto JSON v6 {gameBuild, reviewedDefensives, missingDefensives} (o una respuesta legacy compatible).' }, 400);
+      if (!response) return jsonResponse({ ok: false, error: 'Se esperaba el objeto JSON {promptVersion, gameBuild, reviewedDefensives, missingDefensives} (o una respuesta legacy compatible).' }, 400);
       const researchGameBuild = response.gameBuild ?? 'legacy-current';
       if (researchGameBuild !== 'legacy-current' && !/^\d+\.\d+\.\d+\.\d+$/.test(researchGameBuild)) {
         return jsonResponse({ ok: false, error: `gameBuild inválido: ${researchGameBuild}` }, 400);
@@ -461,8 +518,8 @@ Deno.serve(async (req: Request) => {
               charges: profile.charges,
               recharge_ms: null,
               game_build: researchGameBuild,
-              source: profile.source || 'classify-defensives v6',
-              source_note: 'Investigado por prompt v6; valor base específico de spec.',
+              source: profile.source || `classify-defensives v${PROMPT_VERSION}`,
+              source_note: `Investigado por prompt v${PROMPT_VERSION}; valor base específico de spec.`,
               verified_at: submittedAt,
               updated_at: submittedAt,
             },
@@ -528,6 +585,25 @@ Deno.serve(async (req: Request) => {
           invalid.push({ spellId: entry.spellId, reason: `category inválida: ${entry.category}` });
           continue;
         }
+        if (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION && entry.targetingMode == null) {
+          invalid.push({ spellId: entry.spellId, reason: `targetingMode es obligatorio en respuestas v${PROMPT_VERSION}` });
+          continue;
+        }
+        if (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION && (entry.activationMode == null || entry.passiveConversionSpellIds == null)) {
+          invalid.push({ spellId: entry.spellId, reason: `activationMode y passiveConversionSpellIds son obligatorios en respuestas v${PROMPT_VERSION}` });
+          continue;
+        }
+        if (entry.activationMode != null && !ACTIVATION_MODES.has(entry.activationMode)) {
+          invalid.push({ spellId: entry.spellId, reason: `activationMode inválido: ${entry.activationMode}` });
+          continue;
+        }
+        const passiveConversionSpellIds = entry.passiveConversionSpellIds == null
+          ? matched.passive_conversion_spell_ids
+          : normalizeSpellIds(entry.passiveConversionSpellIds);
+        if (passiveConversionSpellIds == null) {
+          invalid.push({ spellId: entry.spellId, reason: 'passiveConversionSpellIds debe ser un array de spellId positivos' });
+          continue;
+        }
         if (entry.survivalType != null && !SURVIVAL_TYPES.has(entry.survivalType)) {
           invalid.push({ spellId: entry.spellId, reason: `survivalType inválido: ${entry.survivalType}` });
           continue;
@@ -556,9 +632,33 @@ Deno.serve(async (req: Request) => {
         const survivalType = entry.survivalType ?? matched.survival_type;
         if (entry.survivalType == null) skippedUndetermined.push({ spellId: entry.spellId, name });
         const category = entry.category ?? matched.category;
+        const activationMode = entry.activationMode ?? matched.activation_mode;
+        const activationGameBuild = entry.activationMode != null || entry.passiveConversionSpellIds != null
+          ? researchGameBuild
+          : matched.activation_game_build;
+        const targetingMode = entry.targetingMode ?? (
+          category !== matched.category
+            ? category === 'personal_defensive'
+              ? 'self'
+              : category === 'semi_defensive'
+                ? 'both'
+                : 'unknown'
+            : matched.targeting_mode
+        );
+        if (entry.targetingMode != null || (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION)) {
+          const categoryTargetingError = targetingError(category, targetingMode);
+          if (categoryTargetingError) {
+            invalid.push({ spellId: entry.spellId, reason: categoryTargetingError });
+            continue;
+          }
+        }
         const materialChanged =
           matched.spec !== researchedSpec ||
           matched.category !== category ||
+          matched.targeting_mode !== targetingMode ||
+          matched.activation_mode !== activationMode ||
+          matched.activation_game_build !== activationGameBuild ||
+          JSON.stringify(matched.passive_conversion_spell_ids) !== JSON.stringify(passiveConversionSpellIds) ||
           matched.survival_type !== survivalType ||
           matched.base_cooldown_ms !== baseCooldownMs ||
           matched.base_duration_ms !== baseDurationMs;
@@ -566,6 +666,10 @@ Deno.serve(async (req: Request) => {
         const patch: Record<string, unknown> = {
           spec: researchedSpec,
           category,
+          targeting_mode: targetingMode,
+          activation_mode: activationMode,
+          passive_conversion_spell_ids: passiveConversionSpellIds,
+          activation_game_build: activationGameBuild,
           base_cooldown_ms: baseCooldownMs,
           base_duration_ms: baseDurationMs,
           ai_classification: {
@@ -573,7 +677,10 @@ Deno.serve(async (req: Request) => {
             sources: Array.isArray(entry.sources) ? entry.sources : [],
             notes: entry.notes ?? '',
             availableSpecs,
-            promptVersion: 6,
+            targetingMode,
+            activationMode,
+            passiveConversionSpellIds,
+            promptVersion: PROMPT_VERSION,
             classifiedAt: submittedAt,
           },
         };
@@ -648,8 +755,32 @@ Deno.serve(async (req: Request) => {
           invalid.push({ spellId: entry.spellId, reason: 'missingDefensive necesita una category válida' });
           continue;
         }
+        const targetingMode = entry.targetingMode ?? (
+          entry.category === 'personal_defensive' ? 'self' : entry.category === 'semi_defensive' ? 'both' : 'unknown'
+        );
+        if (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION && entry.targetingMode == null) {
+          invalid.push({ spellId: entry.spellId, reason: `missingDefensive necesita targetingMode explícito en respuestas v${PROMPT_VERSION}` });
+          continue;
+        }
+        if (entry.targetingMode != null || (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION)) {
+          const categoryTargetingError = targetingError(entry.category, targetingMode);
+          if (categoryTargetingError) {
+            invalid.push({ spellId: entry.spellId, reason: categoryTargetingError });
+            continue;
+          }
+        }
         if (!validNullableNonNegative(entry.baseCooldownSeconds) || !validNullableNonNegative(entry.baseDurationSeconds)) {
           invalid.push({ spellId: entry.spellId, reason: 'missingDefensive con cooldown/duración inválidos' });
+          continue;
+        }
+        const activationMode = entry.activationMode ?? 'active';
+        const passiveConversionSpellIds = entry.passiveConversionSpellIds == null ? [] : normalizeSpellIds(entry.passiveConversionSpellIds);
+        if (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION && (entry.activationMode == null || entry.passiveConversionSpellIds == null)) {
+          invalid.push({ spellId: entry.spellId, reason: `missingDefensive necesita activationMode y passiveConversionSpellIds en respuestas v${PROMPT_VERSION}` });
+          continue;
+        }
+        if (!ACTIVATION_MODES.has(activationMode) || passiveConversionSpellIds == null) {
+          invalid.push({ spellId: entry.spellId, reason: 'missingDefensive tiene semántica activa/pasiva inválida' });
           continue;
         }
         const availableSpecs = normalizeSpecs(entry.availableSpecs);
@@ -676,6 +807,10 @@ Deno.serve(async (req: Request) => {
           spell_id: entry.spellId,
           name: entry.name.trim(),
           category: entry.category,
+          targeting_mode: targetingMode,
+          activation_mode: activationMode,
+          passive_conversion_spell_ids: passiveConversionSpellIds,
+          activation_game_build: researchGameBuild,
           survival_type: entry.survivalType,
           inferred_survival_type: entry.survivalType,
           base_cooldown_ms: baseCooldownMs,
@@ -686,8 +821,11 @@ Deno.serve(async (req: Request) => {
             sources,
             notes: entry.notes ?? '',
             availableSpecs,
+            targetingMode,
+            activationMode,
+            passiveConversionSpellIds,
             discovered: true,
-            promptVersion: 6,
+            promptVersion: PROMPT_VERSION,
             classifiedAt: submittedAt,
           },
           synced_from_commit: null,
@@ -748,7 +886,7 @@ Deno.serve(async (req: Request) => {
               kind: 'classification',
               classes: [...affectedClasses].sort(),
               gameBuild: researchGameBuild,
-              promptVersion: 6,
+              promptVersion: PROMPT_VERSION,
             },
             requestedBy: guard.userId,
           });

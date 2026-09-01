@@ -30,11 +30,15 @@ interface RequestedMember {
 }
 
 interface GeneratePlanRequest {
+  action?: 'health';
   bossId?: string;
   difficulty?: string;
   name?: string;
   mode?: 'full' | 'partial' | 'no_plan';
   members?: RequestedMember[];
+  /** Selección explícita por jugador. Si no existe, solo entran personales;
+   * semi/external siempre requieren opt-in y utility nunca entra al solver. */
+  resourceSelections?: { playerName: string; spellIds: number[] }[];
   reservations?: SolverReservation[];
   maxSearchNodes?: number;
   supersedesId?: string | null;
@@ -145,6 +149,14 @@ Deno.serve(async (req: Request) => {
   } catch {
     return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
   }
+  if (body.action === 'health') {
+    return jsonResponse({
+      ok: true,
+      generatorVersion: 'generate-defensive-plan@2.1.0',
+      solverVersion: DEFENSIVE_PLAN_SOLVER_VERSION,
+      resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+    });
+  }
   if (!body.bossId?.trim() || !body.difficulty?.trim() || !body.name?.trim() || !body.mode) {
     return jsonResponse({ ok: false, error: 'bossId, difficulty, name y mode son obligatorios.' }, 400);
   }
@@ -155,6 +167,16 @@ Deno.serve(async (req: Request) => {
   }
   const requestedNames = body.members.map((member) => member.playerName?.trim()).filter(Boolean);
   if (new Set(requestedNames).size !== body.members.length) return jsonResponse({ ok: false, error: 'Cada member necesita un playerName único.' }, 400);
+  if (
+    body.resourceSelections != null &&
+    (!Array.isArray(body.resourceSelections) || body.resourceSelections.some((selection) =>
+      !selection?.playerName?.trim() ||
+      !Array.isArray(selection.spellIds) ||
+      selection.spellIds.some((spellId) => !Number.isInteger(spellId) || spellId <= 0)
+    ))
+  ) {
+    return jsonResponse({ ok: false, error: 'resourceSelections contiene una selección inválida.' }, 400);
+  }
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   try {
@@ -212,6 +234,12 @@ Deno.serve(async (req: Request) => {
 
     const memberSnapshots: CreateDraftRequest['members'] = [];
     const solverPlayers: SolverPlayerKit[] = [];
+    const resourceSelectionByPlayer = new Map(
+      (body.resourceSelections ?? []).map((selection) => [
+        selection.playerName.trim().toLocaleLowerCase(),
+        new Set(selection.spellIds),
+      ]),
+    );
     for (const source of memberSources) {
       const playerName = source.requested.playerName.trim();
       const gameBuild = source.latest?.game_build ?? null;
@@ -247,6 +275,11 @@ Deno.serve(async (req: Request) => {
       const playerKey = source.requested.playerKey?.trim() || (source.roster ? `character:${source.roster.character_id}` : `name:${playerName.toLowerCase()}`);
       const role = source.requested.role ?? roleFromRoster(source.roster?.role ?? 'dps');
       const included = source.requested.included !== false;
+      const explicitSelection = resourceSelectionByPlayer.get(playerName.toLocaleLowerCase());
+      const planningKit = kit.filter((defensive) =>
+        defensive.category !== 'utility' &&
+        (explicitSelection ? explicitSelection.has(defensive.spellId) : defensive.category === 'personal_defensive'),
+      );
       solverPlayers.push({
         playerKey,
         playerName,
@@ -256,7 +289,7 @@ Deno.serve(async (req: Request) => {
         raidGroup: source.requested.raidGroup ?? null,
         buildFingerprint,
         included,
-        defensives: kit,
+        defensives: planningKit,
       });
       memberSnapshots.push({
         playerKey,
@@ -278,6 +311,8 @@ Deno.serve(async (req: Request) => {
           sourcePullId: source.latest?.pull_id ?? null,
           gameBuildSource: source.latest?.game_build_source ?? null,
           talentLookupComplete: allTalentSpellIds != null,
+          planningResourceSpellIds: planningKit.map((defensive) => defensive.spellId),
+          optionalResourcesRequireOptIn: true,
         },
       });
     }

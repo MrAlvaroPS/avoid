@@ -55,6 +55,7 @@ function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow 
     defensive_death_viable_cd_count: null,
     defensive_evaluation_confidence: null,
     defensive_evaluator_version: null,
+    defensive_resolver_version: null,
     ...overrides,
   };
 }
@@ -68,7 +69,8 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
     defensive_broken_reservation_count: 0,
     defensive_death_viable_cd_count: 0,
     defensive_evaluation_confidence: 'verified',
-    defensive_evaluator_version: 'defensive-execution-evaluator@2.1.0',
+    defensive_evaluator_version: 'defensive-execution-evaluator@2.2.0',
+    defensive_resolver_version: 'effective-defensives@2.1.0',
   });
 
   it('mantiene v1 como score visible con el feature flag apagado y calcula shadow', () => {
@@ -82,7 +84,7 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
       v2Score: 25,
       delta: -75,
       comparablePullCount: 1,
-      evaluatorVersions: ['defensive-execution-evaluator@2.1.0'],
+      evaluatorVersions: ['defensive-execution-evaluator@2.2.0'],
     });
   });
 
@@ -106,8 +108,14 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
       NOW,
       { defensiveV2Enabled: true },
     );
+    const staleResolver = computeReliabilityBreakdown(
+      [row({ defensive_use_opportunity: true, used_defensive_in_pull: false, ...v2(100), defensive_resolver_version: 'effective-defensives@2.0.0' })],
+      NOW,
+      { defensiveV2Enabled: true },
+    );
     expect(incomplete?.breakdown.defensiva).toBe(100);
     expect(uncertain?.breakdown.defensiva).toBe(0);
+    expect(staleResolver?.breakdown.defensiva).toBe(0);
   });
 });
 

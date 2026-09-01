@@ -7,6 +7,7 @@ import {
   defensiveV2BackfillState,
   defensiveV2Capabilities,
 } from '../_shared/defensive-v2-readiness.ts';
+import { EFFECTIVE_DEFENSIVE_RESOLVER_VERSION } from '../_shared/effective-defensives.ts';
 
 type ReadinessState = 'ready' | 'partial' | 'missing';
 
@@ -72,8 +73,8 @@ Deno.serve(async (req: Request) => {
 
   try {
     const [resolverSchema, overrideAudit, planSchema, evaluatorSchema, reliabilitySchema] = await Promise.all([
-      probe('resolver_schema', 'Resolver y builds', 'M1–M3 · 20260831200000–20260831220000', [
-        { table: 'cooldown_catalog', columns: 'spell_id,targeting_mode' },
+      probe('resolver_schema', 'Resolver y builds', 'M1–M3 + activación · 20260831200000–20260831220000, 20260901160000–20260901180000', [
+        { table: 'cooldown_catalog', columns: 'spell_id,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build' },
         { table: 'defensive_spec_profiles', columns: 'class,spec,game_build' },
         { table: 'defensive_modifier_rules', columns: 'target_spell_id,game_build,effect_field' },
         { table: 'player_latest_build', columns: 'player_name,talent_build_fingerprint,game_build' },
@@ -95,7 +96,7 @@ Deno.serve(async (req: Request) => {
         {
           table: 'player_pull_reliability_inputs',
           columns:
-            'pull_id,player_name,defensive_management_score_v2,defensive_management_decision_count,defensive_required_count,defensive_required_success_count,defensive_broken_reservation_count,defensive_death_viable_cd_count,defensive_evaluation_confidence,defensive_evaluator_version',
+            'pull_id,player_name,defensive_management_score_v2,defensive_management_decision_count,defensive_required_count,defensive_required_success_count,defensive_broken_reservation_count,defensive_death_viable_cd_count,defensive_evaluation_confidence,defensive_evaluator_version,defensive_resolver_version',
         },
       ]),
     ]);
@@ -124,6 +125,7 @@ Deno.serve(async (req: Request) => {
         .not('defensive_death_viable_cd_count', 'is', null)
         .not('defensive_evaluation_confidence', 'is', null)
         .eq('defensive_evaluator_version', DEFENSIVE_EXECUTION_EVALUATOR_VERSION)
+        .eq('defensive_resolver_version', EFFECTIVE_DEFENSIVE_RESOLVER_VERSION)
         .or('defensive_management_decision_count.eq.0,defensive_management_score_v2.not.is.null');
       const [totalResult, completedResult] = await Promise.all([totalQuery, completedQuery]);
       const countError = totalResult.error ?? completedResult.error;
@@ -141,7 +143,7 @@ Deno.serve(async (req: Request) => {
           detail:
             total === 0
               ? 'No hay filas evaluables todavía.'
-              : `${completed}/${total} filas están materializadas con ${DEFENSIVE_EXECUTION_EVALUATOR_VERSION} y conteos completos.`,
+              : `${completed}/${total} filas están materializadas con ${DEFENSIVE_EXECUTION_EVALUATOR_VERSION}, ${EFFECTIVE_DEFENSIVE_RESOLVER_VERSION} y conteos completos.`,
           completed,
           total,
         };

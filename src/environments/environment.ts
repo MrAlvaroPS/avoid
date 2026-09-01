@@ -9,7 +9,7 @@ export const environment = {
     defensiveDeployedPlans: true,
     defensiveExecutionEvaluatorV2: true,
     // R5/R7 permanecen apagados hasta backfill + contraste oficial.
-    defensiveInfographicV2: false,
+    defensiveInfographicV2: true,
     defensiveReliabilityV2: false,
   },
 };

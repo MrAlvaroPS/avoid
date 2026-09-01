@@ -31,8 +31,8 @@ function personalCandidates(kit: ResolvedDefensive[]): ResolvedDefensive[] {
   return kit.filter(
     (defensive) =>
       defensive.eligible &&
-      (defensive.category === 'personal_defensive' || defensive.category === 'semi_defensive') &&
-      (defensive.targetingMode === 'self' || defensive.targetingMode === 'both'),
+      defensive.category === 'personal_defensive' &&
+      defensive.targetingMode === 'self',
   );
 }
 

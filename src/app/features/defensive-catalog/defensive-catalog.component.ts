@@ -41,6 +41,8 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
 
   readonly classes = CLASSES;
   readonly survivalTypes = SURVIVAL_TYPE_KEYS;
+  readonly defensiveCategories: CooldownCatalogRow['category'][] = ['personal_defensive', 'semi_defensive', 'external_defensive', 'utility'];
+  readonly defensiveTargetingModes: CooldownCatalogRow['targeting_mode'][] = ['self', 'ally', 'both', 'raid', 'unknown'];
   readonly classDisplayName = classDisplayName;
   readonly survivalTypeMeta = survivalTypeMeta;
 
@@ -153,7 +155,7 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
 
   async onEdit(
     row: CooldownCatalogRow,
-    patch: Partial<Pick<CooldownCatalogRow, 'survival_type' | 'reviewed' | 'base_cooldown_ms' | 'base_duration_ms' | 'spec_override' | 'excluded'>>,
+    patch: Partial<Pick<CooldownCatalogRow, 'category' | 'targeting_mode' | 'survival_type' | 'reviewed' | 'base_cooldown_ms' | 'base_duration_ms' | 'spec_override' | 'excluded'>>,
   ): Promise<void> {
     const className = this.selectedClass();
     if (!className) return;
@@ -164,6 +166,8 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
         class: className,
         spellId: row.spell_id,
         survivalType: 'survival_type' in patch ? patch.survival_type : row.survival_type,
+        ...('category' in patch ? { category: patch.category } : {}),
+        ...('targeting_mode' in patch ? { targetingMode: patch.targeting_mode } : {}),
         reviewed: patch.reviewed ?? true,
         // Solo se mandan si de verdad se están editando — save-defensive-edit
         // los deja tal cual cuando la clave no viene en el body, así una
@@ -266,6 +270,25 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
       this.scheduleQueueHealthPoll(false);
       return null;
     }
+  }
+
+  onDefensiveCategoryChange(row: CooldownCatalogRow, category: CooldownCatalogRow['category']): void {
+    const targetingMode: CooldownCatalogRow['targeting_mode'] =
+      category === 'personal_defensive'
+        ? 'self'
+        : category === 'semi_defensive'
+          ? 'both'
+          : category === 'external_defensive'
+            ? (row.targeting_mode === 'ally' || row.targeting_mode === 'raid' ? row.targeting_mode : 'unknown')
+            : row.targeting_mode;
+    void this.onEdit(row, { category, targeting_mode: targetingMode });
+  }
+
+  defensiveCategoryLabel(category: CooldownCatalogRow['category']): string {
+    if (category === 'personal_defensive') return 'Personal';
+    if (category === 'semi_defensive') return 'Semi';
+    if (category === 'external_defensive') return 'External';
+    return 'Utility';
   }
 
   private scheduleQueueHealthPoll(active: boolean): void {
@@ -493,7 +516,7 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
     void this.onEdit(row, { survival_type: row.inferred_survival_type });
   }
 
-  /** scope: nombre de clase concreta, o 'all' para el catálogo entero (todas las clases en un único prompt). */
+  /** scope: nombre de una clase concreta; el prompt global se rechaza para evitar respuestas truncadas. */
   async openClassifyPanel(scope: string | 'all'): Promise<void> {
     this.classifyPanelOpen.set(true);
     this.classifyResult.set(null);

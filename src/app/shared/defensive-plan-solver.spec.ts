@@ -17,6 +17,7 @@ function defensive(overrides: Partial<ResolvedDefensive> = {}): ResolvedDefensiv
     category: 'personal_defensive',
     survivalType: 'mitigation',
     targetingMode: 'self',
+    activationMode: 'active',
     effectiveCooldownMs: 60_000,
     effectiveDurationMs: 5_000,
     charges: 1,
@@ -24,7 +25,7 @@ function defensive(overrides: Partial<ResolvedDefensive> = {}): ResolvedDefensiv
     eligible: true,
     buildFingerprint: 'sha256:test',
     gameBuild: '12.1.0.68914',
-    resolverVersion: 'effective-defensives@2.0.0',
+    resolverVersion: 'effective-defensives@2.1.0',
     confidence: 'verified',
     provenance: [],
     conditionalModifiers: [],
@@ -128,6 +129,26 @@ describe('defensive plan solver', () => {
       input({
         occurrences: [occurrence(60_000, 1, { requirementLevel: 'optional' })],
         players: [player([defensive({ survivalType: 'emergency' })])],
+      }),
+    );
+    expect(result.assignments[0].coverageStatus).toBe('uncovered');
+  });
+
+  it('can use an explicitly supplied raid external for raid demand', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1, { demandType: 'raid' })],
+        players: [player([defensive({ category: 'external_defensive', targetingMode: 'raid' })])],
+      }),
+    );
+    expect(result.assignments[0]).toMatchObject({ coverageStatus: 'covered', defensiveSpellId: 100 });
+  });
+
+  it('never assigns a passive defensive even if it reaches the solver input', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1)],
+        players: [player([defensive({ activationMode: 'passive', eligible: false })])],
       }),
     );
     expect(result.assignments[0].coverageStatus).toBe('uncovered');

@@ -27,8 +27,8 @@ indicadas aquí; no significa únicamente que exista código.
 | Bloque | Entrega                      | Estado    | Dependencias / notas                                                               |
 | ------ | ---------------------------- | --------- | ---------------------------------------------------------------------------------- |
 | A      | Datos base M1/M2             | Implementado y revisado | Migraciones listas; falta aplicarlas en el entorno de destino.                     |
-| B      | Effective Defensive Resolver | Implementado y revisado | Resolver único, endpoint y shadow sin alterar scoring legacy.                       |
-| C      | Corrección histórica         | En curso | Motor, materialización y cola durable listos; falta backfill/validación real.     |
+| B      | Effective Defensive Resolver | Implementado y revisado | Resolver 2.1 único, incluida disponibilidad activa/pasiva por build.                |
+| C      | Corrección histórica         | En curso | Motor y cola listos; el backfill debe revalidarse con resolver 2.1 y datos reales.     |
 | D      | Ocurrencias de mecánica      | En curso | Schema y dual-write world listos; falta resync/contraste real de bosses.            |
 | E      | Evidencia local              | Implementado y revisado | Reconstrucción separada lista; falta desplegar y contrastar con pulls reales.       |
 | F      | Esquema de plan desplegado   | Implementado y revisado | Versiones/snapshots/binding listos; falta aplicar migración y prueba DB real.       |
@@ -130,10 +130,16 @@ cargas, targeting, provenance y confidence. Angular solo consumirá la salida.
 - [x] Añadir tests unitarios, incluido Fade 30 s → 20 s a rango 2.
 - [x] Crear endpoint de lectura para Preparación.
 - [x] Integrar analyze/reanalyze en shadow sin cambiar scoring legacy.
+- [x] Modelar disponibilidad activa/pasiva por build y conversiones por
+      talento; una pasiva sigue visible para explicar el kit, pero queda fuera
+      de solver, reminders y oportunidades punitivas.
+- [x] Versionar targeting/categoría de recurso y permitir corregir
+      personal/semi/external desde el catálogo sin guardar valores efectivos
+      de un jugador en la fila base.
 
 ### Revisión del bloque
 
-- Resolver puro `effective-defensives@2.0.0`: no importa Deno ni Supabase y
+- Resolver puro `effective-defensives@2.1.0`: no importa Deno ni Supabase y
   conserva provenance por cada transformación.
 - 23/23 tests específicos del resolver pasan. Cubren talentos ausentes, lookup incompleto,
   rank, regla conditional, perfil exacto y legacy, cambio de build, overrides,
@@ -174,6 +180,10 @@ cargas, targeting, provenance y confidence. Angular solo consumirá la salida.
 - Despliegue obligatorio: las cuatro migraciones `20260831200000` a
   `20260831230000` deben aplicarse en orden antes que las
   Edge Functions que escriben/leen las columnas v2.
+- Consolidación adicional: `20260901180000` amplía el catálogo con
+  `activation_mode`, `passive_conversion_spell_ids` y
+  `activation_game_build`. Los defaults legacy no inventan conversiones; el
+  prompt v8 por clase debe investigarlas para el build actual.
 
 ## Bloque C — Corrección histórica
 
@@ -413,6 +423,16 @@ fallback explícito.
       preferencias, ejecuta solver y persiste un draft autocontenido.
 - [x] Hacer que la cronología de Preparación consuma slots/snapshots del plan
       más reciente cuando existe; el cálculo legacy queda solo como fallback.
+- [x] Conectar la acción de Preparación al generador backend para todo el
+      roster; antes la vista Jugador solo filtraba y nunca creaba el plan.
+- [x] Añadir selección de recursos por jugador: personales elegibles por
+      defecto, semi/external solo con opt-in y utility/pasivas nunca asignables.
+- [x] Excluir semi/external de oportunidades automáticas en modo `no_plan`;
+      un semi solo entra al evaluator si un slot publicado lo seleccionó.
+- [x] Permitir que un external de raid cubra demanda raid sin fingir que es un
+      personal; los externals de aliado siguen siendo target-aware.
+- [x] Alimentar la tabla principal y el aviso de huecos con slots v2 cuando
+      existe draft/plan, separando visualmente los templates legacy.
 - [ ] Ejecutar un draft real con roster de raid seleccionado y revisar su
       resultado completo antes de publicar.
 
@@ -436,6 +456,9 @@ fallback explícito.
 - Un draft con kits enviados directamente por cliente puede guardarse para
   inspección manual, pero `publish_defensive_plan` lo rechaza. El camino
   publicable es `generate-defensive-plan`, que resuelve en backend.
+- Readiness sondea también `generate-defensive-plan`; la capacidad de plan no
+  se marca lista si solo está el schema. La publicación y el export quedan
+  visibles en Jugador, pero siguen sujetos a los guards de cobertura/stale.
 
 ## Bloque H — Export MRT v2
 
@@ -463,6 +486,10 @@ ocurrencia. No reconstruir el plan desde templates al exportar.
       plan.
 - [x] Conservar en el texto del reminder los grupos 1–8 del slot publicado;
       MRT no filtra por grupo, pero el dato informativo no se pierde.
+- [x] Añadir `MRT del jugador`: filtra el miembro exacto del plan publicado y
+      no exporta a todos los jugadores de la misma clase/spec.
+- [x] Impedir que un draft nuevo conviva con una exportación silenciosa del
+      plan publicado anterior; primero debe publicarse o descartarse el draft.
 - [ ] Importar en el addon real un export v2 con counter y otro degradado a
       tiempo para cerrar la validación empírica.
 
@@ -479,6 +506,10 @@ ocurrencia. No reconstruir el plan desde templates al exportar.
 - Inconsistencia corregida al repasar H antes de I: el camino legacy añadía
   `[Grupo/s ...]` al mensaje, pero el export desplegado omitía
   `assigned_groups`. El contrato, el mapping y la prueba ya lo conservan.
+- La falta de reminders observada en Sszorak no se da por cerrada con tests:
+  el siguiente gate exige importar una nota v2 publicada en MRT real y probar
+  al menos un trigger de tiempo y un bossmod/counter verificado. Hasta entonces
+  cualquier counter no verificado se degrada a tiempo de pull.
 
 ## Bloque I — Evaluator post-pull
 
@@ -608,11 +639,13 @@ por pull hasta disponer de evaluación fiable y backfill.
       cooldown viable 5 y recommended/extra 1; optional, hold correcto,
       no-feasible y uncertain no entran en el denominador.
 - [x] Persistir `management_score` desde el evaluator y versionarlo como
-      `defensive-execution-evaluator@2.1.0`.
+      `defensive-execution-evaluator@2.2.0`.
 - [x] Añadir a `player_pull_reliability_inputs` las ocho columnas v2 pedidas,
       manteniendo todas las columnas legacy y la seguridad `security_invoker`.
 - [x] Exigir por fila score, conteos coherentes, confidence `verified/inferred`
       y versión de evaluator antes de considerar v2 backfilled.
+- [x] Exigir también `effective-defensives@2.1.0`: un evaluator vigente no
+      vuelve válida una fila calculada con semántica antigua de disponibilidad.
 - [x] Seleccionar la fuente de forma atómica por pull: v2 fiable o la fórmula
       legacy completa, nunca componentes de ambas en la misma fila.
 - [x] Calcular un shadow compare v1/v2 sobre exactamente los mismos pulls,
@@ -637,6 +670,9 @@ por pull hasta disponer de evaluación fiable y backfill.
 - La migración es aditiva para consumidores: la vista pública conserva el
   contrato anterior y agrega las columnas v2 al final. La subvista legacy queda
   interna y protegida para permitir la retirada gradual de L.
+- Tras desplegar 2.1, readiness puede mostrar temporalmente un backfill menor
+  (incluso 0) aunque las filas 2.0 sigan físicamente presentes. Es intencionado:
+  solo vuelven a contar cuando se reanalizan con el resolver actual.
 
 ## Registro cronológico
 
@@ -768,6 +804,28 @@ por pull hasta disponer de evaluación fiable y backfill.
   después de registrar ese timestamp. Se corrige sin reescribir historial con
   `20260901160000_repair_cooldown_catalog_targeting_mode.sql`: DDL aditivo,
   backfill conservador y reload de PostgREST; no borra datos ni inicia L.
+
+### 2026-09-01 — Consolidación de disponibilidad y flujo Preparación → MRT
+
+- El prompt defensivo pasa a v8 y se limita por clase con JSON compacto. Pide
+  categoría/target coherentes, perfiles por spec, modifiers por build y
+  conversiones de activa a pasiva.
+- Añadida migración `20260901180000_defensive_activation_semantics.sql` y
+  resolver `effective-defensives@2.1.0`; una habilidad pasiva o cuya conversión
+  no puede resolverse con certeza queda fuera del plan por seguridad.
+- Añadida edición manual de categoría/target y metadatos compactos en las
+  cards. Los recursos personales parten seleccionados y semi/external son
+  opt-in excepcionales.
+- Conectados el generador global, publicación y MRT exacto por jugador. La
+  tabla de mecánicas consume slots v2 cuando existen y deja los templates
+  legacy identificados como tales.
+- La auditoría Fade distingue presencia base y modifier 30→20; deja de afirmar
+  falsamente que el jugador no conoce Fade.
+- Fiabilidad y readiness exigen evaluator 2.2 + resolver 2.1, por lo que el
+  backfill anterior debe revalidarse antes de activar scoring.
+- Comprobaciones: build Angular correcto, diez Edge Functions empaquetadas y
+  182/183 tests; el único fallo es el baseline conocido de `.brand` en
+  `src/app/app.spec.ts:24`, ajeno a defensivos.
 
 ## Pendientes transversales
 

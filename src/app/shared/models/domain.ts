@@ -379,6 +379,7 @@ export interface BossMechanicCandidateRow {
 /** §"pantalla nueva para clasificar defensivos... qué le hace al daño entrante durante una mecánica de raid" (feedback real): mitigation = lo reduce antes de que llegue, absorption = lo intercepta con un pool aparte, sustain = repara HP ya perdido, emergency = evita la muerte / dispara el margen de supervivencia. */
 export type DefensiveSurvivalType = 'mitigation' | 'absorption' | 'sustain' | 'emergency';
 export type DefensiveTargetingMode = 'self' | 'ally' | 'both' | 'raid' | 'unknown';
+export type DefensiveActivationMode = 'active' | 'passive';
 export type DefensiveResolutionConfidence = 'verified' | 'inferred' | 'fallback' | 'uncertain';
 
 /**
@@ -404,6 +405,9 @@ export interface CooldownCatalogRow {
   category: 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
   /** El evaluator no puede atribuir ally/both/unknown al caster sin target o aura real. */
   targeting_mode: DefensiveTargetingMode;
+  activation_mode: DefensiveActivationMode;
+  passive_conversion_spell_ids: number[];
+  activation_game_build: string;
   base_cooldown_ms: number | null;
   base_duration_ms: number | null;
   synced_from_commit: string | null;
@@ -473,8 +477,8 @@ export interface PlayerLatestBuildRow {
 }
 
 export interface DefensiveResolutionStep {
-  kind: 'catalog_base' | 'eligibility' | 'spec_profile' | 'modifier' | 'conditional_modifier' | 'player_override' | 'validation';
-  field: 'cooldown_ms' | 'duration_ms' | 'charges' | 'recharge_ms' | 'eligible' | 'targeting_mode';
+  kind: 'catalog_base' | 'eligibility' | 'availability_rule' | 'spec_profile' | 'modifier' | 'conditional_modifier' | 'player_override' | 'validation';
+  field: 'cooldown_ms' | 'duration_ms' | 'charges' | 'recharge_ms' | 'eligible' | 'targeting_mode' | 'activation_mode';
   before: number | string | boolean | null;
   after: number | string | boolean | null;
   operation?: 'set_ms' | 'multiply' | 'add_ms' | 'subtract_ms' | 'charges_add';
@@ -493,6 +497,7 @@ export interface ResolvedDefensiveRow {
   category: CooldownCatalogRow['category'];
   survivalType: DefensiveSurvivalType | null;
   targetingMode: DefensiveTargetingMode;
+  activationMode: DefensiveActivationMode;
   effectiveCooldownMs: number | null;
   effectiveDurationMs: number | null;
   charges: number;
