@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { CombatLogTail } from './tail.mjs';
 import { parseCombatLogLine } from './parser.mjs';
 import { DurableCombatLogSpool } from './spool.mjs';
@@ -8,10 +9,12 @@ import { DurableCombatLogSpool } from './spool.mjs';
  * allowed in Block A.
  */
 export async function openShadowCollector({ logPath, spoolDirectory, attachMode = 'eof' }) {
+  const sourcePath = path.resolve(logPath);
   const spool = new DurableCombatLogSpool(spoolDirectory);
   const recovered = await spool.open();
-  const sameSource = recovered.source === logPath;
-  const tail = new CombatLogTail(logPath, {
+  const recoveredSource = recovered.source ? path.resolve(recovered.source) : null;
+  const sameSource = recoveredSource === sourcePath;
+  const tail = new CombatLogTail(sourcePath, {
     attachMode,
     recoveryOffset: sameSource ? recovered.sourceOffset : null,
     recoveryIdentity: sameSource ? recovered.fileIdentity : null,
@@ -26,7 +29,7 @@ export async function openShadowCollector({ logPath, spoolDirectory, attachMode 
         const event = parseCombatLogLine(record.line);
         appended.push(
           await spool.append({
-            source: logPath,
+            source: sourcePath,
             fileIdentity: record.fileIdentity,
             startOffset: record.startOffset,
             nextOffset: record.nextOffset,
