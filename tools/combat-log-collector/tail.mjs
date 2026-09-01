@@ -1,7 +1,7 @@
 import { open, stat } from 'node:fs/promises';
 
 function fileIdentity(s) {
-  return `${s.dev ?? 'dev'}:${s.ino ?? 'ino'}`;
+  return `${s.dev ?? 'dev'}:${s.ino ?? 'ino'}:${s.birthtimeMs ?? 'birth'}`;
 }
 
 /**
