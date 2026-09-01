@@ -2,11 +2,18 @@ import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 async function fsyncDirectory(dir) {
-  const handle = await open(dir, 'r');
   try {
-    await handle.sync();
-  } finally {
-    await handle.close();
+    const handle = await open(dir, 'r');
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    // Directory fsync is not portable on every Windows/filesystem combination.
+    // Journal and state-file fsync remain mandatory; directory fsync is an
+    // additional rename-durability barrier where the platform supports it.
+    if (!['EPERM', 'EACCES', 'EISDIR', 'ENOTSUP', 'EINVAL'].includes(error?.code)) throw error;
   }
 }
 
@@ -77,20 +84,23 @@ export class DurableCombatLogSpool {
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       if (!line.trim()) continue;
+      let record;
       try {
-        const record = JSON.parse(line);
-        if (!Number.isInteger(record.sequence) || record.sequence < 1) {
-          throw new Error('invalid sequence');
-        }
-        if (last && record.sequence <= last.sequence) {
-          throw new Error('non-monotonic sequence');
-        }
-        last = record;
+        record = JSON.parse(line);
       } catch {
-        // Only a torn final physical record is recoverable. Corruption in the
-        // middle would create an untraceable hole, so fail closed.
-        if (i !== lastNonEmptyIndex) throw new Error('Corrupt non-final record in combat-log spool');
+        // A syntactically torn last record can result from a process/filesystem
+        // failure during append. Earlier complete records are still valid.
+        if (i === lastNonEmptyIndex) break;
+        throw new Error('Corrupt non-final record in combat-log spool');
       }
+      // Structurally invalid but valid JSON is corruption, not a torn write.
+      if (!Number.isInteger(record.sequence) || record.sequence < 1) {
+        throw new Error('Invalid sequence in combat-log spool');
+      }
+      if (last && record.sequence <= last.sequence) {
+        throw new Error('Non-monotonic sequence in combat-log spool');
+      }
+      last = record;
     }
 
     const journalSequence = last?.sequence ?? 0;
