@@ -14,7 +14,7 @@ Este documento es el registro acumulativo de implementación de `feature/iris-ca
 
 | Bloque | Estado | Nota |
 |---|---|---|
-| A — Collector y parser | **EN CURSO** | Foundation local implementada; 15/15 tests sintéticos. Falta corpus real/full-night y transporte shadow. |
+| A — Collector y parser | **EN CURSO** | Foundation local implementada; 16/16 tests sintéticos. Falta corpus real/full-night y transporte shadow. |
 | B — Sessionizer y snapshots | Pendiente | No iniciado. |
 | C — PullEvaluationContext | Pendiente | No iniciado. |
 | D — Policy v3 | Pendiente | No iniciado. |
@@ -152,7 +152,7 @@ Un evento desconocido conserva `tokenizedFields` y `RawLineRef`. `SPELL_ABSORBED
 - [x] Journal JSONL durable con `fsync`.
 - [x] Retry local de una secuencia ya persistida no duplica registros.
 - [x] Recuperación de escritura final truncada/torn.
-- [x] Estado durable por stream: identity, committed/uploaded offset, sequence, format state y clock context.
+- [x] Estado durable por stream: identity, committed/uploaded offset, sequence, hash/rango de última línea committed, format state y clock context.
 - [x] Reconciliación spool→state tras crash.
 - [x] Truncate/replacement abre un stream nuevo; no reutiliza offsets del stream viejo.
 - [x] CLI mínima para validación local (`--log`, `--data-dir`, `--once`, `--poll-ms`).
@@ -170,7 +170,7 @@ Un evento desconocido conserva `tokenizedFields` y `RawLineRef`. `SPELL_ABSORBED
 - [x] `COMBATANT_INFO` conserva grupos anidados;
 - [x] bigint > `Number.MAX_SAFE_INTEGER` serializa como string y JSON válido.
 
-### Collector/file-tail/spool — 8/8 PASS
+### Collector/file-tail/spool — 9/9 PASS
 
 - [x] línea partida entre reads;
 - [x] truncate;
@@ -179,9 +179,10 @@ Un evento desconocido conserva `tokenizedFields` y `RawLineRef`. `SPELL_ABSORBED
 - [x] spool durable y retry local idempotente;
 - [x] recuperación de torn write;
 - [x] restart collector sin duplicar facts;
-- [x] truncate crea stream nuevo y reinicia sequence dentro de ese stream.
+- [x] truncate crea stream nuevo y reinicia sequence dentro de ese stream;
+- [x] truncate + regrow rápido por encima del offset anterior se detecta mediante hash de la última línea committed.
 
-**Total actual: 15/15 PASS.**
+**Total actual: 16/16 PASS.**
 
 Los tests se ejecutaron con Node 22 usando type stripping nativo para no depender de instalar paquetes externos durante la auditoría. El runner definitivo puede migrarse a Vitest cuando se integre el package/workspace; la lógica testada es la misma.
 
@@ -210,6 +211,10 @@ Si el proceso cae después del `fsync` del evento pero antes de guardar `state.j
 ### A-F006 — Fixture real citado pero no versionado
 
 `coiling-occurrence-1.txt` aparece en la especificación/fuentes internas, pero no está presente en la rama accesible. No se recrea a mano. Hasta incorporar ese raw (sanitizado si procede) y una noche completa, el Block A permanece **EN CURSO**.
+
+### A-F007 — La identidad de fichero no basta contra truncate + regrow
+
+Un truncate conserva inode/file identity. Si WoW o una herramienta reescribe y el fichero vuelve a crecer por encima del offset antiguo antes del siguiente poll, `size < offset` ya no detecta el reset. El state conserva rango+hash de la última línea committed y lo revalida antes de confiar en el offset.
 
 ## A.6 Bugs encontrados y arreglos
 
@@ -243,6 +248,25 @@ Si el proceso cae después del `fsync` del evento pero antes de guardar `state.j
 - **Síntoma durante QA:** el runner nativo de Node 22 rechazó `constructor(private readonly ...)`.
 - **Fix:** propiedades explícitas en las clases ejecutadas directamente como TS.
 - **Impacto producto:** ninguno; mejora la ejecutabilidad sin transpiler durante esta fase.
+
+### A-B006 — Dedupe del spool no estaba scopeado por stream
+
+- **Síntoma:** después de un truncate, el nuevo stream reinicia `sequence=1`; el spool comparaba contra la sequence alta del stream anterior y podía descartar el primer batch nuevo.
+- **Causa raíz:** idempotencia local basada solo en sequence.
+- **Fix:** dedupe por `(streamId, sequence)`; un append no puede mezclar streams.
+- **Regresión:** tras truncate se comprueba que el nuevo record sí se persiste y el journal contiene ambos streams.
+
+### A-B007 — El primer timestamp podía elegir el año anterior
+
+- **Síntoma:** el resolver elegía el candidato anual más cercano al 1 de enero del `referenceYear`; una línea de noviembre podía resolverse como noviembre del año anterior.
+- **Fix:** el primer timestamp se ancla a la fecha de referencia real del logger; después se mantiene continuidad temporal.
+- **Regresión:** `11/21` con referencia 2026 se verifica contra epoch 2026 explícito.
+
+### A-B008 — Truncate + regrow rápido podía reutilizar un offset viejo
+
+- **Síntoma:** si el mismo inode se truncaba y volvía a crecer por encima de `lastCommittedOffset` antes del poll, ni file identity ni `size < offset` detectaban el reset.
+- **Fix:** verificar hash de la última línea committed contra el rango original antes de leer nuevos bytes; mismatch abre stream nuevo con reason `content_rewritten`.
+- **Regresión:** reemplazo in-place más largo que el fichero anterior.
 
 ## A.7 Deuda/pending para cerrar Block A
 
@@ -281,6 +305,9 @@ Si el proceso cae después del `fsync` del evento pero antes de guardar `state.j
 | A-B003 | A | Bug de recovery | Resuelto | Crash spool/state podía duplicar replay. |
 | A-B004 | A | Bug de durability | Resuelto | Torn final JSONL write. |
 | A-B005 | A | Tooling | Resuelto | Parameter properties incompatibles con Node strip-only. |
+| A-B006 | A | Bug de idempotencia | Resuelto | Dedupe local debe incluir streamId. |
+| A-B007 | A | Bug temporal | Resuelto | Primer timestamp podía caer en el año anterior. |
+| A-B008 | A | Bug de tailing | Resuelto | Truncate + regrow podía conservar offset inválido. |
 | A-F006 | A | Corpus | Abierto | Fixture Coiling citado no está versionado. |
 
 ## Próximo incremento
