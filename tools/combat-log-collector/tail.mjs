@@ -17,6 +17,7 @@ export class CombatLogTail {
     this.path = path;
     this.attachMode = options.attachMode ?? 'eof';
     this.recoveryOffset = options.recoveryOffset ?? null;
+    this.recoveryIdentity = options.recoveryIdentity ?? null;
     this.readChunkBytes = options.readChunkBytes ?? 256 * 1024;
     this.handle = null;
     this.identity = null;
@@ -28,9 +29,17 @@ export class CombatLogTail {
 
   async attach() {
     const s = await stat(this.path);
+    const currentIdentity = fileIdentity(s);
     await this.#openHandle(s);
-    if (this.recoveryOffset != null) {
+    const recoveryMatchesFile =
+      this.recoveryOffset != null &&
+      (this.recoveryIdentity == null || this.recoveryIdentity === currentIdentity);
+    if (recoveryMatchesFile) {
       this.readOffset = Math.max(0, Math.min(Number(this.recoveryOffset), s.size));
+    } else if (this.recoveryOffset != null && this.recoveryIdentity != null && this.recoveryIdentity !== currentIdentity) {
+      // The durable checkpoint belongs to the previous file behind this path.
+      // A replacement can already contain new events, so start at byte 0.
+      this.readOffset = 0;
     } else if (this.attachMode === 'start') {
       this.readOffset = 0;
     } else {
