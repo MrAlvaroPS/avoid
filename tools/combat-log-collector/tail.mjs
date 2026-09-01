@@ -19,11 +19,14 @@ export class CombatLogTail {
     this.recoveryOffset = options.recoveryOffset ?? null;
     this.recoveryIdentity = options.recoveryIdentity ?? null;
     this.readChunkBytes = options.readChunkBytes ?? 256 * 1024;
+    this.anchorBytesMax = options.anchorBytesMax ?? 64;
     this.handle = null;
     this.identity = null;
     this.readOffset = 0;
     this.lineStartOffset = 0;
     this.pending = Buffer.alloc(0);
+    this.anchorStart = 0;
+    this.anchor = Buffer.alloc(0);
     this.initialized = false;
   }
 
@@ -49,6 +52,7 @@ export class CombatLogTail {
     }
     this.lineStartOffset = this.readOffset;
     this.pending = Buffer.alloc(0);
+    await this.#captureAnchor();
     this.initialized = true;
     return { offset: this.readOffset, identity: this.identity, size: s.size };
   }
@@ -57,6 +61,36 @@ export class CombatLogTail {
     if (this.handle) await this.handle.close().catch(() => {});
     this.handle = await open(this.path, 'r');
     this.identity = fileIdentity(s);
+  }
+
+  async #captureAnchor() {
+    if (!this.handle || this.readOffset <= 0 || this.anchorBytesMax <= 0) {
+      this.anchorStart = this.readOffset;
+      this.anchor = Buffer.alloc(0);
+      return;
+    }
+    const size = Math.min(this.anchorBytesMax, this.readOffset);
+    const start = this.readOffset - size;
+    const buffer = Buffer.alloc(size);
+    const { bytesRead } = await this.handle.read(buffer, 0, size, start);
+    this.anchorStart = start;
+    this.anchor = buffer.subarray(0, bytesRead);
+  }
+
+  async #anchorStillMatches(s) {
+    if (!this.handle || !this.anchor.length) return true;
+    if (s.size < this.anchorStart + this.anchor.length) return false;
+    const current = Buffer.alloc(this.anchor.length);
+    const { bytesRead } = await this.handle.read(current, 0, current.length, this.anchorStart);
+    return bytesRead === this.anchor.length && current.equals(this.anchor);
+  }
+
+  #resetCursor() {
+    this.readOffset = 0;
+    this.lineStartOffset = 0;
+    this.pending = Buffer.alloc(0);
+    this.anchorStart = 0;
+    this.anchor = Buffer.alloc(0);
   }
 
   async #refreshFile() {
@@ -71,14 +105,12 @@ export class CombatLogTail {
       // Rotation/replacement: the pathname now refers to a new file. Start
       // from byte 0 because any content in the replacement was not observed.
       await this.#openHandle(s);
-      this.readOffset = 0;
-      this.lineStartOffset = 0;
-      this.pending = Buffer.alloc(0);
-    } else if (s.size < this.readOffset) {
-      // In-place truncation (common when logs are manually cleared).
-      this.readOffset = 0;
-      this.lineStartOffset = 0;
-      this.pending = Buffer.alloc(0);
+      this.#resetCursor();
+    } else if (s.size < this.readOffset || !(await this.#anchorStillMatches(s))) {
+      // Size regression catches ordinary truncation. The anchor catches the
+      // harder case where a file is truncated and rewritten past our previous
+      // offset between two polls while keeping the same inode.
+      this.#resetCursor();
     }
     return s;
   }
@@ -113,6 +145,7 @@ export class CombatLogTail {
         this.lineStartOffset = nextOffset;
       }
     }
+    await this.#captureAnchor();
     return records;
   }
 
