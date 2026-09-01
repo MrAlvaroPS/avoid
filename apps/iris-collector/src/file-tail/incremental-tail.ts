@@ -44,6 +44,28 @@ export async function snapshotFileIdentity(path: string): Promise<FileIdentitySn
   };
 }
 
+export async function verifyCommittedLine(
+  path: string,
+  byteStart: number,
+  byteEndExclusive: number,
+  expectedHash: string,
+): Promise<boolean> {
+  if (byteStart < 0 || byteEndExclusive <= byteStart) return false;
+  const length = byteEndExclusive - byteStart;
+  const handle = await open(path, 'r');
+  try {
+    const buffer = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, byteStart);
+    if (bytesRead !== length) return false;
+    let end = bytesRead;
+    if (end > 0 && buffer[end - 1] === 0x0a) end -= 1;
+    if (end > 0 && buffer[end - 1] === 0x0d) end -= 1;
+    return shortHash(buffer.subarray(0, end)) === expectedHash;
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readCompleteLines(
   path: string,
   fromOffset: number,

@@ -339,11 +339,13 @@ export class CombatLogTimestampResolver {
   readonly timeZone: string;
   readonly referenceYear: number;
   private readonly fixedOffsetMinutes?: number;
+  private readonly referenceDateMs: number;
   private lastResolvedMs?: number;
 
   constructor(options: TimestampResolverOptions = {}) {
     const referenceDate = options.referenceDate ?? new Date();
     this.referenceYear = referenceDate.getFullYear();
+    this.referenceDateMs = referenceDate.getTime();
     this.fixedOffsetMinutes = options.fixedOffsetMinutes;
     this.timeZone = options.fixedOffsetMinutes == null
       ? Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
@@ -369,9 +371,7 @@ export class CombatLogTimestampResolver {
       return new Date(year, month - 1, day, hour, minute, second, millisecond).getTime();
     });
 
-    const anchor = this.lastResolvedMs ?? (this.fixedOffsetMinutes != null
-      ? Date.UTC(this.referenceYear, 0, 1) - this.fixedOffsetMinutes * 60_000
-      : new Date(this.referenceYear, 0, 1).getTime());
+    const anchor = this.lastResolvedMs ?? this.referenceDateMs;
     let resolved = candidates.reduce((best, candidate) => Math.abs(candidate - anchor) < Math.abs(best - anchor) ? candidate : best);
 
     if (this.lastResolvedMs != null && resolved < this.lastResolvedMs - 180 * 24 * 60 * 60 * 1000) {

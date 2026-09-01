@@ -15,8 +15,12 @@ export class JsonlSpool {
   async append(records: SpoolRecord[]): Promise<number> {
     if (!records.length) return 0;
     await mkdir(dirname(this.path), { recursive: true });
+    const streamId = records[0].streamId;
+    if (records.some((record) => record.streamId !== streamId)) {
+      throw new Error('A spool append may contain records from only one stream');
+    }
     const last = await this.lastRecord();
-    const lastSequence = last ? sequenceFromWire(last.sequence) : -1n;
+    const lastSequence = last?.streamId === streamId ? sequenceFromWire(last.sequence) : -1n;
     const newRecords = records.filter((record) => sequenceFromWire(record.sequence) > lastSequence);
     if (!newRecords.length) return 0;
 

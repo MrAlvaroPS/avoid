@@ -16,6 +16,8 @@ export interface CollectorState {
   lastCommittedOffset: number;
   lastUploadedOffset: number;
   lastSequence: SequenceString;
+  lastCommittedLineStart?: number;
+  lastCommittedLineHash?: string;
   formatState: CombatLogFormatState;
   clockContext: CollectorClockContext;
   updatedAt: string;
@@ -52,6 +54,8 @@ export function reconcileStateWithSpool(state: CollectorState, lastRecord: Spool
     ...state,
     lastSequence: lastRecord.sequence,
     lastCommittedOffset: Math.max(state.lastCommittedOffset, lastRecord.committedOffset),
+    lastCommittedLineStart: lastRecord.event.rawRef.byteStart,
+    lastCommittedLineHash: lastRecord.event.rawRef.lineHash,
     formatState: { ...lastRecord.formatState },
     updatedAt: new Date().toISOString(),
   };

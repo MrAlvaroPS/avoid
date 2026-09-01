@@ -23,6 +23,7 @@ test('COMBAT_LOG_VERSION updates format state and preserves build provenance', (
   assert.equal(event.payload.kind, 'combat_log_version');
   assert.deepEqual(parser.getFormatState(), { logFormatVersion: 19, advancedEnabled: true, gameBuild: '12.0.5', projectId: 1 });
   assert.equal(event.gameBuild, '12.0.5');
+  assert.equal(event.timestamp, Date.UTC(2026, 10, 21, 11, 1, 34, 71));
 });
 
 test('advanced SWING_DAMAGE binds snapshot through explicit infoGuid', () => {

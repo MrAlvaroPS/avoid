@@ -99,5 +99,30 @@ test('truncate starts a new stream rather than reusing offsets from the old file
     assert.equal(after.rotationReason, 'truncated');
     assert.notEqual(after.streamId, before.streamId);
     assert.equal(after.lastSequence, '1');
+    assert.equal(after.recordsSpooled, 1);
+    const spoolLines = (await readFile(spoolPath, 'utf8')).trim().split('\n');
+    assert.equal(spoolLines.length, 3);
+  });
+});
+
+test('truncate followed by fast regrow beyond the old offset is detected by committed-line hash', async () => {
+  await withTemp(async (dir) => {
+    const logPath = join(dir, 'WoWCombatLog.txt');
+    const statePath = join(dir, 'state.json');
+    const spoolPath = join(dir, 'spool.jsonl');
+    const original = '9/1 20:00:00.000  COMBAT_LOG_VERSION,19,ADVANCED_LOG_ENABLED,1,BUILD_VERSION,12.0.5,PROJECT_ID,1\n9/1 20:00:01.000  ZONE_CHANGE,3000,"Original Raid",16\n';
+    await writeFile(logPath, original, 'utf8');
+    const collector = new IrisCollector({ sourcePath: logPath, statePath, spoolPath, referenceDate: new Date('2026-09-01T00:00:00Z'), fixedOffsetMinutes: 120 });
+    const before = await collector.pollOnce();
+
+    const replacement = '9/1 21:00:00.000  COMBAT_LOG_VERSION,19,ADVANCED_LOG_ENABLED,1,BUILD_VERSION,12.0.5,PROJECT_ID,1\n9/1 21:00:01.000  ZONE_CHANGE,4000,"Replacement Raid With A Longer Name",16\n9/1 21:00:02.000  MAP_CHANGE,1,"Map",0,1,0,1\n';
+    assert.ok(Buffer.byteLength(replacement) > before.lastCommittedOffset);
+    await writeFile(logPath, replacement, 'utf8');
+
+    const after = await collector.pollOnce();
+    assert.equal(after.rotationReason, 'content_rewritten');
+    assert.notEqual(after.streamId, before.streamId);
+    assert.equal(after.lastSequence, '3');
+    assert.equal(after.recordsSpooled, 3);
   });
 });

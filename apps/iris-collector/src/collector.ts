@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { COLLECTOR_SPOOL_FORMAT_VERSION, toWireEvent, type SequenceString, type SpoolRecord } from '../../../packages/combat-log-contracts/src/index.ts';
 import { CombatLogParser, CombatLogTimestampResolver } from '../../../packages/combat-log-parser/src/index.ts';
-import { readCompleteLines, snapshotFileIdentity } from './file-tail/incremental-tail.ts';
+import { readCompleteLines, snapshotFileIdentity, verifyCommittedLine } from './file-tail/incremental-tail.ts';
 import { JsonlSpool } from './spool/jsonl-spool.ts';
 import { CollectorStateStore, reconcileStateWithSpool, type CollectorState } from './state/collector-state.ts';
 
@@ -24,7 +24,7 @@ export interface PollDiagnostics {
   advancedEnabled: boolean | null;
   lastCommittedOffset: number;
   lastSequence: SequenceString;
-  rotationReason?: 'file_identity_changed' | 'truncated';
+  rotationReason?: 'file_identity_changed' | 'truncated' | 'content_rewritten';
 }
 
 function zeroSequence(): SequenceString {
@@ -61,6 +61,8 @@ export class IrisCollector {
       lastCommittedOffset: 0,
       lastUploadedOffset: 0,
       lastSequence: zeroSequence(),
+      lastCommittedLineStart: undefined,
+      lastCommittedLineHash: undefined,
       formatState: { advancedEnabled: null },
       clockContext: this.parser.getClockContext(),
       updatedAt: new Date().toISOString(),
@@ -81,6 +83,19 @@ export class IrisCollector {
       await this.stateStore.save(state);
     } else if (identity.size < state.lastCommittedOffset) {
       rotationReason = 'truncated';
+      state = this.freshState(identity.identity);
+      await this.stateStore.save(state);
+    } else if (
+      state.lastCommittedLineStart != null &&
+      state.lastCommittedLineHash &&
+      !(await verifyCommittedLine(
+        this.options.sourcePath,
+        state.lastCommittedLineStart,
+        state.lastCommittedOffset,
+        state.lastCommittedLineHash,
+      ))
+    ) {
+      rotationReason = 'content_rewritten';
       state = this.freshState(identity.identity);
       await this.stateStore.save(state);
     }
@@ -128,6 +143,8 @@ export class IrisCollector {
         ...state,
         lastCommittedOffset: last.committedOffset,
         lastSequence: last.sequence,
+        lastCommittedLineStart: last.event.rawRef.byteStart,
+        lastCommittedLineHash: last.event.rawRef.lineHash,
         formatState: { ...last.formatState },
         updatedAt: new Date().toISOString(),
       };
