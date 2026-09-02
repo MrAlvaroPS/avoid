@@ -271,7 +271,7 @@ Deno.serve(async (req: Request) => {
       );
       if (phaseRows.length) {
         await supabase.from('boss_encounter_phases').upsert(phaseRows, { onConflict: 'boss_id,phase_id' }).then(
-          () => {},
+          () => { },
           (err) => console.error('No se pudo sincronizar boss_encounter_phases (no bloqueante):', err),
         );
       }
@@ -353,7 +353,7 @@ Deno.serve(async (req: Request) => {
             // guardando el mismo build a la vez), no bloquea — se recalculará
             // en la siguiente invocación sin caché, sin más coste que hoy.
             await supabase.from('talent_spell_lookup').upsert({ build, entry_to_spell }).then(
-              () => {},
+              () => { },
               (err) => console.error('No se pudo cachear talent_spell_lookup (no bloqueante):', err),
             );
           }
@@ -1146,32 +1146,32 @@ Deno.serve(async (req: Request) => {
           const defensivePressureWindowSensor =
             damageSeries && actor
               ? (() => {
-                  const { baselineValue, windows } = detectDamageWindows(damageSeries.points, damageSeries.pointStart, damageSeries.pointIntervalMs);
-                  const actorDamageEvents = damageEventsByTarget.get(actorId) ?? [];
-                  return {
-                    baselineValue,
-                    windows: windows.map((w) => {
-                      // §"relacionar 'pico de daño recibido' con una
-                      // habilidad del boss, de forma veraz" (feedback real,
-                      // 2026-08-29): MISMA resolución de nombre que ya usa
-                      // death_cause.mechanicName — curado (mechanicById) si
-                      // esta abilityGameID es una mecánica clasificada,
-                      // nombre real de WCL si no, null solo si ninguna de
-                      // las dos lo tiene (rarísimo). Validado empíricamente
-                      // contra datos reales antes de escribir esto.
-                      const dominant = attributeWindowAbility(actorDamageEvents, w.startMs, w.endMs);
-                      const dominantMechanic = dominant ? mechanicById.get(dominant.abilityGameID) : undefined;
-                      return {
-                        startMs: w.startMs - fight.startTime,
-                        endMs: w.endMs - fight.startTime,
-                        peakMs: w.peakMs - fight.startTime,
-                        peakValue: w.peakValue,
-                        mechanicId: dominant?.abilityGameID ?? null,
-                        mechanicName: dominant ? (dominantMechanic?.name ?? abilityNameById.get(dominant.abilityGameID) ?? null) : null,
-                      };
-                    }),
-                  };
-                })()
+                const { baselineValue, windows } = detectDamageWindows(damageSeries.points, damageSeries.pointStart, damageSeries.pointIntervalMs);
+                const actorDamageEvents = damageEventsByTarget.get(actorId) ?? [];
+                return {
+                  baselineValue,
+                  windows: windows.map((w) => {
+                    // §"relacionar 'pico de daño recibido' con una
+                    // habilidad del boss, de forma veraz" (feedback real,
+                    // 2026-08-29): MISMA resolución de nombre que ya usa
+                    // death_cause.mechanicName — curado (mechanicById) si
+                    // esta abilityGameID es una mecánica clasificada,
+                    // nombre real de WCL si no, null solo si ninguna de
+                    // las dos lo tiene (rarísimo). Validado empíricamente
+                    // contra datos reales antes de escribir esto.
+                    const dominant = attributeWindowAbility(actorDamageEvents, w.startMs, w.endMs);
+                    const dominantMechanic = dominant ? mechanicById.get(dominant.abilityGameID) : undefined;
+                    return {
+                      startMs: w.startMs - fight.startTime,
+                      endMs: w.endMs - fight.startTime,
+                      peakMs: w.peakMs - fight.startTime,
+                      peakValue: w.peakValue,
+                      mechanicId: dominant?.abilityGameID ?? null,
+                      mechanicName: dominant ? (dominantMechanic?.name ?? abilityNameById.get(dominant.abilityGameID) ?? null) : null,
+                    };
+                  }),
+                };
+              })()
               : { baselineValue: 0, windows: [] };
 
           const observedBuild = inferCurrentGameBuildObservation({
@@ -1198,19 +1198,19 @@ Deno.serve(async (req: Request) => {
             : null;
           const resolvedKit = actor
             ? resolveEffectiveDefensiveKit(
-                {
-                  className: actor.subType,
-                  specName: playerSpec,
-                  talentBuild,
-                  buildFingerprint: talentBuildFingerprint,
-                  gameBuild: observedBuild.gameBuild,
-                  gameBuildConfidence: observedBuild.confidence,
-                  playerIdentity: { playerName: actor.name },
-                  allTalentSpellIds: shadowTalentLookup ? new Set(shadowTalentLookup.values()) : null,
-                  talentLookupComplete: shadowTalentLookup != null,
-                },
-                resolverData,
-              )
+              {
+                className: actor.subType,
+                specName: playerSpec,
+                talentBuild,
+                buildFingerprint: talentBuildFingerprint,
+                gameBuild: observedBuild.gameBuild,
+                gameBuildConfidence: observedBuild.confidence,
+                playerIdentity: { playerName: actor.name },
+                allTalentSpellIds: shadowTalentLookup ? new Set(shadowTalentLookup.values()) : null,
+                talentLookupComplete: shadowTalentLookup != null,
+              },
+              resolverData,
+            )
             : [];
           const legacyKit = actor ? defensivesForClass(actor.subType, playerSpec, cooldownCatalog, talentGateForActor(actorId)) : [];
           const legacyBySpellId = new Map(legacyKit.map((entry) => [entry.spellId, entry]));
@@ -1223,15 +1223,15 @@ Deno.serve(async (req: Request) => {
                 (legacy?.durationMs ?? null) !== entry.effectiveDurationMs;
               return changed
                 ? {
-                    spellId: entry.spellId,
-                    legacyEligible: Boolean(legacy),
-                    resolvedEligible: entry.eligible,
-                    legacyCooldownMs: legacy?.baseCooldownMs ?? null,
-                    resolvedCooldownMs: entry.effectiveCooldownMs,
-                    legacyDurationMs: legacy?.durationMs ?? null,
-                    resolvedDurationMs: entry.effectiveDurationMs,
-                    confidence: entry.confidence,
-                  }
+                  spellId: entry.spellId,
+                  legacyEligible: Boolean(legacy),
+                  resolvedEligible: entry.eligible,
+                  legacyCooldownMs: legacy?.baseCooldownMs ?? null,
+                  resolvedCooldownMs: entry.effectiveCooldownMs,
+                  legacyDurationMs: legacy?.durationMs ?? null,
+                  resolvedDurationMs: entry.effectiveDurationMs,
+                  confidence: entry.confidence,
+                }
                 : null;
             })
             .filter((entry) => entry != null);
@@ -1283,60 +1283,60 @@ Deno.serve(async (req: Request) => {
             wipe_call_cluster: wipeCallDetection?.clusterActorIds.has(actorId) ?? false,
             death_cause: death
               ? {
-                  mechanicId: death.killingAbilityGameID,
-                  // Prioridad: nombre curado a mano (manifiesto) > nombre real de WCL
-                  // (masterData.abilities, aunque no esté en el Journal) > null solo si
-                  // WCL tampoco lo tiene (rarísimo — la propia web de WCL no podría
-                  // mostrar nombre tampoco en ese caso).
-                  mechanicName: mechanic?.name ?? abilityNameById.get(death.killingAbilityGameID) ?? null,
-                  // Qué hace la mecánica, no solo cómo se llama (§ "para poder
-                  // explicarlo o criticarlo bien") — del Journal de Blizzard,
-                  // copiado aquí para que el pull quede autocontenido.
-                  mechanicDescription: mechanic?.description ?? null,
-                  // category = confirmada a mano (save-mechanic-edit); si no hay
-                  // ninguna todavía, cae a inferred_category (sugerencia de
-                  // sync-boss-mechanics, ver _shared/mechanic-category-inference.ts)
-                  // — categoryIsInferred dice cuál de las dos es, para que el
-                  // front pueda pintarla distinto (confirmada vs. sugerida).
-                  category: deathEffectiveCategory,
-                  responsibility: mechanic?.responsibility ?? null,
-                  categoryIsInferred: mechanic ? mechanic.category == null && deathEffectiveCategory != null : false,
-                  avoidable: mechanic?.avoidable ?? null,
-                  preventableWithDefensive: bossMeleeOnNonTank ? null : buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
-                  statisticalExclusionReason: bossMeleeOnNonTank ? 'boss_melee_on_non_tank' : null,
-                  // §10: "no es lo mismo un oneshot que una muerte por daño
-                  // sostenido sin sanar, y la causa real puede ser muy
-                  // distinta" — ver computeRootCause para el alcance real
-                  // (deliberadamente sin undispelled_debuff/tank_swap_missed
-                  // todavía, sin datos reales para defenderlas).
-                  rootCause: computeRootCause(actorId, death.timestamp, deathEffectiveCategory, deathDamageProfile?.damageProfile ?? 'unknown', death.killingAbilityGameID),
-                  // §"a quién dirigir: healing sí/no y cuánto en los últimos
-                  // segundos" — misma ventana de 6s que ya usa rootCause,
-                  // pero con el número real en vez de solo sí/no.
-                  ...(deathHealingReceived as NonNullable<typeof deathHealingReceived>),
-                  // Estado de CADA defensivo de su catálogo en el momento exacto
-                  // de morir — activo, en cooldown (y cuánto le faltaba),
-                  // disponible y sin usar, o sin dato de cooldown. Sustituye a
-                  // los dos campos sueltos de la versión anterior
-                  // (activeDefensivesAtDeath/neverCastDefensives), que solo
-                  // decían "algo activo sí/no" y "lo lanzó alguna vez sí/no"
-                  // sin cruzar ambas cosas con el tiempo real.
-                  defensiveOptions: bossMeleeOnNonTank ? [] : defensiveOptions,
-                  // Offset relativo al inicio del pull, en el mismo espacio de
-                  // tiempo que trigger_time_ms de pull_mechanic_events — así
-                  // el front puede alinear muertes y chips de mecánica en una
-                  // única timeline sin dos unidades de tiempo distintas.
-                  timeMs: death.timestamp - fight.startTime,
-                  // §"fases de encuentro... implementarlas en todos los
-                  // sitios donde corresponda": en qué fase murió — null si
-                  // el boss no tiene fases. El nombre legible se resuelve
-                  // en lectura desde boss_encounter_phases (misma fuente
-                  // única que pull_mechanic_events.phase_id), no se
-                  // duplica aquí.
-                  phaseId: resolvePhaseId(death.timestamp),
-                  // §"golpe único vs. daño sostenido" — ver computeDeathDamageProfile.
-                  ...(deathDamageProfile as NonNullable<typeof deathDamageProfile>),
-                }
+                mechanicId: death.killingAbilityGameID,
+                // Prioridad: nombre curado a mano (manifiesto) > nombre real de WCL
+                // (masterData.abilities, aunque no esté en el Journal) > null solo si
+                // WCL tampoco lo tiene (rarísimo — la propia web de WCL no podría
+                // mostrar nombre tampoco en ese caso).
+                mechanicName: mechanic?.name ?? abilityNameById.get(death.killingAbilityGameID) ?? null,
+                // Qué hace la mecánica, no solo cómo se llama (§ "para poder
+                // explicarlo o criticarlo bien") — del Journal de Blizzard,
+                // copiado aquí para que el pull quede autocontenido.
+                mechanicDescription: mechanic?.description ?? null,
+                // category = confirmada a mano (save-mechanic-edit); si no hay
+                // ninguna todavía, cae a inferred_category (sugerencia de
+                // sync-boss-mechanics, ver _shared/mechanic-category-inference.ts)
+                // — categoryIsInferred dice cuál de las dos es, para que el
+                // front pueda pintarla distinto (confirmada vs. sugerida).
+                category: deathEffectiveCategory,
+                responsibility: mechanic?.responsibility ?? null,
+                categoryIsInferred: mechanic ? mechanic.category == null && deathEffectiveCategory != null : false,
+                avoidable: mechanic?.avoidable ?? null,
+                preventableWithDefensive: bossMeleeOnNonTank ? null : buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
+                statisticalExclusionReason: bossMeleeOnNonTank ? 'boss_melee_on_non_tank' : null,
+                // §10: "no es lo mismo un oneshot que una muerte por daño
+                // sostenido sin sanar, y la causa real puede ser muy
+                // distinta" — ver computeRootCause para el alcance real
+                // (deliberadamente sin undispelled_debuff/tank_swap_missed
+                // todavía, sin datos reales para defenderlas).
+                rootCause: computeRootCause(actorId, death.timestamp, deathEffectiveCategory, deathDamageProfile?.damageProfile ?? 'unknown', death.killingAbilityGameID),
+                // §"a quién dirigir: healing sí/no y cuánto en los últimos
+                // segundos" — misma ventana de 6s que ya usa rootCause,
+                // pero con el número real en vez de solo sí/no.
+                ...(deathHealingReceived as NonNullable<typeof deathHealingReceived>),
+                // Estado de CADA defensivo de su catálogo en el momento exacto
+                // de morir — activo, en cooldown (y cuánto le faltaba),
+                // disponible y sin usar, o sin dato de cooldown. Sustituye a
+                // los dos campos sueltos de la versión anterior
+                // (activeDefensivesAtDeath/neverCastDefensives), que solo
+                // decían "algo activo sí/no" y "lo lanzó alguna vez sí/no"
+                // sin cruzar ambas cosas con el tiempo real.
+                defensiveOptions: bossMeleeOnNonTank ? [] : defensiveOptions,
+                // Offset relativo al inicio del pull, en el mismo espacio de
+                // tiempo que trigger_time_ms de pull_mechanic_events — así
+                // el front puede alinear muertes y chips de mecánica en una
+                // única timeline sin dos unidades de tiempo distintas.
+                timeMs: death.timestamp - fight.startTime,
+                // §"fases de encuentro... implementarlas en todos los
+                // sitios donde corresponda": en qué fase murió — null si
+                // el boss no tiene fases. El nombre legible se resuelve
+                // en lectura desde boss_encounter_phases (misma fuente
+                // única que pull_mechanic_events.phase_id), no se
+                // duplica aquí.
+                phaseId: resolvePhaseId(death.timestamp),
+                // §"golpe único vs. daño sostenido" — ver computeDeathDamageProfile.
+                ...(deathDamageProfile as NonNullable<typeof deathDamageProfile>),
+              }
               : null,
             defensive_events: defensivesSeen,
             avoidable_damage_taken: avoidableDamageByTarget.get(actorId) ?? 0,
@@ -1353,15 +1353,15 @@ Deno.serve(async (req: Request) => {
             // instante de morir, que vive aparte en death_cause.defensiveOptions).
             defensive_casts: actor
               ? resolvedKit.filter((defensive) => defensive.eligible).map((cd) => ({
-                  spellId: cd.spellId,
-                  name: cd.name,
-                  timestampsMs: (defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []).map((t) => t - fight.startTime),
-                  events: (defensiveCastEventsByActor.get(actorId)?.get(cd.spellId) ?? []).map((event) => ({
-                    timestampMs: event.timestamp - fight.startTime,
-                    targetActorId: event.targetID,
-                    targetName: event.targetID == null ? null : (actorById.get(event.targetID)?.name ?? null),
-                  })),
-                }))
+                spellId: cd.spellId,
+                name: cd.name,
+                timestampsMs: (defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []).map((t) => t - fight.startTime),
+                events: (defensiveCastEventsByActor.get(actorId)?.get(cd.spellId) ?? []).map((event) => ({
+                  timestampMs: event.timestamp - fight.startTime,
+                  targetActorId: event.targetID,
+                  targetName: event.targetID == null ? null : (actorById.get(event.targetID)?.name ?? null),
+                })),
+              }))
               : [],
             consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent, defensivePressureWindows.windows),
             defensive_pressure_windows: defensivePressureWindows,
@@ -1376,15 +1376,15 @@ Deno.serve(async (req: Request) => {
             defensive_pressure_windows_v2: defensivePressureWindowsV2,
             defensive_resolution_shadow: actor
               ? {
-                  resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
-                  authoritative: false,
-                  kit: resolvedKit,
-                  differencesFromLegacy: resolutionDifferences,
-                  warnings: [
-                    ...resolverShadowWarnings,
-                    ...(observedBuild.gameBuild ? [] : ['No se puede asociar este pull histórico a un game_build exacto.']),
-                  ],
-                }
+                resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+                authoritative: false,
+                kit: resolvedKit,
+                differencesFromLegacy: resolutionDifferences,
+                warnings: [
+                  ...resolverShadowWarnings,
+                  ...(observedBuild.gameBuild ? [] : ['No se puede asociar este pull histórico a un game_build exacto.']),
+                ],
+              }
               : null,
             // Los trinkets (índices 12/13) llevan `name` inyectado — el resto
             // del gear se guarda tal cual, sin resolver (17 ítems × ~25
@@ -1753,27 +1753,64 @@ Deno.serve(async (req: Request) => {
           if (mechError) throw mechError;
         }
 
-        const dispelEventRows = (dispelEvents as DispelEvent[]).flatMap((event) => {
+        const rawDispelEventRows = (dispelEvents as DispelEvent[]).flatMap((event) => {
           const timestamp = event.timestamp;
           if (typeof timestamp !== 'number' || timestamp < fight.startTime) return [];
+
           return [{
             pull_id: insertedPull.id,
             source_actor_id: event.sourceID ?? null,
-            source_player_name: event.sourceID != null ? actorById.get(event.sourceID)?.name ?? null : null,
+            source_player_name:
+              event.sourceID != null
+                ? actorById.get(event.sourceID)?.name ?? null
+                : null,
             target_actor_id: event.targetID ?? null,
-            target_player_name: event.targetID != null ? actorById.get(event.targetID)?.name ?? null : null,
+            target_player_name:
+              event.targetID != null
+                ? actorById.get(event.targetID)?.name ?? null
+                : null,
             dispelled_ability_id: event.extraAbilityGameID ?? null,
             timestamp_ms: timestamp - fight.startTime,
             is_buff: event.isBuff === true,
           }];
         });
-        if (dispelEventRows.length) {
+
+        const uniqueDispelEventRows = [
+          ...new Map(
+            rawDispelEventRows.map((row) => [
+              [
+                row.pull_id,
+                row.source_actor_id,
+                row.target_actor_id,
+                row.dispelled_ability_id,
+                row.timestamp_ms,
+                row.is_buff,
+              ].join('|'),
+              row,
+            ]),
+          ).values(),
+        ];
+
+        if (uniqueDispelEventRows.length) {
           const { error: dispelError } = await supabase
             .from('pull_dispel_events')
-            .upsert(dispelEventRows, {
-              onConflict: 'pull_id,source_actor_id,target_actor_id,dispelled_ability_id,timestamp_ms,is_buff',
+            .upsert(uniqueDispelEventRows, {
+              onConflict:
+                'pull_id,source_actor_id,target_actor_id,dispelled_ability_id,timestamp_ms,is_buff',
               ignoreDuplicates: false,
             });
+
+          if (uniqueDispelEventRows.length !== rawDispelEventRows.length) {
+            console.warn('analyze-report: dispels duplicados eliminados', {
+              reportCode,
+              fightId: fight.id,
+              received: rawDispelEventRows.length,
+              unique: uniqueDispelEventRows.length,
+              duplicates:
+                rawDispelEventRows.length - uniqueDispelEventRows.length,
+            });
+          }
+
           if (dispelError) throw dispelError;
         }
 
