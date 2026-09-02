@@ -92,6 +92,42 @@ describe('defensive execution evaluator', () => {
       }),
     );
     expect(result.events[0]).toEqual(expect.objectContaining({ state: 'covered_with_substitution', coverageOutcome: 'covered', adherenceOutcome: 'substituted' }));
+    expect(result.events[0].managementOutcome).toBe('success');
+    expect(result.requiredExactAdherenceCount).toBe(0);
+    expect(result.requiredCoverageSuccessCount).toBe(1);
+  });
+
+  it('penalizes management once when a substitute breaks a future reservation', () => {
+    const result = evaluateDefensiveExecution(
+      input({
+        kit: [defensive(100), defensive(200, 30_000)],
+        slots: [
+          slot(),
+          slot({
+            id: 'slot-2',
+            occurrenceIndex: 2,
+            occurrenceTimeMs: 110_000,
+            windowStartMs: 109_000,
+            windowEndMs: 111_000,
+            plannedCastAtMs: 110_000,
+            defensiveSpellId: 200,
+          }),
+        ],
+        casts: [{ sourcePlayerKey: 'player:a', spellId: 200, timeMs: 99_000 }],
+      }),
+    );
+    const substitution = result.events.find((event) => event.slotId === 'slot-1');
+    const future = result.events.find((event) => event.slotId === 'slot-2');
+    expect(substitution).toEqual(expect.objectContaining({
+      coverageOutcome: 'covered',
+      managementOutcome: 'failure',
+      reason: 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT',
+      primaryPenalty: true,
+    }));
+    expect(future?.primaryPenalty).toBe(false);
+    expect(result.requiredCoverageSuccessCount).toBe(1);
+    expect(result.brokenReservationCount).toBe(1);
+    expect(result.managementScore).toBe(0);
   });
 
   it('classifies a locally ready cooldown reserved ten seconds later as correct_hold', () => {
@@ -174,5 +210,65 @@ describe('defensive execution evaluator', () => {
     expect(result.events).toEqual([]);
     expect(result.planRequiredCount).toBe(0);
     expect(result.criticalWindowCount).toBe(0);
+  });
+
+  it('treats a cooldown ready only at death as coaching, not demonstrated prevention', () => {
+    const result = evaluateDefensiveExecution(
+      input({ mode: 'no_plan', planVersionId: null, slots: [], deathTimeMs: 100_000 }),
+    );
+    expect(result.events[0]).toEqual(expect.objectContaining({
+      state: 'death_with_ready_cd',
+      reason: 'DEATH_READY_AT_END_ONLY',
+      managementOutcome: 'neutral',
+    }));
+    expect(result.managementScore).toBeNull();
+  });
+
+  it('requires readiness during the observed lethal window for a scored death response', () => {
+    const result = evaluateDefensiveExecution(
+      input({
+        mode: 'no_plan',
+        planVersionId: null,
+        slots: [],
+        deathTimeMs: 100_000,
+        lethalWindowStartMs: 96_000,
+      }),
+    );
+    expect(result.events[0]).toEqual(expect.objectContaining({
+      state: 'death_with_viable_cd',
+      lethalWindowStartMs: 96_000,
+      managementOutcome: 'failure',
+    }));
+    expect(result.managementScore).toBe(0);
+  });
+
+  it('keeps death evidence but applies one primary penalty for the same missed window', () => {
+    const result = evaluateDefensiveExecution(
+      input({
+        mode: 'no_plan',
+        planVersionId: null,
+        slots: [],
+        windows: [window({ startMs: 96_000, endMs: 99_000, peakMs: 98_000 })],
+        deathTimeMs: 100_000,
+        lethalWindowStartMs: 96_000,
+      }),
+    );
+    expect(result.events).toHaveLength(2);
+    expect(new Set(result.events.map((event) => event.causalGroupId)).size).toBe(1);
+    expect(result.events.filter((event) => event.primaryPenalty !== false)).toHaveLength(1);
+    expect(result.managementScore).toBe(0);
+  });
+
+  it('does not guess cardinality when a critical window overlaps multiple slots', () => {
+    const result = evaluateDefensiveExecution(
+      input({
+        kit: [defensive(100), defensive(200)],
+        slots: [slot(), slot({ id: 'slot-2', defensiveSpellId: 200 })],
+        windows: [window({ startMs: 98_000, endMs: 102_000, peakMs: 100_000 })],
+        casts: [{ sourcePlayerKey: 'player:a', spellId: 100, timeMs: 99_000 }],
+      }),
+    );
+    expect(result.criticalWindowCount).toBe(0);
+    expect(result.criticalCoveredCount).toBe(0);
   });
 });

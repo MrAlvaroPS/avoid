@@ -9,7 +9,9 @@ import type { RepeatOffenderRow } from './offenders.service';
 // real — ver effectiveAxisWeights en reliability.service.ts). Mismo motivo
 // que los bumps de night-player-summary-cache.service.ts: sin esto, el
 // roster ya cacheado sigue enseñando el overall de la fórmula vieja.
-const STORAGE_KEY = 'avoid:roster-snapshot:v4';
+// v5 (2026-09-02): el fingerprint incluye evaluaciones defensivas y ledger.
+// Un backfill/replay puede cambiar el score sin tocar pulls.updated_at.
+const STORAGE_KEY = 'avoid:roster-snapshot:v5';
 
 export interface RosterSnapshot {
   fingerprint: string;
@@ -73,7 +75,14 @@ export class RosterSnapshotCacheService {
    */
   async fingerprint(): Promise<string> {
     const client = this.supabase.client;
-    const [pullResponse, correctedPullResponse, reportResponse, rosterResponse] = await Promise.all([
+    const [
+      pullResponse,
+      correctedPullResponse,
+      reportResponse,
+      rosterResponse,
+      defensiveEvaluationResponse,
+      ledgerEvaluationResponse,
+    ] = await Promise.all([
       client
         .from('pulls')
         .select('id, closed_at')
@@ -93,11 +102,25 @@ export class RosterSnapshotCacheService {
         .limit(1)
         .maybeSingle(),
       client.from('wowaudit_roster').select('character_id, name, role, rank'),
+      client
+        .from('player_pull_defensive_evaluations')
+        .select('pull_id, player_name, evaluator_version, resolver_version, evaluated_at')
+        .order('evaluated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      client
+        .from('player_execution_events')
+        .select('pull_id, ledger_evaluator_version, evaluated_at')
+        .order('evaluated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
     ]);
     if (pullResponse.error) throw pullResponse.error;
     if (correctedPullResponse.error) throw correctedPullResponse.error;
     if (reportResponse.error) throw reportResponse.error;
     if (rosterResponse.error) throw rosterResponse.error;
+    if (defensiveEvaluationResponse.error) throw defensiveEvaluationResponse.error;
+    if (ledgerEvaluationResponse.error) throw ledgerEvaluationResponse.error;
 
     const roster = [...(rosterResponse.data ?? [])].sort((a, b) =>
       String(a.name).localeCompare(String(b.name), 'es'),
@@ -108,6 +131,8 @@ export class RosterSnapshotCacheService {
         correctedPull: correctedPullResponse.data ?? null,
         report: reportResponse.data ?? null,
         roster,
+        defensiveEvaluation: defensiveEvaluationResponse.data ?? null,
+        ledgerEvaluation: ledgerEvaluationResponse.data ?? null,
       }),
     );
   }

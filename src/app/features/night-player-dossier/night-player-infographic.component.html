@@ -134,6 +134,19 @@
         [style.height.px]="sheetHeight()"
         [style.transform]="'scale(' + previewScale() + ')'"
       >
+        @if (useV3Layout()) {
+          <main
+            #sheet
+            class="iris-player-sheet iris-player-v3-sheet"
+            [style.--class-accent]="classAccent()"
+            data-v3-canvas
+          >
+            <app-raider-infographic-v3-canvas
+              [viewModel]="v3ViewModel()"
+              [iconUrls]="iconUrls()"
+            />
+          </main>
+        } @else {
         <main #sheet class="iris-player-sheet" [style.--class-accent]="classAccent()">
           <div class="iris-player-bg-grid"></div>
           <div class="iris-player-bg-orb orb-a"></div>
@@ -228,10 +241,6 @@
                     <strong>
                       @if (management.managementScore != null) {
                         {{ formatPct(management.managementScore, 0) }}
-                      } @else if (management.planRequiredCount > 0) {
-                        {{ management.planExecutedCount }}/{{ management.planRequiredCount }}
-                      } @else if (management.criticalWindowCount > 0) {
-                        {{ management.criticalCoveredCount }}/{{ management.criticalWindowCount }}
                       } @else {
                         —
                       }
@@ -256,9 +265,11 @@
                 @if (defensiveManagementV2(); as management) {
                   <p>
                     @if (management.mode === 'plan') {
-                      Plan ejecutado, cobertura crítica y eficiencia global; los holds correctos no penalizan.
-                    } @else {
+                      Adherencia, cobertura y gestión se muestran separadas; los holds correctos no penalizan.
+                    } @else if (management.mode === 'optimal_no_plan') {
                       Modo: uso óptimo factible. Sin reminder publicado; solo cuentan decisiones globalmente compatibles.
+                    } @else {
+                      Noche mixta: cada decisión conserva si procedía de plan o de uso óptimo sin plan; no se mezclan las etiquetas.
                     }
                   </p>
                 } @else {
@@ -266,6 +277,23 @@
                     Métrica legacy de ventanas locales `covered/coverable`; se mantiene durante el rollout y no se presenta como score v2.
                   </p>
                 }
+              </div>
+            </div>
+            <div
+              class="iris-player-execution-card compact evidence-quality"
+              [class]="'tone-' + evidenceQualityTone()"
+            >
+              <div class="iris-player-evidence-quality-badge">
+                <svg viewBox="0 0 48 48" aria-hidden="true">
+                  <path d="M24 4 8 12v12c0 10 7 17 16 20 9-3 16-10 16-20V12L24 4Z" />
+                  <path d="m16 24 5 5 11-12" />
+                </svg>
+                <strong>{{ evidenceQualityLabel() }}</strong>
+              </div>
+              <div class="iris-player-execution-copy">
+                <span>CALIDAD DE EVIDENCIA</span>
+                <strong>{{ evidenceQualityLabel() }}</strong>
+                <p>{{ evidenceProjection().qualityReason }}</p>
               </div>
             </div>
           </section>
@@ -278,14 +306,6 @@
                 }}<small>/{{ summary().execution.evaluatedPulls }}</small></strong
               >
               <p>sin fallo personal ni muerte evaluable</p>
-            </article>
-            <article class="success">
-              <span>ZONA / SPREAD</span>
-              <strong
-                >{{ summary().execution.avoidableSucceeded
-                }}<small>/{{ summary().execution.avoidableEligible }}</small></strong
-              >
-              <p>oportunidades verificadas evitadas</p>
             </article>
             <article class="warning">
               <span>FALLOS PERSONALES</span>
@@ -309,16 +329,149 @@
               <strong>{{ summary().interrupts.length }}</strong>
               <p>autor y momento confirmados por WCL</p>
             </article>
+            <article>
+              <span>VENTANAS DE PRESIÓN</span>
+              <strong>{{ windowCoverageTotals().covered }}<small>/{{ windowCoverageTotals().coverable }}</small></strong>
+              <p>cubiertas en el universo defensivo visible</p>
+            </article>
+            <article>
+              <span>BOSSES EVALUADOS</span>
+              <strong>{{ evaluatedBossCount() }}</strong>
+              <p>boss + dificultad con participación real</p>
+            </article>
+          </section>
+
+          <!-- §"la primera parte parece que agrupa mecánica... la segunda de
+               defensivos... ponerle un subtítulo... otro color de fondo,
+               tipo card dentro de card" (feedback real, 2026-08-29): panel
+               con tinte propio, sin crecer el alto — solo una franja de
+               etiqueta + fondo detrás de las secciones que ya existían. -->
+          <section class="iris-player-macro-group mechanics">
+            <span class="iris-player-macro-label">Mecánicas</span>
+            <div class="iris-player-main-grid">
+              <section class="iris-player-section iris-player-priorities">
+                <div class="iris-player-section-title">
+                  <div>
+                    <span>02 · PRÓXIMA RAID</span>
+                    <h2>Qué corregir primero y cómo</h2>
+                  </div>
+                </div>
+                <div class="iris-player-priority-list">
+                  @for (priority of priorities(); track priority.id; let index = $index) {
+                    <article
+                      [attr.data-kind]="priority.kind"
+                      [attr.data-verdict]="priority.verdict"
+                    >
+                      <span class="iris-player-priority-number">0{{ index + 1 }}</span>
+                      <div class="iris-player-spell-icon large">
+                        @if (iconUrl(prioritySpellId(priority)); as url) {
+                          <img
+                            [src]="url"
+                            crossorigin="anonymous"
+                            alt=""
+                            (error)="onIconError($event)"
+                          />
+                        } @else {
+                          <svg viewBox="0 0 48 48">
+                            <path d="M24 4 8 12v12c0 10 7 17 16 20 9-3 16-10 16-20V12L24 4Z" />
+                            <path d="M24 14v12m0 7v1" />
+                          </svg>
+                        }
+                      </div>
+                      <div class="iris-player-priority-copy">
+                        <div class="iris-player-priority-heading">
+                          <strong>{{ priority.title }}</strong>
+                          <em [attr.data-verdict]="priority.verdict">{{ verdictLabel(priority) }}</em>
+                        </div>
+                        <span>{{ priorityWhen(priority) }}</span>
+                        <span class="iris-player-priority-observation">{{ priority.observation }}</span>
+                        @if (priority.whyItMatters) {
+                          <span class="iris-player-priority-why">{{ priority.whyItMatters }}</span>
+                        }
+                        <p>
+                          <b>Cómo corregirlo</b
+                          >{{ priority.action ?? 'Recomendación pendiente de revisión.' }}
+                        </p>
+                        <small>
+                          {{ priority.reasonCode }} · {{ priority.confidence }} ·
+                          {{ priority.provenance[0].source }}
+                        </small>
+                      </div>
+                    </article>
+                  } @empty {
+                    <article class="iris-player-no-priority">
+                      <strong>Sin una corrección verificable prioritaria</strong>
+                      <p>
+                        No se añade una recomendación genérica si los datos no permiten
+                        justificarla.
+                      </p>
+                    </article>
+                  }
+                </div>
+                @if (evidenceProjection().additionalCoachingCount > 0) {
+                  <p class="iris-player-additional-evidence">
+                    +{{ evidenceProjection().additionalCoachingCount }} incidencias trazables en el detalle.
+                  </p>
+                }
+              </section>
+
+              <section class="iris-player-section iris-player-pull-map">
+                <div class="iris-player-section-title">
+                  <div>
+                    <span>03 · REGULARIDAD</span>
+                    <h2>Lectura pull a pull</h2>
+                  </div>
+                  <p>Color = estado de evidencia; el número interior es el pull boss-local.</p>
+                </div>
+                <div class="iris-player-pull-timeline-legend">
+                  <span class="clean">Sin fallo/muerte evaluable</span>
+                  <span class="confirmed_error">Error confirmado</span>
+                  <span class="coaching">Coaching</span>
+                  <span class="correct_hold">Correct hold</span>
+                  <span class="no_data">Sin veredicto</span>
+                </div>
+                <div class="iris-player-pull-timeline">
+                  @for (group of pullTimelineGroups(); track group.key) {
+                    <section>
+                      <header>
+                        <strong>{{ group.bossName }}</strong>
+                        <span>{{ group.difficulty }} · {{ group.cells.length }} pulls</span>
+                      </header>
+                      <div>
+                        @for (cell of group.cells; track cell.pullId) {
+                          <article
+                            [class]="'tone-' + cell.state"
+                            [title]="
+                              cell.bossName +
+                              ' · Pull #' +
+                              cell.pullNumber +
+                              ' · ' +
+                              formatPct(cell.score * 100, 0) +
+                              ' · ' +
+                              cell.evidenceCount +
+                              ' evidencias'
+                            "
+                          >
+                            <strong>{{ cell.pullNumber }}</strong>
+                            <span>{{ formatPct(cell.score * 100, 0) }}</span>
+                          </article>
+                        }
+                      </div>
+                    </section>
+                  }
+                </div>
+              </section>
+            </div>
           </section>
 
           @if (positiveSignals().length) {
             <section class="iris-player-section iris-player-positive-section">
               <div class="iris-player-section-title">
                 <div>
-                  <span>01 · QUÉ CONSERVAR</span>
-                  <h2>Ejecuciones positivas con evidencia</h2>
+                  <span>04 · QUÉ CONSERVAR</span>
+                  <h2>Señales positivas con evidencia</h2>
                 </div>
-                <p>Solo aciertos atribuibles a este personaje</p>
+                <p>Solo aciertos atribuibles a este personaje; nunca ausencia de error.</p>
               </div>
               <div class="iris-player-positive-grid">
                 @for (signal of positiveSignals(); track signal.kind) {
@@ -335,9 +488,6 @@
                             <path d="M8 8l16 16M24 8 8 24" />
                             <circle cx="16" cy="16" r="12" />
                           </svg>
-                        }
-                        @case ('clean') {
-                          <svg viewBox="0 0 32 32"><path d="m6 16 7 7L27 8" /></svg>
                         }
                         @case ('credit') {
                           <svg viewBox="0 0 32 32">
@@ -363,97 +513,64 @@
             </section>
           }
 
-          <!-- §"la primera parte parece que agrupa mecánica... la segunda de
-               defensivos... ponerle un subtítulo... otro color de fondo,
-               tipo card dentro de card" (feedback real, 2026-08-29): panel
-               con tinte propio, sin crecer el alto — solo una franja de
-               etiqueta + fondo detrás de las secciones que ya existían. -->
-          <section class="iris-player-macro-group mechanics">
-            <span class="iris-player-macro-label">Mecánicas</span>
-            <div class="iris-player-main-grid">
-              <section class="iris-player-section iris-player-priorities">
-                <div class="iris-player-section-title">
-                  <div>
-                    <span>02 · PRÓXIMA RAID</span>
-                    <h2>Qué corregir primero y cómo</h2>
-                  </div>
-                </div>
-                <div class="iris-player-priority-list">
-                  @for (priority of priorities(); track priority.title; let index = $index) {
-                    <article [attr.data-kind]="priority.kind">
-                      <span class="iris-player-priority-number">0{{ index + 1 }}</span>
-                      <div class="iris-player-spell-icon large">
-                        @if (iconUrl(priority.spellId); as url) {
-                          <img
-                            [src]="url"
-                            crossorigin="anonymous"
-                            alt=""
-                            (error)="onIconError($event)"
-                          />
-                        } @else {
-                          <svg viewBox="0 0 48 48">
-                            <path d="M24 4 8 12v12c0 10 7 17 16 20 9-3 16-10 16-20V12L24 4Z" />
-                            <path d="M24 14v12m0 7v1" />
-                          </svg>
-                        }
-                      </div>
-                      <div class="iris-player-priority-copy">
-                        <strong>{{ priority.title }}</strong>
-                        <span>{{ priority.evidence }}</span>
-                        <p><b>Para mejorarlo</b>{{ priority.action }}</p>
-                      </div>
-                    </article>
-                  } @empty {
-                    <article class="iris-player-no-priority">
-                      <strong>Sin una corrección verificable prioritaria</strong>
-                      <p>
-                        No se añade una recomendación genérica si los datos no permiten
-                        justificarla.
-                      </p>
-                    </article>
-                  }
-                </div>
-              </section>
-
-              <section class="iris-player-section iris-player-pull-map">
-                <div class="iris-player-section-title">
-                  <div>
-                    <span>03 · REGULARIDAD</span>
-                    <h2>Lectura pull a pull</h2>
-                  </div>
-                  <p>Porcentaje de rendimiento en el pull</p>
-                </div>
-                <div class="iris-player-pull-list">
-                  @for (pull of pullRows(); track pull.pullId) {
-                    <article [class]="'tone-' + pullTone(pull.pullScore)">
-                      <div class="iris-player-pull-boss">
-                        <span>{{ pull.difficulty }} · #{{ pull.pullNumber }}</span
-                        ><strong>{{ pull.bossName }}</strong>
-                      </div>
-                      <div class="iris-player-pull-track">
-                        <i [style.width.%]="pullScoreWidth(pull.pullScore)"></i>
-                      </div>
-                      <b>{{ formatPct((pull.pullScore ?? 0) * 100, 0) }}</b>
-                      <div class="iris-player-pull-flags">
-                        @if (pull.failCount) {
-                          <span class="warning"
-                            >{{ pull.failCount }} fallo{{ pull.failCount === 1 ? '' : 's' }}</span
-                          >
-                        }
-                        @if (pull.evaluatedDeath) {
-                          <span class="danger"
-                            >muerte {{ formatDuration(pull.evaluatedDeath.timeMs) }}</span
-                          >
-                        }
-                        @if (!pull.failCount && !pull.evaluatedDeath) {
-                          <span class="success">limpio</span>
-                        }
-                      </div>
-                    </article>
-                  }
-                </div>
-              </section>
+          <header #pageTwoStart class="iris-player-page-two-header">
+            <div class="iris-player-brand">
+              <img src="/assets/avoid-guild-logo.png" crossorigin="anonymous" alt="Logo de Avoid" />
+              <div>
+                <span>AVOID · IRIS RAID INTELLIGENCE</span>
+                <strong>Defensivos y mecánicas</strong>
+              </div>
             </div>
+            <div class="iris-player-page-two-identity">
+              <strong>{{ summary().playerName }}</strong>
+              <span>{{ summary().execution.evaluatedPulls }} pulls evaluados · snapshot {{ summary().reportCode }}</span>
+            </div>
+            <div class="iris-player-date">
+              <strong>{{
+                summary().reportDate
+                  ? (summary().reportDate | date: "d 'de' MMMM 'de' y")
+                  : summary().reportTitle
+              }}</strong>
+              <span>{{ summary().reportTitle }}</span>
+            </div>
+          </header>
+
+          <section class="iris-player-page-two-summary" aria-label="Resumen defensivo de la noche">
+            <article class="success">
+              <strong>{{ summary().defensiveSummary.totalCasts }}</strong>
+              <span>casts defensivos</span>
+              <p>en {{ summary().defensiveSummary.pullsWithCasts }} pulls</p>
+            </article>
+            <article>
+              <strong>{{ windowCoverageTotals().covered }}<small>/{{ windowCoverageTotals().coverable }}</small></strong>
+              <span>ventanas cubiertas</span>
+              <p>universo de pressure windows visible</p>
+            </article>
+            <article class="warning">
+              <strong>{{ windowCoverageTotals().coverable - windowCoverageTotals().covered }}</strong>
+              <span>oportunidades no cubiertas</span>
+              <p>no se etiquetan como culpa por sí solas</p>
+            </article>
+            <article class="hold">
+              @if (defensiveManagementV2(); as management) {
+                <strong>{{ management.correctHoldCount }}</strong>
+              } @else {
+                <strong>—</strong>
+              }
+              <span>reservas válidas</span>
+              <p>{{ defensiveManagementV2() ? 'correct holds v2' : 'sin muestra v2 homogénea' }}</p>
+            </article>
+            <article class="danger">
+              @if (defensiveManagementV2(); as management) {
+                <strong>{{ management.deathViableCdCount }}</strong>
+                <span>muertes con respuesta viable</span>
+                <p>durante la secuencia letal observada</p>
+              } @else {
+                <strong>{{ summary().defensiveSummary.deathsWithDefensiveAvailable }}</strong>
+                <span>CD disponible al morir</span>
+                <p>legacy; no demuestra viabilidad previa</p>
+              }
+            </article>
           </section>
 
           <section class="iris-player-macro-group defensives">
@@ -474,9 +591,14 @@
               @if (defensiveManagementV2(); as management) {
                 <div class="iris-player-defensive-summary v2">
                   <article>
-                    <strong>{{ management.planExecutedCount }}/{{ management.planRequiredCount }}</strong>
-                    <span>plan ejecutado</span>
-                    <p>slots required evaluables</p>
+                    <strong>{{ management.requiredExactAdherenceCount }}/{{ management.planRequiredCount }}</strong>
+                    <span>adherencia exacta</span>
+                    <p>required con el spell planificado</p>
+                  </article>
+                  <article>
+                    <strong>{{ management.requiredCoverageSuccessCount }}/{{ management.planRequiredCount }}</strong>
+                    <span>cobertura required</span>
+                    <p>incluye sustituciones funcionales</p>
                   </article>
                   <article [class.danger]="management.criticalCoveredCount < management.criticalWindowCount">
                     <strong>{{ management.criticalCoveredCount }}/{{ management.criticalWindowCount }}</strong>
@@ -500,17 +622,28 @@
                   </article>
                   <article [class.danger]="management.deathViableCdCount > 0">
                     <strong>{{ management.deathViableCdCount }}</strong>
-                    <span>muertes con CD viable</span>
-                    <p>objetivo: 0</p>
+                    <span>respuesta omitida en secuencia letal</span>
+                    <p>no afirma prevención cuantitativa</p>
+                  </article>
+                  <article [class.warning]="management.deathReadyCdCount > 0">
+                    <strong>{{ management.deathReadyCdCount }}</strong>
+                    <span>CD listo solo al morir</span>
+                    <p>coaching; prevención no demostrada</p>
                   </article>
                 </div>
 
                 <p class="iris-player-miss-subheading">
-                  {{ management.mode === 'plan' ? 'Decisiones frente al plan' : 'Modo: uso óptimo factible' }}
+                  {{
+                    management.mode === 'plan'
+                      ? 'Decisiones frente al plan'
+                      : management.mode === 'optimal_no_plan'
+                        ? 'Modo: uso óptimo factible'
+                        : 'Noche mixta: plan + uso óptimo factible'
+                  }}
                 </p>
                 <p class="iris-player-miss-note">
                   {{ management.evaluatedPullCount }} pulls evaluados por {{ management.evaluatorVersion }} ·
-                  confidence {{ management.dataConfidence }}. Se priorizan hasta cinco hechos que cambian la siguiente raid.
+                  confidence {{ management.dataConfidence }}. Aquí se conserva toda la evidencia; el coaching superior limita solo la selección editorial.
                 </p>
                 @if (management.decisions.length) {
                   <div class="iris-player-defensive-decisions">
@@ -518,7 +651,10 @@
                       <article [class]="'tone-' + defensiveDecisionTone(decision)">
                         <div class="iris-player-decision-time">
                           <strong>#{{ decision.pullNumber }} · {{ formatDuration(decision.atMs) }}</strong>
-                          <span>{{ decision.bossName }} · {{ decision.difficulty }}</span>
+                          <span>
+                            {{ decision.bossName }} · {{ decision.difficulty }} ·
+                            {{ decision.evaluationMode === 'no_plan' ? 'sin plan' : 'plan' }}
+                          </span>
                         </div>
                         <div class="iris-player-decision-copy">
                           <strong>{{ defensiveDecisionLabel(decision) }}</strong>
@@ -530,7 +666,8 @@
                 } @else {
                   <p class="iris-player-empty-evidence">Sin decisiones defensivas accionables: no hubo reservas rotas, reminders omitidos ni extras factibles.</p>
                 }
-              } @else {
+              }
+              @if (!defensiveManagementV2()) {
               <div class="iris-player-defensive-summary">
                 <article>
                   <strong>{{ summary().defensiveSummary.totalCasts }}</strong
@@ -566,12 +703,13 @@
                   <p>en pulls con muerte evaluable</p>
                 </article>
               </div>
+              }
 
               @if (neverTouchedPulls().length) {
-                <p class="iris-player-miss-subheading">Pulls sin ningún defensivo usado</p>
+                <p class="iris-player-miss-subheading">Ventanas no cubiertas y cero casts en el pull</p>
                 <p class="iris-player-miss-note">
-                  No hay ni un solo cast de su catálogo en todo el intento, habiendo ventana real de
-                  presión — la penalización más severa: no hubo ni intento.
+                  Sensor descriptivo de pressure windows: hubo una oportunidad real y no consta ningún
+                  cast del catálogo antes del wipe call. No equivale por sí solo a culpabilidad mecánica.
                 </p>
                 <div class="iris-player-pressure-list">
                   @for (pull of neverTouchedPulls(); track pull.pullId) {
@@ -601,7 +739,7 @@
                           presión real — cero casts defensivos en todo el pull.
                         </p>
                       </div>
-                      <div class="iris-player-pressure-penalty">0 %</div>
+                      <div class="iris-player-pressure-penalty">0 casts</div>
                     </article>
                   }
                 </div>
@@ -653,8 +791,8 @@
                             <span class="iris-mech-pct">({{ mechanicRatioPct(mechanic) }}%)</span>
                           </strong>
                           <div class="iris-mech-legend" role="img" [attr.aria-label]="mechanicGridAriaLabel(mechanic)">
-                            <span><i class="covered" aria-hidden="true"></i>Bien usado</span>
-                            <span><i aria-hidden="true"></i>Mal usado / No usado</span>
+                            <span><i class="covered" aria-hidden="true"></i>Ventana cubierta</span>
+                            <span><i aria-hidden="true"></i>Ventana no cubierta</span>
                           </div>
                         </div>
                       </div>
@@ -799,15 +937,15 @@
                             {{ defensive.name }}{{ last ? '' : ' · ' }}
                           }
                         </strong>
-                        <p>Libre de cooldown en ese instante, catálogo real de su clase/spec.</p>
+                        <p>Libre de cooldown en ese instante; por sí solo no demuestra que evitara la secuencia letal.</p>
                       </div>
                       <div class="iris-player-evidence-cell source">
                         <span>¿HIZO ALGO EN LA VENTANA?</span>
                         @if (miss.nearestDefensive; as defensive) {
                           <strong>{{ defensive.spellName }}</strong>
                           <p>
-                            {{ defensiveOffsetLabel(defensive.offsetMs) }} — no era el que tenía
-                            disponible, y no evitó la muerte.
+                            {{ defensiveOffsetLabel(defensive.offsetMs) }} — no era el que figura
+                            disponible; no consta que cubriera la secuencia letal.
                           </p>
                         } @else {
                           <strong>Ningún cast defensivo registrado</strong>
@@ -831,7 +969,6 @@
                   Ninguna ventana de presión real quedó sin cubrir esta noche — ni muertes con
                   catálogo libre sin usar.
                 </p>
-              }
               }
 
               <!-- §"qué usó y cuándo... recortado a icono + total" (feedback
@@ -979,6 +1116,7 @@
             </p>
           </footer>
         </main>
+        }
       </div>
     </div>
   </div>

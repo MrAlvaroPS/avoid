@@ -827,6 +827,20 @@ por pull hasta disponer de evaluación fiable y backfill.
   180/181 tests; el único fallo es el baseline conocido de `.brand` en
   `src/app/app.spec.ts:24`, ajeno a defensivos.
 
+### 2026-09-02 — Generación individual desde Preparación
+
+- La vista Por jugador mantiene el generador global y añade `Generar borrador
+  individual` para el jugador seleccionado.
+- El borrador individual envía únicamente ese member y sus recursos opt-in al
+  solver, se guarda como `plan_mode = partial` y conserva snapshots/provenance
+  backend igual que el global.
+- Los slots que el kit individual no cubre siguen visibles y diagnosticados,
+  pero no activan la restricción de publicación de un plan `full`. El botón de
+  publicación identifica claramente si el draft activo es parcial o global.
+- La UI muestra nombre y modo del plan activo en la tabla y la cronología.
+  Validación local: build correcto y suite completa 38 archivos/236 pruebas,
+  incluyendo regresiones de draft parcial con ventanas obligatorias sin cubrir.
+
 ## Pendientes transversales
 
 - Determinar y persistir el `game_build` real de WCL sin inferirlo a partir del

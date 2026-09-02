@@ -8,9 +8,13 @@ import {
   type CausalPolicyInput,
   type PolicyResearchConfidence,
 } from '../_shared/mechanic-policy-classification.ts';
+import {
+  partitionReadyMechanicPolicyDifficulties,
+  type SkippedMechanicPolicyDifficulty,
+} from '../_shared/mechanic-policy-scope.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 
-const PROMPT_VERSION = 1;
+const PROMPT_VERSION = 2;
 const MAX_POLICY_BATCH_SIZE = 20;
 const VALID_CATEGORIES = new Set([
   'tankbuster',
@@ -202,7 +206,23 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: false, error: `No hay mecánicas aplicables${difficulty ? ` para ${difficulty}` : ''}; sincroniza y clasifica el catálogo primero.` }, 400);
     }
     const missingIdentity = candidates.filter((candidate) => !candidate.mechanic_key?.trim());
-    if (missingIdentity.length) {
+    let candidatesInScope = candidates;
+    let skippedDifficulties: SkippedMechanicPolicyDifficulty[] = [];
+    if (body.action === 'prompt' && !difficulty) {
+      const partition = partitionReadyMechanicPolicyDifficulties(candidates);
+      candidatesInScope = partition.readyCandidates;
+      skippedDifficulties = partition.skippedDifficulties;
+      if (!candidatesInScope.length) {
+        const detail = skippedDifficulties
+          .map((entry) => `${entry.difficulty}: ${entry.missingIdentities}/${entry.totalCandidates} sin identity`)
+          .join(' · ');
+        return jsonResponse({
+          ok: false,
+          error: `Ninguna dificultad está completa para generar semántica causal. ${detail}. Ejecuta "Crear identities y policies base" cuando esas mecánicas estén disponibles.`,
+          skippedDifficulties,
+        }, 409);
+      }
+    } else if (missingIdentity.length) {
       return jsonResponse({
         ok: false,
         error: `${missingIdentity.length} mecánicas${difficulty ? ` de ${difficulty}` : ''} aún no tienen mechanic_key. Ejecuta "Crear identities y policies base" antes de generar semántica causal.`,
@@ -212,11 +232,11 @@ Deno.serve(async (req: Request) => {
     const currentPolicies = (policiesResult.data ?? []) as CurrentPolicyRow[];
     const scopedKey = (mechanicKey: string, rowDifficulty: string): string => `${rowDifficulty}::${mechanicKey}`;
     const currentByKey = new Map(currentPolicies.map((policy) => [scopedKey(policy.mechanic_key, policy.difficulty), policy]));
-    const knownByKey = new Map(candidates.map((candidate) => [scopedKey(candidate.mechanic_key!.trim(), candidate.difficulty), candidate]));
+    const knownByKey = new Map(candidatesInScope.map((candidate) => [scopedKey(candidate.mechanic_key!.trim(), candidate.difficulty), candidate]));
     const bossName = (bossResult.data as { boss_name: string } | null)?.boss_name ?? `Boss ${bossId}`;
 
     if (body.action === 'prompt') {
-      const list = candidates.map((candidate) => {
+      const list = candidatesInScope.map((candidate) => {
         const current = currentByKey.get(scopedKey(candidate.mechanic_key!.trim(), candidate.difficulty));
         return {
           abilityId: candidate.ability_id,
@@ -246,6 +266,7 @@ Deno.serve(async (req: Request) => {
           mechanicKey: entry.mechanicKey,
           difficulty: entry.difficulty,
         })),
+        skippedDifficulties,
         maxBatchSize: MAX_POLICY_BATCH_SIZE,
       });
     }

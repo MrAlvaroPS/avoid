@@ -202,7 +202,7 @@
                 <div class="workflow-copy">
                   <strong>Generar semántica causal</strong>
                   @if (policyCoverage(); as coverage) {
-                    <span>{{ coverage.basePolicies }} base pendientes en {{ selectedDifficultyName() }} · {{ coverage.reviewedPolicies }} generadas. El prompt incluye todas las dificultades y mecánicas del boss.</span>
+                    <span>{{ coverage.basePolicies }} base pendientes en {{ selectedDifficultyName() }} · {{ coverage.reviewedPolicies }} generadas. El prompt incluye cada dificultad completa y avisa de las que aún no tienen todas sus identities.</span>
                   } @else {
                     <span>Primero deben existir las identities y policies base.</span>
                   }
@@ -210,7 +210,7 @@
                 <button
                   type="button"
                   class="workflow-action"
-                  [disabled]="!candidates().length || (policyCoverage()?.missingPolicies ?? 1) > 0"
+                  [disabled]="selectedEncounterId() == null || loadingPolicyClassifyPrompt()"
                   (click)="openPolicyClassifyPanel()"
                 >Generar policies con IA</button>
               </li>
@@ -336,9 +336,16 @@
               <p class="error" role="alert">{{ promptError }}</p>
               <button type="button" class="classify-toggle" (click)="closePolicyClassifyPanel()">Cerrar</button>
             } @else if (policyClassifySystemPrompt()) {
+              @if (policyClassifySkippedDifficulties().length) {
+                <p class="result-line result-warn" role="status">
+                  ⚠ No se bloquearán las dificultades listas. Se omiten por ahora:
+                  {{ policyClassifySkippedDifficulties().map((entry) => entry.difficulty + ' (' + entry.missingIdentities + '/' + entry.totalCandidates + ' sin mechanic_key)').join(' · ') }}.
+                  Cuando aparezcan o se enlacen esas mecánicas, vuelve a generar el prompt para completar esas difficulties.
+                </p>
+              }
               <div class="classify-step">
                 <span class="step-label">
-                  1. Prompt de policies v{{ policyClassifyPromptVersion() ?? '—' }} · Todas las dificultades: {{ policyClassifyDifficulties().join(', ') }} ·
+                  1. Prompt de policies v{{ policyClassifyPromptVersion() ?? '—' }} · Dificultades listas: {{ policyClassifyDifficulties().join(', ') }} ·
                   {{ policyClassifyCount() }} mecánicas. Copia un único prompt; al aplicar, la app hará lotes internos de hasta {{ policyClassifyMaxBatchSize() }} por dificultad.
                 </span>
                 <pre class="prompt-box">{{ policyClassifyFullPrompt }}</pre>

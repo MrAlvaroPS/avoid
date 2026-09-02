@@ -142,6 +142,11 @@ export class ManifestComponent {
   policyClassifyBossId = signal<string | null>(null);
   policyClassifyDifficulties = signal<string[]>([]);
   policyClassifyIdentities = signal<{ abilityId: number; mechanicKey: string; difficulty: string }[]>([]);
+  policyClassifySkippedDifficulties = signal<{
+    difficulty: string;
+    totalCandidates: number;
+    missingIdentities: number;
+  }[]>([]);
   policyClassifyCount = signal(0);
   policyClassifyMaxBatchSize = signal(20);
   policyClassifyPromptVersion = signal<number | null>(null);
@@ -709,6 +714,7 @@ export class ManifestComponent {
       this.policyClassifyCount.set(res.policyCount);
       this.policyClassifyDifficulties.set(res.difficulties);
       this.policyClassifyIdentities.set(res.policyIdentities);
+      this.policyClassifySkippedDifficulties.set(res.skippedDifficulties ?? []);
       this.policyClassifyMaxBatchSize.set(res.maxBatchSize);
       this.policyClassifyPromptVersion.set(res.promptVersion);
     } catch (err) {
@@ -723,6 +729,7 @@ export class ManifestComponent {
     this.policyClassifyBossId.set(null);
     this.policyClassifyDifficulties.set([]);
     this.policyClassifyIdentities.set([]);
+    this.policyClassifySkippedDifficulties.set([]);
     this.policyClassifySystemPrompt.set(null);
     this.policyClassifyUserMessage.set(null);
     this.policyClassifyPromptVersion.set(null);

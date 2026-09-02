@@ -30,9 +30,9 @@ revisados; no significa únicamente que exista código.
 
 | Bloque | Entrega | Estado | Gate principal |
 | --- | --- | --- | --- |
-| A | Contracts y schema | M19 desplegada | M11-M19 y M11b aplicadas; la publicación causal transaccional por lote está disponible y el dry-run remoto queda sin pendientes. |
+| A | Contracts y schema | M20 desplegada | M11-M20 y M11b aplicadas; la publicación causal transaccional por lote está endurecida, autotestada y el dry-run remoto queda sin pendientes. |
 | B | `PullEvaluationContext` | Implementado · editor UI y override | Componente editor Angular standalone, tests, validación e integración completadas. |
-| C | Identidad y `MechanicPolicy` | Clasificadores separados y desplegados | 674 policies/aliases base creados. Policies v1 usa un prompt global para todo el boss y publicación interna por dificultad en lotes de 20. |
+| C | Identidad y `MechanicPolicy` | Policies v2 desplegada | 674 policies/aliases base creados. Policies v2 procesa las dificultades completas, avisa y omite temporalmente las incompletas, y publica internamente por dificultad en lotes de 20. |
 | D | Occurrences y responsabilidad | Implementado · 2 Edge Functions + lógica core | evaluate-mechanic-occurrences, compute-responsibility-edges, ownership resolver, edge builder. |
 | E | Ledger y consumers shadow | En curso · dominios evaluables cubiertos | Ledger para mecánica, defensivos, consumibles, muerte, preparación, interrupt, external y dispel; `utility` queda fuera hasta tener policy causal. Falta E2E con datos remotos. |
 | F | Defensa y consumibles causales | En curso · consumibles reactivos | Los usos reactivos de piedra/poción se registran aunque el jugador sobreviva; falta policy defensiva causal. |
@@ -100,7 +100,7 @@ referencias y errores parciales.
 1. Guardar rama/commit y exportar una muestra de los conteos legacy que luego se
   compararán con v3.
 2. Ejecutar `npm run verify:causal-schema`.
-3. Éxito esperado: 10 migraciones reconocidas, 27 reason codes y 6 flags OFF.
+3. Éxito esperado: 11 migraciones reconocidas, 27 reason codes y 6 flags OFF.
 
 Fallos y recuperación:
 
@@ -114,10 +114,10 @@ Fallos y recuperación:
 
 1. Ejecutar `npx supabase db push --linked --dry-run --skip-vault`.
 2. Ejecutar `npm run verify:causal-runtime`.
-3. M19 aplicada y `classify-mechanics`/`classify-mechanic-policies`
+3. M19/M20 aplicadas y `classify-mechanics`/`classify-mechanic-policies`
   desplegadas. Queda recargar/desplegar el frontend que presenta el flujo 1-5.
 4. En Supabase, confirmar que las 14 funciones causales están `ACTIVE` y que
-  M11-M19/M11b constan en `supabase_migrations.schema_migrations`.
+  M11-M20/M11b constan en `supabase_migrations.schema_migrations`.
 5. En SQL Editor, comprobar que existen y son consultables como officer:
 
 ```sql
@@ -367,6 +367,8 @@ Ajustes para poder restaurarla, pero `listAll()` y el generador filtran
 - [x] M14: `player_execution_events` y views consumidoras v3.
 - [x] M19 desplegada: RPC transaccional de publicación causal con límite de 20
       policies de una sola dificultad por lote interno.
+- [x] M20 desplegada: conflict target no ambiguo, resolución explícita de
+      colisiones PL/pgSQL y autotest transaccional de la RPC real.
 - [x] Tipos TypeScript puros y 27 reason codes compartidos para front/back.
 - [x] RLS de lectura para officers; escrituras solo mediante backend autorizado.
 - [x] Índices y constraints de scope, confianza, eligibility y versionado.
@@ -1032,7 +1034,7 @@ player_execution_events (M14)
   schema y 14 Edge Functions con typecheck Deno.
 - Despliegue backend completado el 2026-09-02: aplicada
   `20260902130000_publish_mechanic_policy_batch.sql`; `classify-mechanics` está
-  `ACTIVE` en v30 y `classify-mechanic-policies` está `ACTIVE` en v1. El dry-run
+  `ACTIVE` en v30 y `classify-mechanic-policies` está `ACTIVE` en v2. El dry-run
   enlazado queda sin pendientes. Solo queda recargar/desplegar el frontend.
 
 ### 2026-09-02 — Cobertura visible y runbook de finalización
@@ -1170,3 +1172,34 @@ player_execution_events (M14)
   es un issue pre-existente en la configuración que se debe resolver.
 - Componente listo para integración en vistas de live-pull y auditoría de
   decisiones de evaluación por officers.
+
+### 2026-09-02 — Una dificultad incompleta ya no bloquea policies listas
+
+- Diagnosticado el falso bloqueo: la cobertura 21/21 de la UI pertenecía a la
+  dificultad seleccionada, pero `classify-mechanic-policies` abortaba el prompt
+  global al encontrar un único `mechanic_key` ausente en cualquier otra.
+- Policies prompt v2 agrupa por dificultad. Incluye todas las filas de cada
+  dificultad completa y omite completa cualquier dificultad con identities
+  pendientes, devolviendo `skippedDifficulties` con sus conteos.
+- La UI muestra el aviso sin convertirlo en error y el botón global ya no se
+  deshabilita por la cobertura de la pestaña seleccionada. Si ninguna
+  dificultad está completa, el bloqueo sigue siendo correcto y explícito.
+- Añadidas 2 pruebas Deno del particionado y conectadas al verificador causal.
+  Validación local: 14 Edge Functions, 2/2 Deno, build correcto y suite Angular
+  completa 38 archivos/236 pruebas. `classify-mechanic-policies` v2 está
+  desplegada y `ACTIVE`; solo queda recargar el frontend.
+
+### 2026-09-02 — M20 blinda la publicación contra ambigüedad PL/pgSQL
+
+- Reproducido desde el error remoto: el parámetro OUT `mechanic_key` de
+  `RETURNS TABLE` colisionaba con `mechanic_key` en el conflict target de M19.
+- M20 conserva la firma consumida por la Edge Function, usa
+  `ON CONFLICT ON CONSTRAINT boss_mechanic_policy_pkey`, fija
+  `#variable_conflict use_column` y devuelve ambas columnas cualificadas desde
+  `v_after`.
+- La propia migración ejecuta INSERT/UPSERT/audit/snapshot sobre una policy
+  existente dentro de un subbloque y provoca una excepción centinela para
+  revertir todos los cambios del autotest. Cualquier error real aborta M20.
+- Aplicada correctamente al proyecto remoto; el autotest pasó y el dry-run
+  posterior confirma `upToDate:true`. El JSON pegado puede reintentarse sin
+  repetir la investigación.

@@ -22,6 +22,8 @@ import { upsertReportEncounters } from '../_shared/report-encounters.ts';
 import { resolveSeverity } from '../_shared/mechanic-severity.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
+import { errorMessage } from '../_shared/error-message.ts';
+import { pullIngestionRecoveryAction } from '../_shared/report-ingestion-recovery.ts';
 import { detectWipeCall as detectWipeCallShared, type WipeCallDetection } from '../_shared/wipe-call-detection.ts';
 import { PULL_CONTEXT_COMMAND_VERSION } from '../_shared/pull-evaluation-context.ts';
 import { detectUnassignedMechanicOccurrences, type UnassignedMechanicCatalogEntry, type ActorLite, type GenericEvent } from '../_shared/unassigned-mechanics.ts';
@@ -174,6 +176,7 @@ Deno.serve(async (req: Request) => {
 
   let reportCode: string | undefined;
   let maxFights = DEFAULT_MAX_FIGHTS_PER_CALL;
+  let activePullId: string | null = null;
   try {
     const body = await req.json();
     reportCode = body.reportCode;
@@ -384,6 +387,37 @@ Deno.serve(async (req: Request) => {
       for (const fight of batch) {
         const bossId = String(fight.encounterID);
         const difficulty = fight.difficulty != null ? (WCL_DIFFICULTY_NAME_BY_ID[fight.difficulty] ?? `Dificultad ${fight.difficulty}`) : 'Desconocida';
+        const { data: existingPull, error: existingPullError } = await supabase
+          .from('pulls')
+          .select('id,ingestion_status')
+          .eq('report_code', reportCode)
+          .eq('fight_id', fight.id)
+          .maybeSingle();
+        if (existingPullError) throw existingPullError;
+
+        const recoveryAction = pullIngestionRecoveryAction(existingPull);
+        if (recoveryAction === 'reuse_complete') {
+          const { error: cursorError } = await supabase
+            .from('reports')
+            .update({ last_processed_fight_id: fight.id })
+            .eq('code', reportCode);
+          if (cursorError) throw cursorError;
+          newestPullId = existingPull.id;
+          continue;
+        }
+        if (recoveryAction === 'replace_incomplete') {
+          const { data: removedPull, error: removeError } = await supabase
+            .from('pulls')
+            .delete()
+            .eq('id', existingPull.id)
+            .neq('ingestion_status', 'complete')
+            .select('id')
+            .maybeSingle();
+          if (removeError) throw removeError;
+          if (!removedPull) {
+            throw new Error(`El pull ${fight.id} cambió de estado durante la recuperación; reintenta la importación.`);
+          }
+        }
         const normalizedFightName = normalizeAbilityName(fight.name);
         const bossActorIds = new Set(
           actors
@@ -461,10 +495,13 @@ Deno.serve(async (req: Request) => {
             phase_transitions: fight.phaseTransitions,
             last_phase_absolute_index: fight.lastPhaseAsAbsoluteIndex,
             last_phase_is_intermission: fight.lastPhaseIsIntermission,
+            ingestion_status: 'processing',
+            ingestion_error: null,
           })
           .select('id')
           .single();
         if (pullError) throw pullError;
+        activePullId = insertedPull.id;
         newestPullId = insertedPull.id;
 
         // Mecánicas curadas de este boss+dificultad — el matching depende
@@ -1739,16 +1776,41 @@ Deno.serve(async (req: Request) => {
             });
           if (dispelError) throw dispelError;
         }
-      }
 
-      await supabase
-        .from('reports')
-        .update({ last_processed_fight_id: batch[batch.length - 1].id })
-        .eq('code', reportCode);
+        const { error: completionError } = await supabase
+          .from('pulls')
+          .update({ ingestion_status: 'complete', ingestion_error: null })
+          .eq('id', insertedPull.id)
+          .eq('ingestion_status', 'processing');
+        if (completionError) throw completionError;
+        activePullId = null;
+
+        const { error: cursorError } = await supabase
+          .from('reports')
+          .update({ last_processed_fight_id: fight.id })
+          .eq('code', reportCode);
+        if (cursorError) throw cursorError;
+      }
     }
 
     return jsonResponse({ ok: true, processed: batch.length, remaining, newestPullId, possibleDuplicateOf });
   } catch (err) {
-    return jsonResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+    const detail = errorMessage(err);
+    if (activePullId) {
+      const { error: statusError } = await supabase
+        .from('pulls')
+        .update({ ingestion_status: 'failed', ingestion_error: detail })
+        .eq('id', activePullId)
+        .eq('ingestion_status', 'processing');
+      if (statusError) {
+        console.error('analyze-report: no se pudo persistir el fallo de ingesta', {
+          reportCode,
+          pullId: activePullId,
+          error: errorMessage(statusError),
+        });
+      }
+    }
+    console.error('analyze-report: ingesta fallida', { reportCode, pullId: activePullId, error: detail });
+    return jsonResponse({ ok: false, error: detail }, 500);
   }
 });

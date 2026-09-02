@@ -247,6 +247,12 @@ export async function evaluateDefensivePull(
       deathCause?.['statisticalExclusionReason'] !== 'boss_melee_on_non_tank'
         ? finite(deathCause?.['timeMs'])
         : null;
+    const lethalWindowStartMs = Array.isArray(deathCause?.['damageWindowEvents'])
+      ? (deathCause!['damageWindowEvents'] as Record<string, unknown>[])
+          .map((event) => finite(event['time_ms']))
+          .filter((timeMs): timeMs is number => timeMs != null && deathTimeMs != null && timeMs < deathTimeMs)
+          .sort((left, right) => left - right)[0] ?? null
+      : null;
     return evaluateDefensiveExecution({
       playerKey,
       playerName: record.player_name,
@@ -265,6 +271,7 @@ export async function evaluateDefensivePull(
       casts: observedCasts(record, playerKey, playerKeyByName),
       windows,
       deathTimeMs,
+      lethalWindowStartMs,
       evaluationCutoffMs,
     });
   });
@@ -284,6 +291,8 @@ export async function evaluateDefensivePull(
         evaluator_version: result.evaluatorVersion,
         plan_required_count: result.planRequiredCount,
         plan_executed_count: result.planExecutedCount,
+        required_exact_adherence_count: result.requiredExactAdherenceCount,
+        required_coverage_success_count: result.requiredCoverageSuccessCount,
         critical_window_count: result.criticalWindowCount,
         critical_covered_count: result.criticalCoveredCount,
         correct_hold_count: result.correctHoldCount,

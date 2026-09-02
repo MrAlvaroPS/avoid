@@ -17,6 +17,7 @@ const extensionMigrations = [
   '20260902090000_boss_mechanic_catalog_sync_state.sql',
   '20260902110000_refresh_applicable_candidates_causal_identity.sql',
   '20260902130000_publish_mechanic_policy_batch.sql',
+  '20260902140000_harden_publish_mechanic_policy_batch.sql',
 ];
 const extensionSql = new Map(
   extensionMigrations.map((name) => [name, readFileSync(join(migrationDir, name), 'utf8')]),
@@ -113,6 +114,13 @@ assert(policyBatchSql.includes('create or replace function publish_mechanic_poli
 assert(policyBatchSql.includes('jsonb_array_length(p_entries) > 20'), 'M19 no limita el tamaño del lote causal.');
 assert(policyBatchSql.includes('insert into boss_mechanic_policy_audit'), 'M19 no audita cada policy publicada.');
 assert(policyBatchSql.includes('for update'), 'M19 no serializa el incremento de versión por policy.');
+
+const hardenedPolicyBatchSql = extensionSql.get(extensionMigrations[6]);
+assert(hardenedPolicyBatchSql.includes('#variable_conflict use_column'), 'M20 no fija cómo resolver colisiones entre variables OUT y columnas SQL.');
+assert(hardenedPolicyBatchSql.includes('on conflict on constraint boss_mechanic_policy_pkey'), 'M20 no dirige el UPSERT por una constraint no ambigua.');
+assert(!hardenedPolicyBatchSql.includes('on conflict (boss_id, difficulty, mechanic_key)'), 'M20 reintroduce el conflict target ambiguo de M19.');
+assert(hardenedPolicyBatchSql.includes('return query select v_after.mechanic_key, v_after.policy_version'), 'M20 no devuelve el resultado mediante referencias calificadas.');
+assert(hardenedPolicyBatchSql.includes('publish_mechanic_policy_batch_self_test_rollback'), 'M20 no ejecuta el autotest transaccional de la RPC real.');
 
 const aliasSync = readFileSync(join(root, 'supabase', 'functions', 'sync-mechanic-aliases', 'index.ts'), 'utf8');
 assert(!aliasSync.includes("onConflict: 'boss_id,difficulty,mechanic_key,ability_id,normalized_name'"), 'El UPSERT de aliases no coincide con los índices parciales de M12.');

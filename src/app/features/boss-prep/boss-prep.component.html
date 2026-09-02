@@ -181,7 +181,7 @@
         @if (assignmentView() === 'spec') {
           <p class="assignment-view-note">Template reutilizable de clase/spec. Muestra valores base/spec y puede variar según el build; AUTO aquí no es un plan desplegado ni entra en scoring.</p>
         } @else {
-          <p class="assignment-view-note">El jugador seleccionado solo filtra lo que ves. El solver y el plan siguen siendo globales para todo el roster.</p>
+          <p class="assignment-view-note">Puedes generar un plan parcial para el jugador seleccionado —sin exigir que todo el roster cubra todos los slots— o un plan global completo.</p>
         }
 
         <div class="header-row">
@@ -238,11 +238,20 @@
                 }
               </select>
               <button type="button" class="sync-btn" [disabled]="!selectedPreparationPlayer() || loadingSelectedPlayerKit()" (click)="openTimeline()">🕐 Cronología del jugador</button>
+              <button
+                type="button"
+                class="sync-btn"
+                [disabled]="!selectedPreparationPlayer() || generatingPlan() || v2Readiness()?.capabilities?.planManagement !== true"
+                title="Crea un borrador parcial solo para el jugador seleccionado; los slots globales sin cubrir no impiden publicarlo"
+                (click)="generateIndividualPlan()"
+              >
+                {{ generatingPlanScope() === 'individual' ? 'Generando individual…' : 'Generar borrador individual' }}
+              </button>
               <button type="button" class="sync-btn" [disabled]="generatingPlan() || v2Readiness()?.capabilities?.planManagement !== true" (click)="generateGlobalPlan()">
-                {{ generatingPlan() ? 'Generando…' : (activePlanVersion() ? 'Regenerar borrador global' : 'Generar borrador global') }}
+                {{ generatingPlanScope() === 'global' ? 'Generando global…' : (activePlanVersion()?.plan_mode === 'full' ? 'Regenerar borrador global' : 'Generar borrador global') }}
               </button>
               @if (activeDraft()) {
-                <button type="button" class="sync-btn" [disabled]="publishingPlan()" (click)="publishCurrentDraft()">{{ publishingPlan() ? 'Publicando…' : 'Publicar plan' }}</button>
+                <button type="button" class="sync-btn" [disabled]="publishingPlan()" (click)="publishCurrentDraft()">{{ publishingPlan() ? 'Publicando…' : (activeDraft()?.plan_mode === 'partial' ? 'Publicar plan parcial' : 'Publicar plan global') }}</button>
               }
               <button type="button" class="sync-btn export-trigger" [disabled]="!publishedPlan() || !!activeDraft() || !selectedPreparationPlayer()" [title]="activeDraft() ? 'Publica primero el borrador actual; no se exporta silenciosamente el plan anterior' : 'Requiere un plan publicado'" (click)="generateSelectedPlayerExport()">📋 MRT del jugador</button>
             </div>
@@ -502,7 +511,7 @@
                     <td colspan="9">
                       @if (activePlanVersion(); as plan) {
                         <div class="deployed-plan-assignments">
-                          <p class="meta">Plan v2 {{ plan.status === 'published' ? 'publicado' : 'en borrador' }} · filtro {{ assignmentView() === 'player' ? (selectedPreparationPlayer()?.name ?? 'sin jugador') : autoAssignClass() + ' / ' + autoAssignSpec() }}</p>
+                          <p class="meta">{{ plan.name }} · Plan v2 {{ plan.status === 'published' ? 'publicado' : 'en borrador' }} · modo {{ plan.plan_mode === 'partial' ? 'parcial' : plan.plan_mode === 'full' ? 'global' : 'sin plan' }} · filtro {{ assignmentView() === 'player' ? (selectedPreparationPlayer()?.name ?? 'sin jugador') : autoAssignClass() + ' / ' + autoAssignSpec() }}</p>
                           @if (visiblePlanSlotsForAbility(row.candidate.ability_id); as visibleSlots) {
                             @if (visibleSlots.length) {
                               <table class="assignments">
@@ -699,7 +708,7 @@
         </div>
         <p class="meta">
           @if (activePlanVersion(); as plan) {
-            Salida del solver {{ plan.solver_version }} · versión {{ plan.status }} · calidad {{ plan.planning_quality }}. Los cooldowns son los snapshots con los que se creó el plan.
+            {{ plan.name }} · Salida del solver {{ plan.solver_version }} · modo {{ plan.plan_mode }} · versión {{ plan.status }} · calidad {{ plan.planning_quality }}. Los cooldowns son los snapshots con los que se creó el plan.
           } @else {
             @if (assignmentView() === 'spec') {
               Fallback legacy por template. "en conflicto" = este mismo defensivo ya se habría usado antes y su cooldown no habría vuelto a tiempo.

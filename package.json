@@ -8,7 +8,8 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "verify:causal-schema": "node scripts/verify-causal-schema.mjs",
-    "verify:causal-runtime": "node scripts/verify-causal-runtime.mjs"
+    "verify:causal-runtime": "node scripts/verify-causal-runtime.mjs",
+    "verify:defensive-contract": "node scripts/verify-defensive-contract.mjs"
   },
   "private": true,
   "packageManager": "npm@10.9.8",

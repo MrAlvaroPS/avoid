@@ -748,6 +748,7 @@ export type DefensiveExecutionState =
   | 'plan_broken'
   | 'reminder_missed'
   | 'death_with_viable_cd'
+  | 'death_with_ready_cd'
   | 'no_feasible_alternative'
   | 'uncertain_data';
 
@@ -757,6 +758,7 @@ export interface PlayerPullDefensiveEvaluationEvent {
   atMs: number;
   coverageOutcome: 'covered' | 'uncovered' | 'not_applicable' | 'uncertain';
   adherenceOutcome: 'followed' | 'substituted' | 'held' | 'broken' | 'missed' | 'not_applicable' | 'uncertain';
+  managementOutcome: 'success' | 'failure' | 'neutral' | 'uncertain';
   requirementLevel?: 'required' | 'recommended' | 'optional';
   slotId?: string;
   windowId?: string;
@@ -770,6 +772,9 @@ export interface PlayerPullDefensiveEvaluationEvent {
   relatedFutureAtMs?: number;
   cooldownRemainingMs?: number;
   candidateSpellIds?: number[];
+  lethalWindowStartMs?: number;
+  causalGroupId?: string;
+  primaryPenalty?: boolean;
 }
 
 export interface PlayerPullDefensiveEvaluationRow {
@@ -784,6 +789,8 @@ export interface PlayerPullDefensiveEvaluationRow {
   evaluator_version: string;
   plan_required_count: number;
   plan_executed_count: number;
+  required_exact_adherence_count?: number;
+  required_coverage_success_count?: number;
   critical_window_count: number;
   critical_covered_count: number;
   correct_hold_count: number;

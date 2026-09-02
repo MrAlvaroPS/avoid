@@ -27,4 +27,19 @@ for (const functionName of functions) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-console.log(`Causal runtime OK: ${functions.length} Edge Functions comprobadas.`);
+const tests = [
+  'supabase/functions/_shared/error-message_test.ts',
+  'supabase/functions/_shared/mechanic-policy-scope_test.ts',
+  'supabase/functions/_shared/report-ingestion-recovery_test.ts',
+];
+for (const testPath of tests) {
+  const result = spawnSync(
+    'npx',
+    ['deno', 'test', testPath],
+    { stdio: 'inherit', shell: process.platform === 'win32' },
+  );
+  if (result.error) console.error(result.error.message);
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+console.log(`Causal runtime OK: ${functions.length} Edge Functions y ${tests.length} suite Deno comprobadas.`);

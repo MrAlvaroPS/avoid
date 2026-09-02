@@ -380,6 +380,7 @@ export class EdgeFunctionsService {
     policyCount: number;
     difficulties: string[];
     policyIdentities: { abilityId: number; mechanicKey: string; difficulty: string }[];
+    skippedDifficulties: { difficulty: string; totalCandidates: number; missingIdentities: number }[];
     maxBatchSize: number;
   }> {
     const difficulty = difficulties?.length === 1 ? difficulties[0] : undefined;

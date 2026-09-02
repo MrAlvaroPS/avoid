@@ -93,6 +93,16 @@ describe('defensive plan solver', () => {
     expect(result.assignments.map((slot) => slot.coverageStatus)).toEqual(['covered', 'uncovered', 'covered']);
   });
 
+  it('keeps a one-player partial plan feasible when required windows remain uncovered', () => {
+    const result = solveDefensivePlan(input({
+      mode: 'partial',
+      occurrences: [occurrence(60_000, 1), occurrence(90_000, 2), occurrence(120_000, 3)],
+    }));
+
+    expect(result).toMatchObject({ mode: 'partial', feasible: true, coverageComplete: false });
+    expect(result.diagnostics.uncoveredRequired).toHaveLength(1);
+  });
+
   it('models two consecutive charges and sequential recharge', () => {
     const twoCharges = defensive({ charges: 2, effectiveCooldownMs: 20_000, rechargeMs: 20_000 });
     expect(

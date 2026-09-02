@@ -57,6 +57,8 @@ import { PERSONAL_RESPONSIBILITY_CATEGORIES, validAttemptOrdinal } from '../shar
 import { roleFromSpec } from '../shared/spec-role.util';
 import { errorMessage } from '../shared/error-message.util';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { computeDefensiveManagementScore } from '../../../supabase/functions/_shared/defensive-management-score';
+import { homogeneousDefensiveEvaluationGeneration } from '../shared/defensive-evaluation-generation';
 
 export interface NightPullSummary {
   pullId: string;
@@ -319,14 +321,19 @@ export interface NightDefensiveDecision extends PlayerPullDefensiveEvaluationEve
   plannedSpellName: string | null;
   actualSpellName: string | null;
   candidateSpellNames: string[];
+  evaluationMode: PlayerPullDefensiveEvaluationRow['mode'];
+  planVersionId: string | null;
 }
 
 /** Agregado exclusivamente de evaluations v2 completas y confiables. Null
  * significa rollout/tabla/backfill incompleto y obliga a la UI a usar legacy. */
 export interface NightDefensiveManagementV2 {
-  mode: 'plan' | 'optimal_no_plan';
+  mode: 'plan' | 'optimal_no_plan' | 'mixed';
   evaluatedPullCount: number;
   planRequiredCount: number;
+  requiredExactAdherenceCount: number;
+  requiredCoverageSuccessCount: number;
+  /** Alias legacy de requiredExactAdherenceCount. */
   planExecutedCount: number;
   criticalWindowCount: number;
   criticalCoveredCount: number;
@@ -336,8 +343,13 @@ export interface NightDefensiveManagementV2 {
   viableExtraCount: number;
   extraUsedCount: number;
   deathViableCdCount: number;
+  deathReadyCdCount: number;
   managementScore: number | null;
   evaluatorVersion: string;
+  resolverVersion: string;
+  solverVersion: string;
+  gameBuild: string;
+  buildFingerprint: string;
   dataConfidence: 'verified' | 'inferred';
   decisions: NightDefensiveDecision[];
 }
@@ -353,11 +365,20 @@ export function buildNightDefensiveManagementV2(input: {
   const selected = expectedPulls
     .map((pull) => evaluationsByPullId.get(pull.pullId))
     .filter((evaluation): evaluation is PlayerPullDefensiveEvaluationRow => Boolean(evaluation));
-  const evaluatorVersions = new Set(selected.map((evaluation) => evaluation.evaluator_version));
+  const generation = homogeneousDefensiveEvaluationGeneration(
+    selected.map((evaluation) => ({
+      evaluatorVersion: evaluation.evaluator_version,
+      resolverVersion: evaluation.resolver_version,
+      solverVersion: evaluation.solver_version,
+      gameBuild: evaluation.game_build,
+      buildFingerprint: evaluation.build_fingerprint,
+    })),
+  );
   if (
     expectedPulls.length === 0 ||
     selected.length !== expectedPulls.length ||
-    evaluatorVersions.size !== 1 ||
+    generation == null ||
+    generation.evaluatorVersion !== 'defensive-execution-evaluator@2.3.0' ||
     selected.some((evaluation) => evaluation.data_confidence !== 'verified' && evaluation.data_confidence !== 'inferred')
   ) return null;
 
@@ -368,12 +389,13 @@ export function buildNightDefensiveManagementV2(input: {
     plan_broken: 1,
     reminder_missed: 2,
     covered_with_substitution: 3,
-    correct_hold: 4,
-    missed_extra_opportunity: 5,
-    safe_extra_use: 6,
-    no_feasible_alternative: 7,
-    uncertain_data: 8,
-    plan_covered: 9,
+    death_with_ready_cd: 4,
+    correct_hold: 5,
+    missed_extra_opportunity: 6,
+    safe_extra_use: 7,
+    no_feasible_alternative: 8,
+    uncertain_data: 9,
+    plan_covered: 10,
   };
   const decisions = selected
     .flatMap((evaluation) => {
@@ -392,6 +414,8 @@ export function buildNightDefensiveManagementV2(input: {
           plannedSpellName: event.plannedSpellId == null ? null : (input.spellNameById.get(event.plannedSpellId) ?? null),
           actualSpellName: event.actualSpellId == null ? null : (input.spellNameById.get(event.actualSpellId) ?? null),
           candidateSpellNames: (event.candidateSpellIds ?? []).map((spellId) => input.spellNameById.get(spellId) ?? `#${spellId}`),
+          evaluationMode: evaluation.mode,
+          planVersionId: evaluation.plan_version_id,
         }));
     })
     .sort(
@@ -399,15 +423,23 @@ export function buildNightDefensiveManagementV2(input: {
         decisionPriority[left.state] - decisionPriority[right.state] ||
         (pullOrderById.get(left.pullId) ?? Number.MAX_SAFE_INTEGER) - (pullOrderById.get(right.pullId) ?? Number.MAX_SAFE_INTEGER) ||
         left.atMs - right.atMs,
-    )
-    .slice(0, 5);
+    );
   const sum = (pick: (evaluation: PlayerPullDefensiveEvaluationRow) => number): number =>
     selected.reduce((total, evaluation) => total + pick(evaluation), 0);
+  const allEvents = selected.flatMap((evaluation) => evaluation.events ?? []);
+  const management = computeDefensiveManagementScore(allEvents);
+  const requiredEvents = allEvents.filter((event) => event.requirementLevel === 'required');
+  const requiredExactAdherenceCount = requiredEvents.filter((event) => event.state === 'plan_covered').length;
+  const requiredCoverageSuccessCount = requiredEvents.filter((event) => event.coverageOutcome === 'covered').length;
+  const hasPlan = selected.some((evaluation) => evaluation.mode !== 'no_plan');
+  const hasNoPlan = selected.some((evaluation) => evaluation.mode === 'no_plan');
   return {
-    mode: selected.some((evaluation) => evaluation.mode !== 'no_plan') ? 'plan' : 'optimal_no_plan',
+    mode: hasPlan && hasNoPlan ? 'mixed' : hasPlan ? 'plan' : 'optimal_no_plan',
     evaluatedPullCount: selected.length,
     planRequiredCount: sum((evaluation) => evaluation.plan_required_count),
-    planExecutedCount: sum((evaluation) => evaluation.plan_executed_count),
+    requiredExactAdherenceCount,
+    requiredCoverageSuccessCount,
+    planExecutedCount: requiredExactAdherenceCount,
     criticalWindowCount: sum((evaluation) => evaluation.critical_window_count),
     criticalCoveredCount: sum((evaluation) => evaluation.critical_covered_count),
     correctHoldCount: sum((evaluation) => evaluation.correct_hold_count),
@@ -416,8 +448,13 @@ export function buildNightDefensiveManagementV2(input: {
     viableExtraCount: sum((evaluation) => evaluation.viable_extra_count),
     extraUsedCount: sum((evaluation) => evaluation.extra_used_count),
     deathViableCdCount: sum((evaluation) => evaluation.death_viable_cd_count),
-    managementScore: null,
-    evaluatorVersion: [...evaluatorVersions][0],
+    deathReadyCdCount: allEvents.filter((event) => event.state === 'death_with_ready_cd').length,
+    managementScore: management.score,
+    evaluatorVersion: generation.evaluatorVersion,
+    resolverVersion: generation.resolverVersion,
+    solverVersion: generation.solverVersion,
+    gameBuild: generation.gameBuild,
+    buildFingerprint: generation.buildFingerprint,
     dataConfidence: selected.some((evaluation) => evaluation.data_confidence === 'inferred') ? 'inferred' : 'verified',
     decisions,
   };

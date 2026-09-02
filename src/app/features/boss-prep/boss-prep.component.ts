@@ -141,6 +141,7 @@ export class BossPrepComponent {
   planningResourceSelections = signal<Record<string, number[]>>({});
   includeSemiInTemplateAuto = signal(false);
   generatingPlan = signal(false);
+  generatingPlanScope = signal<'global' | 'individual' | null>(null);
   publishingPlan = signal(false);
   planActionMessage = signal<string | null>(null);
 
@@ -1013,44 +1014,73 @@ export class BossPrepComponent {
   }
 
   async generateGlobalPlan(): Promise<void> {
+    await this.generatePlanDraft('global');
+  }
+
+  async generateIndividualPlan(): Promise<void> {
+    await this.generatePlanDraft('individual');
+  }
+
+  private async generatePlanDraft(scope: 'global' | 'individual'): Promise<void> {
     const bossId = this.selectedEncounterId();
     const difficulty = this.selectedDifficultyName();
     const boss = this.selectedBoss();
     if (bossId == null || !difficulty || !boss || this.generatingPlan()) return;
-    if (!this.preparationPlayers().length) {
+    const selectedPlayer = this.selectedPreparationPlayer();
+    if (scope === 'individual' && !selectedPlayer) {
+      this.error.set('Selecciona un jugador antes de generar su plan individual.');
+      return;
+    }
+    const players = scope === 'individual' && selectedPlayer
+      ? [selectedPlayer]
+      : this.preparationPlayers();
+    if (!players.length) {
       this.error.set('No hay roster disponible para generar el plan. Actualiza WoWAudit/roster y vuelve a intentarlo.');
       return;
     }
     this.generatingPlan.set(true);
+    this.generatingPlanScope.set(scope);
     this.error.set(null);
     this.planActionMessage.set(null);
     try {
       const selections = this.planningResourceSelections();
+      const playerNames = new Set(players.map((player) => player.name.toLocaleLowerCase()));
       const result = await this.edgeFunctions.generateDefensivePlan({
         bossId: String(bossId),
         difficulty,
-        name: `${boss.bossName} · ${difficulty}`,
-        mode: 'full',
-        members: this.preparationPlayers().map((player) => ({
+        name: scope === 'individual'
+          ? `${boss.bossName} · ${difficulty} · ${selectedPlayer!.name}`
+          : `${boss.bossName} · ${difficulty}`,
+        mode: scope === 'individual' ? 'partial' : 'full',
+        members: players.map((player) => ({
           playerName: player.name,
           playerKey: `character:${player.characterId}`,
           included: true,
         })),
-        resourceSelections: Object.entries(selections).map(([normalizedName, spellIds]) => ({
-          playerName: this.preparationPlayers().find((player) => player.name.toLocaleLowerCase() === normalizedName)?.name ?? normalizedName,
-          spellIds,
-        })),
+        resourceSelections: Object.entries(selections)
+          .filter(([normalizedName]) => playerNames.has(normalizedName))
+          .map(([normalizedName, spellIds]) => ({
+            playerName: players.find((player) => player.name.toLocaleLowerCase() === normalizedName)?.name ?? normalizedName,
+            spellIds,
+          })),
         supersedesId: this.activePlanVersion()?.id ?? null,
-        notes: 'Generado desde Preparación. Personal seleccionado por defecto; semi/external solo con opt-in explícito.',
+        notes: scope === 'individual'
+          ? `Plan parcial individual de ${selectedPlayer!.name}. Personal seleccionado por defecto; semi/external solo con opt-in explícito.`
+          : 'Plan global generado desde Preparación. Personal seleccionado por defecto; semi/external solo con opt-in explícito.',
       });
       await this.loadRows();
       const solver = result.solver as { diagnostics?: { uncoveredRequired?: unknown[] }; planningQuality?: string };
       const uncovered = solver.diagnostics?.uncoveredRequired?.length ?? 0;
-      this.planActionMessage.set(`Borrador generado${uncovered ? ` · ${uncovered} ventanas obligatorias siguen sin cobertura` : ' · cobertura obligatoria completa'}.`);
+      this.planActionMessage.set(
+        scope === 'individual'
+          ? `Borrador parcial de ${selectedPlayer!.name} generado${uncovered ? ` · ${uncovered} ventanas obligatorias quedan fuera de su cobertura individual` : ' · cubre todas las ventanas obligatorias'}. Los huecos globales no bloquean su publicación.`
+          : `Borrador global generado${uncovered ? ` · ${uncovered} ventanas obligatorias siguen sin cobertura` : ' · cobertura obligatoria completa'}.`,
+      );
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
       this.generatingPlan.set(false);
+      this.generatingPlanScope.set(null);
     }
   }
 

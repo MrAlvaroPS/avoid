@@ -41,8 +41,9 @@ import {
   ExecutionLedgerService,
   type ExecutionLedgerPullSummary,
 } from './execution-ledger.service';
+import { homogeneousDefensiveEvaluationGeneration } from '../shared/defensive-evaluation-generation';
 
-const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.2.0';
+const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.3.0';
 const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
 const REQUIRED_EXECUTION_LEDGER_VERSION = 'execution-ledger@1.0.0';
 
@@ -202,11 +203,16 @@ export interface ReliabilityInputRow {
   defensive_management_decision_count: number | null;
   defensive_required_count: number | null;
   defensive_required_success_count: number | null;
+  defensive_required_exact_adherence_count: number | null;
   defensive_broken_reservation_count: number | null;
   defensive_death_viable_cd_count: number | null;
   defensive_evaluation_confidence: string | null;
   defensive_evaluator_version: string | null;
   defensive_resolver_version: string | null;
+  defensive_solver_version: string | null;
+  defensive_game_build: string | null;
+  defensive_build_fingerprint: string | null;
+  defensive_evaluated_at: string | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -292,24 +298,28 @@ export interface ReliabilityComputationOptions {
   defensiveV2Enabled?: boolean;
 }
 
-function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
+function v2DefensiveRowIsCompatible(row: ReliabilityInputRow): boolean {
   const score = row.defensive_management_score_v2;
   const decisionCount = row.defensive_management_decision_count;
   const requiredCount = row.defensive_required_count;
   const requiredSuccessCount = row.defensive_required_success_count;
+  const requiredExactAdherenceCount = row.defensive_required_exact_adherence_count;
   const brokenCount = row.defensive_broken_reservation_count;
   const deathCount = row.defensive_death_viable_cd_count;
   if (
-    score == null ||
-    !Number.isFinite(score) ||
-    score < 0 ||
-    score > 100 ||
     decisionCount == null ||
-    decisionCount < 1 ||
+    decisionCount < 0 ||
+    (decisionCount === 0 ? score != null : score == null) ||
+    (score != null && (!Number.isFinite(score) || score < 0 || score > 100)) ||
     requiredCount == null ||
+    requiredCount < 0 ||
     requiredSuccessCount == null ||
     requiredSuccessCount < 0 ||
     requiredSuccessCount > requiredCount ||
+    requiredExactAdherenceCount == null ||
+    requiredExactAdherenceCount < 0 ||
+    requiredExactAdherenceCount > requiredSuccessCount ||
+    requiredExactAdherenceCount > requiredCount ||
     brokenCount == null ||
     brokenCount < 0 ||
     deathCount == null ||
@@ -319,9 +329,15 @@ function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
     (row.defensive_evaluation_confidence !== 'verified' &&
       row.defensive_evaluation_confidence !== 'inferred')
   ) {
-    return null;
+    return false;
   }
-  return score / 100;
+  return true;
+}
+
+function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
+  return v2DefensiveRowIsCompatible(row) && row.defensive_management_score_v2 != null
+    ? row.defensive_management_score_v2 / 100
+    : null;
 }
 
 export interface PlayerConsistency {
@@ -350,6 +366,20 @@ export function computeReliabilityBreakdown(
   options: ReliabilityComputationOptions = {},
 ): ReliabilityBreakdown | null {
   if (!rows.length) return null;
+
+  const visibleV2Generation =
+    options.defensiveV2Enabled === true && rows.every(v2DefensiveRowIsCompatible)
+      ? homogeneousDefensiveEvaluationGeneration(
+          rows.map((row) => ({
+            evaluatorVersion: row.defensive_evaluator_version,
+            resolverVersion: row.defensive_resolver_version,
+            solverVersion: row.defensive_solver_version,
+            gameBuild: row.defensive_game_build,
+            buildFingerprint: row.defensive_build_fingerprint,
+          })),
+        )
+      : null;
+  const useVisibleV2Generation = visibleV2Generation != null;
 
   // §"el baremo de preparación deberia medir los primeros pulls no los
   // ultimos, porque si en mitad de la raid te toca un objeto y te lo
@@ -459,13 +489,13 @@ export function computeReliabilityBreakdown(
     const legacyDefensiveExecution =
       pullDefensiveWeight > 0 ? pullDefensiveSum / pullDefensiveWeight : null;
     const v2DefensiveExecution = reliableV2DefensiveScore(r);
-    const useV2ForPull = options.defensiveV2Enabled === true && v2DefensiveExecution != null;
+    const useV2ForPull = useVisibleV2Generation && v2DefensiveExecution != null;
     if (useV2ForPull) {
       // Selección atómica: si v2 es fiable, esta fila no aporta ninguna
       // señal defensiva legacy al score efectivo.
       defSum += v2DefensiveExecution * w;
       defWeight += w;
-    } else if (legacyDefensiveExecution != null) {
+    } else if (!useVisibleV2Generation && legacyDefensiveExecution != null) {
       // Conserva exactamente la ponderación legacy (muerte x2 + ventana x1)
       // cuando el flag está apagado o esta fila todavía no tiene backfill.
       defSum += pullDefensiveSum * w;
@@ -484,7 +514,9 @@ export function computeReliabilityBreakdown(
       prepWeight += w;
     }
     const mechanicExecution = mecScore * 100;
-    const selectedDefensiveExecution = useV2ForPull ? v2DefensiveExecution : legacyDefensiveExecution;
+    const selectedDefensiveExecution = useVisibleV2Generation
+      ? v2DefensiveExecution
+      : legacyDefensiveExecution;
     const defensiveExecution =
       selectedDefensiveExecution == null ? null : selectedDefensiveExecution * 100;
     pullExecution.push({
@@ -637,7 +669,7 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
 // propio por encima de WINDOW_RELIABILITY_COLUMNS, mismo motivo de siempre
 // (frontend puede llegar antes que la migración).
 const V2_RELIABILITY_COLUMNS =
-  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version, defensive_resolver_version';
+  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_required_exact_adherence_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version, defensive_resolver_version, defensive_solver_version, defensive_game_build, defensive_build_fingerprint, defensive_evaluated_at';
 const UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count';
 const WINDOW_RELIABILITY_COLUMNS =
@@ -686,7 +718,7 @@ function isReliabilitySchemaTransitionError(
   return (
     error.code === '42703' ||
     error.code === 'PGRST204' ||
-    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count|defensive_management_score_v2|defensive_management_decision_count|defensive_required_count|defensive_required_success_count|defensive_broken_reservation_count|defensive_death_viable_cd_count|defensive_evaluation_confidence|defensive_evaluator_version|defensive_resolver_version/i.test(
+    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count|defensive_management_score_v2|defensive_management_decision_count|defensive_required_count|defensive_required_success_count|defensive_required_exact_adherence_count|defensive_broken_reservation_count|defensive_death_viable_cd_count|defensive_evaluation_confidence|defensive_evaluator_version|defensive_resolver_version|defensive_solver_version|defensive_game_build|defensive_build_fingerprint|defensive_evaluated_at/i.test(
       message,
     )
   );
@@ -830,6 +862,10 @@ export class ReliabilityService {
         schemaLevel === 'v2' && row.defensive_required_success_count != null
           ? Number(row.defensive_required_success_count)
           : null,
+      defensive_required_exact_adherence_count:
+        schemaLevel === 'v2' && row.defensive_required_exact_adherence_count != null
+          ? Number(row.defensive_required_exact_adherence_count)
+          : null,
       defensive_broken_reservation_count:
         schemaLevel === 'v2' && row.defensive_broken_reservation_count != null
           ? Number(row.defensive_broken_reservation_count)
@@ -844,6 +880,14 @@ export class ReliabilityService {
         schemaLevel === 'v2' ? (row.defensive_evaluator_version ?? null) : null,
       defensive_resolver_version:
         schemaLevel === 'v2' ? (row.defensive_resolver_version ?? null) : null,
+      defensive_solver_version:
+        schemaLevel === 'v2' ? (row.defensive_solver_version ?? null) : null,
+      defensive_game_build:
+        schemaLevel === 'v2' ? (row.defensive_game_build ?? null) : null,
+      defensive_build_fingerprint:
+        schemaLevel === 'v2' ? (row.defensive_build_fingerprint ?? null) : null,
+      defensive_evaluated_at:
+        schemaLevel === 'v2' ? (row.defensive_evaluated_at ?? null) : null,
       };
     });
   }

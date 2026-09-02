@@ -16,8 +16,13 @@ export interface DefensiveManagementScoringEvent {
     | 'reminder_missed'
     | 'death_with_viable_cd'
     | 'no_feasible_alternative'
+    | 'death_with_ready_cd'
     | 'uncertain_data';
   requirementLevel?: 'required' | 'recommended' | 'optional';
+  reason?: string;
+  /** `false` conserva el hecho para explicaciÃ³n, pero evita penalizar dos
+   * veces una misma decisiÃ³n causal (por ejemplo ventana omitida + muerte). */
+  primaryPenalty?: boolean;
 }
 
 export interface DefensiveManagementScoreResult {
@@ -46,6 +51,19 @@ export function computeDefensiveManagementScore(
   for (const event of events) {
     const isRequired = event.requirementLevel === 'required';
     if (isRequired && event.state !== 'uncertain_data') requiredCount++;
+
+    if (event.primaryPenalty === false) continue;
+
+    if (
+      event.state === 'covered_with_substitution' &&
+      event.reason === 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT'
+    ) {
+      // La cobertura actual sigue siendo real, pero la gestiÃ³n fue
+      // incorrecta: el sustituto hizo inviable una reserva posterior.
+      weightedOpportunity += DEFENSIVE_MANAGEMENT_SCORE_WEIGHTS.brokenReservation;
+      decisionCount++;
+      continue;
+    }
 
     if (event.state === 'plan_broken') {
       weightedOpportunity += DEFENSIVE_MANAGEMENT_SCORE_WEIGHTS.brokenReservation;
@@ -78,7 +96,10 @@ export function computeDefensiveManagementScore(
           ? DEFENSIVE_MANAGEMENT_SCORE_WEIGHTS.recommended
           : 0;
     if (!weight) continue;
-    const succeeded = event.state === 'plan_covered' || event.state === 'covered_with_substitution';
+    const succeeded =
+      event.state === 'plan_covered' ||
+      (event.state === 'covered_with_substitution' &&
+        event.reason !== 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT');
     weightedOpportunity += weight;
     if (succeeded) weightedSuccess += weight;
     if (isRequired && succeeded) requiredSuccessCount++;
