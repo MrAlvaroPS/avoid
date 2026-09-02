@@ -1,4 +1,9 @@
-import { computeReliabilityBreakdown, type ReliabilityInputRow } from './reliability.service';
+import {
+  compareExecutionLedgerShadow,
+  computeReliabilityBreakdown,
+  type ReliabilityInputRow,
+} from './reliability.service';
+import type { ExecutionLedgerPullSummary } from './execution-ledger.service';
 
 const NOW = Date.parse('2026-08-26T12:00:00.000Z');
 
@@ -116,6 +121,61 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
     expect(incomplete?.breakdown.defensiva).toBe(100);
     expect(uncertain?.breakdown.defensiva).toBe(0);
     expect(staleResolver?.breakdown.defensiva).toBe(0);
+  });
+});
+
+describe('compareExecutionLedgerShadow', () => {
+  it('compara solo pulls materializados con versiones homogéneas', () => {
+    const summaries: ExecutionLedgerPullSummary[] = [
+      {
+        pull_id: 'pull-1',
+        player_name: 'Raider',
+        ledger_evaluator_version: 'execution-ledger@1.0.0',
+        event_count: 3,
+        credit_count: 0,
+        penalty_count: 2,
+        primary_penalty_count: 1,
+        mechanic_failure_count: 2,
+        defensive_failure_count: 0,
+        consumable_failure_count: 0,
+        versions_homogeneous: true,
+        evaluated_at: '2026-08-26T12:00:00.000Z',
+      },
+      {
+        pull_id: 'pull-2',
+        player_name: 'Raider',
+        ledger_evaluator_version: 'execution-ledger@1.0.0',
+        event_count: 1,
+        credit_count: 0,
+        penalty_count: 1,
+        primary_penalty_count: 1,
+        mechanic_failure_count: 9,
+        defensive_failure_count: 9,
+        consumable_failure_count: 9,
+        versions_homogeneous: false,
+        evaluated_at: '2026-08-26T12:00:00.000Z',
+      },
+    ];
+
+    expect(
+      compareExecutionLedgerShadow(
+        [
+          row({ personal_mechanic_fail_count: 1 }),
+          row({ pull_id: 'pull-2', personal_mechanic_fail_count: 7 }),
+        ],
+        summaries,
+      ),
+    ).toEqual({
+      legacyMechanicFailureCount: 1,
+      ledgerMechanicFailureCount: 2,
+      ledgerDefensiveFailureCount: 0,
+      ledgerConsumableFailureCount: 0,
+      primaryPenaltyCount: 1,
+      mechanicFailureDelta: 1,
+      comparablePullCount: 1,
+      evaluatorVersions: ['execution-ledger@1.0.0'],
+      versionsCompatible: true,
+    });
   });
 });
 

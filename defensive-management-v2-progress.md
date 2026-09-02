@@ -824,7 +824,7 @@ por pull hasta disponer de evaluación fiable y backfill.
 - Fiabilidad y readiness exigen evaluator 2.2 + resolver 2.1, por lo que el
   backfill anterior debe revalidarse antes de activar scoring.
 - Comprobaciones: build Angular correcto, diez Edge Functions empaquetadas y
-  182/183 tests; el único fallo es el baseline conocido de `.brand` en
+  180/181 tests; el único fallo es el baseline conocido de `.brand` en
   `src/app/app.spec.ts:24`, ajeno a defensivos.
 
 ## Pendientes transversales

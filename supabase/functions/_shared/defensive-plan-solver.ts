@@ -1,6 +1,9 @@
 import type { ResolvedDefensive } from './effective-defensives.ts';
 
-export const DEFENSIVE_PLAN_SOLVER_VERSION = 'defensive-plan-solver@2.0.0';
+export const DEFENSIVE_PLAN_SOLVER_VERSION = 'defensive-plan-solver@2.1.0';
+
+const DEFAULT_SEARCH_BUDGET = 5_000;
+const MAX_SEARCH_BUDGET = 5_000;
 
 export type RequirementLevel = 'required' | 'recommended' | 'optional';
 export type PlanMode = 'full' | 'partial' | 'no_plan';
@@ -103,7 +106,7 @@ export interface SolverResult {
   diagnostics: {
     searchNodes: number;
     searchBudget: number;
-    fallbackReason: string | null;
+    fallbackReason: 'search_budget_exceeded' | 'search_space_exceeds_budget' | null;
     hardConflicts: string[];
     uncoveredRequired: { abilityId: number; occurrenceIndex: number }[];
   };
@@ -437,7 +440,14 @@ function finalizeAssignments(
 }
 
 export function solveDefensivePlan(input: SolverInput): SolverResult {
-  const searchBudget = Math.max(1, Math.trunc(input.maxSearchNodes ?? 50_000));
+  // El runtime alojado de Supabase tiene un presupuesto CPU estricto. Nunca
+  // aceptamos un límite arbitrario del cliente y evitamos arrancar el DFS si
+  // su árbol bruto ya excede el presupuesto: ese camino acababa igualmente
+  // en el mismo greedy, pero después de decenas de miles de clones de Map.
+  const requestedSearchBudget = Number.isFinite(input.maxSearchNodes)
+    ? Math.trunc(input.maxSearchNodes!)
+    : DEFAULT_SEARCH_BUDGET;
+  const searchBudget = Math.max(1, Math.min(MAX_SEARCH_BUDGET, requestedSearchBudget));
   const occurrences = [...input.occurrences].sort(compareOccurrences);
   const occurrenceByKey = new Map(occurrences.map((occurrence) => [occurrenceKey(occurrence), occurrence]));
   const players = [...input.players]
@@ -519,8 +529,17 @@ export function solveDefensivePlan(input: SolverInput): SolverResult {
     ]),
   );
 
+  let estimatedSearchNodes = 1;
+  let nodesAtDepth = 1;
+  for (const occurrence of decisions) {
+    nodesAtDepth *= (candidatesByOccurrence.get(occurrenceKey(occurrence))?.length ?? 0) + 1;
+    estimatedSearchNodes += nodesAtDepth;
+    if (estimatedSearchNodes > searchBudget) break;
+  }
+
   let searchNodes = 0;
-  let budgetExceeded = false;
+  let budgetExceeded = estimatedSearchNodes > searchBudget;
+  let fallbackReason: SolverResult['diagnostics']['fallbackReason'] = budgetExceeded ? 'search_space_exceeds_budget' : null;
   let bestCandidates: Candidate[] | null = null;
   let bestScore: SearchScore | null = null;
 
@@ -528,6 +547,7 @@ export function solveDefensivePlan(input: SolverInput): SolverResult {
     searchNodes++;
     if (searchNodes > searchBudget) {
       budgetExceeded = true;
+      fallbackReason = 'search_budget_exceeded';
       return;
     }
     if (index >= decisions.length) {
@@ -550,7 +570,7 @@ export function solveDefensivePlan(input: SolverInput): SolverResult {
     search(index + 1, selected, schedules);
   }
 
-  search(0, [], hardSchedules);
+  if (!budgetExceeded) search(0, [], hardSchedules);
 
   if (budgetExceeded) {
     const selected = [...hardCandidates];
@@ -594,7 +614,7 @@ export function solveDefensivePlan(input: SolverInput): SolverResult {
     diagnostics: {
       searchNodes: Math.min(searchNodes, searchBudget),
       searchBudget,
-      fallbackReason: budgetExceeded ? 'search_budget_exceeded' : null,
+      fallbackReason,
       hardConflicts: [],
       uncoveredRequired,
     },

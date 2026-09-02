@@ -175,6 +175,7 @@ export async function evaluateDefensivePull(
     if (bound.error) throw bound.error;
     binding = bound.data;
   }
+  if (!binding) throw new Error(`No se pudo vincular el pull ${pullId} a un plan defensivo.`);
 
   const { data: recordRows, error: recordsError } = await supabase
     .from('player_pull_records')

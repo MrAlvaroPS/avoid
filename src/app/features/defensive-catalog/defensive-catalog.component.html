@@ -167,7 +167,7 @@
             @if (r.applied.length) {
               <p class="result-line result-ok">
                 ✓ {{ r.applied.length }} defensivo{{ r.applied.length === 1 ? '' : 's' }} clasificado{{ r.applied.length === 1 ? '' : 's' }} (sugerido, revisa y confirma en la
-                tabla): {{ r.applied.map((a) => a.name + ' → ' + a.survivalType).join(', ') }}
+                tabla): {{ r.applied.map((a) => a.name + ' → ' + a.survivalType + ' · ' + a.category + ' · target ' + a.targetingMode).join(', ') }}
               </p>
             }
             @if (r.skippedLowConfidence.length) {

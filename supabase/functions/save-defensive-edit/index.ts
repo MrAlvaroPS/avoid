@@ -1,7 +1,8 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
-import { enqueueDefensiveReanalysis } from '../_shared/defensive-reanalysis-queue.ts';
+import { enqueueDefensiveReanalysis, type QueueClient } from '../_shared/defensive-reanalysis-queue.ts';
+import { defensiveTargetingError } from '../_shared/defensive-classification-semantics.ts';
 
 // §"pantalla nueva para clasificar defensivos... parecida a la de
 // mecánicas de bosses pero para defensivos" (feedback real): mismo patrón
@@ -99,14 +100,9 @@ Deno.serve(async (req: Request) => {
 
   const nextCategory = body.category ?? before.category;
   const nextTargetingMode = body.targetingMode ?? before.targeting_mode;
-  if (nextCategory === 'personal_defensive' && nextTargetingMode !== 'self') {
-    return jsonResponse({ ok: false, error: 'personal_defensive requiere target self.' }, 400);
-  }
-  if (nextCategory === 'semi_defensive' && nextTargetingMode !== 'both') {
-    return jsonResponse({ ok: false, error: 'semi_defensive requiere target both.' }, 400);
-  }
-  if (nextCategory === 'external_defensive' && !['ally', 'raid', 'unknown'].includes(nextTargetingMode)) {
-    return jsonResponse({ ok: false, error: 'external_defensive requiere target ally, raid o unknown.' }, 400);
+  if (nextCategory != null && nextTargetingMode != null) {
+    const targetingError = defensiveTargetingError(nextCategory, nextTargetingMode);
+    if (targetingError) return jsonResponse({ ok: false, error: targetingError }, 400);
   }
 
   // §"editarlo para que sea en segundos" (feedback real, 2026-08-29): el
@@ -195,7 +191,7 @@ Deno.serve(async (req: Request) => {
   let reanalysisQueueError: string | null = pullDiscoveryError;
   if (pullIds.length) {
     try {
-      const queued = await enqueueDefensiveReanalysis(supabase, {
+      const queued = await enqueueDefensiveReanalysis(supabase as unknown as QueueClient, {
         pullIds,
         reason: `cooldown_catalog:${body.class}:${body.spellId}`,
         scope: {

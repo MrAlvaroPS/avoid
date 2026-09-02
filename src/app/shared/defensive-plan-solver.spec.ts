@@ -178,4 +178,23 @@ describe('defensive plan solver', () => {
     expect(result.strictScoringEligible).toBe(false);
     expect(result.assignments[0].source).toBe('fallback');
   });
+
+  it('skips an exponential DFS and falls back before consuming its node budget', () => {
+    const players = Array.from({ length: 20 }, (_, index) => ({
+      ...player([defensive({ spellId: 1_000 + index })]),
+      playerKey: `player:${index.toString().padStart(2, '0')}`,
+      playerName: `Player ${index}`,
+    }));
+    const occurrences = Array.from({ length: 20 }, (_, index) => occurrence((index + 1) * 70_000, index + 1));
+
+    const result = solveDefensivePlan(input({ occurrences, players, maxSearchNodes: 50_000_000 }));
+
+    expect(result.planningQuality).toBe('fallback_greedy');
+    expect(result.diagnostics).toMatchObject({
+      searchNodes: 0,
+      searchBudget: 5_000,
+      fallbackReason: 'search_space_exceeds_budget',
+    });
+    expect(result.assignments).toHaveLength(20);
+  });
 });

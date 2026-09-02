@@ -335,6 +335,9 @@ export interface BossMechanicCandidateRow {
   boss_id: string;
   difficulty: string;
   ability_id: number;
+  /** Identidad canónica M12. Null únicamente mientras una fila legacy no haya pasado por backfill. */
+  mechanic_key: string | null;
+  policy_version: number | null;
   name: string;
   /** Nombre en castellano (Blizzard Journal, locale=es_ES) — para localizar la habilidad en el juego/logs, no una traducción de la descripción. Null si Blizzard no lo tiene traducido todavía. */
   name_es: string | null;

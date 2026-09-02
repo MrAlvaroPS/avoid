@@ -10,6 +10,16 @@ export const environment = {
     defensiveExecutionEvaluatorV2: true,
     // R5/R7 permanecen apagados hasta backfill + contraste oficial.
     defensiveInfographicV2: true,
-    defensiveReliabilityV2: false,
+    defensiveReliabilityV2: true,
+  },
+  // Causalidad v3 · Bloque A: schema/contratos disponibles en shadow, sin
+  // cambiar todavía ninguna superficie ni scoring visible.
+  combatEvaluationFeatureFlags: {
+    combatEvaluationContextV2: false,
+    mechanicPolicyV2: false,
+    mechanicResponsibilityV2: false,
+    consumableEvaluatorV2: false,
+    playerInfographicV3: false,
+    reliabilityExecutionV3: false,
   },
 };

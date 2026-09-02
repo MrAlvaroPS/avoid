@@ -5,7 +5,7 @@
 // cero texto tecleado para nombres/IDs.
 import { Component, computed, inject, signal } from '@angular/core';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
-import { ManifestService, type ObservedHitStat } from '../../core/manifest.service';
+import { isCandidateAutoClassified, ManifestService, type ManifestPolicyCoverage, type MechanicCatalogSyncState, type MechanicPolicyStatus, type ObservedHitStat } from '../../core/manifest.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
 import { formatPct, STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
@@ -14,9 +14,12 @@ import { MechanicResolutionIconComponent } from '../../shared/mechanic-resolutio
 import type { BossMechanicCandidateRow } from '../../shared/models/domain';
 import { difficultyRank, hasExactDifficultyEvidence, isContradictedByOtherDifficulty, type OtherDifficultyEvidence } from '../../shared/difficulty-evidence.util';
 import { errorMessage } from '../../shared/error-message.util';
+import { parseMechanicPolicySubmission } from '../../shared/mechanic-policy-batches';
 import { DefensiveCatalogComponent } from '../defensive-catalog/defensive-catalog.component';
 import { DiscordSettingsComponent } from '../discord-settings/discord-settings.component';
 import { UnassignedMechanicsCatalogComponent } from '../unassigned-mechanics-catalog/unassigned-mechanics-catalog.component';
+import { PolicyManifestEditorComponent } from '../policy-manifest-editor/policy-manifest-editor.component';
+import { CombatEvaluationFeatureFlagsService } from '../../core/combat-evaluation-feature-flags.service';
 
 const CATEGORIES = ['tankbuster', 'raid-damage', 'avoidable-ground', 'debuff-stack', 'interrupt', 'soak', 'spread', 'healing-absorb', 'personal-target', 'enrage'] as const;
 const RESPONSIBILITIES = ['tank', 'dps', 'healer', 'raid', 'personal'] as const;
@@ -39,14 +42,14 @@ type AjustesTab = 'mecanicas' | 'sin-asignar' | 'defensivos' | 'discord';
 
 // §9.1: un boss sembrado por sync-season-bosses pero nunca pulleado no tiene
 // dificultades "vistas" que ofrecer (difficulties queda vacío) — se ofrecen
-// las 4 estándar del juego para que se pueda elegir a mano cuál sincronizar.
+// las 3 dificultades de raid progresivo para poder elegir cuál consultar.
 // (STANDARD_DIFFICULTY_IDS ahora vive en shared/format.util.ts, compartida
 // con reports.service.ts — ver import de arriba.)
 
 @Component({
   selector: 'app-manifest',
   standalone: true,
-  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent, DefensiveCatalogComponent, DiscordSettingsComponent, UnassignedMechanicsCatalogComponent],
+  imports: [WowheadLinkComponent, MechanicInfoIconComponent, MechanicResolutionIconComponent, DefensiveCatalogComponent, DiscordSettingsComponent, UnassignedMechanicsCatalogComponent, PolicyManifestEditorComponent],
   templateUrl: './manifest.component.html',
   styleUrl: './manifest.component.scss',
 })
@@ -54,6 +57,7 @@ export class ManifestComponent {
   private edgeFunctions = inject(EdgeFunctionsService);
   private manifestService = inject(ManifestService);
   private reportsService = inject(ReportsService);
+  protected combatFlags = inject(CombatEvaluationFeatureFlagsService);
 
   activeTab = signal<AjustesTab>('mecanicas');
 
@@ -71,7 +75,7 @@ export class ManifestComponent {
   loadingBosses = signal(true);
   syncing = signal(false);
   deepSyncing = signal(false);
-  /** "Sincronizando Heroic… (2/4)" mientras onSync recorre las 4 dificultades una a una — ver comentario en onSync. */
+  /** "Sincronizando Heroic… (2/3)" mientras onSync recorre las 3 dificultades una a una. */
   syncProgress = signal<string | null>(null);
   syncingSeason = signal(false);
   // §"arriba del todo en la subcabecera un botón de sincronizar para traer
@@ -85,6 +89,15 @@ export class ManifestComponent {
   readonly standardDifficultyIds = STANDARD_DIFFICULTY_IDS;
   loadingCandidates = signal(false);
   savingAbilityId = signal<number | null>(null);
+  expandedPolicyAbilityId = signal<number | null>(null);
+  backfillingPolicies = signal(false);
+  confirmPolicyBackfill = signal(false);
+  policyBackfillResult = signal<string | null>(null);
+  policyRefreshVersion = signal(0);
+  policyCoverage = signal<ManifestPolicyCoverage | null>(null);
+  policyCoverageError = signal<string | null>(null);
+  catalogSyncState = signal<MechanicCatalogSyncState | null>(null);
+  catalogSyncStateError = signal<string | null>(null);
   error = signal<string | null>(null);
   lastSyncSummary = signal<string | null>(null);
 
@@ -104,6 +117,8 @@ export class ManifestComponent {
   classifySubmitting = signal(false);
   classifySubmitError = signal<string | null>(null);
   classifyResult = signal<{
+    submittedCount: number;
+    fullyAppliedCount: number;
     applied: { abilityId: number; difficulty: string; name: string; category: string }[];
     skippedLowConfidence: { abilityId: number; difficulty: string; name: string; category: string | null; notes: string }[];
     skippedUndetermined: { abilityId: number; difficulty: string; name: string }[];
@@ -114,13 +129,53 @@ export class ManifestComponent {
     responsibilitiesApplied: { abilityId: number; difficulty: string; name: string; responsibility: string }[];
     responsibilitiesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     responsibilityContractMissing: boolean;
-    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean }[];
+    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean | null }[];
     avoidablesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     avoidableContractMissing: boolean;
   } | null>(null);
 
+  policyClassifyPanelOpen = signal(false);
+  loadingPolicyClassifyPrompt = signal(false);
+  policyClassifyPromptError = signal<string | null>(null);
+  policyClassifySystemPrompt = signal<string | null>(null);
+  policyClassifyUserMessage = signal<string | null>(null);
+  policyClassifyBossId = signal<string | null>(null);
+  policyClassifyDifficulties = signal<string[]>([]);
+  policyClassifyIdentities = signal<{ abilityId: number; mechanicKey: string; difficulty: string }[]>([]);
+  policyClassifyCount = signal(0);
+  policyClassifyMaxBatchSize = signal(20);
+  policyClassifyPromptVersion = signal<number | null>(null);
+  policyClassifyCopied = signal(false);
+  policyClassifyPasteText = signal('');
+  policyClassifySubmitting = signal(false);
+  policyClassifyProgress = signal<string | null>(null);
+  policyClassifySubmitError = signal<string | null>(null);
+  policyClassifyResult = signal<{
+    submittedCount: number;
+    applied: {
+      abilityId: number;
+      mechanicKey: string;
+      difficulty: string;
+      name: string;
+      confidence: 'inferred' | 'uncertain';
+      policyVersion: number;
+    }[];
+    invalid: { abilityId: unknown; mechanicKey: unknown; reason: string }[];
+  } | null>(null);
+
   selectedBoss = computed(() => this.bosses().find((b) => b.encounterId === this.selectedEncounterId()) ?? null);
   selectedDifficultyName = computed(() => (this.selectedDifficultyId() != null ? WCL_DIFFICULTY_NAME_BY_ID[this.selectedDifficultyId()!] : null));
+  classifiedCandidateCount = computed(() => this.candidates().filter(isCandidateAutoClassified).length);
+  pendingPolicyGenerationCount = computed(() => {
+    const coverage = this.policyCoverage();
+    return coverage ? coverage.basePolicies + coverage.missingPolicies : 0;
+  });
+  pendingPolicyReviewCount = computed(() => {
+    const coverage = this.policyCoverage();
+    return coverage
+      ? coverage.basePolicies + coverage.uncertainPolicies + coverage.missingPolicies
+      : 0;
+  });
 
   constructor() {
     void this.loadBosses();
@@ -142,17 +197,82 @@ export class ManifestComponent {
     const boss = this.bosses().find((b) => b.encounterId === encounterId);
     // Preselecciona una dificultad con pulls propios si hay alguna (es la
     // más probable que se quiera consultar); si no hay ninguna, no se
-    // preselecciona nada — las 4 siguen ahí para elegir a mano.
+    // preselecciona nada — las 3 siguen ahí para elegir a mano.
     this.selectedDifficultyId.set(boss?.difficulties[0] ?? null);
     this.candidates.set([]);
     this.excludedByDifficultyCount.set(0);
     this.closeClassifyPanel();
+    this.closePolicyClassifyPanel();
     if (boss?.difficulties.length) void this.loadCandidates();
+  }
+
+  bossIdForPolicy(encounterId: number): string {
+    return String(encounterId);
+  }
+
+  mechanicKeyFor(candidate: BossMechanicCandidateRow): string {
+    return candidate.mechanic_key?.trim() || `ability:${candidate.ability_id}`;
+  }
+
+  policyStatusFor(candidate: BossMechanicCandidateRow): MechanicPolicyStatus {
+    return this.policyCoverage()?.policiesByMechanicKey.get(this.mechanicKeyFor(candidate))?.status ?? 'missing';
+  }
+
+  policyStatusLabel(candidate: BossMechanicCandidateRow): string {
+    const policy = this.policyCoverage()?.policiesByMechanicKey.get(this.mechanicKeyFor(candidate));
+    if (!policy) return 'Sin policy';
+    if (policy.status === 'base') return `Base v${policy.policyVersion}`;
+    if (policy.status === 'verified') return `Verificada v${policy.policyVersion}`;
+    if (policy.status === 'uncertain') return `Incierta v${policy.policyVersion}`;
+    return `Revisada v${policy.policyVersion}`;
+  }
+
+  formatStatusDate(value: string | null): string {
+    if (!value) return 'nunca';
+    return new Intl.DateTimeFormat('es-ES', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value));
+  }
+
+  togglePolicy(candidate: BossMechanicCandidateRow): void {
+    this.expandedPolicyAbilityId.update((abilityId) =>
+      abilityId === candidate.ability_id ? null : candidate.ability_id,
+    );
+  }
+
+  openFirstPendingPolicy(): void {
+    const candidate = this.candidates().find((entry) => {
+      const status = this.policyStatusFor(entry);
+      return status === 'base' || status === 'uncertain' || status === 'missing';
+    });
+    if (candidate) this.expandedPolicyAbilityId.set(candidate.ability_id);
+  }
+
+  async runPolicyBackfill(): Promise<void> {
+    this.backfillingPolicies.set(true);
+    this.error.set(null);
+    try {
+      const result = await this.edgeFunctions.backfillMechanicCandidatesToPolicy();
+      this.policyBackfillResult.set(
+        `${result.policiesCreated} policies y ${result.aliasesCreated} aliases preparados desde ${result.totalCandidates} mecánicas aplicables.`,
+      );
+      this.policyRefreshVersion.update((version) => version + 1);
+      await this.loadCandidates();
+      this.confirmPolicyBackfill.set(false);
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.backfillingPolicies.set(false);
+    }
   }
 
   selectDifficulty(difficultyId: number): void {
     this.selectedDifficultyId.set(difficultyId);
     this.closeClassifyPanel();
+    this.closePolicyClassifyPanel();
     void this.loadCandidates();
   }
 
@@ -162,17 +282,38 @@ export class ManifestComponent {
     if (bossId == null || !difficulty) return;
     this.loadingCandidates.set(true);
     this.error.set(null);
+    this.policyCoverageError.set(null);
+    this.catalogSyncStateError.set(null);
     try {
-      const [candidates, hitStats, otherDifficultyEvidence] = await Promise.all([
+      const [candidates, hitStats, otherDifficultyEvidence, catalogSyncState] = await Promise.all([
         this.manifestService.listCandidates(String(bossId), difficulty),
         this.manifestService.listObservedHitStats(String(bossId), difficulty),
         this.manifestService.listOtherDifficultyEvidence(String(bossId), difficulty),
+        this.manifestService.getCatalogSyncState(String(bossId), difficulty).catch((err) => {
+          this.catalogSyncStateError.set(errorMessage(err));
+          return null;
+        }),
       ]);
       const visibleCandidates = candidates.filter((candidate) => !isContradictedByOtherDifficulty(candidate, otherDifficultyEvidence.get(candidate.ability_id) ?? []));
       this.candidates.set(visibleCandidates);
       this.excludedByDifficultyCount.set(candidates.length - visibleCandidates.length);
       this.hitStats.set(hitStats);
       this.otherDifficultyEvidence.set(otherDifficultyEvidence);
+      this.catalogSyncState.set(catalogSyncState);
+      if (this.combatFlags.enabled('mechanicPolicyV2')) {
+        try {
+          this.policyCoverage.set(await this.manifestService.getPolicyCoverage(
+            String(bossId),
+            difficulty,
+            visibleCandidates,
+          ));
+        } catch (err) {
+          this.policyCoverage.set(null);
+          this.policyCoverageError.set(errorMessage(err));
+        }
+      } else {
+        this.policyCoverage.set(null);
+      }
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
@@ -183,7 +324,7 @@ export class ManifestComponent {
   // §"hay que hacer esto por cada dificultad en lugar de traernos todo de
   // todas las dificultades" (feedback real): sync-boss-mechanics acepta
   // `difficulties: number[]` y las recorre todas en un solo Deno.serve —
-  // pero mandar las 4 en UNA sola llamada (con deep sync, hasta 20 logs de
+  // pero mandar las 3 en UNA sola llamada (con deep sync, varias referencias
   // referencia POR dificultad, cada uno con ~6-7 queries WCL) resultó ser
   // demasiado para una sola invocación de Edge Function: §bug real
   // reportado y reproducido en real (2026-08-27, boss 3445): "Edge Function
@@ -193,11 +334,11 @@ export class ManifestComponent {
   // función. La sincronización en sí (una dificultad, deep sync) YA
   // funcionaba bien antes de este cambio — el problema es agrupar 4 en una
   // sola invocación, no el volumen total de trabajo en sí. Solución: el
-  // FRONTEND sigue ofreciendo "sincronizar las 4 a la vez" como una sola
-  // acción, pero por debajo hace 4 llamadas secuenciales (una por
+  // FRONTEND sigue ofreciendo "sincronizar las 3 a la vez" como una sola
+  // acción, pero por debajo hace 3 llamadas secuenciales (una por
   // dificultad) en vez de una. Un fallo en una dificultad ya no aborta las
   // demás, sigue con la siguiente.
-  // Contrastado además en real: encadenar las 4 llamadas SIN pausa seguía
+  // Contrastado además en real: encadenar las 3 llamadas SIN pausa seguía
   // reventando la 3ª/4ª igual (mismo WORKER_RESOURCE_LIMIT) y de paso hacía
   // fallar el fetch de Wago DB2 (mappingStatus caía a
   // difficulty-metadata-unavailable) — la MISMA dificultad, aislada y sin
@@ -242,7 +383,7 @@ export class ManifestComponent {
         this.syncProgress.set(`Sincronizando ${label}… (${i + 1}/${this.standardDifficultyIds.length})`);
         try {
           const result = await this.edgeFunctions.syncBossMechanics(String(bossId), [diffId], deepSync);
-          totalCandidates = result.candidates; // mismo Journal para las 4 — no se suma, solo se refresca
+          totalCandidates = result.candidates; // mismo Journal para las 3 — no se suma, solo se refresca
           totalUpserts += result.upserts;
           for (const d of result.difficulties) {
             perDifficulty.push(
@@ -448,7 +589,7 @@ export class ManifestComponent {
     return Number(value);
   }
 
-  // §"el prompt de mecánicas de bosses no puede consultar las 4
+  // §"el prompt de mecánicas de bosses no puede consultar las 3
   // dificultades a la vez... asegurando la calidad de datos obviamente"
   // (feedback real, 2026-08-27): antes se generaba SIEMPRE para el
   // boss+dificultad seleccionados en pantalla, nunca mezclaba dificultades
@@ -463,6 +604,7 @@ export class ManifestComponent {
   classifyScope = signal<string | 'all' | null>(null);
 
   async openClassifyPanel(scope: string | 'all'): Promise<void> {
+    this.closePolicyClassifyPanel();
     this.classifyPanelOpen.set(true);
     this.classifyResult.set(null);
     if (this.classifySystemPrompt() != null && this.classifyScope() === scope) return; // ya traído para este alcance, no repetir la llamada
@@ -527,6 +669,8 @@ export class ManifestComponent {
       // pantalla). Se espera a tener la tabla fresca antes de anunciar éxito.
       await this.loadCandidates();
       this.classifyResult.set({
+        submittedCount: res.submittedCount,
+        fullyAppliedCount: res.fullyAppliedCount,
         applied: res.applied,
         skippedLowConfidence: res.skippedLowConfidence,
         skippedUndetermined: res.skippedUndetermined,
@@ -545,6 +689,140 @@ export class ManifestComponent {
       this.classifySubmitError.set(errorMessage(err));
     } finally {
       this.classifySubmitting.set(false);
+    }
+  }
+
+  async openPolicyClassifyPanel(): Promise<void> {
+    const bossId = this.selectedEncounterId();
+    if (bossId == null) return;
+    this.closeClassifyPanel();
+    this.policyClassifyPanelOpen.set(true);
+    this.policyClassifyResult.set(null);
+    if (this.policyClassifySystemPrompt() != null && this.policyClassifyBossId() === String(bossId)) return;
+    this.policyClassifyBossId.set(String(bossId));
+    this.loadingPolicyClassifyPrompt.set(true);
+    this.policyClassifyPromptError.set(null);
+    try {
+      const res = await this.edgeFunctions.getMechanicPolicyClassificationPrompt(String(bossId));
+      this.policyClassifySystemPrompt.set(res.systemPrompt);
+      this.policyClassifyUserMessage.set(res.userMessage);
+      this.policyClassifyCount.set(res.policyCount);
+      this.policyClassifyDifficulties.set(res.difficulties);
+      this.policyClassifyIdentities.set(res.policyIdentities);
+      this.policyClassifyMaxBatchSize.set(res.maxBatchSize);
+      this.policyClassifyPromptVersion.set(res.promptVersion);
+    } catch (err) {
+      this.policyClassifyPromptError.set(errorMessage(err));
+    } finally {
+      this.loadingPolicyClassifyPrompt.set(false);
+    }
+  }
+
+  closePolicyClassifyPanel(): void {
+    this.policyClassifyPanelOpen.set(false);
+    this.policyClassifyBossId.set(null);
+    this.policyClassifyDifficulties.set([]);
+    this.policyClassifyIdentities.set([]);
+    this.policyClassifySystemPrompt.set(null);
+    this.policyClassifyUserMessage.set(null);
+    this.policyClassifyPromptVersion.set(null);
+    this.policyClassifyCount.set(0);
+    this.policyClassifyPasteText.set('');
+    this.policyClassifyProgress.set(null);
+    this.policyClassifyPromptError.set(null);
+    this.policyClassifySubmitError.set(null);
+    this.policyClassifyResult.set(null);
+  }
+
+  get policyClassifyFullPrompt(): string {
+    return `${this.policyClassifySystemPrompt() ?? ''}\n\n---\n\n${this.policyClassifyUserMessage() ?? ''}`;
+  }
+
+  async copyPolicyClassifyPrompt(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(this.policyClassifyFullPrompt);
+      this.policyClassifyCopied.set(true);
+      setTimeout(() => this.policyClassifyCopied.set(false), 2_000);
+    } catch (err) {
+      this.policyClassifyPromptError.set(`No se pudo copiar automáticamente — selecciona el texto a mano. (${errorMessage(err)})`);
+    }
+  }
+
+  async submitPolicyClassification(): Promise<void> {
+    const bossId = this.selectedEncounterId();
+    if (bossId == null || !this.policyClassifyPasteText().trim()) return;
+    this.policyClassifySubmitting.set(true);
+    this.policyClassifySubmitError.set(null);
+    const previousResult = this.policyClassifyResult();
+    const applied: {
+      abilityId: number;
+      mechanicKey: string;
+      difficulty: string;
+      name: string;
+      confidence: 'inferred' | 'uncertain';
+      policyVersion: number;
+    }[] = [...(previousResult?.applied ?? [])];
+    const invalid: { abilityId: unknown; mechanicKey: unknown; reason: string }[] = [];
+    let submittedCount = previousResult?.submittedCount ?? 0;
+    try {
+      const submission = parseMechanicPolicySubmission(
+        this.policyClassifyPasteText(),
+        this.policyClassifyMaxBatchSize(),
+        previousResult ? undefined : this.policyClassifyIdentities(),
+      );
+      if (!previousResult) submittedCount = submission.submittedCount;
+      if (!previousResult && submission.submittedCount !== this.policyClassifyCount()) {
+        throw new Error(`La respuesta contiene ${submission.submittedCount} policies, pero el prompt pedía ${this.policyClassifyCount()}. No se ha publicado nada.`);
+      }
+
+      let remainingEntries = [...submission.entries];
+      for (const [index, batch] of submission.batches.entries()) {
+        this.policyClassifyProgress.set(
+          `Publicando ${batch.difficulty} · lote ${index + 1}/${submission.batches.length} · ${batch.entries.length} policies`,
+        );
+        const result = await this.edgeFunctions.submitMechanicPolicyClassification(
+          String(bossId),
+          batch.difficulty,
+          JSON.stringify(batch.entries),
+        );
+        applied.push(...result.applied);
+        invalid.push(...result.invalid);
+
+        const batchEntries = new Set(batch.entries);
+        const invalidKeys = new Set(
+          result.invalid
+            .map((entry) => typeof entry.mechanicKey === 'string' ? entry.mechanicKey : null)
+            .filter((key): key is string => key != null),
+        );
+        remainingEntries = remainingEntries.filter((entry) =>
+          !batchEntries.has(entry) ||
+          (typeof entry['mechanicKey'] === 'string' && invalidKeys.has(entry['mechanicKey'])),
+        );
+        this.policyClassifyPasteText.set(remainingEntries.length ? JSON.stringify(remainingEntries, null, 2) : '');
+        this.policyClassifyResult.set({ submittedCount, applied: [...applied], invalid: [...invalid] });
+      }
+
+      this.policyRefreshVersion.update((version) => version + 1);
+      await this.loadCandidates();
+      this.policyClassifyResult.set({
+        submittedCount,
+        applied,
+        invalid,
+      });
+      if (!invalid.length) {
+        this.policyClassifySystemPrompt.set(null);
+        this.policyClassifyUserMessage.set(null);
+      }
+    } catch (err) {
+      if (applied.length) {
+        this.policyRefreshVersion.update((version) => version + 1);
+        await this.loadCandidates().catch(() => {});
+        this.policyClassifyResult.set({ submittedCount, applied, invalid });
+      }
+      this.policyClassifySubmitError.set(errorMessage(err));
+    } finally {
+      this.policyClassifyProgress.set(null);
+      this.policyClassifySubmitting.set(false);
     }
   }
 }

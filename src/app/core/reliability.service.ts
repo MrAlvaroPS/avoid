@@ -37,9 +37,14 @@ import { mechanicScoreFor } from './pull-analysis.service';
 import { gearPreparationDetails } from '../shared/gear-preparation.util';
 import type { DeathCause, WclGearItem } from '../shared/models/domain';
 import { DefensiveFeatureFlagsService } from './defensive-feature-flags.service';
+import {
+  ExecutionLedgerService,
+  type ExecutionLedgerPullSummary,
+} from './execution-ledger.service';
 
 const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.2.0';
 const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
+const REQUIRED_EXECUTION_LEDGER_VERSION = 'execution-ledger@1.0.0';
 
 const WINDOW_DAYS = 60; // "varias noches o semanas", no los 21 días de una versión anterior
 const HALF_LIFE_DAYS = 10; // un pull de hace 10 días pesa la mitad que uno de hoy
@@ -63,6 +68,8 @@ export interface PlayerReliability {
   consistency: PlayerConsistency | null;
   /** Comparación interna v1/v2 sobre los mismos pulls; no altera el score mientras el flag siga apagado. */
   defensiveShadowComparison: DefensiveReliabilityShadowComparison | null;
+  /** Comparación causal legacy/v3; informativa hasta activar reliabilityExecutionV3. */
+  executionLedgerShadowComparison: ExecutionLedgerShadowComparison | null;
   /** Snapshot de preparación al inicio de la última noche observada. */
   latestGemCount: number | null;
   latestGemmedSlotCount: number | null;
@@ -224,6 +231,61 @@ export interface DefensiveReliabilityShadowComparison {
   delta: number | null;
   comparablePullCount: number;
   evaluatorVersions: string[];
+}
+
+export interface ExecutionLedgerShadowComparison {
+  legacyMechanicFailureCount: number;
+  ledgerMechanicFailureCount: number;
+  ledgerDefensiveFailureCount: number;
+  ledgerConsumableFailureCount: number;
+  primaryPenaltyCount: number;
+  mechanicFailureDelta: number;
+  comparablePullCount: number;
+  evaluatorVersions: string[];
+  versionsCompatible: boolean;
+}
+
+export function compareExecutionLedgerShadow(
+  rows: ReliabilityInputRow[],
+  summaries: ExecutionLedgerPullSummary[],
+): ExecutionLedgerShadowComparison | null {
+  const summaryByPullId = new Map(
+    summaries
+      .filter((summary) => summary.versions_homogeneous)
+      .map((summary) => [summary.pull_id, summary]),
+  );
+  const comparableRows = rows.filter((row) => summaryByPullId.has(row.pull_id));
+  if (!comparableRows.length) return null;
+
+  let legacyMechanicFailureCount = 0;
+  let ledgerMechanicFailureCount = 0;
+  let ledgerDefensiveFailureCount = 0;
+  let ledgerConsumableFailureCount = 0;
+  let primaryPenaltyCount = 0;
+  const evaluatorVersions = new Set<string>();
+  for (const row of comparableRows) {
+    const summary = summaryByPullId.get(row.pull_id)!;
+    legacyMechanicFailureCount +=
+      row.personal_mechanic_fail_count ??
+      Number(row.had_avoidable_damage || row.self_positioning_death);
+    ledgerMechanicFailureCount += summary.mechanic_failure_count;
+    ledgerDefensiveFailureCount += summary.defensive_failure_count;
+    ledgerConsumableFailureCount += summary.consumable_failure_count;
+    primaryPenaltyCount += summary.primary_penalty_count;
+    evaluatorVersions.add(summary.ledger_evaluator_version);
+  }
+  return {
+    legacyMechanicFailureCount,
+    ledgerMechanicFailureCount,
+    ledgerDefensiveFailureCount,
+    ledgerConsumableFailureCount,
+    primaryPenaltyCount,
+    mechanicFailureDelta: ledgerMechanicFailureCount - legacyMechanicFailureCount,
+    comparablePullCount: comparableRows.length,
+    evaluatorVersions: [...evaluatorVersions].sort(),
+    versionsCompatible:
+      evaluatorVersions.size === 1 && evaluatorVersions.has(REQUIRED_EXECUTION_LEDGER_VERSION),
+  };
 }
 
 export interface ReliabilityComputationOptions {
@@ -636,6 +698,16 @@ export class ReliabilityService {
   private wowauditRoster = inject(WowauditRosterService);
   private attendanceService = inject(AttendanceService);
   private defensiveFlags = inject(DefensiveFeatureFlagsService);
+  private executionLedger = inject(ExecutionLedgerService);
+
+  private async loadExecutionLedgerShadow(pullIds: string[]): Promise<ExecutionLedgerPullSummary[]> {
+    try {
+      return await this.executionLedger.listPullSummaries(pullIds);
+    } catch {
+      // La migración puede llegar después del frontend durante el rollout.
+      return [];
+    }
+  }
 
   private reliabilityComputationOptions(): ReliabilityComputationOptions {
     return {
@@ -813,6 +885,9 @@ export class ReliabilityService {
         .catch(() => new Map<string, { attended: number; total: number; pct: number | null }>()),
     ]);
     const rosterByName = new Map(roster.map((r) => [r.name, r]));
+    const ledgerSummaries = await this.loadExecutionLedgerShadow(
+      [...new Set(data.map((row) => row.pull_id))],
+    );
 
     // El roster necesita poder explicar el score, no solo calcularlo. Estas
     // lecturas son best-effort y solo se hacen en la vista global: equipo
@@ -898,6 +973,7 @@ export class ReliabilityService {
           bossNames,
           now,
           midpoint,
+          ledgerSummaries.filter((summary) => summary.player_name === playerName),
         ),
       );
     }
@@ -974,6 +1050,9 @@ export class ReliabilityService {
       evidenceRecords.map((record) => [`${record.player_name}|${record.pull_id}`, record]),
     );
     const evidencePullById = new Map(evidencePulls.map((pull) => [pull.id, pull]));
+    const ledgerSummaries = await this.loadExecutionLedgerShadow(
+      [...new Set(rows.map((row) => row.pull_id))],
+    );
 
     const now = Date.now();
     const midpoint = now - (WINDOW_DAYS / 2) * 86_400_000;
@@ -987,6 +1066,7 @@ export class ReliabilityService {
       bossNames,
       now,
       midpoint,
+      ledgerSummaries.filter((summary) => summary.player_name === playerName),
     );
   }
 
@@ -1006,6 +1086,7 @@ export class ReliabilityService {
     bossNames: Map<string, string>,
     now: number,
     midpoint: number,
+    ledgerSummaries: ExecutionLedgerPullSummary[] = [],
   ): PlayerReliability {
     // Para la pantalla operativa importa cómo llegó a la última noche,
     // no el objeto sin encantar que pudo equipar a mitad de raid. Se toma
@@ -1179,6 +1260,7 @@ export class ReliabilityService {
       breakdown: { mecanica, defensiva, preparacion },
       consistency: result?.consistency ?? null,
       defensiveShadowComparison: result?.defensiveShadowComparison ?? null,
+      executionLedgerShadowComparison: compareExecutionLedgerShadow(rows, ledgerSummaries),
       latestGemCount,
       latestGemmedSlotCount,
       latestGemmableSlotCount,

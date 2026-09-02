@@ -16,6 +16,12 @@ import {
 } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
 import { NightPlayerSummaryCacheService } from './night-player-summary-cache.service';
+import { CombatEvaluationFeatureFlagsService } from './combat-evaluation-feature-flags.service';
+import {
+  ExecutionLedgerService,
+  type MechanicOffenseAudit,
+  type PreparationExecutionCheck,
+} from './execution-ledger.service';
 import {
   PULL_SCORE_FAIL_PENALTY,
   UNASSIGNED_MECHANIC_BONUS_CAP,
@@ -49,6 +55,7 @@ import { gearPreparationCounts } from '../shared/gear-preparation.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
 import { PERSONAL_RESPONSIBILITY_CATEGORIES, validAttemptOrdinal } from '../shared/pull-consistency.util';
 import { roleFromSpec } from '../shared/spec-role.util';
+import { errorMessage } from '../shared/error-message.util';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface NightPullSummary {
@@ -251,6 +258,9 @@ export interface NightGearSnapshot {
   gemmedSlotCount: number;
   gemmableSlotCount: number;
   gemCount: number;
+  preparationSource: 'legacy_wcl' | 'ledger_v3';
+  preparationLedgerVersion: string | null;
+  preparationEvaluatedAt: string | null;
 }
 
 export interface NightDefensiveCast {
@@ -609,6 +619,8 @@ export interface NightPlayerSummary {
   totalMechanicFails: number;
   deaths: NightDeathRow[];
   mechanicFails: NightMechanicFailRow[];
+  /** Evidencia v3 para auditoría; nunca sustituye mechanicFails mientras el rollout siga en shadow. */
+  mechanicOffensesV3: MechanicOffenseAudit[];
   interrupts: NightInterruptRow[];
   /** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
    * 2026-08-29): mecánicas sin asignación fija (huevos, orbes, ítems) que
@@ -748,6 +760,8 @@ export class NightPlayerSummaryService {
   private reliability = inject(ReliabilityService);
   private wowauditRoster = inject(WowauditRosterService);
   private summaryCache = inject(NightPlayerSummaryCacheService);
+  private combatFlags = inject(CombatEvaluationFeatureFlagsService);
+  private executionLedger = inject(ExecutionLedgerService);
 
   /**
    * §"no todos los días tenemos raid... tiene sentido que actualice una
@@ -1547,8 +1561,44 @@ export class NightPlayerSummaryService {
       lastPull && lastRecord ? this.buildGearSnapshot(lastPull, lastRecord) : null;
     const firstPull = pulls[0] ?? null;
     const firstRecord = firstPull ? recordByPullId.get(firstPull.pullId) : null;
-    const startingPreparation =
+    let startingPreparation =
       firstPull && firstRecord ? this.buildGearSnapshot(firstPull, firstRecord) : null;
+    if (startingPreparation && firstPull && this.combatFlags.enabled('playerInfographicV3')) {
+      const checks = await this.executionLedger
+        .listPreparationChecks(firstPull.pullId, playerName)
+        .catch((caught) => {
+          console.warn(
+            `[NightPlayerSummary] Preparación v3 degradada para ${playerName} en pull ${firstPull.pullId}: ${errorMessage(caught)}`,
+          );
+          return [] as PreparationExecutionCheck[];
+        });
+      const byType = new Map(checks.map((check) => [check.event_type, check]));
+      const enchant = byType.get('enchant_check');
+      const gem = byType.get('gem_check');
+      const enchantedSlotCount = enchant?.evidence.completed_slots;
+      const enchantableSlotCount = enchant?.evidence.eligible_slots;
+      const gemmedSlotCount = gem?.evidence.completed_slots;
+      const gemmableSlotCount = gem?.evidence.eligible_slots;
+      if (
+        enchant?.confidence === 'verified' &&
+        gem?.confidence === 'verified' &&
+        typeof enchantedSlotCount === 'number' && Number.isInteger(enchantedSlotCount) &&
+        typeof enchantableSlotCount === 'number' && Number.isInteger(enchantableSlotCount) &&
+        typeof gemmedSlotCount === 'number' && Number.isInteger(gemmedSlotCount) &&
+        typeof gemmableSlotCount === 'number' && Number.isInteger(gemmableSlotCount)
+      ) {
+        startingPreparation = {
+          ...startingPreparation,
+          enchantedSlotCount,
+          enchantableSlotCount,
+          gemmedSlotCount,
+          gemmableSlotCount,
+          preparationSource: 'ledger_v3',
+          preparationLedgerVersion: enchant.ledger_evaluator_version,
+          preparationEvaluatedAt: enchant.evaluated_at,
+        };
+      }
+    }
 
     // Casts defensivos con timing exacto. Igual que la vista SQL de
     // fiabilidad: un ninja pull no aporta evidencia y nada posterior al
@@ -1766,6 +1816,16 @@ export class NightPlayerSummaryService {
     };
 
     const rosterEntry = roster.find((r) => r.name === playerName) ?? null;
+    const mechanicOffensesV3 = this.combatFlags.enabled('playerInfographicV3')
+      ? await this.executionLedger
+          .listMechanicOffenseAudits(pullIds, playerName)
+          .catch((caught) => {
+            console.warn(
+              `[NightPlayerSummary] Evidencia mecánica v3 degradada para ${playerName}: ${errorMessage(caught)}`,
+            );
+            return [] as MechanicOffenseAudit[];
+          })
+      : [];
 
     // §"preparar la vinculación de ese ID... con el dosier de ese raider"
     // (feedback real, 2026-08-28): no puede ir en el Promise.all de arriba —
@@ -1818,6 +1878,7 @@ export class NightPlayerSummaryService {
       totalMechanicFails: mechanicFails.length,
       deaths,
       mechanicFails,
+      mechanicOffensesV3,
       interrupts,
       unassignedMechanicCredits,
       repeatedPatterns,
@@ -2211,6 +2272,9 @@ export class NightPlayerSummaryService {
       gear: items
         .map((item, slot) => ({ slot, itemId: item?.id ?? 0, itemLevel: item?.itemLevel ?? 0 }))
         .filter((g) => g.itemId > 0),
+      preparationSource: 'legacy_wcl',
+      preparationLedgerVersion: null,
+      preparationEvaluatedAt: null,
       ...preparation,
     };
   }

@@ -22,7 +22,8 @@ import { upsertReportEncounters } from '../_shared/report-encounters.ts';
 import { resolveSeverity } from '../_shared/mechanic-severity.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
-import { detectWipeCall as detectWipeCallShared, WIPE_CALL_CONFIDENCE_THRESHOLD, type WipeCallDetection } from '../_shared/wipe-call-detection.ts';
+import { detectWipeCall as detectWipeCallShared, type WipeCallDetection } from '../_shared/wipe-call-detection.ts';
+import { PULL_CONTEXT_COMMAND_VERSION } from '../_shared/pull-evaluation-context.ts';
 import { detectUnassignedMechanicOccurrences, type UnassignedMechanicCatalogEntry, type ActorLite, type GenericEvent } from '../_shared/unassigned-mechanics.ts';
 import {
   EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
@@ -979,7 +980,8 @@ Deno.serve(async (req: Request) => {
         const NINJA_PULL_MIN_BOSS_HEALTH_PCT = 90; // wipe_pct >= esto = al boss le queda ≥90% de vida = "apenas le baja la vida"
 
         interface NinjaPullDetection {
-          excluded: boolean;
+          candidate: boolean;
+          confidence: number;
           signals: {
             durationMs: number;
             raidSize: number;
@@ -1005,7 +1007,11 @@ Deno.serve(async (req: Request) => {
           const barelyDamagedBoss = bossHealthPct != null && bossHealthPct >= NINJA_PULL_MIN_BOSS_HEALTH_PCT;
 
           return {
-            excluded: engagedFraction <= NINJA_PULL_MAX_ENGAGED_FRACTION || barelyDamagedBoss,
+            candidate: engagedFraction <= NINJA_PULL_MAX_ENGAGED_FRACTION || barelyDamagedBoss,
+            confidence: Math.round(Math.max(
+              engagedFraction <= NINJA_PULL_MAX_ENGAGED_FRACTION ? (1 - engagedFraction) * 100 : 0,
+              barelyDamagedBoss ? Math.min(80, 50 + (bossHealthPct! - NINJA_PULL_MIN_BOSS_HEALTH_PCT) * 3) : 0,
+            )),
             signals: {
               durationMs,
               raidSize: raidSizeForNinjaCheck,
@@ -1023,12 +1029,14 @@ Deno.serve(async (req: Request) => {
         if (wipeCallDetection) {
           pullUpdatePatch.wipe_call_confidence = wipeCallDetection.confidence;
           pullUpdatePatch.wipe_call_signals = wipeCallDetection.signals;
-          pullUpdatePatch.wipe_call_excluded = wipeCallDetection.confidence >= WIPE_CALL_CONFIDENCE_THRESHOLD;
+          // El detector es un sensor. Solo un officer convierte el candidato
+          // en límite autoritativo mediante set-pull-evaluation-context.
+          pullUpdatePatch.wipe_call_excluded = false;
         }
         if (ninjaPullDetection) {
-          pullUpdatePatch.is_ninja_pull = true;
+          pullUpdatePatch.is_ninja_pull = ninjaPullDetection.candidate;
           pullUpdatePatch.ninja_pull_signals = ninjaPullDetection.signals;
-          pullUpdatePatch.ninja_pull_excluded = ninjaPullDetection.excluded;
+          pullUpdatePatch.ninja_pull_excluded = false;
         }
         // §unassigned-mechanics: se guarda siempre que el catálogo de este
         // boss+dificultad tenga alguna fila, aunque el resultado sea un
@@ -1041,6 +1049,33 @@ Deno.serve(async (req: Request) => {
         if (Object.keys(pullUpdatePatch).length) {
           await supabase.from('pulls').update(pullUpdatePatch).eq('id', insertedPull.id);
         }
+
+        // Crea la autoridad para pulls nuevos. Candidatos y hechos crudos se
+        // conservan en evidence, pero el intervalo completo sigue evaluable.
+        const durationMs = Math.max(0, fight.endTime - fight.startTime);
+        const { error: contextError } = await supabase.rpc('set_pull_evaluation_context_v2', {
+          p_pull_id: insertedPull.id,
+          p_evaluation_eligible: true,
+          p_evaluation_start_ms: 0,
+          p_evaluation_end_ms: durationMs,
+          p_cutoff_reason: 'fight_end',
+          p_wipe_call_at_ms: null,
+          p_wipe_call_boss_hp_pct: null,
+          p_wipe_call_source: 'none',
+          p_wipe_call_confidence: null,
+          p_wipe_call_verified: false,
+          p_ninja_status: ninjaPullDetection?.candidate ? 'probable' : 'valid',
+          p_ninja_source: ninjaPullDetection?.candidate ? 'heuristic' : 'imported',
+          p_ninja_confidence: ninjaPullDetection?.candidate ? ninjaPullDetection.confidence : null,
+          p_evidence: {
+            ...(wipeCallDetection ? { wipeCallCandidate: { boundaryMs: wipeCallDetection.signals.wipeCallStartMs, confidence: wipeCallDetection.confidence, evidence: wipeCallDetection.signals } } : {}),
+            ...(ninjaPullDetection ? { ninjaPullCandidate: { confidence: ninjaPullDetection.confidence, evidence: ninjaPullDetection.signals } } : {}),
+          },
+          p_resolver_version: PULL_CONTEXT_COMMAND_VERSION,
+          p_reason: 'Contexto inicial derivado de sensores; ninguna exclusión automática.',
+          p_changed_by: null,
+        });
+        if (contextError) throw new Error(`No se pudo crear PullEvaluationContext: ${contextError.message}`);
 
         const defensiveResolutionEvaluatedAt = new Date().toISOString();
         const playerRecords = await Promise.all(fight.friendlyPlayers.map(async (actorId) => {
@@ -1679,6 +1714,30 @@ Deno.serve(async (req: Request) => {
         if (mechanicEventRows.length) {
           const { error: mechError } = await supabase.from('pull_mechanic_events').insert(mechanicEventRows);
           if (mechError) throw mechError;
+        }
+
+        const dispelEventRows = (dispelEvents as DispelEvent[]).flatMap((event) => {
+          const timestamp = event.timestamp;
+          if (typeof timestamp !== 'number' || timestamp < fight.startTime) return [];
+          return [{
+            pull_id: insertedPull.id,
+            source_actor_id: event.sourceID ?? null,
+            source_player_name: event.sourceID != null ? actorById.get(event.sourceID)?.name ?? null : null,
+            target_actor_id: event.targetID ?? null,
+            target_player_name: event.targetID != null ? actorById.get(event.targetID)?.name ?? null : null,
+            dispelled_ability_id: event.extraAbilityGameID ?? null,
+            timestamp_ms: timestamp - fight.startTime,
+            is_buff: event.isBuff === true,
+          }];
+        });
+        if (dispelEventRows.length) {
+          const { error: dispelError } = await supabase
+            .from('pull_dispel_events')
+            .upsert(dispelEventRows, {
+              onConflict: 'pull_id,source_actor_id,target_actor_id,dispelled_ability_id,timestamp_ms,is_buff',
+              ignoreDuplicates: false,
+            });
+          if (dispelError) throw dispelError;
         }
       }
 

@@ -109,7 +109,7 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
   classifySubmitting = signal(false);
   classifySubmitError = signal<string | null>(null);
   classifyResult = signal<{
-    applied: { spellId: number; name: string; survivalType: string }[];
+    applied: { spellId: number; name: string; survivalType: string; category: string; targetingMode: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
     suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];

@@ -18,6 +18,8 @@ import type { DonutSegment } from '../shared/charts/donut-chart.component';
 import type { TrendBar } from '../shared/charts/trend-bars.component';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from '../shared/death-statistics.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
+import { CombatEvaluationFeatureFlagsService } from './combat-evaluation-feature-flags.service';
+import type { PullEvaluationContextContract } from '../../../supabase/functions/_shared/combat-evaluation-contract';
 import {
   PERSONAL_RESPONSIBILITY_CATEGORIES,
   buildAttemptComparison,
@@ -101,6 +103,9 @@ export interface PullDetail {
   wipeCall: { confidence: number; excluded: boolean; signals: Record<string, number | boolean | null> } | null;
   /** §"un ninja pull... también cuenta en la estadística de wipes": null = la heurística no lo marcó (duración/enganche normales, o fue kill). */
   ninjaPull: { excluded: boolean; signals: Record<string, number | boolean | null> } | null;
+  /** Autoridad v2. Null mantiene el fallback legacy de forma atómica. */
+  evaluationContext: PullEvaluationContextContract | null;
+  useEvaluationContextV2: boolean;
 }
 
 // §"los defensivos ganan peso si están pegados a la muerte": un cast dentro
@@ -113,6 +118,28 @@ const CLOSE_TO_DEATH_MS = 10_000;
 // duplicarla como chip suelto.
 const MECHANIC_ATTRIBUTION_WINDOW_MS = 4000;
 
+function mapPullEvaluationContext(row: Record<string, unknown>): PullEvaluationContextContract {
+  const numeric = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+  return {
+    pullId: String(row['pull_id']),
+    evaluationEligible: Boolean(row['evaluation_eligible']),
+    evaluationStartMs: Number(row['evaluation_start_ms']),
+    evaluationEndMs: Number(row['evaluation_end_ms']),
+    cutoffReason: row['cutoff_reason'] as PullEvaluationContextContract['cutoffReason'],
+    wipeCallAtMs: numeric(row['wipe_call_at_ms']),
+    wipeCallBossHpPct: numeric(row['wipe_call_boss_hp_pct']),
+    wipeCallSource: row['wipe_call_source'] as PullEvaluationContextContract['wipeCallSource'],
+    wipeCallConfidence: numeric(row['wipe_call_confidence']),
+    wipeCallVerified: Boolean(row['wipe_call_verified']),
+    ninjaStatus: row['ninja_status'] as PullEvaluationContextContract['ninjaStatus'],
+    ninjaSource: row['ninja_source'] as PullEvaluationContextContract['ninjaSource'],
+    ninjaConfidence: numeric(row['ninja_confidence']),
+    evidence: row['evidence'] && typeof row['evidence'] === 'object' ? (row['evidence'] as Record<string, unknown>) : {},
+    resolverVersion: String(row['resolver_version']),
+    updatedAt: String(row['updated_at']),
+  };
+}
+
 /** §"esa gente no debería... contar como muerte, marcado como wipe call": true solo cuando la muerte formó parte del cluster detectado EN ESE PULL y el RL no la ha restaurado (pull.wipe_call_excluded). La fila se sigue mostrando en "a quién dirigir" — esto solo decide si cuenta en métricas/fiabilidad/racha. */
 function isExcludedStatisticalDeath(pull: PullRow, record: PlayerPullRecordRow): boolean {
   return isDeathExcludedFromStatistics(pull, record);
@@ -124,6 +151,7 @@ export class PullAnalysisService {
   private edgeFunctions = inject(EdgeFunctionsService);
   private wowauditRoster = inject(WowauditRosterService);
   private bossPhase = inject(BossPhaseService);
+  private combatFlags = inject(CombatEvaluationFeatureFlagsService);
 
   async loadPullDetail(pullId: string): Promise<PullDetail> {
     const client = this.supabase.client;
@@ -145,7 +173,8 @@ export class PullAnalysisService {
     // `header` — mismo patrón que rosterByNamePromise.
     const bossPhasesPromise = this.bossPhase.listPhases(pull.boss_id).catch(() => []);
 
-    const [encounterRes, recordsRes, mechEventsRes, briefRes, candidatesRes, priorPullsRes, referenceStatsRes] = await Promise.all([
+    const useEvaluationContextV2 = this.combatFlags.enabled('combatEvaluationContextV2');
+    const [encounterRes, recordsRes, mechEventsRes, briefRes, candidatesRes, priorPullsRes, referenceStatsRes, contextRes] = await Promise.all([
       client.from('report_encounters').select('*').eq('report_code', pull.report_code).eq('fight_id', pull.fight_id).maybeSingle(),
       client.from('player_pull_records').select('*').eq('pull_id', pullId),
       withSupabaseRelationFallback(
@@ -179,6 +208,9 @@ export class PullAnalysisService {
       // ha sincronizado el manifiesto de este boss) — se trata como "sin
       // benchmark todavía", no como error.
       client.from('boss_reference_stats').select('*').eq('boss_id', pull.boss_id).eq('difficulty', pull.difficulty).maybeSingle(),
+      useEvaluationContextV2
+        ? client.from('pull_evaluation_context').select('*').eq('pull_id', pullId).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
     ]);
 
     const encounter = encounterRes.data as ReportEncounterRow | null;
@@ -186,6 +218,9 @@ export class PullAnalysisService {
     const mechEvents = (mechEventsRes.data ?? []) as PullMechanicEventRow[];
     const briefRow = briefRes.data as PullBriefRow | null;
     const candidateRows = (candidatesRes.data ?? []) as { name: string; ai_classification: { notes: string } | null }[];
+    const evaluationContext = useEvaluationContextV2 && !contextRes.error && contextRes.data
+      ? mapPullEvaluationContext(contextRes.data as Record<string, unknown>)
+      : null;
     const hasManifest = candidateRows.length > 0;
     const notesByMechanicName = new Map(candidateRows.filter((c) => c.ai_classification?.notes).map((c) => [c.name, c.ai_classification!.notes]));
     // "Anterior" en una pantalla operativa significa el intento válido
@@ -352,6 +387,8 @@ export class PullAnalysisService {
           : buildProgressTrend(pull, comparisonPriorPulls.slice(0, 6), header.attemptNumber),
       wipeCall: pull.wipe_call_signals ? { confidence: pull.wipe_call_confidence ?? 0, excluded: pull.wipe_call_excluded, signals: pull.wipe_call_signals } : null,
       ninjaPull: pull.ninja_pull_signals ? { excluded: pull.ninja_pull_excluded, signals: pull.ninja_pull_signals } : null,
+      evaluationContext,
+      useEvaluationContextV2: useEvaluationContextV2 && evaluationContext != null,
     };
   }
 
@@ -363,6 +400,10 @@ export class PullAnalysisService {
   /** §"un ninja pull... habría que clasificarlo de otra manera": mismo patrón que setWipeCallStatus — recarga el pull entero porque la exclusión afecta a fiabilidad/histórico de boss/informe de noche, no solo a este pull. */
   async setNinjaPullStatus(pullId: string, excluded: boolean): Promise<void> {
     await this.edgeFunctions.setNinjaPullStatus(pullId, excluded);
+  }
+
+  async setPullEvaluationContext(params: Parameters<EdgeFunctionsService['setPullEvaluationContext']>[0]): Promise<void> {
+    await this.edgeFunctions.setPullEvaluationContext(params);
   }
 
   /** §"centralizar esta información... hacerla fiable": recalcula el wipe call de un pull ya analizado contra WCL con el algoritmo actual — ver edge-functions.service.ts. */

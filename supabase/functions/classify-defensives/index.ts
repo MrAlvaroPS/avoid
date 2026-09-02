@@ -4,7 +4,8 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 import { errorMessage } from '../_shared/error-message.ts';
 import { getCurrentBuildNamespace } from '../_shared/blizzard-client.ts';
 import { buildFromBlizzardNamespace } from '../_shared/wago-db2-client.ts';
-import { enqueueDefensiveReanalysis } from '../_shared/defensive-reanalysis-queue.ts';
+import { enqueueDefensiveReanalysis, type QueueClient } from '../_shared/defensive-reanalysis-queue.ts';
+import { defensiveTargetingError } from '../_shared/defensive-classification-semantics.ts';
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -12,7 +13,6 @@ function todayIso(): string {
 
 const SURVIVAL_TYPES = new Set(['mitigation', 'absorption', 'sustain', 'emergency']);
 const CATEGORIES = new Set(['personal_defensive', 'semi_defensive', 'external_defensive', 'utility']);
-const TARGETING_MODES = new Set(['self', 'ally', 'both', 'raid', 'unknown']);
 const ACTIVATION_MODES = new Set(['active', 'passive']);
 const CONFIDENCES = new Set<unknown>(['high', 'medium', 'low']);
 const MODIFIER_OPERATIONS = new Set(['subtract_seconds', 'add_seconds', 'multiply', 'set_seconds', 'charges_add']);
@@ -250,17 +250,6 @@ function jsonPayload(raw: string): string {
   return fenced ? fenced[1].trim() : trimmed;
 }
 
-function targetingError(category: string, targetingMode: string): string | null {
-  if (!CATEGORIES.has(category)) return `category inválida: ${category}`;
-  if (!TARGETING_MODES.has(targetingMode)) return `targetingMode inválido: ${targetingMode}`;
-  if (category === 'personal_defensive' && targetingMode !== 'self') return 'personal_defensive exige targetingMode self';
-  if (category === 'semi_defensive' && targetingMode !== 'both') return 'semi_defensive exige targetingMode both';
-  if (category === 'external_defensive' && targetingMode !== 'ally' && targetingMode !== 'raid') {
-    return 'external_defensive exige targetingMode ally o raid';
-  }
-  return null;
-}
-
 function validateProfiles(entry: Partial<ClassificationEntry>): { rows: SpecProfileEntry[]; error?: string } {
   const raw = Array.isArray(entry.specProfiles) ? entry.specProfiles : [];
   const rows: SpecProfileEntry[] = [];
@@ -464,6 +453,8 @@ Deno.serve(async (req: Request) => {
         name: string;
         class: string;
         survivalType: string;
+        category: string;
+        targetingMode: string;
         confidence: 'high' | 'medium';
         sources: string[];
         notes: string;
@@ -646,7 +637,7 @@ Deno.serve(async (req: Request) => {
             : matched.targeting_mode
         );
         if (entry.targetingMode != null || (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION)) {
-          const categoryTargetingError = targetingError(category, targetingMode);
+          const categoryTargetingError = defensiveTargetingError(category, targetingMode);
           if (categoryTargetingError) {
             invalid.push({ spellId: entry.spellId, reason: categoryTargetingError });
             continue;
@@ -707,6 +698,8 @@ Deno.serve(async (req: Request) => {
           name,
           class: matched.class,
           survivalType: survivalType ?? 'sin clasificar',
+          category,
+          targetingMode,
           confidence: entry.confidence === 'high' ? 'high' : 'medium',
           sources: Array.isArray(entry.sources) ? entry.sources : [],
           notes: entry.notes ?? '',
@@ -763,7 +756,7 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         if (entry.targetingMode != null || (response.promptVersion != null && response.promptVersion >= PROMPT_VERSION)) {
-          const categoryTargetingError = targetingError(entry.category, targetingMode);
+          const categoryTargetingError = defensiveTargetingError(entry.category, targetingMode);
           if (categoryTargetingError) {
             invalid.push({ spellId: entry.spellId, reason: categoryTargetingError });
             continue;
@@ -851,6 +844,8 @@ Deno.serve(async (req: Request) => {
           name: entry.name.trim(),
           class: entry.class,
           survivalType: entry.survivalType,
+          category: entry.category,
+          targetingMode,
           confidence: entry.confidence,
           sources,
           notes: entry.notes ?? '',
@@ -879,7 +874,9 @@ Deno.serve(async (req: Request) => {
       let reanalysisQueueError: string | null = pullDiscoveryError;
       if (pullIds.length) {
         try {
-          const queued = await enqueueDefensiveReanalysis(supabase, {
+          // Evita que Deno expanda recursivamente todos los genéricos del
+          // cliente Supabase al comprobar este adaptador estructural mínimo.
+          const queued = await enqueueDefensiveReanalysis(supabase as unknown as QueueClient, {
             pullIds,
             reason: `classify_defensives:${[...affectedClasses].sort().join(',')}`,
             scope: {

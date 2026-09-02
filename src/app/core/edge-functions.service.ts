@@ -4,6 +4,8 @@
 // lectura pública; las escrituras las hacen las funciones con service_role).
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
+import { errorMessage } from '../shared/error-message.util';
+import { describeFunctionError } from '../shared/function-error.util';
 import type { GenerateNightFullReportResult } from '../shared/models/night-full-report';
 import type {
   DefensivePlanDraftInput,
@@ -13,6 +15,10 @@ import type {
   PullDefensivePlanBindingRow,
   ResolvedPlayerDefensiveKitResult,
 } from '../shared/models/domain';
+import type {
+  MechanicAliasContract,
+  MechanicPolicyContract,
+} from '../../../supabase/functions/_shared/combat-evaluation-contract';
 
 export interface AnalyzeReportResult {
   ok: true;
@@ -279,6 +285,29 @@ export class EdgeFunctionsService {
     return this.invoke('set-ninja-pull-status', { pullId, excluded });
   }
 
+  /** Autoridad v2: corrige wipe/ninja o el contexto completo, siempre con auditoría. */
+  async setPullEvaluationContext(params:
+    | {
+        pullId: string;
+        action: 'confirm_wipe' | 'clear_wipe' | 'move_wipe_boundary' | 'accept_inferred_wipe' | 'confirm_ninja' | 'mark_valid' | 'mark_probable_ninja';
+        boundaryMs?: number;
+        reason?: string;
+      }
+    | {
+        pullId: string;
+        action: 'override_context';
+        evaluationEligible: boolean;
+        evaluationStartMs: number;
+        evaluationEndMs: number;
+        wipeCallAtMs: number | null;
+        wipeCallVerified: boolean;
+        ninjaConfirmed: boolean;
+        reason: string;
+      },
+  ): Promise<{ ok: true; pullId: string; action: string; context: import('../../../supabase/functions/_shared/combat-evaluation-contract').PullEvaluationContextContract; reanalysisQueued: true }> {
+    return this.invoke('set-pull-evaluation-context', params);
+  }
+
   /**
    * §"Hay que ver la manera de centralizar esta información y, sobretodo,
    * en hacerla fiable" (feedback real, 2026-08-28): vuelve a pedir a WCL
@@ -316,6 +345,8 @@ export class EdgeFunctionsService {
     rawResponseText: string,
   ): Promise<{
     ok: true;
+    submittedCount: number;
+    fullyAppliedCount: number;
     applied: { abilityId: number; difficulty: string; name: string; category: string }[];
     skippedLowConfidence: { abilityId: number; difficulty: string; name: string; category: string | null; notes: string }[];
     skippedUndetermined: { abilityId: number; difficulty: string; name: string }[];
@@ -326,11 +357,54 @@ export class EdgeFunctionsService {
     responsibilitiesApplied: { abilityId: number; difficulty: string; name: string; responsibility: string }[];
     responsibilitiesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     responsibilityContractMissing: boolean;
-    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean }[];
+    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean | null }[];
     avoidablesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     avoidableContractMissing: boolean;
   }> {
     return this.invoke('classify-mechanics', { bossId, difficulties, action: 'submit', rawResponseText });
+  }
+
+  /**
+   * Genera un único prompt causal para todas las dificultades/mecánicas del
+   * boss. La respuesta completa se divide después en submits internos de una
+   * dificultad y hasta 20 filas para respetar el presupuesto de cada worker.
+   */
+  async getMechanicPolicyClassificationPrompt(
+    bossId: string,
+    difficulties?: string[],
+  ): Promise<{
+    ok: true;
+    promptVersion: number;
+    systemPrompt: string;
+    userMessage: string;
+    policyCount: number;
+    difficulties: string[];
+    policyIdentities: { abilityId: number; mechanicKey: string; difficulty: string }[];
+    maxBatchSize: number;
+  }> {
+    const difficulty = difficulties?.length === 1 ? difficulties[0] : undefined;
+    return this.invoke('classify-mechanic-policies', { bossId, ...(difficulty ? { difficulty } : {}), action: 'prompt' });
+  }
+
+  async submitMechanicPolicyClassification(
+    bossId: string,
+    difficulty: string,
+    rawResponseText: string,
+  ): Promise<{
+    ok: true;
+    submittedCount: number;
+    applied: {
+      abilityId: number;
+      mechanicKey: string;
+      difficulty: string;
+      name: string;
+      confidence: 'inferred' | 'uncertain';
+      policyVersion: number;
+    }[];
+    invalid: { abilityId: unknown; mechanicKey: unknown; reason: string }[];
+    maxBatchSize?: number;
+  }> {
+    return this.invoke('classify-mechanic-policies', { bossId, difficulty, action: 'submit', rawResponseText });
   }
 
   /**
@@ -492,7 +566,7 @@ export class EdgeFunctionsService {
     expectedGameBuild: string | null,
   ): Promise<{
     ok: true;
-    applied: { spellId: number; name: string; survivalType: string }[];
+    applied: { spellId: number; name: string; survivalType: string; category: string; targetingMode: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
     /** §"que lo sugiera, no que lo borre solo" (feedback real, 2026-08-31): la IA cree que ya no es un defensivo real — nunca se aplica sola, un humano confirma fila por fila con el botón "excluir" manual. */
@@ -742,6 +816,56 @@ export class EdgeFunctionsService {
     return this.invoke('save-mechanic-defensive-assignment', edit);
   }
 
+  /** Publica una nueva versión auditable de la semántica causal de una mecánica. */
+  async publishMechanicPolicy(
+    policy: Omit<MechanicPolicyContract, 'policyVersion'>,
+    reason: string,
+  ): Promise<{ ok: true; policy: MechanicPolicyContract }> {
+    return this.invoke('publish-mechanic-policy', { policy, reason });
+  }
+
+  /** Lee una versión concreta de policy o la vigente si no se indica versión. */
+  async queryMechanicPolicy(
+    bossId: string,
+    difficulty: string,
+    mechanicKey: string,
+    policyVersion?: number,
+  ): Promise<{ ok: true; policy: MechanicPolicyContract }> {
+    return this.invoke('query-mechanic-policy', {
+      bossId,
+      difficulty,
+      mechanicKey,
+      ...(policyVersion != null ? { policyVersion } : {}),
+    });
+  }
+
+  /** Registra o actualiza aliases canónicos de una policy ya publicada. */
+  async syncMechanicAliases(params: {
+    bossId: string;
+    difficulty: string;
+    mechanicKey: string;
+    aliases: Array<{
+      ability_id?: number | null;
+      normalized_name?: string | null;
+      source: 'journal' | 'wcl' | 'manual' | 'classifier' | 'legacy';
+      confidence: 'verified' | 'inferred' | 'fallback' | 'uncertain';
+      active?: boolean;
+    }>;
+  }): Promise<{ ok: true; aliases: MechanicAliasContract[] }> {
+    return this.invoke('sync-mechanic-aliases', params);
+  }
+
+  /** Genera policies/aliases base y rellena mechanic_key solo en candidates legacy que aún no tengan identidad. */
+  async backfillMechanicCandidatesToPolicy(): Promise<{
+    ok: true;
+    totalCandidates: number;
+    policiesCreated: number;
+    aliasesCreated: number;
+    message: string;
+  }> {
+    return this.invoke('backfill-mechanic-candidates-to-policy', {});
+  }
+
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */
   async syncReports(params: { guildName: string; serverSlug: string; serverRegion: string; sinceMs?: number }): Promise<SyncReportsResult> {
     return this.invoke<SyncReportsResult>('sync-reports', params);
@@ -819,31 +943,10 @@ export class EdgeFunctionsService {
 
   private async invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> {
     const { data, error } = await this.supabase.client.functions.invoke(fn, { body });
-    if (error) throw await describeFunctionError(error);
+    if (error) throw await describeFunctionError(error, fn);
     if (data && typeof data === 'object' && 'ok' in data && !(data as { ok: boolean }).ok) {
-      throw new Error((data as { error?: string }).error ?? `${fn} falló sin detalle`);
+      throw new Error(errorMessage((data as { error?: unknown }).error, `${fn} falló sin detalle`));
     }
     return data as T;
   }
-}
-
-/**
- * Cuando una Edge Function responde con un HTTP no-2xx (ej. 500 del guard de
- * §14), supabase-js lanza un FunctionsHttpError genérico ("Edge Function
- * returned a non-2xx status code") y descarta el cuerpo — que es justo donde
- * está el mensaje real (`{ ok: false, error: "..." }`). El cuerpo original
- * sigue accesible en `error.context` (el Response crudo del fetch), así que
- * se relee de ahí antes de rendirse al mensaje genérico.
- */
-async function describeFunctionError(error: unknown): Promise<Error> {
-  const context = (error as { context?: unknown }).context;
-  if (context instanceof Response) {
-    try {
-      const body = await context.clone().json();
-      if (body?.error) return new Error(body.error);
-    } catch {
-      // el cuerpo no era JSON (ej. un 502 de la propia infraestructura) — se cae al mensaje genérico de abajo
-    }
-  }
-  return error instanceof Error ? error : new Error(String(error));
 }

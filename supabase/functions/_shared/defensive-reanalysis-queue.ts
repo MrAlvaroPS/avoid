@@ -11,7 +11,7 @@ export interface EnqueuedDefensiveReanalysis {
   jobs: DefensiveReanalysisJobRef[];
 }
 
-interface QueueClient {
+export interface QueueClient {
   rpc(name: string, params: Record<string, unknown>): PromiseLike<{ data: unknown; error: { message: string } | null }>;
   from(table: string): {
     select(columns: string): {

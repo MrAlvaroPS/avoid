@@ -152,7 +152,7 @@ Deno.serve(async (req: Request) => {
   if (body.action === 'health') {
     return jsonResponse({
       ok: true,
-      generatorVersion: 'generate-defensive-plan@2.1.0',
+      generatorVersion: 'generate-defensive-plan@2.2.0',
       solverVersion: DEFENSIVE_PLAN_SOLVER_VERSION,
       resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
     });
@@ -179,6 +179,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+  let stage = 'load_sources';
   try {
     const [rosterResult, latestResult, occurrenceResult, planningResult, candidateResult, templateResult] = await Promise.all([
       supabase.from('wowaudit_roster').select('character_id,name,class,role').in('name', requestedNames),
@@ -198,6 +199,7 @@ Deno.serve(async (req: Request) => {
     const occurrenceRows = (occurrenceResult.data ?? []) as OccurrenceRow[];
     if (!occurrenceRows.length) return jsonResponse({ ok: false, error: 'No hay perfiles por ocurrencia; sincroniza primero el boss y dificultad.' }, 409);
 
+    stage = 'resolve_roster';
     const rosterByName = new Map(((rosterResult.data ?? []) as RosterRow[]).map((row) => [row.name, row]));
     const latestByName = new Map(((latestResult.data ?? []) as LatestBuildRow[]).map((row) => [row.player_name, row]));
     const memberSources = body.members.map((requested) => {
@@ -210,6 +212,7 @@ Deno.serve(async (req: Request) => {
     const classes = [...new Set(memberSources.map((source) => source.className))];
     const builds = [...new Set(memberSources.map((source) => source.latest?.game_build).filter((value): value is string => Boolean(value)))];
 
+    stage = 'load_defensive_catalog';
     const [catalogResult, profileResult, ruleResult, overrideResult, lookupResult] = await Promise.all([
       supabase.from('cooldown_catalog').select('*').in('class', classes).eq('excluded', false),
       supabase.from('defensive_spec_profiles').select('*').in('class', classes),
@@ -232,6 +235,7 @@ Deno.serve(async (req: Request) => {
       ((lookupResult.data ?? []) as { build: string; entry_to_spell: Record<string, number> }[]).map((row) => [row.build, row.entry_to_spell]),
     );
 
+    stage = 'resolve_effective_kits';
     const memberSnapshots: CreateDraftRequest['members'] = [];
     const solverPlayers: SolverPlayerKit[] = [];
     const resourceSelectionByPlayer = new Map(
@@ -372,6 +376,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    stage = 'solve_plan';
     const result = solveDefensivePlan({
       mode: body.mode,
       occurrences,
@@ -381,6 +386,7 @@ Deno.serve(async (req: Request) => {
     });
     if (!result.feasible) return jsonResponse({ ok: false, error: 'Las reservas hard contienen conflictos.', solver: result }, 409);
 
+    stage = 'build_draft';
     const rosterFingerprint = await sha256(
       memberSnapshots
         .map((member) => ({ playerKey: member.playerKey, buildFingerprint: member.buildFingerprint, included: member.included }))
@@ -461,13 +467,15 @@ Deno.serve(async (req: Request) => {
         rationale: slot.rationale,
       })),
     };
+    stage = 'validate_draft';
     const validationError = validateDefensivePlanDraft(draft);
     if (validationError) throw new Error(`El solver produjo un draft inválido: ${validationError}`);
+    stage = 'persist_draft';
     const plan = await persistDefensivePlanDraft(supabase, draft, guard.userId);
 
     return jsonResponse({ ok: true, plan, solver: result });
   } catch (error) {
-    console.error('generate-defensive-plan error:', error);
-    return jsonResponse({ ok: false, error: errorMessage(error) }, 500);
+    console.error(`generate-defensive-plan error at ${stage}:`, error);
+    return jsonResponse({ ok: false, error: `No se pudo generar el borrador (${stage}): ${errorMessage(error)}`, stage }, 500);
   }
 });
