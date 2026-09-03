@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { decodeMrtExport } from './mrt-reminder-codec';
 import { exportDeployedPlanToMrt, type DeployedMrtSlot } from './deployed-plan-mrt';
 
@@ -59,5 +60,29 @@ describe('MRT from deployed defensive plan', () => {
     expect(() => exportDeployedPlanToMrt(plan, members, [slot({ coverageStatus: 'uncovered' })], mechanics, defensives)).toThrow(
       'no contiene slots',
     );
+  });
+
+  // §"un cast debe cubrir toda su ventana de duración (no un recordatorio
+  // por cada ocurrencia cercana)" (feedback real, 2026-09-03).
+  it('skips a slot already covered by a prior cast duration and reports it separately', () => {
+    const first = slot({ id: 'slot-1', occurrenceIndex: 1 });
+    const second = slot({ id: 'slot-2', occurrenceIndex: 2, needsFreshCast: false });
+    const exported = exportDeployedPlanToMrt(plan, members, [first, second], mechanics, defensives);
+
+    const decoded = decodeMrtExport(exported.text);
+    expect(decoded.reminders).toHaveLength(1);
+    expect(decoded.reminders[0].name).toContain('#1');
+    expect(exported.durationCoveredSlotIds).toEqual(['slot-2']);
+  });
+
+  // §"las mecánicas de soak/rotación deberían decir 'posible defensivo', no
+  // una asignación dura" (feedback real, 2026-09-03) — solo el texto del
+  // reminder cambia, coverageStatus y el resto del contrato son iguales.
+  it('marks a soak mechanic as a suggestion instead of a hard assignment', () => {
+    const withSoak = exportDeployedPlanToMrt(plan, members, [slot()], mechanics, defensives, new Set([500]));
+    expect(decodeMrtExport(withSoak.text).reminders[0].message).toContain('Posible defensivo:');
+
+    const withoutSoak = exportDeployedPlanToMrt(plan, members, [slot()], mechanics, defensives, new Set([999]));
+    expect(decodeMrtExport(withoutSoak.text).reminders[0].message).not.toContain('Posible defensivo:');
   });
 });

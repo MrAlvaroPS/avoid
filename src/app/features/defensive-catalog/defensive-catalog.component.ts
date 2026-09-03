@@ -14,7 +14,7 @@ import {
 } from '../../core/edge-functions.service';
 import { DefensiveCatalogService } from '../../core/defensive-catalog.service';
 import { ClassIconComponent } from '../../shared/class-icon.component';
-import { CLASS_DISPLAY_NAME, SURVIVAL_TYPE_KEYS, classDisplayName, survivalTypeMeta } from '../../shared/format.util';
+import { CLASS_DISPLAY_NAME, SURVIVAL_TYPE_KEYS, classDisplayName, safeSpellName, survivalTypeMeta } from '../../shared/format.util';
 import { specsForClass } from '../../shared/spec-role.util';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
@@ -45,6 +45,7 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
   readonly defensiveTargetingModes: CooldownCatalogRow['targeting_mode'][] = ['self', 'ally', 'both', 'raid', 'unknown'];
   readonly classDisplayName = classDisplayName;
   readonly survivalTypeMeta = survivalTypeMeta;
+  readonly safeSpellName = safeSpellName;
 
   selectedClass = signal<string | null>(null);
   defensives = signal<CooldownCatalogRow[]>([]);
@@ -139,13 +140,51 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
     void this.loadDefensives();
   }
 
+  // §"quiero enseñar icono de la habilidad defensiva en la tabla de
+  // defensivos" (feedback real, 2026-09-03): mismo mecanismo que ya usa
+  // night-player-infographic.component.ts (loadSpellIcons) — sin servicio
+  // compartido todavía, así que se repite aquí en vez de bloquear esto a que
+  // exista uno.
+  readonly iconUrls = signal<Record<number, string>>({});
+
+  iconUrl(spellId: number | null): string | null {
+    return spellId ? (this.iconUrls()[spellId] ?? null) : null;
+  }
+
+  onIconError(event: Event): void {
+    (event.currentTarget as HTMLImageElement).style.display = 'none';
+  }
+
+  private async loadSpellIcons(spellIds: number[]): Promise<void> {
+    const entries = await Promise.all(
+      spellIds.map(async (spellId): Promise<[number, string] | null> => {
+        try {
+          const response = await fetch(`https://nether.wowhead.com/tooltip/spell/${spellId}`);
+          if (!response.ok) return null;
+          const payload = (await response.json()) as { icon?: string };
+          return payload.icon
+            ? [spellId, `https://wow.zamimg.com/images/wow/icons/large/${payload.icon}.jpg`]
+            : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    this.iconUrls.update((current) => ({
+      ...current,
+      ...Object.fromEntries(entries.filter((entry): entry is [number, string] => entry != null)),
+    }));
+  }
+
   async loadDefensives(): Promise<void> {
     const className = this.selectedClass();
     if (!className) return;
     this.loadingDefensives.set(true);
     this.error.set(null);
     try {
-      this.defensives.set(await this.defensiveCatalogService.listByClass(className));
+      const rows = await this.defensiveCatalogService.listByClass(className);
+      this.defensives.set(rows);
+      void this.loadSpellIcons(rows.map((row) => row.spell_id));
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {

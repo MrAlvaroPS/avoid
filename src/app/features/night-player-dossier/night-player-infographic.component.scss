@@ -99,6 +99,13 @@ app-night-player-infographic {
     background: rgb(88 101 242 / 15%);
     border-color: rgb(132 140 255 / 30%);
   }
+  // §"toggle... plan vs uso real observado" (feedback real, 2026-09-03): activo
+  // = se está forzando la rama legacy a mano, no el estado por defecto.
+  .iris-player-tool-button.active {
+    color: #ffd88c;
+    background: rgb(255 191 87 / 14%);
+    border-color: rgb(255 191 87 / 34%);
+  }
   .iris-player-tool-button.primary {
     color: #fff;
     background: #8c63ab;

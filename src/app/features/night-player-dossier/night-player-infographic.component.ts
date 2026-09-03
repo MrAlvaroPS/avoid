@@ -189,9 +189,31 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   // ratio real cubiertas/cubribles con el mismo never_touched=0/mistimed=
   // crédito parcial/covered=ratio que ya vimos y arreglamos hoy. Reutilizarlo
   // aquí evita una segunda fórmula que pudiera divergir de la de Fiabilidad.
-  readonly defensiveManagementV2 = computed(() =>
-    this.defensiveFlags.enabled('defensiveInfographicV2') ? this.summary().defensiveManagementV2 : null,
-  );
+  // §"si no está listo el plan del MRT para mostrar podemos poner un toggle
+  // en su dosier para calcularlo en base al plan o... en base al uso real
+  // que haya hecho el jugador en los pulls como calculábamos antes...
+  // (pero mismo concepto)" (feedback real, 2026-09-03): v2 puede dar un
+  // managementScore=0 legítimo (p.ej. una noche con solo muertes de causa no
+  // verificable como única oportunidad puntuable) y las cards de coaching se
+  // quedan sin defensivos recomendados por diseño (ver raider-evidence-
+  // projection.ts). El fallback legacy (nightReliability.breakdown.defensiva,
+  // casts reales por defensivo) ya existe y ya se usa como `??` cuando v2 es
+  // null — este toggle simplemente fuerza esa rama a mano, sin inventar una
+  // fórmula nueva: cuando está activo, defensiveManagementV2() devuelve null
+  // y TODO lo que ya depende de "v2 ?? legacy" en este componente y en
+  // evidenceProjection()/v3ViewModel() cae automáticamente al mismo cálculo
+  // legacy que ya existía, solo que a demanda del oficial en vez de solo
+  // cuando el flag está apagado.
+  readonly preferObservedDefensives = signal(false);
+  readonly defensiveManagementV2 = computed(() => {
+    if (this.preferObservedDefensives()) return null;
+    return this.defensiveFlags.enabled('defensiveInfographicV2') ? this.summary().defensiveManagementV2 : null;
+  });
+  toggleDefensiveDataSource(): void {
+    this.preferObservedDefensives.update((prefer) => !prefer);
+  }
+  /** Solo tiene sentido ofrecer el toggle si de verdad hay una generación v2 de la que alejarse — si nunca la hubo, ambas ramas ya muestran lo mismo. */
+  readonly hasV2DefensiveData = computed(() => this.summary().defensiveManagementV2 != null);
   readonly evidenceProjection = computed(() =>
     buildRaiderEvidenceProjection(this.summary(), {
       defensiveManagementV2: this.defensiveManagementV2(),
@@ -1156,6 +1178,12 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
 
   private calculateFitScale(): number {
     const widthScale = (window.innerWidth - 36) / SHEET_WIDTH;
+    // §"debe ser dinámico... para que pueda haberlo si se necesita crecer"
+    // (feedback real, 2026-09-03): la altura de página V3 dejó de ser fija
+    // (2160px) — hoy solo hay un pliego por dosier (sin continuaciones
+    // reales todavía, ver raider-infographic-v3-canvas.component.ts), así
+    // que la misma altura medida (sheetHeight/scrollHeight, ya actualizada
+    // por el mismo ResizeObserver para ambos layouts) sirve también aquí.
     const heightScale = (window.innerHeight - 112) / this.sheetHeight();
     return Math.max(0.18, Math.min(1, widthScale, heightScale));
   }

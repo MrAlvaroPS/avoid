@@ -8,12 +8,12 @@ export const environment = {
     defensiveEffectiveResolverV2: false,
     defensiveDeployedPlans: false,
     defensiveExecutionEvaluatorV2: false,
-    // R5/R7 permanecen apagados hasta backfill + contraste oficial.
-    defensiveInfographicV2: false,
+    // R5 usa gate atómico jugador×noche; R7 permanece apagado hasta backfill global.
+    defensiveInfographicV2: true,
     defensiveReliabilityV2: false,
   },
-  // Causalidad v3 · Bloque A: schema/contratos disponibles en shadow, sin
-  // cambiar todavía ninguna superficie ni scoring visible.
+  // Causalidad/infografía v3 activas en este entorno. Cada proyector mantiene
+  // sus gates de completitud: un dataset parcial nunca debe mezclarse con v3.
   combatEvaluationFeatureFlags: {
     combatEvaluationContextV2: true,
     mechanicPolicyV2: true,

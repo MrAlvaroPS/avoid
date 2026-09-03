@@ -72,6 +72,8 @@ function mechanic(
     })),
     coveredCount: Math.ceil(occurrencePulls.length / 2),
     totalCount: occurrencePulls.length,
+    aiNote: null,
+    resolution: null,
     defensives: Array.from({ length: defensiveCount }, (_, defensiveIndex) => ({
       spellId: 2_000 + defensiveIndex,
       name: `Defensivo ${defensiveIndex + 1}`,
@@ -166,7 +168,7 @@ function management(
     deathViableCdCount: 0,
     deathReadyCdCount: 0,
     managementScore: null,
-    evaluatorVersion: 'defensive-execution-evaluator@2.3.0',
+    evaluatorVersion: 'defensive-execution-evaluator@2.4.0',
     resolverVersion: 'effective-defensives@2.0.0',
     solverVersion: 'defensive-plan-solver@2.0.0',
     gameBuild: '12.0.0.1',
@@ -194,7 +196,7 @@ function management(
         mechanicName: mechanicValue.mechanicName,
         plannedSpellName: null,
         actualSpellName: null,
-        evaluationMode: 'plan',
+        evaluationMode: 'full',
         planVersionId: 'plan-1',
       },
     ],
@@ -216,15 +218,16 @@ describe('RaiderInfographicViewModel', () => {
     });
     expect(view.timelineGroups).toHaveLength(1);
     expect(view.timelineGroups[0].cells).toHaveLength(4);
-    expect(view.mechanicPages[0][0].defensives).toHaveLength(2);
+    expect(view.mechanics[0].defensives).toHaveLength(2);
+    expect(view.additionalMechanicCount).toBe(0);
     expect(view.layout).toMatchObject({
       pullDensity: 'normal',
       defensiveDensity: 'normal',
-      spreadCount: 1,
+      mechanicColumns: 2,
     });
   });
 
-  it('pagina nueve mecánicas y conserva 25 pulls, siete bosses y cinco defensivos', () => {
+  it('amplía a tres columnas con nueve mecánicas, sin paginar, y conserva 25 pulls, siete bosses y cinco defensivos', () => {
     const pulls = Array.from({ length: 25 }, (_, index) => {
       const bossIndex = Math.min(6, Math.floor(index / 4));
       return pull(index + 1, {
@@ -249,14 +252,34 @@ describe('RaiderInfographicViewModel', () => {
     });
     expect(view.timelineGroups).toHaveLength(7);
     expect(view.timelineGroups.flatMap((group) => group.cells)).toHaveLength(25);
-    expect(view.mechanicPages.map((page) => page.length)).toEqual([6, 3]);
-    expect(view.mechanicPages[0][0].defensives).toHaveLength(5);
+    expect(view.mechanics).toHaveLength(9);
+    expect(view.additionalMechanicCount).toBe(0);
+    expect(view.mechanics[0].defensives).toHaveLength(5);
     expect(view.layout).toEqual({
       pullDensity: 'dense',
-      mechanicDensity: 'dense',
+      mechanicColumns: 3,
       defensiveDensity: 'compact',
-      spreadCount: 2,
+      coachingDensity: 'normal',
     });
+  });
+
+  it('conserva mecánicas visibles y cuenta las que no caben cuando hay más de nueve', () => {
+    const pulls = Array.from({ length: 4 }, (_, index) => pull(index + 1));
+    const mechanics = Array.from({ length: 12 }, (_, index) => mechanic(index + 1, 1, pulls));
+    const input = summary(pulls, mechanics);
+    const projection = buildRaiderEvidenceProjection(input, { defensiveManagementV2: null });
+    const view = buildRaiderInfographicViewModel(input, projection, null);
+
+    // §"no quiero que se genere una nueva página... únicamente las que
+    // quepan... esas otras se tienen en cuenta para las métricas pero no se
+    // enseñan en la infografía porque no caben" (feedback real, 2026-09-03).
+    expect(view.mechanics).toHaveLength(9);
+    expect(view.additionalMechanicCount).toBe(3);
+    expect(view.layout.mechanicColumns).toBe(3);
+    // El resumen medible sigue sumando las 12, no solo las 9 visibles.
+    expect(view.defensiveMetrics.find((metric) => metric.key === 'coverage')?.value).toBe(
+      `${mechanics.reduce((sum, m) => sum + m.coveredCount, 0)}/${mechanics.reduce((sum, m) => sum + m.totalCount, 0)}`,
+    );
   });
 
   it('conserva las 25 ocurrencias cuando todos los pulls pertenecen a un solo boss', () => {
@@ -268,12 +291,12 @@ describe('RaiderInfographicViewModel', () => {
 
     expect(view.timelineGroups).toHaveLength(1);
     expect(view.timelineGroups[0].cells).toHaveLength(25);
-    expect(view.mechanicPages).toHaveLength(1);
-    expect(view.mechanicPages[0][0].occurrenceGroups).toHaveLength(25);
+    expect(view.mechanics).toHaveLength(1);
+    expect(view.mechanics[0].occurrenceGroups).toHaveLength(25);
     expect(
-      view.mechanicPages[0][0].occurrenceGroups.flatMap((group) => group.cells),
+      view.mechanics[0].occurrenceGroups.flatMap((group) => group.cells),
     ).toHaveLength(25);
-    expect(view.mechanicPages[0][0].defensives).toHaveLength(5);
+    expect(view.mechanics[0].defensives).toHaveLength(5);
     expect(view.layout.pullDensity).toBe('dense');
   });
 
@@ -285,7 +308,7 @@ describe('RaiderInfographicViewModel', () => {
     const input = { ...base, defensiveManagementV2: v2 };
     const projection = buildRaiderEvidenceProjection(input, { defensiveManagementV2: v2 });
     const view = buildRaiderInfographicViewModel(input, projection, v2);
-    const defensive = view.mechanicPages[0][0].defensives[0];
+    const defensive = view.mechanics[0].defensives[0];
 
     expect(defensive).toMatchObject({
       coveredCount: 1,
@@ -295,6 +318,6 @@ describe('RaiderInfographicViewModel', () => {
       unknownCount: 0,
       totalCount: 4,
     });
-    expect(view.mechanicPages[0][0].occurrenceGroups[0].cells[0].state).toBe('covered');
+    expect(view.mechanics[0].occurrenceGroups[0].cells[0].state).toBe('covered');
   });
 });

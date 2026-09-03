@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { buildNightDefensiveManagementV2 } from '../core/night-player-summary.service';
 import type { PlayerPullDefensiveEvaluationRow } from './models/domain';
 
@@ -20,9 +21,9 @@ function evaluation(pullId: string, overrides: Partial<PlayerPullDefensiveEvalua
     mode: 'full',
     game_build: '12.0.0.1',
     build_fingerprint: 'fp',
-    resolver_version: 'resolver@test',
+    resolver_version: 'effective-defensives@2.1.0',
     solver_version: 'solver@test',
-    evaluator_version: 'defensive-execution-evaluator@2.3.0',
+    evaluator_version: 'defensive-execution-evaluator@2.4.0',
     plan_required_count: 1,
     plan_executed_count: 1,
     critical_window_count: 1,
@@ -64,6 +65,7 @@ describe('night defensive management v2 summary', () => {
   it('does not expose uncertain or mixed evaluator versions as v2', () => {
     const base = { pulls: [pull('pull-1')], spellNameById: new Map<number, string>(), mechanicNameById: new Map<number, string>() };
     expect(buildNightDefensiveManagementV2({ ...base, evaluations: [evaluation('pull-1', { data_confidence: 'uncertain' })] })).toBeNull();
+    expect(buildNightDefensiveManagementV2({ ...base, evaluations: [evaluation('pull-1', { resolver_version: 'effective-defensives@2.0.0' })] })).toBeNull();
     expect(
       buildNightDefensiveManagementV2({
         ...base,
@@ -132,7 +134,7 @@ describe('night defensive management v2 summary', () => {
     expect(result?.mode).toBe('mixed');
   });
 
-  it('rejects a mixed resolver or build generation', () => {
+  it('rejects a mixed resolver generation', () => {
     const base = {
       pulls: [pull('pull-1'), pull('pull-2')],
       spellNameById: new Map<number, string>(),
@@ -142,9 +144,23 @@ describe('night defensive management v2 summary', () => {
       ...base,
       evaluations: [evaluation('pull-1'), evaluation('pull-2', { resolver_version: 'resolver@other' })],
     })).toBeNull();
-    expect(buildNightDefensiveManagementV2({
+  });
+
+  // §"es normal que una persona cambie de talentos según el boss al que se
+  // enfrenta" (feedback real, 2026-09-03): un respec entre pulls cambia
+  // build_fingerprint sin que evaluator/resolver/solver/build dejen de ser
+  // los mismos — ya no debe tirar la noche entera a legacy.
+  it('tolerates a build fingerprint mixture from a mid-night talent respec', () => {
+    const base = {
+      pulls: [pull('pull-1'), pull('pull-2')],
+      spellNameById: new Map<number, string>(),
+      mechanicNameById: new Map<number, string>(),
+    };
+    const result = buildNightDefensiveManagementV2({
       ...base,
       evaluations: [evaluation('pull-1'), evaluation('pull-2', { build_fingerprint: 'fp-other' })],
-    })).toBeNull();
+    });
+    expect(result).not.toBeNull();
+    expect(result!.evaluatedPullCount).toBe(2);
   });
 });

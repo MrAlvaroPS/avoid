@@ -43,7 +43,7 @@ import {
 } from './execution-ledger.service';
 import { homogeneousDefensiveEvaluationGeneration } from '../shared/defensive-evaluation-generation';
 
-const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.3.0';
+const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.0';
 const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
 const REQUIRED_EXECUTION_LEDGER_VERSION = 'execution-ledger@1.0.0';
 

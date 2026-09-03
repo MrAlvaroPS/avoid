@@ -57,6 +57,34 @@ interface PlanMember {
   included: boolean;
 }
 
+// §"buscarle la lógica... ahora que sabemos cuáles son las ventanas de daño
+// que se hacen a la raid... podemos saber qué daño era evitable, dónde se
+// debía tirar un defensivo" (feedback real, 2026-09-03): misma vista y misma
+// fórmula que ya usa el solver (generate-defensive-plan/index.ts) para
+// clasificar mecánicas — se reutiliza aquí para las ventanas SIN plan, que
+// antes puntuaban todas como 'recommended' sin mirar cuán exigente era la
+// mecánica real.
+interface PlanningRow {
+  ability_id: number;
+  world_requires_defensive: boolean | null;
+  combined_planning_priority: number | null;
+}
+
+// §Verificado contra producción (2026-09-03): "The Coiled Altar" Normal no
+// tiene NINGUNA fila en boss_mechanic_defensive_planning_view todavía (boss
+// sin curar en Ajustes → Mecánicas) — muy real, no un caso de borde. Sin
+// fila = "no sabemos", nunca "confirmado que no importa": degradar eso a
+// 'optional' (peso 0, excluido) habría borrado del todo el uso real que el
+// fix del sentinel "Environment" acababa de recuperar. Solo se sube a
+// 'required' o se baja a 'optional' cuando SÍ hay una fila curada que lo
+// respalde; sin curar, se mantiene 'recommended' (mismo peso que ya tenía
+// toda ventana sin plan antes de este cambio).
+function requirementLevelFor(planning: PlanningRow | undefined): 'required' | 'recommended' | 'optional' {
+  if (!planning) return 'recommended';
+  const priority = Math.max(1, Math.min(5, Math.trunc(finite(planning.combined_planning_priority) ?? 1)));
+  return planning.world_requires_defensive === true ? 'required' : priority >= 3 ? 'recommended' : 'optional';
+}
+
 const CONFIDENCE_RANK: Record<DefensiveResolutionConfidence, number> = {
   verified: 0,
   inferred: 1,
@@ -111,14 +139,29 @@ function observedCasts(
       for (const event of defensive.events) {
         const timeMs = finite(event.timestampMs);
         if (timeMs == null) continue;
-        const targetName = typeof event.targetName === 'string' ? event.targetName : null;
+        const targetActorId = finite(event.targetActorId);
+        const rawTargetName = typeof event.targetName === 'string' ? event.targetName : null;
+        // §"cuando decimos que es un 0 tiene que ser una comprobación 100%
+        // real" (feedback real, 2026-09-03): WCL registra "Environment"/
+        // targetActorId -1 en autolanzamientos (p.ej. Barkskin sobre uno
+        // mismo) — es el sentinel de "sin objetivo real", no un objetivo
+        // real ajeno al roster. Antes caía en la rama de "nombre no
+        // encontrado en el roster" (targetPlayerKey: null = objetivo real
+        // confirmado que NO es este jugador), así que castAppliesToSelfOrSlot
+        // descartaba el cast entero para cualquier defensivo de objetivo
+        // 'self' — un Barkskin real quedaba invisible para el evaluador y la
+        // ventana se marcaba como "no cubierta" pese a haberse usado.
+        const isEnvironmentSentinel =
+          targetActorId === -1 || rawTargetName?.trim().toLocaleLowerCase('en-US') === 'environment';
+        const targetName = isEnvironmentSentinel ? null : rawTargetName;
         casts.push({
           sourcePlayerKey,
           spellId,
           timeMs,
-          targetPlayerKey: targetName == null ? undefined : (playerKeyByName.get(normalizedName(targetName)) ?? null),
-          targetActorId: finite(event.targetActorId),
-          targetName,
+          targetPlayerKey:
+            targetName == null ? undefined : (playerKeyByName.get(normalizedName(targetName)) ?? null),
+          targetActorId,
+          targetName: rawTargetName,
         });
       }
       continue;
@@ -150,7 +193,7 @@ export async function evaluateDefensivePull(
 ): Promise<DefensiveExecutionEvaluationResult[]> {
   const { data: pull, error: pullError } = await supabase
     .from('pulls')
-    .select('id,ninja_pull_excluded,wipe_call_excluded,wipe_call_signals')
+    .select('id,boss_id,difficulty,ninja_pull_excluded,wipe_call_excluded,wipe_call_signals')
     .eq('id', pullId)
     .single();
   if (pullError) throw pullError;
@@ -186,6 +229,16 @@ export async function evaluateDefensivePull(
     .order('player_name');
   if (recordsError) throw recordsError;
   const records = (recordRows ?? []) as PullRecord[];
+
+  const { data: planningRows, error: planningError } = await supabase
+    .from('boss_mechanic_defensive_planning_view')
+    .select('ability_id,world_requires_defensive,combined_planning_priority')
+    .eq('boss_id', pull.boss_id)
+    .eq('difficulty', pull.difficulty);
+  if (planningError) throw planningError;
+  const planningByAbility = new Map(
+    ((planningRows ?? []) as PlanningRow[]).map((row) => [Number(row.ability_id), row]),
+  );
 
   let plan: PlanVersion | null = null;
   let members: PlanMember[] = [];
@@ -229,6 +282,8 @@ export async function evaluateDefensivePull(
       const endMs = finite(window.endMs);
       const peakMs = finite(window.peakMs);
       if (startMs == null || endMs == null || peakMs == null) return [];
+      const mechanicId = finite(window.mechanicId);
+      const peakValue = finite(window.peakValue);
       return [{
         id: `${record.id}:pressure:${index + 1}`,
         startMs,
@@ -237,7 +292,9 @@ export async function evaluateDefensivePull(
         priority: 2,
         // detectDamageWindows ya exige >=2.5× la línea base propia.
         critical: true,
-        mechanicId: finite(window.mechanicId),
+        mechanicId,
+        requirementLevel: requirementLevelFor(mechanicId == null ? undefined : planningByAbility.get(mechanicId)),
+        ...(peakValue != null ? { peakValue } : {}),
       }];
     });
     const deathCause = record.death_cause;

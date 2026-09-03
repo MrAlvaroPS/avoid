@@ -100,6 +100,9 @@ interface TemplateRow {
   prewarn_seconds: number;
   trigger_type: 'bossmod' | 'time';
   bossmod_spell_id: number | null;
+  /** Ver migración 20260903110000 — solo se usa si bossmod_counter_verified es true. */
+  bossmod_counter: string | null;
+  bossmod_counter_verified: boolean;
   notes: string | null;
 }
 
@@ -369,7 +372,12 @@ Deno.serve(async (req: Request) => {
             source: 'template',
             triggerMode: template.trigger_type,
             bossmodSpellId: template.bossmod_spell_id,
-            bossmodCounterVerified: false,
+            // §"el trigger... se puede anclar a una mecánica de bossmod o de
+            // bigwigs" (feedback real, 2026-09-03) — antes siempre false, así
+            // que una asignación automática con bossmod_spell_id igual
+            // degradaba en silencio a tiempo fijo en la exportación MRT.
+            bossmodCounter: template.bossmod_counter,
+            bossmodCounterVerified: template.bossmod_counter_verified,
             notes: template.notes,
           });
         }
@@ -465,6 +473,8 @@ Deno.serve(async (req: Request) => {
         buildFingerprintSnapshot: slot.buildFingerprintSnapshot,
         notes: slot.notes,
         rationale: slot.rationale,
+        needsFreshCast: slot.needsFreshCast,
+        coveredByPriorCastAtMs: slot.coveredByPriorCastAtMs,
       })),
     };
     stage = 'validate_draft';

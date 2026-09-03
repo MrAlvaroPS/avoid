@@ -53,7 +53,7 @@ import { evaluateDefensivePull } from '../_shared/defensive-execution-persistenc
 // reciente que haya quedado procesado, no para todos.
 
 const WCL_DIFFICULTY_NAME_BY_ID: Record<number, string> = { 1: 'LFR', 3: 'Normal', 4: 'Heroic', 5: 'Mythic' };
-const DEFAULT_MAX_FIGHTS_PER_CALL = 3;
+const DEFAULT_MAX_FIGHTS_PER_CALL = 1;
 
 // Orden de inventario estándar de WoW: los slots de trinket son los índices
 // 12 y 13 del array `gear` de combatantInfo (verificado en real el
@@ -180,7 +180,9 @@ Deno.serve(async (req: Request) => {
   try {
     const body = await req.json();
     reportCode = body.reportCode;
-    if (typeof body.maxFights === 'number' && body.maxFights > 0) maxFights = Math.min(body.maxFights, 10);
+    if (typeof body.maxFights === 'number' && body.maxFights > 0) {
+      maxFights = 1;
+    }
   } catch {
     return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
   }
@@ -235,7 +237,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      await supabase.from('reports').upsert(
+      const { error: reportInsertError } = await supabase.from('reports').upsert(
         {
           code: reportCode,
           title: reportDetail.title,
@@ -248,6 +250,7 @@ Deno.serve(async (req: Request) => {
         },
         { onConflict: 'code', ignoreDuplicates: true },
       );
+      if (reportInsertError) throw reportInsertError;
     }
     // Un log en vivo pegado a mano nunca pasa por sync-reports — asegura que
     // esta tabla (de donde sale la lista de bosses del report) siempre esté al día.
@@ -389,23 +392,39 @@ Deno.serve(async (req: Request) => {
         const difficulty = fight.difficulty != null ? (WCL_DIFFICULTY_NAME_BY_ID[fight.difficulty] ?? `Dificultad ${fight.difficulty}`) : 'Desconocida';
         const { data: existingPull, error: existingPullError } = await supabase
           .from('pulls')
-          .select('id,ingestion_status')
+          .select('id,ingestion_status,created_at')
           .eq('report_code', reportCode)
           .eq('fight_id', fight.id)
           .maybeSingle();
         if (existingPullError) throw existingPullError;
 
         const recoveryAction = pullIngestionRecoveryAction(existingPull);
+        if (recoveryAction === 'wait_for_in_progress') {
+          throw new Error(
+            `El pull ${fight.id} ya se está importando en otra petición. Espera unos minutos y vuelve a comprobar el report.`,
+          );
+        }
         if (recoveryAction === 'reuse_complete') {
-          const { error: cursorError } = await supabase
+          if (!existingPull) {
+            throw new Error(`Estado de recuperación inválido para el pull ${fight.id}: falta la fila completa.`);
+          }
+          const { data: advancedReport, error: cursorError } = await supabase
             .from('reports')
             .update({ last_processed_fight_id: fight.id })
-            .eq('code', reportCode);
+            .eq('code', reportCode)
+            .select('code')
+            .maybeSingle();
           if (cursorError) throw cursorError;
+          if (!advancedReport) {
+            throw new Error(`No se pudo confirmar el cursor del report ${reportCode} tras reutilizar el pull ${fight.id}.`);
+          }
           newestPullId = existingPull.id;
           continue;
         }
         if (recoveryAction === 'replace_incomplete') {
+          if (!existingPull) {
+            throw new Error(`Estado de recuperación inválido para el pull ${fight.id}: falta la fila incompleta.`);
+          }
           const { data: removedPull, error: removeError } = await supabase
             .from('pulls')
             .delete()
@@ -429,11 +448,13 @@ Deno.serve(async (req: Request) => {
             .map((actor) => actor.id),
         );
 
-        const { count: priorPulls } = await supabase
+        const { count: priorPulls, error: priorPullsError } = await supabase
           .from('pulls')
           .select('id', { count: 'exact', head: true })
           .eq('boss_id', bossId)
-          .eq('difficulty', difficulty);
+          .eq('difficulty', difficulty)
+          .eq('ingestion_status', 'complete');
+        if (priorPullsError) throw priorPullsError;
 
         // §"el timeline es horrible, rehacerlo con algo real y útil": daño
         // recibido por TODA la raid en el tiempo, agregado server-side por
@@ -1084,7 +1105,11 @@ Deno.serve(async (req: Request) => {
           pullUpdatePatch.unassigned_mechanic_occurrences = unassignedMechanicOccurrences;
         }
         if (Object.keys(pullUpdatePatch).length) {
-          await supabase.from('pulls').update(pullUpdatePatch).eq('id', insertedPull.id);
+          const { error: pullUpdateError } = await supabase
+            .from('pulls')
+            .update(pullUpdatePatch)
+            .eq('id', insertedPull.id);
+          if (pullUpdateError) throw pullUpdateError;
         }
 
         // Crea la autoridad para pulls nuevos. Candidatos y hechos crudos se
@@ -1814,19 +1839,29 @@ Deno.serve(async (req: Request) => {
           if (dispelError) throw dispelError;
         }
 
-        const { error: completionError } = await supabase
+        const { data: completedPull, error: completionError } = await supabase
           .from('pulls')
           .update({ ingestion_status: 'complete', ingestion_error: null })
           .eq('id', insertedPull.id)
-          .eq('ingestion_status', 'processing');
+          .eq('ingestion_status', 'processing')
+          .select('id')
+          .maybeSingle();
         if (completionError) throw completionError;
+        if (!completedPull) {
+          throw new Error(`No se pudo confirmar la ingesta completa del pull ${fight.id}.`);
+        }
         activePullId = null;
 
-        const { error: cursorError } = await supabase
+        const { data: advancedReport, error: cursorError } = await supabase
           .from('reports')
           .update({ last_processed_fight_id: fight.id })
-          .eq('code', reportCode);
+          .eq('code', reportCode)
+          .select('code')
+          .maybeSingle();
         if (cursorError) throw cursorError;
+        if (!advancedReport) {
+          throw new Error(`El pull ${fight.id} está completo, pero no se pudo avanzar el cursor del report ${reportCode}.`);
+        }
       }
     }
 

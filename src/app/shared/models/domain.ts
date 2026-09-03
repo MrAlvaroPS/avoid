@@ -725,6 +725,9 @@ export interface DefensivePlanSlotRow {
   build_fingerprint_snapshot: string | null;
   notes: string | null;
   rationale: Record<string, unknown>;
+  /** false = ya cubierto por la duración de un cast anterior del mismo jugador+defensivo; ver defensive-plan-solver.ts. */
+  needs_fresh_cast: boolean;
+  covered_by_prior_cast_at_ms: number | null;
   created_at: string;
 }
 
@@ -773,6 +776,9 @@ export interface PlayerPullDefensiveEvaluationEvent {
   cooldownRemainingMs?: number;
   candidateSpellIds?: number[];
   lethalWindowStartMs?: number;
+  /** Pico de daño real de la ventana que originó este evento — ver
+   * EvaluationPressureWindow.peakValue en defensive-execution-evaluator.ts. */
+  peakValue?: number;
   causalGroupId?: string;
   primaryPenalty?: boolean;
 }
@@ -872,6 +878,8 @@ export interface DefensivePlanDraftInput {
     buildFingerprintSnapshot?: string | null;
     notes?: string | null;
     rationale?: Record<string, unknown>;
+    needsFreshCast?: boolean;
+    coveredByPriorCastAtMs?: number | null;
   }[];
 }
 
@@ -889,6 +897,9 @@ export interface MechanicDefensiveAssignmentRow {
   trigger_type: 'bossmod' | 'time';
   /** Normalmente = ability_id; distinto solo si el timer real de BigWigs/DBM usa otro spellID. */
   bossmod_spell_id: number | null;
+  /** Contador de la ocurrencia en el timer de BigWigs/DBM — solo se usa si bossmod_counter_verified es true. Ver migración 20260903110000. */
+  bossmod_counter: string | null;
+  bossmod_counter_verified: boolean;
   notes: string | null;
   /** Grupos de raid (1-6) a los que aplica — null = todos/sin restringir. Solo informativo (se refleja en el texto del reminder), MRT no filtra por esto — ver migración 20260831130000. */
   assigned_groups: number[] | null;

@@ -4,140 +4,6 @@
     infografía) + asignación de defensivo por spec + generador de reminders para MRT.
   </p>
 
-  <section
-    class="v2-readiness"
-    [class.readiness-ready]="v2Readiness()?.state === 'ready'"
-    [class.readiness-partial]="v2Readiness()?.state === 'partial'"
-    [class.readiness-missing]="v2Readiness()?.state === 'missing' || v2ReadinessError()"
-    aria-live="polite"
-  >
-    <div class="readiness-header">
-      <div>
-        <strong>Defensivos v2 · readiness técnico</strong>
-        @if (v2ReadinessLoading()) {
-          <span>Comprobando endpoint, migraciones y backfill…</span>
-        } @else if (v2ReadinessError(); as readinessError) {
-          <span>Diagnóstico no accesible. Las capacidades v2 quedan deshabilitadas; el template por spec sigue disponible.</span>
-        } @else if (v2Readiness(); as readiness) {
-          @switch (readiness.state) {
-            @case ('ready') { <span>Esquema y backfill listos para activar las capacidades v2.</span> }
-            @case ('partial') { <span>Esquema disponible; backfill incompleto. Dosier/Fiabilidad v2 siguen bloqueados.</span> }
-            @case ('missing') { <span>Falta al menos un endpoint o migración. Las capacidades afectadas no usarán un fallback que parezca v2.</span> }
-          }
-        }
-      </div>
-      <div class="readiness-actions">
-        <button type="button" class="readiness-link" (click)="toggleV2ReadinessDetails()" [attr.aria-expanded]="v2ReadinessDetailsOpen()">
-          {{ v2ReadinessDetailsOpen() ? 'Ocultar' : 'Detalle' }}
-        </button>
-        @if (!v2ReadinessLoading() && (v2ReadinessError() || v2Readiness()?.state !== 'ready')) {
-          <button type="button" class="readiness-retry" (click)="retryV2Readiness()">Volver a comprobar</button>
-        }
-      </div>
-    </div>
-
-    @if (v2ReadinessDetailsOpen()) {
-      <div class="readiness-detail">
-        @if (v2ReadinessError(); as readinessError) {
-          <p class="result-line result-warn"><strong>Error:</strong> {{ readinessError }}</p>
-        }
-        @if (v2Readiness(); as readiness) {
-          <ul class="readiness-checks">
-            @for (check of readiness.checks; track check.id) {
-              <li [class]="'check-' + check.state">
-                <span class="readiness-check-state">{{ check.state === 'ready' ? '✓' : (check.state === 'partial' ? '◐' : '!') }}</span>
-                <span>
-                  <strong>{{ check.label }}</strong> · {{ check.detail }}
-                  @if (check.requiredMigration && check.state !== 'ready') {
-                    <small>Requiere: {{ check.requiredMigration }}</small>
-                  }
-                </span>
-              </li>
-            }
-          </ul>
-          <p class="readiness-capabilities">
-            Jugador {{ readiness.capabilities.playerMode ? '✓' : 'bloqueado' }} ·
-            Override {{ readiness.capabilities.playerOverride ? '✓' : 'bloqueado' }} ·
-            Plan {{ readiness.capabilities.planManagement ? '✓' : 'bloqueado' }} ·
-            Evaluator {{ readiness.capabilities.evaluator ? '✓' : 'bloqueado' }} ·
-            Sección 04 {{ readiness.capabilities.infographic ? '✓' : 'bloqueada' }} ·
-            Fiabilidad {{ readiness.capabilities.reliability ? '✓' : 'bloqueada' }}
-          </p>
-        }
-      </div>
-    }
-  </section>
-
-  <section class="controlled-backfill">
-    <div class="controlled-backfill-header">
-      <div>
-        <strong>Backfill controlado</strong>
-        <span>Reanaliza una muestra reciente del boss seleccionado, un pull por invocación, y audita cinco casos sensibles.</span>
-      </div>
-      <div class="controlled-backfill-actions">
-        <label>
-          Muestra
-          <input
-            type="number"
-            min="5"
-            max="10"
-            [value]="backfillSampleSize()"
-            [disabled]="backfillRunning()"
-            (change)="onBackfillSampleSize($any($event.target).value)"
-          />
-        </label>
-        <button
-          type="button"
-          class="sync-btn"
-          [disabled]="backfillRunning() || !selectedBoss() || v2Readiness()?.capabilities?.evaluator !== true"
-          [title]="v2Readiness()?.capabilities?.evaluator === true ? '' : 'Requiere resolver, plan M7 y evaluator M8 listos'"
-          (click)="startControlledBackfill()"
-        >
-          {{ backfillRunning() ? 'Reanalizando…' : 'Iniciar / reanudar muestra' }}
-        </button>
-      </div>
-    </div>
-
-    @if (!selectedBoss()) {
-      <p class="muted">Selecciona primero un boss y dificultad.</p>
-    } @else if (v2Readiness()?.capabilities?.evaluator !== true) {
-      <p class="result-line result-warn">Bloqueado por seguridad: la muestra necesita Resolver y builds, Plan M7 y Evaluator M8 en estado ✓. Revisa arriba la primera fila marcada con “!”.</p>
-    }
-    @if (backfillError(); as sampleError) {
-      <p class="result-line result-warn" role="alert">⚠ {{ sampleError }}</p>
-    }
-    @if (backfillProgress(); as progress) {
-      <div class="backfill-progress" role="progressbar" [attr.aria-valuenow]="progress.completed" [attr.aria-valuemin]="0" [attr.aria-valuemax]="progress.total">
-        <span [style.width.%]="backfillProgressPercent()"></span>
-      </div>
-      <div class="backfill-progress-meta">
-        <span>{{ progress.completed }}/{{ progress.total }} completados@if (progress.running) { · 1 ejecutando }@if (progress.failed) { · {{ progress.failed }} fallidos }</span>
-        @if (backfillBatchId(); as batchId) {
-          <span>Batch {{ batchId }}@if (backfillReused()) { · reanudado }</span>
-        }
-        <button type="button" class="readiness-link" [disabled]="backfillRunning()" (click)="refreshControlledBackfillReport()">Actualizar informe</button>
-        @if (progress.failed) {
-          <button type="button" class="readiness-retry" [disabled]="backfillRunning()" (click)="retryControlledBackfillFailures()">Reintentar fallidos</button>
-        }
-      </div>
-    }
-    @if (backfillAudit().length) {
-      @if (backfillProgress(); as progress) {
-        @if (progress.completed !== progress.total || progress.failed > 0) {
-          <p class="result-line result-warn">Informe provisional: no puede usarse como aceptación mientras el batch no termine completo y sin fallos.</p>
-        }
-      }
-      <ul class="backfill-audit">
-        @for (audit of backfillAudit(); track audit.id) {
-          <li [class]="'audit-' + audit.state">
-            <span>{{ audit.state === 'passed' ? '✓' : (audit.state === 'failed' ? '!' : '○') }}</span>
-            <div><strong>{{ audit.label }}</strong><small>{{ audit.detail }}</small></div>
-          </li>
-        }
-      </ul>
-    }
-  </section>
-
   @if (error()) {
     <p class="error">{{ error() }}</p>
   }
@@ -227,16 +93,6 @@
           </div>
           } @else {
             <div class="player-select-bar">
-              <select
-                [value]="selectedPlayerCharacterId() ?? ''"
-                [disabled]="loadingPreparationPlayers()"
-                (change)="selectPreparationPlayer($any($event.target).value)"
-              >
-                <option value="">Selecciona jugador…</option>
-                @for (player of preparationPlayers(); track player.characterId) {
-                  <option [value]="player.characterId">{{ player.name }} · {{ player.className }}{{ player.specName ? ' · ' + player.specName : '' }}</option>
-                }
-              </select>
               <button type="button" class="sync-btn" [disabled]="!selectedPreparationPlayer() || loadingSelectedPlayerKit()" (click)="openTimeline()">🕐 Cronología del jugador</button>
               <button
                 type="button"
@@ -257,7 +113,40 @@
             </div>
           }
         </div>
+
+        <!-- §"el flujo aquí es un poco caótico... hay que ordenarlo para que sea paso a paso" (feedback real, 2026-09-03): boss → dificultad → sincronizar mecánicas → vista/jugador. Antes este botón vivía enterrado bajo la grid de kit efectivo, junto a otro panel de QA interna que citaba "Fade" para cualquier clase (ver "Diagnóstico técnico" al final de la página) — de ahí la confusión. -->
+        <div class="sync-row">
+          <button type="button" class="sync-btn" [disabled]="syncing()" (click)="runSync()">
+            {{ syncing() ? 'Sincronizando…' : '🔄 Sincronizar mecánicas de este boss+dificultad' }}
+          </button>
+          <span class="meta">Solo {{ selectedBoss()!.bossName }} · {{ difficultyLabel(selectedDifficultyId()!) }} — no afecta a otras dificultades.@if (syncState(); as s) { · {{ s.referenceFightsConsumed }} logs de referencia acumulados@if (s.lastSyncedAt) { · última sync {{ s.lastSyncedAt | date: 'd MMM, HH:mm' }} } }</span>
+          @if (syncSummary()) {
+            <span class="result-line result-ok">{{ syncSummary() }}</span>
+          }
+        </div>
+
         @if (assignmentView() === 'player') {
+          <!-- §"Preparación... sustituye el desplegable de jugador por chips clicables con color/icono de clase" (feedback real, 2026-09-03) -->
+          <div class="player-chip-row" role="tablist" aria-label="Selecciona jugador">
+            @for (player of preparationPlayers(); track player.characterId) {
+              <button
+                type="button"
+                role="tab"
+                class="player-select-chip"
+                [class.selected]="selectedPlayerCharacterId() === player.characterId"
+                [style.color]="classColor(player.className)"
+                [attr.aria-selected]="selectedPlayerCharacterId() === player.characterId"
+                [disabled]="loadingPreparationPlayers()"
+                (click)="selectPreparationPlayer(player.characterId.toString())"
+              >
+                <app-class-icon [wclClass]="player.className" />
+                <span>{{ player.name }}</span>
+              </button>
+            }
+            @if (!preparationPlayers().length && !loadingPreparationPlayers()) {
+              <p class="muted">No hay jugadores en el roster todavía.</p>
+            }
+          </div>
           @if (preparationPlayersError(); as rosterError) {
             <p class="result-line result-warn" role="alert">⚠ No se pudo cargar roster/builds: {{ rosterError }}</p>
           } @else if (loadingPreparationPlayers()) {
@@ -309,9 +198,12 @@
             @if (overrideResult(); as savedResult) {
               <p class="result-line result-ok">{{ savedResult }}</p>
             }
+            @if (planningResourceSaveError(); as saveError) {
+              <p class="result-line result-warn" role="alert">⚠ No se guardó la selección "Usar en el plan": {{ saveError }}. El checkbox refleja el estado local; recarga la página con cuidado.</p>
+            }
 
             <div class="effective-kit-grid">
-              @for (defensive of selectedPlayerEffectiveKit(); track defensive.spellId) {
+              @for (defensive of selectedPlayerVisibleKit(); track defensive.spellId) {
                 <article class="effective-defensive" [class.has-manual]="defensiveHasManualOverride(defensive)" [class.unavailable]="!defensive.eligible">
                   <div class="effective-defensive-title">
                     <app-wowhead-link type="spell" [id]="defensive.spellId"><strong>{{ defensive.name }}</strong></app-wowhead-link>
@@ -391,18 +283,9 @@
         @if (assignmentsStaleFor(autoAssignClass(), autoAssignSpec())) {
           <p class="result-line result-warn">⚠ Se editó algún defensivo de {{ autoAssignClass() }} — {{ autoAssignSpec() }} después de la última asignación guardada. Se recomienda volver a auto-asignar.</p>
         }
-
-        <div class="sync-row">
-          <button type="button" class="sync-btn" [disabled]="syncing()" (click)="runSync()">
-            {{ syncing() ? 'Sincronizando…' : '🔄 Sincronizar desde logs públicos' }}
-          </button>
-          @if (syncState(); as s) {
-            <span class="meta">{{ s.referenceFightsConsumed }} logs de referencia acumulados@if (s.lastSyncedAt) { · última sync {{ s.lastSyncedAt | date: 'd MMM, HH:mm' }} }</span>
-          }
-          @if (syncSummary()) {
-            <span class="result-line result-ok">{{ syncSummary() }}</span>
-          }
-        </div>
+        @if (draftPredatesLastSync()) {
+          <p class="result-line result-warn">⚠ El perfil de mecánicas se sincronizó después de este borrador — regenera el plan antes de publicar.</p>
+        }
 
         @if (loadingRows()) {
           <p class="muted">Cargando mecánicas…</p>
@@ -643,6 +526,14 @@
                                 spellID del timer (opcional, si no = el de la mecánica)
                                 <input type="text" [value]="assignmentDraft()!.bossmodSpellId" (change)="onDraftBossmodSpellIdChange($any($event.target).value)" />
                               </label>
+                              <label title="Contador de la ocurrencia en el timer real de BigWigs/DBM (p.ej. &quot;2&quot; para el 2º cast). Sin esto, aunque pongas spellID, el plan automático sigue degradando a tiempo fijo desde pull.">
+                                Counter del timer
+                                <input type="text" placeholder="p.ej. 2" [value]="assignmentDraft()!.bossmodCounter" (change)="onDraftBossmodCounterChange($any($event.target).value)" />
+                              </label>
+                              <label class="inline-field" title="Marca esto solo tras confirmar el counter contra un timer real en juego — nunca se asume.">
+                                <input type="checkbox" [checked]="assignmentDraft()!.bossmodCounterVerified" [disabled]="!assignmentDraft()!.bossmodCounter.trim()" (change)="onDraftBossmodCounterVerifiedChange($any($event.target).checked)" />
+                                <span>Counter verificado en juego</span>
+                              </label>
                             }
                             <label>
                               Notas
@@ -678,6 +569,149 @@
     </section>
   </div>
 
+  <!-- §"el flujo aquí es un poco caótico" (feedback real, 2026-09-03): panel de readiness técnico + herramienta de QA "Backfill controlado" (audita 5 casos fijos de resolución de spellmods contra una muestra reciente — no algo que haga falta tocar para preparar un boss; uno de esos casos usa literalmente Fade de priest como referencia, por eso aparecía esa palabra sin sentido con cualquier clase) vivían por delante del selector de boss. Se agrupan aquí, colapsados por defecto y fuera del flujo principal — ninguna lógica interna cambia. -->
+  <section class="technical-diagnostics">
+    <button type="button" class="readiness-link" (click)="technicalDiagnosticsOpen.set(!technicalDiagnosticsOpen())" [attr.aria-expanded]="technicalDiagnosticsOpen()">
+      {{ technicalDiagnosticsOpen() ? '▾' : '▸' }} Diagnóstico técnico (readiness v2 · backfill controlado de QA)
+    </button>
+
+    @if (technicalDiagnosticsOpen()) {
+      <section
+        class="v2-readiness"
+        [class.readiness-ready]="v2Readiness()?.state === 'ready'"
+        [class.readiness-partial]="v2Readiness()?.state === 'partial'"
+        [class.readiness-missing]="v2Readiness()?.state === 'missing' || v2ReadinessError()"
+        aria-live="polite"
+      >
+        <div class="readiness-header">
+          <div>
+            <strong>Defensivos v2 · readiness técnico</strong>
+            @if (v2ReadinessLoading()) {
+              <span>Comprobando endpoint, migraciones y backfill…</span>
+            } @else if (v2ReadinessError(); as readinessError) {
+              <span>Diagnóstico no accesible. Las capacidades v2 quedan deshabilitadas; el template por spec sigue disponible.</span>
+            } @else if (v2Readiness(); as readiness) {
+              @switch (readiness.state) {
+                @case ('ready') { <span>Esquema y backfill listos para activar las capacidades v2.</span> }
+                @case ('partial') { <span>Esquema disponible; backfill global incompleto. El dosier usa v2 solo cuando la noche del jugador está completa; Fiabilidad v2 sigue bloqueada.</span> }
+                @case ('missing') { <span>Falta al menos un endpoint o migración. Las capacidades afectadas no usarán un fallback que parezca v2.</span> }
+              }
+            }
+          </div>
+          <div class="readiness-actions">
+            <button type="button" class="readiness-link" (click)="toggleV2ReadinessDetails()" [attr.aria-expanded]="v2ReadinessDetailsOpen()">
+              {{ v2ReadinessDetailsOpen() ? 'Ocultar' : 'Detalle' }}
+            </button>
+            @if (!v2ReadinessLoading() && (v2ReadinessError() || v2Readiness()?.state !== 'ready')) {
+              <button type="button" class="readiness-retry" (click)="retryV2Readiness()">Volver a comprobar</button>
+            }
+          </div>
+        </div>
+
+        @if (v2ReadinessDetailsOpen()) {
+          <div class="readiness-detail">
+            @if (v2ReadinessError(); as readinessError) {
+              <p class="result-line result-warn"><strong>Error:</strong> {{ readinessError }}</p>
+            }
+            @if (v2Readiness(); as readiness) {
+              <ul class="readiness-checks">
+                @for (check of readiness.checks; track check.id) {
+                  <li [class]="'check-' + check.state">
+                    <span class="readiness-check-state">{{ check.state === 'ready' ? '✓' : (check.state === 'partial' ? '◐' : '!') }}</span>
+                    <span>
+                      <strong>{{ check.label }}</strong> · {{ check.detail }}
+                      @if (check.requiredMigration && check.state !== 'ready') {
+                        <small>Requiere: {{ check.requiredMigration }}</small>
+                      }
+                    </span>
+                  </li>
+                }
+              </ul>
+              <p class="readiness-capabilities">
+                Jugador {{ readiness.capabilities.playerMode ? '✓' : 'bloqueado' }} ·
+                Override {{ readiness.capabilities.playerOverride ? '✓' : 'bloqueado' }} ·
+                Plan {{ readiness.capabilities.planManagement ? '✓' : 'bloqueado' }} ·
+                Evaluator {{ readiness.capabilities.evaluator ? '✓' : 'bloqueado' }} ·
+                Sección 04 (gate por noche) {{ readiness.capabilities.infographic ? '✓' : 'bloqueada' }} ·
+                Fiabilidad {{ readiness.capabilities.reliability ? '✓' : 'bloqueada' }}
+              </p>
+            }
+          </div>
+        }
+      </section>
+
+      <section class="controlled-backfill">
+        <div class="controlled-backfill-header">
+          <div>
+            <strong>Backfill controlado</strong>
+            <span>Reanaliza una muestra reciente del boss seleccionado, un pull por invocación, y audita cinco casos sensibles. Herramienta de QA para validar la resolución de modificadores de talento — no hace falta usarla para preparar un boss.</span>
+          </div>
+          <div class="controlled-backfill-actions">
+            <label>
+              Muestra
+              <input
+                type="number"
+                min="5"
+                max="10"
+                [value]="backfillSampleSize()"
+                [disabled]="backfillRunning()"
+                (change)="onBackfillSampleSize($any($event.target).value)"
+              />
+            </label>
+            <button
+              type="button"
+              class="sync-btn"
+              [disabled]="backfillRunning() || !selectedBoss() || v2Readiness()?.capabilities?.evaluator !== true"
+              [title]="v2Readiness()?.capabilities?.evaluator === true ? '' : 'Requiere resolver, plan M7 y evaluator M8 listos'"
+              (click)="startControlledBackfill()"
+            >
+              {{ backfillRunning() ? 'Reanalizando…' : 'Iniciar / reanudar auditoría de QA' }}
+            </button>
+          </div>
+        </div>
+
+        @if (!selectedBoss()) {
+          <p class="muted">Selecciona primero un boss y dificultad.</p>
+        } @else if (v2Readiness()?.capabilities?.evaluator !== true) {
+          <p class="result-line result-warn">Bloqueado por seguridad: la muestra necesita Resolver y builds, Plan M7 y Evaluator M8 en estado ✓. Revisa arriba la primera fila marcada con “!”.</p>
+        }
+        @if (backfillError(); as sampleError) {
+          <p class="result-line result-warn" role="alert">⚠ {{ sampleError }}</p>
+        }
+        @if (backfillProgress(); as progress) {
+          <div class="backfill-progress" role="progressbar" [attr.aria-valuenow]="progress.completed" [attr.aria-valuemin]="0" [attr.aria-valuemax]="progress.total">
+            <span [style.width.%]="backfillProgressPercent()"></span>
+          </div>
+          <div class="backfill-progress-meta">
+            <span>{{ progress.completed }}/{{ progress.total }} completados@if (progress.running) { · 1 ejecutando }@if (progress.failed) { · {{ progress.failed }} fallidos }</span>
+            @if (backfillBatchId(); as batchId) {
+              <span>Batch {{ batchId }}@if (backfillReused()) { · reanudado }</span>
+            }
+            <button type="button" class="readiness-link" [disabled]="backfillRunning()" (click)="refreshControlledBackfillReport()">Actualizar informe</button>
+            @if (progress.failed) {
+              <button type="button" class="readiness-retry" [disabled]="backfillRunning()" (click)="retryControlledBackfillFailures()">Reintentar fallidos</button>
+            }
+          </div>
+        }
+        @if (backfillAudit().length) {
+          @if (backfillProgress(); as progress) {
+            @if (progress.completed !== progress.total || progress.failed > 0) {
+              <p class="result-line result-warn">Informe provisional: no puede usarse como aceptación mientras el batch no termine completo y sin fallos.</p>
+            }
+          }
+          <ul class="backfill-audit">
+            @for (audit of backfillAudit(); track audit.id) {
+              <li [class]="'audit-' + audit.state">
+                <span>{{ audit.state === 'passed' ? '✓' : (audit.state === 'failed' ? '!' : '○') }}</span>
+                <div><strong>{{ audit.label }}</strong><small>{{ audit.detail }}</small></div>
+              </li>
+            }
+          </ul>
+        }
+      </section>
+    }
+  </section>
+
   @if (exportModalOpen() && exportResult(); as r) {
     <div class="export-modal-backdrop" (click)="closeExportModal()">
       <div class="export-modal" (click)="$event.stopPropagation()">
@@ -690,6 +724,9 @@
         }
         @if (r.timeFallbacks.length) {
           <p class="result-line result-warn">Trigger bossmod degradado de forma segura a tiempo de pull (counter no verificado): {{ r.timeFallbacks.join(', ') }}</p>
+        }
+        @if (r.durationCovered.length) {
+          <p class="result-line">Sin recordatorio propio (ya cubierto por la duración de un cast anterior): {{ r.durationCovered.join(', ') }}</p>
         }
         <pre class="prompt-box">{{ r.text }}</pre>
         <button type="button" class="sync-btn" (click)="copyExport()">

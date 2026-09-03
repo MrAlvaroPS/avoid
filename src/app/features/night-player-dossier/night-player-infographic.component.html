@@ -54,6 +54,21 @@
         </svg>
         {{ refreshing() ? 'Actualizando…' : 'Actualizar' }}
       </button>
+      @if (hasV2DefensiveData()) {
+        <button
+          type="button"
+          class="iris-player-tool-button"
+          [attr.aria-pressed]="preferObservedDefensives()"
+          [class.active]="preferObservedDefensives()"
+          (click)="toggleDefensiveDataSource()"
+          title="Automático: cruza mecánicas, disponibilidad real y uso, con o sin plan publicado. Recuento directo: cuenta casts observados en los pulls sin ese cruce — útil si el automático da 0/vacío por falta de datos suficientes."
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 12h16M4 12l4-4M4 12l4 4M20 12l-4-4M20 12l-4 4" />
+          </svg>
+          Defensivos: {{ preferObservedDefensives() ? 'recuento directo' : 'automático' }}
+        </button>
+      }
       <button type="button" class="iris-player-tool-button" (click)="toggleZoom()">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" />
@@ -252,7 +267,7 @@
                 </div>
               </div>
               <div class="iris-player-execution-copy">
-                <span>{{ defensiveManagementV2() ? 'GESTIÓN DEFENSIVA' : 'LEGACY · COBERTURA DEFENSIVA' }}</span>
+                <span>GESTIÓN DEFENSIVA</span>
                 <strong>{{
                   defensiveTone() === 'success'
                     ? 'Sólida'
@@ -274,7 +289,7 @@
                   </p>
                 } @else {
                   <p>
-                    Métrica legacy de ventanas locales `covered/coverable`; se mantiene durante el rollout y no se presenta como score v2.
+                    Sin datos suficientes todavía para cruzar mecánicas y disponibilidad; se muestra el recuento directo de ventanas locales cubiertas.
                   </p>
                 }
               </div>
@@ -558,7 +573,7 @@
                 <strong>—</strong>
               }
               <span>reservas válidas</span>
-              <p>{{ defensiveManagementV2() ? 'correct holds v2' : 'sin muestra v2 homogénea' }}</p>
+              <p>{{ defensiveManagementV2() ? 'reservas mantenidas a propósito' : 'sin muestra suficiente todavía' }}</p>
             </article>
             <article class="danger">
               @if (defensiveManagementV2(); as management) {
@@ -568,7 +583,7 @@
               } @else {
                 <strong>{{ summary().defensiveSummary.deathsWithDefensiveAvailable }}</strong>
                 <span>CD disponible al morir</span>
-                <p>legacy; no demuestra viabilidad previa</p>
+                <p>recuento directo; no demuestra viabilidad previa</p>
               }
             </article>
           </section>
@@ -584,7 +599,7 @@
                 @if (defensiveManagementV2()) {
                   <p>Reminders publicados + casts reales + replay global de reservas y oportunidades factibles.</p>
                 } @else {
-                  <p>Fallback legacy: sensor local de pressure windows y catálogo; `coverable` aún no es un veredicto v2.</p>
+                  <p>Sensor local de ventanas de presión y catálogo; recuento provisional sin cruzar plan ni disponibilidad real.</p>
                 }
               </div>
 

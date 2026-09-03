@@ -477,6 +477,62 @@
   font-size: 12px;
 }
 
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spell-icon {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.spell-icon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.spell-icon svg {
+  width: 65%;
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1.8;
+}
+
+// §"las cosas que son pasivas... las ponemos en gris, no son evaluables en
+// ningún lado" (feedback real, 2026-09-03): ya nunca se penalizan (el
+// resolver las marca eligible=false y el evaluator devuelve status
+// 'unknown') — esto solo hace visible esa realidad en vez de que parezcan
+// un defensivo normal con un dato pendiente.
+tr.passive {
+  opacity: 0.55;
+}
+
+.passive-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .name {
   display: block;
   font-weight: 500;

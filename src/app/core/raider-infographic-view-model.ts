@@ -11,7 +11,7 @@ import type {
   RaiderEvidenceProjection,
   RaiderEvidenceVerdict,
 } from './raider-evidence-projection';
-import { classDisplayName, formatDuration } from '../shared/format.util';
+import { classDisplayName, formatDuration, safeSpellName } from '../shared/format.util';
 
 export type RaiderInfographicTone =
   | 'positive'
@@ -42,12 +42,16 @@ export interface RaiderCoachingCard {
   verdictLabel: string;
   tone: RaiderInfographicTone;
   confidenceLabel: string;
+  /** "Qué es la habilidad", bajo boss/pull/hora — null si no hay clasificación revisada. */
+  mechanicDescription: string | null;
   whatHappened: string;
   evidence: string;
   correction: string | null;
   correctionSource: string;
-  observedImpact: string;
-  whyItMatters: string | null;
+  /** "Cómo resolver" en el pie — resolución de la mecánica (distinta de
+   * `correction`, que en cards defensivas es la instrucción sobre el CD). */
+  resolutionSummary: string | null;
+  preventionKey: string | null;
   defensives: Array<RaiderEvidenceDefensive & { statusLabel: string }>;
 }
 
@@ -55,6 +59,11 @@ export interface RaiderInfographicTimelineGroup {
   key: string;
   bossName: string;
   difficulty: string;
+  /** Boss + dificultad abreviada (N/HC/M), para la etiqueta flotante de la
+   * banda continua — con 8-10 bosses en una noche, un grupo puede ser un
+   * único pull de ~40px y no cabe "Nombre largo · Heroic" sin solaparse con
+   * el siguiente grupo. */
+  bossLabel: string;
   cells: {
     pullId: string;
     pullNumber: number;
@@ -85,6 +94,12 @@ export interface RaiderMechanicCard {
   coveredCount: number;
   totalCount: number;
   coverageLabel: string;
+  /** "Qué es la habilidad", entre el nombre y el ratio — null si no hay clasificación revisada. */
+  description: string | null;
+  /** "Cómo resolverla", debajo de description. */
+  resolution: string | null;
+  /** Una línea al pie: por qué esta mecánica aparece aquí (frecuencia esta noche). Siempre presente. */
+  relevanceNote: string;
   timingLabel: string | null;
   occurrenceGroups: {
     pullNumber: number;
@@ -114,6 +129,9 @@ export interface RaiderInfographicDeathCard {
   tone: RaiderInfographicTone;
   observation: string;
   evidence: string | null;
+  /** Cifra de daño destacada (serif grande), separada de `evidence` para
+   * poder tratarla tipográficamente aparte; null cuando no hay daño medido. */
+  damageLabel: string | null;
   defensives: Array<RaiderEvidenceDefensive & { statusLabel: string }>;
 }
 
@@ -122,7 +140,13 @@ export interface RaiderInfographicPattern {
   mechanicId: number | null;
   mechanicName: string;
   bossNames: string;
+  /** Etiqueta de dificultad solo si el patrón no cruza dificultades esta noche. */
+  difficultyLabel: string | null;
   instanceLabel: string;
+  /** "Qué es" — null cuando el patrón cruza dificultades o no hay clasificación revisada. */
+  description: string | null;
+  /** "Cómo resolverla" — mismo criterio que description. */
+  resolution: string | null;
 }
 
 export interface RaiderInfographicEvolutionCard {
@@ -156,7 +180,8 @@ export interface RaiderInfographicViewModel {
   timelineGroups: RaiderInfographicTimelineGroup[];
   positiveSignals: RaiderInfographicSignal[];
   defensiveMetrics: RaiderInfographicMetric[];
-  mechanicPages: RaiderMechanicCard[][];
+  mechanics: RaiderMechanicCard[];
+  additionalMechanicCount: number;
   deaths: RaiderInfographicDeathCard[];
   additionalDeathCount: number;
   patterns: RaiderInfographicPattern[];
@@ -169,14 +194,11 @@ export interface RaiderInfographicViewModel {
   generationLabel: string | null;
   layout: {
     pullDensity: 'normal' | 'compact' | 'dense';
-    mechanicDensity: 'normal' | 'compact' | 'dense';
+    mechanicColumns: 2 | 3;
     defensiveDensity: 'normal' | 'compact';
-    spreadCount: number;
+    coachingDensity: 'normal' | 'compact';
   };
 }
-
-const PRIMARY_MECHANIC_CAPACITY = 6;
-const CONTINUATION_MECHANIC_CAPACITY = 8;
 
 const VERDICT_LABEL: Record<RaiderEvidenceVerdict, string> = {
   success: 'Éxito',
@@ -245,13 +267,6 @@ function evidenceSource(item: RaiderEvidenceItem): string {
   return [...labels].join(' · ');
 }
 
-function observedImpact(item: RaiderEvidenceItem): string {
-  if (item.kind === 'death' || item.reasonCode.startsWith('DEATH_')) return 'Muerte registrada';
-  if (item.damageTotal > 0) return `${compactNumber(item.damageTotal)} de daño observado`;
-  if (item.occurrences.length > 1) return `${item.occurrences.length} incidencias observadas`;
-  return 'Incidencia observada';
-}
-
 function defensiveView(defensive: RaiderEvidenceDefensive) {
   return { ...defensive, statusLabel: DEFENSIVE_STATUS_LABEL[defensive.status] };
 }
@@ -276,14 +291,24 @@ function coachingCard(item: RaiderEvidenceItem, index: number): RaiderCoachingCa
         : item.confidence === 'inferred'
           ? 'Evidencia parcial'
           : 'Sin veredicto fuerte',
+    mechanicDescription: item.mechanicDescription,
     whatHappened: item.observation,
     evidence: item.whyItMatters ?? 'No hay una inferencia adicional publicable.',
     correction: item.action,
     correctionSource: evidenceSource(item),
-    observedImpact: observedImpact(item),
-    whyItMatters: item.whyItMatters,
+    resolutionSummary: item.resolutionText,
+    preventionKey: item.preventionKey,
     defensives: item.defensives.map(defensiveView),
   };
+}
+
+function shortDifficulty(difficulty: string): string {
+  const normalized = difficulty.trim().toLowerCase();
+  if (normalized.startsWith('mythic')) return 'M';
+  if (normalized.startsWith('heroic')) return 'HC';
+  if (normalized.startsWith('normal')) return 'N';
+  if (normalized.startsWith('lfr')) return 'LFR';
+  return difficulty;
 }
 
 function groupTimeline(projection: RaiderEvidenceProjection): RaiderInfographicTimelineGroup[] {
@@ -294,6 +319,7 @@ function groupTimeline(projection: RaiderEvidenceProjection): RaiderInfographicT
       key,
       bossName: cell.bossName,
       difficulty: cell.difficulty,
+      bossLabel: `${cell.bossName} · ${shortDifficulty(cell.difficulty)}`,
       cells: [],
     };
     group.cells.push({
@@ -343,7 +369,7 @@ function defensiveRow(
   const freeUnused = Math.max(0, stat.timesAvailableUnused - (reserved ?? 0));
   return {
     spellId: stat.spellId,
-    name: stat.name,
+    name: safeSpellName(stat.name),
     coveredCount: stat.timesCovered,
     freeUnusedCount: freeUnused,
     onCooldownCount: stat.timesOnCooldown,
@@ -356,6 +382,17 @@ function defensiveRow(
       (reserved ?? 0) +
       stat.timesUnknown,
   };
+}
+
+// §"el literal de 'Buena ejecución' podemos quitarlo porque se entiende bien
+// viendo el resto de colores... en su lugar un texto muy breve de por qué
+// esa mecánica es relevante (para que aparezca ahí)" (feedback real,
+// 2026-09-03): ya no es un veredicto de cobertura (eso lo dicen los colores
+// de la tabla) — es la razón cuantitativa de inclusión en esta lista.
+function mechanicRelevanceNote(totalCount: number): string {
+  return totalCount === 1
+    ? 'Ventana defensiva única esta noche.'
+    : `Se repitió ${totalCount} veces esta noche.`;
 }
 
 function mechanicCards(
@@ -385,7 +422,7 @@ function mechanicCards(
         state,
         label: `Pull ${occurrence.pullNumber} · ${formatDuration(occurrence.timeMs)} · ${
           state === 'covered'
-            ? `cubierta${occurrence.coveredBySpellName ? ` con ${occurrence.coveredBySpellName}` : ''}`
+            ? `cubierta${occurrence.coveredBySpellName ? ` con ${safeSpellName(occurrence.coveredBySpellName)}` : ''}`
             : state === 'reserved'
               ? 'reserva correcta'
               : 'sin cobertura'
@@ -410,6 +447,9 @@ function mechanicCards(
       coverageLabel: percent(
         mechanic.totalCount > 0 ? (mechanic.coveredCount / mechanic.totalCount) * 100 : null,
       ),
+      description: mechanic.aiNote,
+      resolution: mechanic.resolution,
+      relevanceNote: mechanicRelevanceNote(mechanic.totalCount),
       timingLabel,
       occurrenceGroups: [...occurrenceGroups.values()],
       defensives: mechanic.defensives.map((stat) =>
@@ -419,21 +459,28 @@ function mechanicCards(
   });
 }
 
-function chunk<T>(rows: T[], size: number): T[][] {
-  if (!rows.length) return [[]];
-  const result: T[][] = [];
-  for (let index = 0; index < rows.length; index += size) result.push(rows.slice(index, index + size));
-  return result;
-}
+// §"no quiero que se genere una nueva página... 2 columnas, 3 columnas, y
+// únicamente las que quepan en ese espacio... esas otras mecánicas se
+// tienen en cuenta para las métricas y valores pero no se enseñan en la
+// infografía porque no caben" (feedback real, 2026-09-03): reemplaza la
+// paginación por láminas adicionales — nunca crece verticalmente, solo
+// cambia de 2 a 3 columnas (misma altura de 3 filas) cuando hay más de 6.
+const MECHANIC_TWO_COLUMN_CAPACITY = 6;
+const MECHANIC_THREE_COLUMN_CAPACITY = 9;
 
-function mechanicSpreads(rows: RaiderMechanicCard[]): RaiderMechanicCard[][] {
-  if (!rows.length) return [[]];
-  return [
-    rows.slice(0, PRIMARY_MECHANIC_CAPACITY),
-    ...chunk(rows.slice(PRIMARY_MECHANIC_CAPACITY), CONTINUATION_MECHANIC_CAPACITY).filter(
-      (page) => page.length > 0,
-    ),
-  ];
+function selectMechanics(rows: RaiderMechanicCard[]): {
+  visible: RaiderMechanicCard[];
+  additionalCount: number;
+  columns: 2 | 3;
+} {
+  if (rows.length <= MECHANIC_TWO_COLUMN_CAPACITY) {
+    return { visible: rows, additionalCount: 0, columns: 2 };
+  }
+  return {
+    visible: rows.slice(0, MECHANIC_THREE_COLUMN_CAPACITY),
+    additionalCount: Math.max(0, rows.length - MECHANIC_THREE_COLUMN_CAPACITY),
+    columns: 3,
+  };
 }
 
 function positiveSignals(
@@ -491,6 +538,30 @@ function positiveSignals(
   return rows;
 }
 
+// §"0/0 slots required cubiertos... por qué el score no es 100% o sin dato"
+// (feedback real, 2026-09-03): managementScore sale de
+// computeDefensiveManagementScore, que pondera death_with_viable_cd/
+// plan_broken/extras además de los slots required — no solo required. La
+// leyenda anterior citaba únicamente required (0/0 esa noche) y parecía
+// contradecir un score que en realidad venía sobre todo de 2 muertes con CD
+// viable. Ahora la leyenda sigue al dato que de verdad domina el score.
+function defensiveScoreDetail(v2: NightDefensiveManagementV2 | null): string {
+  // §"esto no es información útil para un raider" (feedback real,
+  // 2026-09-03): la explicación anterior hablaba del propio sistema
+  // (v2/legacy) en vez de lo que el número representa para el jugador.
+  if (!v2) return '% de ventanas de presión con algún defensivo usado.';
+  if (v2.planRequiredCount > 0) {
+    return `${v2.requiredCoverageSuccessCount}/${v2.planRequiredCount} slots required cubiertos · ${v2.correctHoldCount} reservas correctas`;
+  }
+  if (v2.deathViableCdCount > 0) {
+    return `${v2.deathViableCdCount} muerte${v2.deathViableCdCount === 1 ? '' : 's'} con CD viable sin usar · ${v2.correctHoldCount} reservas correctas`;
+  }
+  if (v2.brokenReservationCount > 0) {
+    return `${v2.brokenReservationCount} reserva${v2.brokenReservationCount === 1 ? '' : 's'} rota${v2.brokenReservationCount === 1 ? '' : 's'} · ${v2.correctHoldCount} reservas correctas`;
+  }
+  return `${v2.correctHoldCount} reservas correctas · sin slots required esta noche`;
+}
+
 function evolutionValue(value: number, unit: NightEvolutionMetric['unit']): string {
   return unit === 'percent' ? percent(value) : metricNumber(value);
 }
@@ -511,7 +582,10 @@ export function buildRaiderInfographicViewModel(
   );
   const bossKills = evaluatedPulls.filter((pull) => pull.kill).length;
   const mechanics = mechanicCards(summary, v2);
-  const mechanicPages = mechanicSpreads(mechanics);
+  const mechanicSelection = selectMechanics(mechanics);
+  // Coverage/KPIs siempre sobre TODAS las mecánicas, aunque algunas no quepan
+  // en el grid visible — "se tienen en cuenta para las métricas... pero no
+  // se enseñan en la infografía porque no caben" (feedback real, 2026-09-03).
   const coverage = mechanics.reduce(
     (totals, mechanic) => ({
       covered: totals.covered + mechanic.coveredCount,
@@ -523,13 +597,19 @@ export function buildRaiderInfographicViewModel(
   const className = summary.gearSnapshot?.class ?? summary.roster?.class ?? null;
   const executionScore = summary.nightScore == null ? null : summary.nightScore * 100;
   const defensiveScore = v2?.managementScore ?? summary.nightReliability?.breakdown.defensiva ?? null;
-  const deathResponseCount = v2?.deathViableCdCount ?? summary.defensiveSummary.deathsWithDefensiveAvailable;
-  const deathResponseDetail = v2
-    ? 'con respuesta viable durante la secuencia letal'
-    : 'con un CD libre al final; no prueba que fuera viable antes';
-  const deaths = projection.items
-    .filter((item) => item.kind === 'death' || item.reasonCode.startsWith('DEATH_'))
-    .map((item): RaiderInfographicDeathCard => ({
+  // §Hallazgo 4 (2026-09-03): antes este contador leía v2.deathViableCdCount
+  // (o el agregado legacy) mientras las cards de muerte de abajo se
+  // construyen mezclando episodios v2 y legacy pull a pull — un episodio de
+  // muerte concreto puede no tener decisión v2 aunque v2 exista para la
+  // noche, y ese contador global no lo veía. El resumen y las cards podían
+  // contradecirse en la misma lámina ("0 muertes con respuesta viable"
+  // arriba, dos cards de muerte con CD libre debajo). Ahora el contador
+  // cuenta exactamente las mismas cards que se van a pintar.
+  const deathItems = projection.items.filter(
+    (item) => item.kind === 'death' || item.reasonCode.startsWith('DEATH_'),
+  );
+  const deaths = deathItems.map(
+    (item): RaiderInfographicDeathCard => ({
       id: item.id,
       title: item.title,
       bossName: item.bossName,
@@ -543,8 +623,15 @@ export function buildRaiderInfographicViewModel(
       tone: verdictTone(item.verdict),
       observation: item.observation,
       evidence: item.whyItMatters,
+      damageLabel: item.damageTotal > 0 ? compactNumber(item.damageTotal) : null,
       defensives: item.defensives.map(defensiveView),
-    }));
+    }),
+  );
+  const deathResponseCount = deathItems.filter(
+    (item) => item.verdict === 'coaching' && item.defensives.length > 0,
+  ).length;
+  const deathResponseDetail =
+    'defensivo disponible identificado en la card de muerte correspondiente; no prueba que hubiera evitado la muerte';
 
   return {
     identity: {
@@ -568,10 +655,14 @@ export function buildRaiderInfographicViewModel(
     },
     heroMetrics: [
       {
+        // §"'6/13 pulls sin fallo personal ni muerte evaluable' porque ya
+        // está en la card de abajo" (feedback real, 2026-09-03): ese mismo
+        // par ya es el KPI "Pulls limpios" del stat-strip; aquí describe qué
+        // pesa el % en vez de repetir la fracción.
         key: 'execution',
         label: 'Ejecución de la noche',
         value: percent(executionScore),
-        detail: `${summary.execution.cleanPulls}/${summary.execution.evaluatedPulls} pulls sin fallo personal ni muerte evaluable`,
+        detail: 'Combina fallos personales, muertes evaluables y consistencia por pull.',
         tone:
           executionScore == null
             ? 'neutral'
@@ -582,12 +673,16 @@ export function buildRaiderInfographicViewModel(
                 : 'positive',
       },
       {
+        // §"No debería existir el literal de defensivos V2 en la
+        // infografía porque todo tiene que adaptarse al nuevo" (feedback
+        // real, 2026-09-03): una sola etiqueta para el jugador,
+        // independientemente de qué generación interna resolvió el número
+        // — mismo criterio que ya siguen sus dos hermanas ('Ejecución de la
+        // noche', 'Calidad de evidencia'), que tampoco revelan su fuente.
         key: 'defensive',
-        label: v2 ? 'Gestión defensiva V2' : 'Cobertura defensiva legacy',
+        label: 'Gestión defensiva',
         value: percent(defensiveScore),
-        detail: v2
-          ? `${v2.requiredCoverageSuccessCount}/${v2.planRequiredCount} slots required cubiertos · ${v2.correctHoldCount} reservas correctas`
-          : 'La métrica legacy no se presenta como score V2.',
+        detail: defensiveScoreDetail(v2),
         tone:
           defensiveScore == null
             ? 'neutral'
@@ -606,7 +701,16 @@ export function buildRaiderInfographicViewModel(
             : projection.quality === 'partial'
               ? 'PARCIAL'
               : 'LIMITADA',
-        detail: projection.qualityReason,
+        // §"PARCIAL / CALIDAD DE EVIDENCIA / Algunas cards se basan en menos
+        // datos... no es útil" (feedback real, 2026-09-03): esa frase ya se
+        // había reescrito una vez el mismo día citando esta misma queja y
+        // seguía sin aportar nada que las propias cards no dijeran ya cada
+        // una con su confidenceLabel. Se retira aquí; la nota fina de
+        // evidencia sigue viva en el pie de página (view.evidenceNote) para
+        // quien la busque, y este hueco pasa a describir la métrica en sí
+        // — mismo patrón que sus dos hermanas ('Ejecución de la noche',
+        // 'Gestión defensiva V2'), que explican qué miden, no cuánto fiarse.
+        detail: 'Cuánta de la noche está verificada u observada directamente, no solo inferida.',
         tone:
           projection.quality === 'high'
             ? 'positive'
@@ -621,7 +725,14 @@ export function buildRaiderInfographicViewModel(
         label: 'Pulls limpios',
         value: `${summary.execution.cleanPulls}/${summary.execution.evaluatedPulls}`,
         detail: percent(summary.execution.cleanPullRate),
-        tone: 'positive',
+        tone:
+          summary.execution.cleanPullRate == null
+            ? 'neutral'
+            : summary.execution.cleanPullRate < 50
+              ? 'danger'
+              : summary.execution.cleanPullRate < 75
+                ? 'warning'
+                : 'positive',
       },
       {
         key: 'personal-errors',
@@ -645,17 +756,22 @@ export function buildRaiderInfographicViewModel(
         tone: summary.interrupts.length > 0 ? 'positive' : 'neutral',
       },
       {
+        // §Spec visual sección 6: "Pulls evaluados" no debe ocupar un KPI
+        // porque ya aparece junto a la identidad del jugador (hero, arriba).
+        // En su lugar vuelve "Ventanas de presión", que aporta una
+        // dimensión distinta (misma fuente que el strip de la página
+        // derecha, `coverage`, para no introducir un segundo cálculo).
+        key: 'pressure-windows',
+        label: 'Ventanas de presión',
+        value: `${coverage.covered}/${coverage.total}`,
+        detail: percent(coverage.total > 0 ? (coverage.covered / coverage.total) * 100 : null) + ' cubiertas',
+        tone: coverage.total === 0 ? 'neutral' : coverage.covered === coverage.total ? 'positive' : 'warning',
+      },
+      {
         key: 'bosses',
         label: 'Bosses evaluados',
         value: String(evaluatedBosses.size),
         detail: `${bossKills} kills de boss`,
-        tone: 'information',
-      },
-      {
-        key: 'pulls',
-        label: 'Pulls evaluados',
-        value: String(evaluatedPulls.length),
-        detail: 'mismo universo en toda la lámina',
         tone: 'information',
       },
     ],
@@ -694,25 +810,22 @@ export function buildRaiderInfographicViewModel(
         key: 'holds',
         label: 'Reservas correctas',
         value: v2 ? String(v2.correctHoldCount) : '—',
-        detail: v2 ? 'holds confirmados por el replay' : 'requiere evaluación V2 homogénea',
+        detail: v2 ? 'holds confirmados por el replay' : 'sin datos suficientes esta noche',
         tone: v2?.correctHoldCount ? 'information' : 'neutral',
       },
       {
         key: 'death-response',
-        label: v2 ? 'Muertes con respuesta viable' : 'CD libre al morir · legacy',
+        label: 'Muertes con respuesta disponible',
         value: String(deathResponseCount),
         detail: deathResponseDetail,
         tone: deathResponseCount > 0 ? 'danger' : 'neutral',
       },
-      {
-        key: 'kills',
-        label: 'Kills de boss',
-        value: String(bossKills),
-        detail: `${evaluatedBosses.size} bosses evaluados`,
-        tone: bossKills > 0 ? 'positive' : 'neutral',
-      },
+      // §Spec visual sección 12: 5 columnas, no 6 — "Kills del boss" no
+      // pertenece a este strip (ya está en la identidad de página izquierda
+      // y en las propias cards) y comprimía las otras cinco.
     ],
-    mechanicPages,
+    mechanics: mechanicSelection.visible,
+    additionalMechanicCount: mechanicSelection.additionalCount,
     deaths,
     additionalDeathCount: Math.max(0, deaths.length - 3),
     patterns: summary.repeatedPatterns
@@ -722,7 +835,10 @@ export function buildRaiderInfographicViewModel(
         mechanicId: pattern.mechanicId,
         mechanicName: pattern.mechanicName,
         bossNames: pattern.bossNames.join(' · '),
+        difficultyLabel: pattern.difficulty,
         instanceLabel: `${pattern.instanceCount} incidencias en ${pattern.distinctBossCount} boss${pattern.distinctBossCount === 1 ? '' : 'es'}`,
+        description: pattern.aiNote,
+        resolution: pattern.resolution,
       })),
     additionalPatternCount: Math.max(
       0,
@@ -753,9 +869,14 @@ export function buildRaiderInfographicViewModel(
     layout: {
       pullDensity:
         evaluatedPulls.length > 22 ? 'dense' : evaluatedPulls.length > 12 ? 'compact' : 'normal',
-      mechanicDensity: mechanics.length > 6 ? 'dense' : mechanics.length > 4 ? 'compact' : 'normal',
+      mechanicColumns: mechanicSelection.columns,
       defensiveDensity: maxDefensiveRows > 3 ? 'compact' : 'normal',
-      spreadCount: mechanicPages.length,
+      // §"solo aparecen 3 cards y creo que caben 4 (o 5)" (feedback real,
+      // 2026-09-03): el tope editorial subió de 3 a 4 (raider-evidence-
+      // projection.ts); la página es de altura fija con recorte, así que la
+      // 4ª card usa una variante compacta en vez de asumir que el hueco
+      // libre siempre alcanza a tamaño normal.
+      coachingDensity: projection.coaching.length > 3 ? 'compact' : 'normal',
     },
   };
 }

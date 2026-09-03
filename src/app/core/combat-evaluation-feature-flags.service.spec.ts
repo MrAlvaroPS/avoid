@@ -15,17 +15,17 @@ describe('CombatEvaluationFeatureFlagsService', () => {
 
   afterEach(() => localStorage.removeItem(key));
 
-  it('keeps every causal rollout flag disabled by default', () => {
-    expect(service.enabled('combatEvaluationContextV2')).toBe(false);
-    expect(service.enabled('mechanicPolicyV2')).toBe(false);
-    expect(service.enabled('mechanicResponsibilityV2')).toBe(false);
-    expect(service.enabled('consumableEvaluatorV2')).toBe(false);
-    expect(service.enabled('playerInfographicV3')).toBe(false);
-    expect(service.enabled('reliabilityExecutionV3')).toBe(false);
+  it('reflects the explicit causal rollout enabled in this environment', () => {
+    expect(service.enabled('combatEvaluationContextV2')).toBe(true);
+    expect(service.enabled('mechanicPolicyV2')).toBe(true);
+    expect(service.enabled('mechanicResponsibilityV2')).toBe(true);
+    expect(service.enabled('consumableEvaluatorV2')).toBe(true);
+    expect(service.enabled('playerInfographicV3')).toBe(true);
+    expect(service.enabled('reliabilityExecutionV3')).toBe(true);
   });
 
-  it('does not activate anything from a corrupt tester override', () => {
+  it('falls back to the environment when the tester override is corrupt', () => {
     localStorage.setItem(key, '{not-json');
-    expect(service.enabled('playerInfographicV3')).toBe(false);
+    expect(service.enabled('playerInfographicV3')).toBe(true);
   });
 });

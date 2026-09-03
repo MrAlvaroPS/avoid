@@ -6,7 +6,17 @@ import { isConservativeScheduleFeasible } from './defensive-plan-solver.ts';
 // @ts-ignore Same cross-runtime boundary as above.
 import { computeDefensiveManagementScore } from './defensive-management-score.ts';
 
-export const DEFENSIVE_EXECUTION_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.3.0';
+// §2.4.0 (feedback real, 2026-09-03): corrige el sentinel "Environment"/
+// targetActorId -1 en observedCasts() (un auto-cast de Barkskin se
+// descartaba como si fuera de otro jugador), añade requirementLevel real
+// para ventanas sin plan (antes siempre 'recommended', ahora sale de
+// boss_mechanic_defensive_planning_view igual que el solver), hace viajar
+// peakValue hasta la card, y añade una salvaguarda: un cast propio no
+// explicado dentro de una ventana/secuencia letal nunca se traduce en un
+// fallo confirmado, degrada a incertidumbre. Cambia el resultado de
+// evaluateDefensiveExecution — filas 2.3.0 quedan fuera de una generación
+// v2 homogénea hasta reanalizarse, mismo criterio que el salto anterior.
+export const DEFENSIVE_EXECUTION_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.0';
 
 export type DefensiveExecutionState =
   | 'plan_covered'
@@ -75,6 +85,20 @@ export interface EvaluationPressureWindow {
     | { kind: 'ALL_OF' }
     | { kind: 'MIN_N'; count: number }
     | { kind: 'LAYERED' };
+  /** §"buscarle la lógica... ahora que sabemos cuáles son las ventanas de
+   * daño... podemos saber qué daño era evitable, dónde se debía tirar un
+   * defensivo" (feedback real, 2026-09-03): mismo criterio que ya usa el
+   * solver (generate-defensive-plan/index.ts) contra
+   * boss_mechanic_defensive_planning_view — sin esto, evaluateUnplannedWindow
+   * trataba toda ventana sin plan como 'recommended' (peso 1) sin mirar si la
+   * mecánica real exige defensivo. undefined = sin clasificación resuelta,
+   * cae al valor por defecto de siempre.
+   */
+  requirementLevel?: 'required' | 'recommended' | 'optional';
+  /** Pico de daño real de la ventana (mismo dato que ya trae el sensor,
+   * defensive_pressure_windows_v2) — antes se perdía al construir esta
+   * ventana; sin él es imposible decir "era la mecánica de más daño". */
+  peakValue?: number;
 }
 
 export interface DefensiveExecutionEvaluationInput {
@@ -122,6 +146,10 @@ export interface DefensiveExecutionEvaluationEvent {
   cooldownRemainingMs?: number;
   candidateSpellIds?: number[];
   lethalWindowStartMs?: number;
+  /** Pico de daño real de la ventana que originó este evento — ver
+   * EvaluationPressureWindow.peakValue. undefined para eventos que no vienen
+   * de una ventana de presión (slots de plan, muertes). */
+  peakValue?: number;
   causalGroupId?: string;
   primaryPenalty?: boolean;
 }
@@ -272,6 +300,30 @@ function coveringCasts(
     .sort((left, right) => left.cast.timeMs - right.cast.timeMs || left.cast.spellId - right.cast.spellId);
 }
 
+// §"cuando decimos que es un 0 tiene que ser una comprobación 100% real de
+// que no ha usado ningún defensivo ante ningún daño" (feedback real,
+// 2026-09-03): coveringCasts() ya filtra por categoría/confidence/target —
+// si un cast real del jugador cae dentro de la ventana pero no encaja con
+// ninguno de esos filtros (el bug de "Environment" era un caso concreto;
+// puede haber otros: catálogo mal clasificado, confidence no fiable...),
+// eso NO es evidencia de que no hizo nada — es evidencia de que no se pudo
+// interpretar. Nunca se afirma un fallo confirmado sobre un hueco de
+// interpretación; se degrada a uncertain_data, igual que ya hace
+// evaluateDeath cuando el kit tiene una entrada no fiable.
+function hasUnexplainedOwnCast(
+  input: DefensiveExecutionEvaluationInput,
+  startMs: number,
+  endMs: number,
+): boolean {
+  return input.casts.some(
+    (cast) =>
+      cast.sourcePlayerKey === input.playerKey &&
+      (input.evaluationCutoffMs == null || cast.timeMs < input.evaluationCutoffMs) &&
+      cast.timeMs >= startMs &&
+      cast.timeMs <= endMs,
+  );
+}
+
 function uncertainEvent(atMs: number, details: Partial<DefensiveExecutionEvaluationEvent> = {}): DefensiveExecutionEvaluationEvent {
   return {
     state: 'uncertain_data',
@@ -403,7 +455,8 @@ function evaluateUnplannedWindow(
     atMs: window.peakMs,
     windowId: window.id,
     abilityId: window.mechanicId ?? undefined,
-    requirementLevel: 'recommended' as const,
+    requirementLevel: window.requirementLevel ?? 'recommended',
+    ...(window.peakValue != null ? { peakValue: window.peakValue } : {}),
   };
   if (!trusted(input.dataConfidence) || (!input.solverStrictScoringEligible && input.mode !== 'no_plan')) {
     return uncertainEvent(window.peakMs, base);
@@ -455,6 +508,10 @@ function evaluateUnplannedWindow(
   });
   const viable = locallyReady.filter((defensive) => counterfactual(input, defensive, window.peakMs, window.priority).feasible);
   if (viable.length) {
+    // "0 verificado": si hubo un cast propio real dentro de la ventana que
+    // coveringCasts() no reconoció como cobertura (categoría/confidence/
+    // target no encajaron), no se afirma "no hizo nada" — se degrada.
+    if (hasUnexplainedOwnCast(input, window.startMs, window.endMs)) return uncertainEvent(window.peakMs, base);
     return {
       ...base,
       state: 'missed_extra_opportunity',
@@ -535,6 +592,11 @@ function evaluateDeath(input: DefensiveExecutionEvaluationInput, deathTimeMs: nu
         ...(lethalWindowStartMs != null ? { lethalWindowStartMs } : {}),
       };
     }
+    // "0 verificado": un cast propio real dentro de la secuencia letal que
+    // no explique por qué ninguno de los candidatos estaba "on_cooldown" no
+    // se ignora — degrada a incertidumbre en vez de afirmar la muerte como
+    // fallo confirmado (mismo criterio que evaluateUnplannedWindow).
+    if (hasUnexplainedOwnCast(input, scoredLethalWindowStartMs!, deathTimeMs)) return uncertainEvent(deathTimeMs, base);
     return {
       ...base,
       state: 'death_with_viable_cd',

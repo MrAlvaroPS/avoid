@@ -19,14 +19,15 @@ const evaluator = read('supabase/functions/_shared/defensive-execution-evaluator
 const activationMigration = read('supabase/migrations/20260901180000_defensive_activation_semantics.sql');
 const consistencyMigration = read('supabase/migrations/20260902150000_defensive_evaluation_consistency.sql');
 
-for (const flag of [
-  'defensiveEffectiveResolverV2',
-  'defensiveDeployedPlans',
-  'defensiveExecutionEvaluatorV2',
-  'defensiveInfographicV2',
-  'defensiveReliabilityV2',
-]) {
-  requireText(environment, `${flag}: false`, 'rollout defensivo seguro');
+for (const [flag, enabled] of new Map([
+  ['defensiveEffectiveResolverV2', false],
+  ['defensiveDeployedPlans', false],
+  ['defensiveExecutionEvaluatorV2', false],
+  // La infografía tiene gate atómico jugador×noche y puede adelantarse al backfill global.
+  ['defensiveInfographicV2', true],
+  ['defensiveReliabilityV2', false],
+])) {
+  requireText(environment, `${flag}: ${enabled}`, 'rollout defensivo explícito');
 }
 
 for (const flag of [
@@ -37,7 +38,7 @@ for (const flag of [
   'playerInfographicV3',
   'reliabilityExecutionV3',
 ]) {
-  requireText(environment, `${flag}: false`, 'rollout causal seguro');
+  requireText(environment, `${flag}: true`, 'rollout causal explícito');
 }
 
 requireText(
@@ -60,10 +61,11 @@ for (const column of [
 for (const versionedSource of [evaluator, reliability, summary]) {
   requireText(
     versionedSource,
-    'defensive-execution-evaluator@2.3.0',
+    'defensive-execution-evaluator@2.4.0',
     'gate de evaluator homogéneo',
   );
 }
+requireText(summary, 'effective-defensives@2.1.0', 'gate de resolver autoritativo en la infografía');
 
 if (
   /v2\.managementScore != null[\s\S]{0,250}planExecutedCount\s*\/\s*v2\.planRequiredCount/.test(

@@ -4,7 +4,7 @@ import type {
   NightMechanicFailRow,
   NightPlayerSummary,
 } from './night-player-summary.service';
-import { formatDuration } from '../shared/format.util';
+import { formatDuration, safeSpellName } from '../shared/format.util';
 import { PERSONAL_RESPONSIBILITY_CATEGORIES } from '../shared/pull-consistency.util';
 
 export type RaiderEvidenceVerdict =
@@ -62,6 +62,14 @@ export interface RaiderEvidenceItem {
   observation: string;
   whyItMatters: string | null;
   action: string | null;
+  /** Síntesis de una frase, memorizable para el siguiente pull; null cuando
+   * no hay una segunda formulación distinta de `action` que no sea inventada
+   * (la spec visual permite mostrar "—" en ese caso, sección 9). */
+  preventionKey: string | null;
+  /** Nota descriptiva de la mecánica ("qué es"), misma fuente que aiNote en el resto de la app; null si no hay clasificación revisada. */
+  mechanicDescription: string | null;
+  /** Resolución esperada ("cómo resolverla"), distinta de `action` — action puede ser una instrucción defensiva concreta mientras esto es la táctica general de la mecánica. */
+  resolutionText: string | null;
   defensives: RaiderEvidenceDefensive[];
   confidence: RaiderEvidenceConfidence;
   occurrences: RaiderEvidenceOccurrence[];
@@ -135,19 +143,26 @@ function verifiableMechanic(id: number | null, name: string | null): boolean {
   return id != null && id > 0 && !!name && !/^unknown(?: ability| cause)?$/i.test(name.trim());
 }
 
+/** El nombre puede venir ausente (fallback `#id`) o presente pero corrupto
+ * (JSON/markdown sin terminar de parsear desde un envío manual anterior);
+ * safeSpellName() cubre el segundo caso, este helper cubre el primero. */
+function cleanSpellName(rawName: string | null | undefined, spellId: number): string {
+  return rawName == null ? `#${spellId}` : safeSpellName(rawName);
+}
+
 function defensiveNames(decision: NightDefensiveDecision): RaiderEvidenceDefensive[] {
   const rows: RaiderEvidenceDefensive[] = [];
   if (decision.plannedSpellId != null) {
     rows.push({
       spellId: decision.plannedSpellId,
-      name: decision.plannedSpellName ?? `#${decision.plannedSpellId}`,
+      name: cleanSpellName(decision.plannedSpellName, decision.plannedSpellId),
       status: 'planned',
     });
   }
   if (decision.actualSpellId != null) {
     rows.push({
       spellId: decision.actualSpellId,
-      name: decision.actualSpellName ?? `#${decision.actualSpellId}`,
+      name: cleanSpellName(decision.actualSpellName, decision.actualSpellId),
       status: 'used',
     });
   }
@@ -155,7 +170,7 @@ function defensiveNames(decision: NightDefensiveDecision): RaiderEvidenceDefensi
     const spellId = decision.candidateSpellIds![index];
     rows.push({
       spellId,
-      name: decision.candidateSpellNames[index] ?? `#${spellId}`,
+      name: cleanSpellName(decision.candidateSpellNames[index], spellId),
       status: 'candidate',
     });
   }
@@ -206,15 +221,21 @@ function decisionTitle(decision: NightDefensiveDecision): string {
 
 function decisionObservation(decision: NightDefensiveDecision): string {
   const planned =
-    decision.plannedSpellName ??
-    (decision.plannedSpellId == null ? 'el defensivo asignado' : `#${decision.plannedSpellId}`);
+    decision.plannedSpellName != null
+      ? safeSpellName(decision.plannedSpellName)
+      : decision.plannedSpellId == null
+        ? 'el defensivo asignado'
+        : `#${decision.plannedSpellId}`;
   const actual =
-    decision.actualSpellName ??
-    (decision.actualSpellId == null ? 'el cooldown' : `#${decision.actualSpellId}`);
+    decision.actualSpellName != null
+      ? safeSpellName(decision.actualSpellName)
+      : decision.actualSpellId == null
+        ? 'el cooldown'
+        : `#${decision.actualSpellId}`;
   const mechanic =
     decision.mechanicName ??
     (decision.abilityId == null ? 'la ventana observada' : `mecánica #${decision.abilityId}`);
-  const candidates = decision.candidateSpellNames.join(' / ') || 'un defensivo propio';
+  const candidates = decision.candidateSpellNames.map(safeSpellName).join(' / ') || 'un defensivo propio';
   const untilFuture =
     decision.relatedFutureAtMs == null
       ? null
@@ -261,12 +282,15 @@ function decisionObservation(decision: NightDefensiveDecision): string {
 
 function decisionAction(decision: NightDefensiveDecision): string | null {
   const planned =
-    decision.plannedSpellName ??
-    (decision.plannedSpellId == null ? 'el defensivo asignado' : `#${decision.plannedSpellId}`);
+    decision.plannedSpellName != null
+      ? safeSpellName(decision.plannedSpellName)
+      : decision.plannedSpellId == null
+        ? 'el defensivo asignado'
+        : `#${decision.plannedSpellId}`;
   const mechanic =
     decision.mechanicName ??
     (decision.abilityId == null ? 'esa ventana' : `mecánica #${decision.abilityId}`);
-  const candidates = decision.candidateSpellNames.join(' / ') || 'el defensivo factible';
+  const candidates = decision.candidateSpellNames.map(safeSpellName).join(' / ') || 'el defensivo factible';
   switch (decision.reason) {
     case 'TARGET_MISMATCH':
       return `Lanza ${planned} sobre el objetivo publicado para ${mechanic}.`;
@@ -290,6 +314,35 @@ function decisionAction(decision: NightDefensiveDecision): string | null {
     case 'DEATH_READY_AT_END_ONLY':
     case 'UNRESOLVED_BUILD_OR_RULE':
       return null;
+    default:
+      return null;
+  }
+}
+
+/** Versión de una frase de `decisionAction`, para la franja Impacto/Por qué
+ * importa/Prevención de la card (spec visual sección 7-8). Solo cubre los
+ * reason codes donde existe una síntesis corta que no repite ni inventa
+ * nada nuevo respecto a `action`; el resto queda `null` y la franja muestra
+ * "—" en esa celda sin romper la anatomía (permitido explícitamente por la
+ * spec, sección 9). */
+function decisionPreventionKey(decision: NightDefensiveDecision): string | null {
+  const planned =
+    decision.plannedSpellName != null ? safeSpellName(decision.plannedSpellName) : 'el CD asignado';
+  switch (decision.reason) {
+    case 'TARGET_MISMATCH':
+      return 'Confirma el objetivo antes de lanzarlo.';
+    case 'EARLY_CAST_CAUSED_MISS':
+      return `Espera a la ventana antes de usar ${planned}.`;
+    case 'READY_NOT_CAST_IN_WINDOW':
+      return `No dejes ${planned} listo sin usar en la ventana.`;
+    case 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT':
+      return 'No sustituyas si rompe la siguiente reserva.';
+    case 'COUNTERFACTUAL_FEASIBLE':
+      return 'Ten la alternativa lista para la próxima vez.';
+    case 'DEATH_COUNTERFACTUAL_FEASIBLE':
+      return 'Prepara el CD antes de que empiece la secuencia letal.';
+    case 'RESERVED_HIGHER_PRIORITY':
+      return 'Sigue reservando: fue la decisión correcta.';
     default:
       return null;
   }
@@ -320,6 +373,9 @@ function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] 
       (row) => row.category != null && PERSONAL_RESPONSIBILITY_CATEGORIES.has(row.category),
     );
     const resolutions = [...new Set(group.map((row) => row.resolution).filter((value): value is string => !!value))];
+    // Mismo criterio de consenso que ya usa repeatedPatterns.aiNote: solo se
+    // publica si todas las instancias verificables coinciden.
+    const aiNotes = [...new Set(group.map((row) => row.aiNote).filter((value): value is string => !!value))];
     const totalDamage = group.reduce((sum, row) => sum + Math.max(0, row.damageTaken), 0);
     return {
       id: `mechanic|${key}`,
@@ -347,6 +403,12 @@ function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] 
               group.length === 1 ? '' : 's'
             }.` ,
       action: resolutions.length === 1 ? resolutions[0] : null,
+      // Sin una segunda formulación independiente de la resolución de
+      // mecánica ya mostrada en "Corrección práctica"; repetirla no sería
+      // una síntesis nueva. La franja de la card muestra "—" aquí.
+      preventionKey: null,
+      mechanicDescription: aiNotes.length === 1 ? aiNotes[0] : null,
+      resolutionText: resolutions.length === 1 ? resolutions[0] : null,
       defensives: [],
       confidence: personal ? 'verified' : 'uncertain',
       occurrences: group.map((row) => ({
@@ -444,6 +506,9 @@ export function buildRaiderEvidenceProjection(
               ? 'La disponibilidad exacta al morir es contexto y no demuestra que el cooldown pudiera alterar el desenlace.'
               : null,
         action: knownReason ? decisionAction(decision) : null,
+        preventionKey: knownReason ? decisionPreventionKey(decision) : null,
+        mechanicDescription: causeIsVerifiable ? decision.mechanicDescription : null,
+        resolutionText: causeIsVerifiable ? decision.mechanicResolution : null,
         defensives: causeIsVerifiable ? defensiveNames(decision) : [],
         confidence: knownReason ? v2.dataConfidence : 'uncertain',
         occurrences: [
@@ -457,7 +522,12 @@ export function buildRaiderEvidenceProjection(
           },
         ],
         priorityTier: knownReason ? defensivePriority(decision) : 9,
-        damageTotal: 0,
+        // §"si en ese momento tenía un defensivo en CD (mal usado)... si lo
+        // tiró en las mecánicas de más daño" (feedback real, 2026-09-03):
+        // antes siempre 0 — el pico de daño real de la ventana (cuando la
+        // decisión viene de una ventana de presión, no de un slot de plan o
+        // una muerte) ahora viaja hasta aquí vía peakValue.
+        damageTotal: decision.peakValue ?? 0,
       });
     }
   }
@@ -477,6 +547,18 @@ export function buildRaiderEvidenceProjection(
     const mechanicIsVerifiable = verifiableMechanic(death.mechanicId, death.mechanicName);
     const hasResponse = death.defensivesAvailable.length > 0;
     const canCoachDefensiveResponse = mechanicIsVerifiable && hasResponse;
+    const availableDefensiveNames = death.defensivesAvailable.map((row) => safeSpellName(row.name)).join(' / ');
+    // §"no tenemos en ningún lado el uso de poción / piedra de brujo" (feedback
+    // real, 2026-09-03): usedHealthstoneInPull/usedHealthPotionInPull ya
+    // existen en NightDeathRow (night-player-summary.service.ts) pero no se
+    // mostraban en ningún sitio de la infografía. Son solo "se usó" — no
+    // "estaba disponible y no se usó" (eso exigiría saber si había Warlock en
+    // el pull, que no está aquí) — así que solo se afirma el caso positivo,
+    // nunca se interpreta `false` como una omisión.
+    const consumableNote = [
+      death.usedHealthstoneInPull ? 'usó piedra de brujo' : null,
+      death.usedHealthPotionInPull ? 'usó poción de vida' : null,
+    ].filter((note): note is string => note != null).join(' y ');
     items.push({
       id: `death|${death.pullId}|${death.timeMs}`,
       kind: 'death',
@@ -495,21 +577,43 @@ export function buildRaiderEvidenceProjection(
         : canCoachDefensiveResponse
           ? 'DEATH_READY_AT_END_LEGACY'
           : 'EVALUABLE_DEATH_CONTEXT',
-      observation: canCoachDefensiveResponse
-        ? `Murió con ${death.defensivesAvailable.map((row) => row.name).join(' / ')} disponible al final.`
-        : mechanicIsVerifiable
-          ? 'Muerte evaluable registrada sin una respuesta defensiva disponible identificada.'
-          : 'Muerte evaluable registrada sin una causa mitigable identificada.',
+      observation:
+        (canCoachDefensiveResponse
+          ? `Murió con ${availableDefensiveNames} disponible al final.`
+          : mechanicIsVerifiable
+            ? 'Muerte evaluable registrada sin una respuesta defensiva disponible identificada.'
+            : 'Muerte evaluable registrada sin una causa mitigable identificada.') +
+        (consumableNote ? ` En este pull ${consumableNote}.` : ''),
       whyItMatters:
         !mechanicIsVerifiable
           ? 'Se contabiliza la muerte, pero no se atribuye a una mecánica ni se recomienda un defensivo sin ese vínculo.'
           : death.damageWindowTotal == null
           ? 'La muestra temporal de daño es insuficiente para una afirmación contrafactual.'
           : `${Math.round(death.damageWindowTotal).toLocaleString('es-ES')} de daño observado en los 5 s previos.`,
-      action: mechanicIsVerifiable ? death.resolution : null,
+      // §Hallazgo 3 (2026-09-03): antes esta card usaba siempre
+      // `death.resolution` (nota táctica general de la mecánica: cómo
+      // esquivarla) también cuando el hallazgo real de la card es "murió con
+      // un defensivo libre" — dos preguntas distintas ("¿cómo evito esto?"
+      // vs. "¿qué hago con mi cooldown?"). El resultado eran cards donde la
+      // corrección hablaba de posicionamiento sin mencionar el defensivo que
+      // la propia card acababa de mostrar como disponible. Cuando el
+      // hallazgo es de disponibilidad defensiva, la corrección debe salir
+      // del mismo dato (nombres de `defensivesAvailable`), no de la
+      // resolución general de la mecánica.
+      action: canCoachDefensiveResponse
+        ? `Ten ${availableDefensiveNames} preparado para esa ventana; estaba disponible y no se usó, sin que esto demuestre que habría evitado la muerte.`
+        : mechanicIsVerifiable
+          ? death.resolution
+          : null,
+      preventionKey: canCoachDefensiveResponse
+        ? `Prepara ${availableDefensiveNames} antes de esa ventana.`
+        : null,
+      mechanicDescription: mechanicIsVerifiable ? death.aiNote : null,
+      resolutionText: mechanicIsVerifiable ? death.resolution : null,
       defensives: mechanicIsVerifiable
         ? death.defensivesAvailable.map((row) => ({
             ...row,
+            name: safeSpellName(row.name),
             status: 'available_unused' as const,
           }))
         : [],
@@ -560,6 +664,9 @@ export function buildRaiderEvidenceProjection(
         } de gema sin cubrir en el primer pull.`,
         whyItMatters: 'La medición usa el equipo del primer pull y no el obtenido durante la raid.',
         action: 'Completa los enchants y gemas indicados antes de la próxima raid.',
+        preventionKey: 'Revisa enchants/gemas antes de pullear, no durante la noche.',
+        mechanicDescription: null,
+        resolutionText: null,
         defensives: [],
         confidence: preparation.preparationSource === 'ledger_v3' ? 'verified' : 'inferred',
         occurrences: [],
@@ -583,7 +690,13 @@ export function buildRaiderEvidenceProjection(
       item.verdict === 'coaching' ||
       (item.verdict === 'no_verdict' && item.kind === 'defensive'),
   );
-  const coaching = actionable.slice(0, 3);
+  // §"solo aparecen 3 cards y creo que caben 4 (o 5)" (feedback real,
+  // 2026-09-03): subido a 4 — el lienzo es de altura fija con recorte
+  // (.iris-v3-page { overflow: hidden }), así que el view-model añade una
+  // densidad compacta (coachingDensity) para las cards en vez de asumir que
+  // el hueco libre ya alcanza sin más. additionalCoachingCount sigue
+  // reflejando lo que queda fuera de estas 4.
+  const coaching = actionable.slice(0, 4);
   const uncertainVisible = coaching.some((item) => item.confidence === 'uncertain');
   const quality: RaiderEvidenceQuality =
     evaluatedPulls.length === 0
@@ -593,12 +706,16 @@ export function buildRaiderEvidenceProjection(
         : items.some((item) => item.confidence !== 'uncertain')
           ? 'partial'
           : 'limited';
+  // §"esto no es información útil para un raider" (feedback real,
+  // 2026-09-03): las tres frases anteriores explicaban mecanismos internos
+  // (gate, generación, confianza homogénea) en vez de lo que el jugador
+  // puede confiar de esta lámina.
   const qualityReason =
     quality === 'high'
-      ? 'Todos los pulls evaluables comparten una generación defensiva completa; las cards visibles conservan su confianza.'
+      ? 'Todos los datos de la noche están completos y verificados.'
       : quality === 'partial'
-        ? 'Alguna sección usa evidencia legacy o una card no alcanza confianza homogénea; cada veredicto mantiene su gate.'
-        : 'No hay muestra suficiente para publicar coaching fuerte; se prioriza contexto o ausencia de veredicto.';
+        ? 'Algunas cards se basan en menos datos que otras; el veredicto de cada una ya lo indica.'
+        : 'No hay datos suficientes esta noche para dar consejos firmes.';
 
   const itemsByPull = new Map<string, RaiderEvidenceItem[]>();
   for (const item of items) {

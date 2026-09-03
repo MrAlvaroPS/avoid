@@ -91,6 +91,8 @@ export async function persistDefensivePlanDraft(
           build_fingerprint_snapshot: slot.buildFingerprintSnapshot ?? null,
           notes: slot.notes ?? null,
           rationale: slot.rationale ?? {},
+          needs_fresh_cast: slot.needsFreshCast ?? true,
+          covered_by_prior_cast_at_ms: slot.coveredByPriorCastAtMs ?? null,
         })),
       );
       if (error) throw error;

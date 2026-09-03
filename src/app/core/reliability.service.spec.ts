@@ -80,7 +80,7 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
     defensive_broken_reservation_count: 0,
     defensive_death_viable_cd_count: 0,
     defensive_evaluation_confidence: 'verified',
-    defensive_evaluator_version: 'defensive-execution-evaluator@2.3.0',
+    defensive_evaluator_version: 'defensive-execution-evaluator@2.4.0',
     defensive_resolver_version: 'effective-defensives@2.1.0',
     defensive_solver_version: 'defensive-plan-solver@2.0.0',
     defensive_game_build: '12.0.0.1',
@@ -99,7 +99,7 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
       v2Score: 25,
       delta: -75,
       comparablePullCount: 1,
-      evaluatorVersions: ['defensive-execution-evaluator@2.3.0'],
+      evaluatorVersions: ['defensive-execution-evaluator@2.4.0'],
     });
   });
 

@@ -189,6 +189,49 @@ describe('defensive plan solver', () => {
     expect(result.assignments[0].source).toBe('fallback');
   });
 
+  // §"un cast debe cubrir toda su ventana de duración (no un recordatorio
+  // por cada ocurrencia cercana)" (feedback real, 2026-09-03): el solver
+  // elige jugador+defensivo mirando solo cooldown/cargas, así que dos
+  // ocurrencias cercanas quedaban cada una "cubierta" con su propio cast
+  // aunque la duración del primero ya bastase — dos recordatorios de MRT
+  // para pulsar el mismo botón en unos segundos.
+  it('marks a second nearby occurrence as already covered by the first cast duration', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1), occurrence(64_000, 2, { abilityId: 501 })],
+        players: [player([defensive({ effectiveCooldownMs: 30_000, effectiveDurationMs: 8_000 })])],
+      }),
+    );
+    const first = result.assignments.find((slot) => slot.occurrenceIndex === 1)!;
+    const second = result.assignments.find((slot) => slot.occurrenceIndex === 2)!;
+    expect(first).toMatchObject({ coverageStatus: 'covered', needsFreshCast: true, coveredByPriorCastAtMs: null });
+    expect(second).toMatchObject({ coverageStatus: 'covered', needsFreshCast: false, coveredByPriorCastAtMs: first.plannedCastAtMs });
+  });
+
+  it('requires a fresh cast once the first duration has actually expired', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1), occurrence(90_000, 2, { abilityId: 501 })],
+        players: [player([defensive({ effectiveCooldownMs: 30_000, effectiveDurationMs: 8_000 })])],
+      }),
+    );
+    expect(result.assignments.map((slot) => slot.needsFreshCast)).toEqual([true, true]);
+  });
+
+  it('does not mark a locked/manual reservation as redundant even inside another cast duration', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1), occurrence(64_000, 2, { abilityId: 501 })],
+        players: [player([defensive({ effectiveCooldownMs: 30_000, effectiveDurationMs: 8_000 })])],
+        reservations: [
+          { playerKey: 'player:a', spellId: 100, abilityId: 501, occurrenceIndex: 2, hard: true, locked: true, source: 'manual' },
+        ],
+      }),
+    );
+    const second = result.assignments.find((slot) => slot.occurrenceIndex === 2)!;
+    expect(second).toMatchObject({ locked: true, needsFreshCast: true, coveredByPriorCastAtMs: null });
+  });
+
   it('skips an exponential DFS and falls back before consuming its node budget', () => {
     const players = Array.from({ length: 20 }, (_, index) => ({
       ...player([defensive({ spellId: 1_000 + index })]),

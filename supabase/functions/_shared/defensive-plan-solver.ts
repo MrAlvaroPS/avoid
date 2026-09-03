@@ -1,6 +1,9 @@
 import type { ResolvedDefensive } from './effective-defensives.ts';
 
-export const DEFENSIVE_PLAN_SOLVER_VERSION = 'defensive-plan-solver@2.1.0';
+// 2.2.0: cobertura por duración — un cast dentro de cuya duración cae la
+// siguiente ocurrencia ya no consume una carga nueva ni genera un segundo
+// recordatorio (needsFreshCast/coveredByPriorCastAtMs). Ver progreso 2026-09-03.
+export const DEFENSIVE_PLAN_SOLVER_VERSION = 'defensive-plan-solver@2.2.0';
 
 const DEFAULT_SEARCH_BUDGET = 5_000;
 const MAX_SEARCH_BUDGET = 5_000;
@@ -93,6 +96,20 @@ export interface SolverAssignment {
   buildFingerprintSnapshot: string | null;
   notes: string | null;
   rationale: Record<string, unknown>;
+  /**
+   * §"un cast debe cubrir toda su ventana de duración (no un recordatorio
+   * por cada ocurrencia cercana)" (feedback real, 2026-09-03). El solver
+   * decide QUÉ jugador/defensivo cubre cada ocurrencia mirando solo
+   * cooldown/cargas; dos ocurrencias del mismo jugador+defensivo pueden
+   * caer ambas dentro de la duración de UN único cast. `false` significa
+   * que este slot está protegido por un cast anterior todavía activo — no
+   * hace falta pulsar nada de nuevo, así que no debe generar un segundo
+   * recordatorio de MRT. `true` (o ausente en asignaciones no cubiertas)
+   * significa que sí hace falta un press nuevo.
+   */
+  needsFreshCast: boolean;
+  /** Cuándo se pulsó el cast anterior que ya cubre este slot, si needsFreshCast es false. */
+  coveredByPriorCastAtMs: number | null;
 }
 
 export interface SolverResult {
@@ -116,6 +133,17 @@ interface Usage {
   timeMs: number;
   uncertaintyMs: number;
   identity: string;
+  /**
+   * Instante real de la ocurrencia que este uso protege (no el planned cast,
+   * que puede ir adelantado por prewarn). Si se omite, se asume igual a
+   * timeMs — comportamiento histórico para llamadas que no conocen duración.
+   */
+  occurrenceAtMs?: number;
+  /**
+   * Duración efectiva del defensivo en este uso. Si se omite o es 0, este
+   * uso no cubre nada más allá de sí mismo (comportamiento histórico).
+   */
+  durationMs?: number;
 }
 
 interface Candidate {
@@ -164,6 +192,15 @@ function plannedCastAt(occurrence: MechanicOccurrence, reservation?: SolverReser
  * Simula cargas con recharge secuencial. Cada uso anterior se considera en su
  * instante más tardío y el siguiente en el más temprano; si aun así hay una
  * carga, el schedule es seguro dentro de todos los percentiles declarados.
+ *
+ * §"un cast debe cubrir toda su ventana de duración (no un recordatorio por
+ * cada ocurrencia cercana)" (feedback real, 2026-09-03): antes de consumir
+ * una carga nueva, un uso comprueba si el peor caso (p90) de su propia
+ * ocurrencia ya cae dentro de la ventana activa [cast, cast+duración] de un
+ * uso anterior del MISMO recurso — si es así, no hace falta un press nuevo,
+ * así que no consume carga ni entra en la cola de recarga. `occurrenceAtMs`/
+ * `durationMs` son opcionales: ausentes, el comportamiento es idéntico al
+ * histórico (duración 0 nunca cubre nada más allá de sí misma).
  */
 export function isConservativeScheduleFeasible(defensive: ResolvedDefensive, usages: Usage[]): boolean {
   if (!defensive.eligible || defensive.effectiveCooldownMs == null || defensive.effectiveCooldownMs < 0) return false;
@@ -173,7 +210,11 @@ export function isConservativeScheduleFeasible(defensive: ResolvedDefensive, usa
 
   let available = charges;
   const rechargeReadyAt: number[] = [];
+  let activeCoverageEndMs = -Infinity;
   for (const usage of [...usages].sort((left, right) => left.timeMs - right.timeMs || left.identity.localeCompare(right.identity))) {
+    const worstCaseNeedAtMs = (usage.occurrenceAtMs ?? usage.timeMs) + Math.max(0, usage.uncertaintyMs);
+    if (worstCaseNeedAtMs <= activeCoverageEndMs) continue;
+
     const earliest = Math.max(0, usage.timeMs - Math.max(0, usage.uncertaintyMs));
     const latest = usage.timeMs + Math.max(0, usage.uncertaintyMs);
     while (rechargeReadyAt.length && rechargeReadyAt[0] <= earliest) {
@@ -182,6 +223,7 @@ export function isConservativeScheduleFeasible(defensive: ResolvedDefensive, usa
     }
     if (available <= 0) return false;
     available--;
+    activeCoverageEndMs = Math.max(activeCoverageEndMs, usage.timeMs + Math.max(0, usage.durationMs ?? 0));
     const rechargeStartsAt = rechargeReadyAt.length ? rechargeReadyAt[rechargeReadyAt.length - 1] : latest;
     rechargeReadyAt.push(Math.max(rechargeStartsAt, latest) + rechargeMs);
   }
@@ -292,6 +334,9 @@ function toAssignment(candidate: Candidate, fallback: boolean): SolverAssignment
       raidImpactScore: occurrence.raidImpactScore,
       individualLethalityScore: occurrence.individualLethalityScore,
     },
+    // Se recalcula para todo el plan en markDurationCoverage() antes de devolver el resultado.
+    needsFreshCast: true,
+    coveredByPriorCastAtMs: null,
   };
 }
 
@@ -327,7 +372,52 @@ function uncoveredAssignment(occurrence: MechanicOccurrence): SolverAssignment {
     buildFingerprintSnapshot: null,
     notes: null,
     rationale: { solverVersion: DEFENSIVE_PLAN_SOLVER_VERSION, reason: 'no_feasible_assignment' },
+    needsFreshCast: true,
+    coveredByPriorCastAtMs: null,
   };
+}
+
+/**
+ * Recorre las asignaciones cubiertas agrupadas por jugador+defensivo y marca
+ * `needsFreshCast: false` cuando la duración de un cast anterior ya llega
+ * hasta el peor caso (p90) de una ocurrencia posterior — el DFS/greedy elige
+ * jugador+defensivo mirando solo cooldown/cargas, así que dos ocurrencias
+ * cercanas del mismo recurso pueden quedar "cubiertas" cada una con su
+ * propio cast aunque el primero por sí solo ya bastase. Nunca toca
+ * coverageStatus (el jugador sigue protegido) ni reordena occurrences.
+ */
+function markDurationCoverage(assignments: SolverAssignment[]): void {
+  const byResource = new Map<string, SolverAssignment[]>();
+  for (const assignment of assignments) {
+    if (assignment.coverageStatus !== 'covered' && assignment.coverageStatus !== 'partial') continue;
+    if (assignment.assignedPlayerKey == null || assignment.defensiveSpellId == null || assignment.plannedCastAtMs == null) continue;
+    const key = resourceKey(assignment.assignedPlayerKey, assignment.defensiveSpellId);
+    const list = byResource.get(key) ?? [];
+    list.push(assignment);
+    byResource.set(key, list);
+  }
+  for (const list of byResource.values()) {
+    list.sort((a, b) => a.plannedCastAtMs! - b.plannedCastAtMs! || a.occurrenceTimeMs - b.occurrenceTimeMs);
+    let activeCastAtMs: number | null = null;
+    let activeCoverageEndMs = -Infinity;
+    for (const assignment of list) {
+      // Reservas manuales/publicadas o locks nunca se reinterpretan como
+      // "redundantes": un raider que fijó ese slot a propósito lo quiere ahí.
+      if (assignment.locked || assignment.source === 'manual') {
+        activeCastAtMs = assignment.plannedCastAtMs!;
+        activeCoverageEndMs = activeCastAtMs + (assignment.effectiveDurationMsSnapshot ?? 0);
+        continue;
+      }
+      const worstCaseHitAtMs = assignment.windowEndMs;
+      if (activeCastAtMs != null && worstCaseHitAtMs <= activeCoverageEndMs) {
+        assignment.needsFreshCast = false;
+        assignment.coveredByPriorCastAtMs = activeCastAtMs;
+        continue;
+      }
+      activeCastAtMs = assignment.plannedCastAtMs!;
+      activeCoverageEndMs = activeCastAtMs + (assignment.effectiveDurationMsSnapshot ?? 0);
+    }
+  }
 }
 
 function compareScores(left: SearchScore, right: SearchScore): number {
@@ -383,6 +473,8 @@ function addIfFeasible(candidate: Candidate, schedules: Map<string, Usage[]>): M
     timeMs: candidate.plannedCastAtMs,
     uncertaintyMs: candidate.occurrence.timeUncertaintyMs,
     identity: occurrenceKey(candidate.occurrence),
+    occurrenceAtMs: candidate.occurrence.timeMs,
+    durationMs: candidate.defensive.effectiveDurationMs ?? 0,
   });
   if (!isConservativeScheduleFeasible(candidate.defensive, usages)) return null;
   next.set(key, usages);
@@ -597,6 +689,7 @@ export function solveDefensivePlan(input: SolverInput): SolverResult {
   }
 
   const assignments = finalizeAssignments(occurrences, bestCandidates ?? hardCandidates, budgetExceeded);
+  markDurationCoverage(assignments);
   const uncoveredRequired = assignments
     .filter((slot) => slot.requirementLevel === 'required' && slot.coverageStatus === 'uncovered')
     .map((slot) => ({ abilityId: slot.abilityId, occurrenceIndex: slot.occurrenceIndex }));

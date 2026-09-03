@@ -125,7 +125,7 @@ function decision(
     plannedSpellName: 'Escudo',
     actualSpellName: null,
     candidateSpellNames: ['Escudo'],
-    evaluationMode: 'plan',
+    evaluationMode: 'full',
     planVersionId: 'plan-1',
     ...overrides,
   };
@@ -149,7 +149,7 @@ function management(decisions: NightDefensiveDecision[]): NightDefensiveManageme
     deathViableCdCount: 0,
     deathReadyCdCount: 0,
     managementScore: 0,
-    evaluatorVersion: 'defensive-execution-evaluator@2.3.0',
+    evaluatorVersion: 'defensive-execution-evaluator@2.4.0',
     resolverVersion: 'effective-defensives@2.0.0',
     solverVersion: 'defensive-plan-solver@2.0.0',
     gameBuild: '12.0.0.1',
@@ -259,14 +259,19 @@ describe('RaiderEvidenceProjection', () => {
       decision({ causalGroupId: 'g2', atMs: 40_000 }),
       decision({ causalGroupId: 'g3', atMs: 50_000 }),
       decision({ causalGroupId: 'g4', atMs: 60_000 }),
+      decision({ causalGroupId: 'g5', atMs: 70_000 }),
     ]);
     const projection = buildRaiderEvidenceProjection(
       summary({ defensiveManagementV2: v2 }),
       { defensiveManagementV2: v2 },
     );
 
-    expect(projection.items).toHaveLength(4);
-    expect(projection.coaching).toHaveLength(3);
+    // §"solo aparecen 3 cards y creo que caben 4 (o 5)" (feedback real,
+    // 2026-09-03): el tope editorial subió de 3 a 4 — este test solo
+    // comprueba que SIGUE existiendo un tope que no trunca la evidencia
+    // completa, no que el número sea exactamente 3.
+    expect(projection.items).toHaveLength(5);
+    expect(projection.coaching).toHaveLength(4);
     expect(projection.additionalCoachingCount).toBe(1);
     expect(projection.items.find((row) => row.id.includes('g1'))?.reasonCode).toBe(
       'READY_NOT_CAST_IN_WINDOW',

@@ -117,6 +117,7 @@ export class NightReportComponent {
       ? {
           attendingMain: d.attendingMain.map((p) => p.name),
           attendingTrial: d.attendingTrial.map((p) => p.name),
+          attendingUnlisted: d.attendingUnlisted.map((p) => p.name),
           absentMain: d.absentMain.map((p) => p.name),
         }
       : undefined;
@@ -340,6 +341,13 @@ export class NightReportComponent {
       this.bossEvolutionRequested.clear();
       this.bossEvolution.set(new Map());
 
+      // El informe base (bosses/asistencia/causas de muerte/cobertura) tiene
+      // su propia caché ahora (NightReportCacheService) — un recálculo total
+      // que solo refrescara roster/asistencia/evolución/informe-IA seguiría
+      // sirviendo el snapshot viejo aquí hasta el próximo cambio de
+      // fingerprint, justo lo que este botón promete evitar.
+      this.data.set(await this.nightReportService.load(code, true));
+
       await Promise.all([
         this.loadRosterSnapshot(true),
         this.loadNightAttendanceStats(code, this.attendingPlayers(), true),
@@ -528,7 +536,10 @@ export class NightReportComponent {
   // medio, seguro de correr sobre 20+ jugadores seguidos.
   private attendingPlayers(): NightAttendee[] {
     const d = this.data();
-    return d ? [...d.attendingMain, ...d.attendingTrial] : [];
+    // attendingUnlisted también asistió esta noche (ver comentario junto a
+    // ese campo en night-report.service.ts) — la actualización masiva no
+    // debe saltárselo solo porque wowaudit_roster no tenga su fila todavía.
+    return d ? [...d.attendingMain, ...d.attendingTrial, ...d.attendingUnlisted] : [];
   }
 
   // §"más completa... quitar la columna de 'estado' (eso ya se puede ver en
@@ -557,13 +568,21 @@ export class NightReportComponent {
     if (!d) return [];
     const stats = this.nightAttendanceStats();
     const overallByName = this.rosterOverallByName();
-    const build = (attendee: NightAttendee, isTrial: boolean) => ({
+    const build = (attendee: NightAttendee, isTrial: boolean, isUnlisted = false) => ({
       ...attendee,
       isTrial,
+      isUnlisted,
       stats: stats.get(attendee.name) ?? null,
       reliability60d: overallByName.get(attendee.name) ?? null,
     });
-    return [...d.attendingMain.map((p) => build(p, false)), ...d.attendingTrial.map((p) => build(p, true))];
+    return [
+      ...d.attendingMain.map((p) => build(p, false)),
+      ...d.attendingTrial.map((p) => build(p, true)),
+      // §"si sale en el roster de esa noche... debería salir en el resumen
+      // también" (feedback real, 2026-09-03): jugó esa noche pero no tiene
+      // fila en wowaudit_roster — se muestra aparte, nunca desaparece.
+      ...d.attendingUnlisted.map((p) => build(p, false, true)),
+    ];
   });
 
   // §"que las filas también fueran un desplegable... si pulso sobre el

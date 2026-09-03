@@ -474,6 +474,16 @@ export class EdgeFunctionsService {
     return this.invoke('manage-player-defensive-override', params);
   }
 
+  /** §"si a Gusmi le marco que tiene Barkskin y Frenzied Regeneration..." (feedback real, 2026-09-03): guarda el conjunto COMPLETO de spellIds marcados "usar en el plan" para un jugador — reemplaza, no parchea. Ver migración 20260903120000_player_planning_resource_selections. */
+  async savePlanningResourceSelection(params: {
+    characterId: number;
+    playerName: string;
+    className: string;
+    selectedSpellIds: number[];
+  }): Promise<{ ok: true; selection: Record<string, unknown> }> {
+    return this.invoke('save-planning-resource-selection', params);
+  }
+
   /**
    * Diagnóstico técnico explícito: combina la existencia real del endpoint
    * del resolver con schema M1–M9 y cobertura de backfill. Si el propio
@@ -809,6 +819,8 @@ export class EdgeFunctionsService {
           prewarnSeconds?: number;
           triggerType?: 'bossmod' | 'time';
           bossmodSpellId?: number | null;
+          bossmodCounter?: string | null;
+          bossmodCounterVerified?: boolean;
           notes?: string | null;
           assignedGroups?: number[] | null;
         }

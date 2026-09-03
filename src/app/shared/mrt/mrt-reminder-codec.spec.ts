@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { decodeMrtExport, encodeMrtExport, type MrtReminderInput } from './mrt-reminder-codec';
 
 // §Estos tests solo prueban que encode/decode son inversos ENTRE SÍ — NO que
@@ -46,6 +47,19 @@ describe('encodeMrtExport / decodeMrtExport', () => {
     expect(r.durRev).toBe(true); // solo los triggers de tipo 'pull' activan durrev
     expect(r.players).toEqual([]);
     expect(r.triggers).toEqual([{ type: 'pull', delayTimeSeconds: 80 }]);
+  });
+
+  // §"las notas del MRT no saltan... si no se ponía [zoneID] no salía"
+  // (feedback real, 2026-09-03): zoneId es opcional en el input, pero si se
+  // manda debe sobrevivir el roundtrip igual que bossId/difficultyId.
+  it('ida y vuelta de zoneId cuando se especifica, y omitido cuando no', () => {
+    const withZone = decodeMrtExport(
+      encodeMrtExport('Raid Defensivos', [baseReminder({ zoneId: 3004 })]),
+    ).reminders[0];
+    expect(withZone.zoneId).toBe(3004);
+
+    const withoutZone = decodeMrtExport(encodeMrtExport('Raid Defensivos', [baseReminder()])).reminders[0];
+    expect(withoutZone.zoneId).toBeNull();
   });
 
   it('ida y vuelta de un reminder con trigger de bossmod (spellId, sin patrón) — sin durrev', () => {

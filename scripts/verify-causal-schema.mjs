@@ -22,6 +22,10 @@ const extensionMigrations = [
 const extensionSql = new Map(
   extensionMigrations.map((name) => [name, readFileSync(join(migrationDir, name), 'utf8')]),
 );
+const ingestionRecoveryMigration = '20260902160000_pull_ingestion_recovery.sql';
+const ingestionRecoverySql = readFileSync(join(migrationDir, ingestionRecoveryMigration), 'utf8');
+const ingestionHardeningMigration = '20260903070000_harden_pull_ingestion_recovery.sql';
+const ingestionHardeningSql = readFileSync(join(migrationDir, ingestionHardeningMigration), 'utf8');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -37,6 +41,8 @@ assert(new Set(timestamps).size === timestamps.length, 'Hay timestamps de migrac
 assert(migrations.every((name, index) => index === 0 || name > migrations[index - 1]), 'M11-M14 no están ordenadas.');
 assert(extensionMigrations.every((name, index) => index === 0 || name > extensionMigrations[index - 1]), 'Las extensiones causales no están ordenadas.');
 assert(extensionMigrations[0] > migrations.at(-1), 'Las extensiones causales deben suceder a M14.');
+assert(ingestionRecoveryMigration > extensionMigrations.at(-1), 'La recuperación de ingesta debe suceder a las extensiones causales.');
+assert(ingestionHardeningMigration > ingestionRecoveryMigration, 'El endurecimiento de lectura debe suceder a M22.');
 
 const requiredTablesByMigration = new Map([
   [migrations[0], ['pull_evaluation_context', 'pull_evaluation_context_audit']],
@@ -122,6 +128,17 @@ assert(!hardenedPolicyBatchSql.includes('on conflict (boss_id, difficulty, mecha
 assert(hardenedPolicyBatchSql.includes('return query select v_after.mechanic_key, v_after.policy_version'), 'M20 no devuelve el resultado mediante referencias calificadas.');
 assert(hardenedPolicyBatchSql.includes('publish_mechanic_policy_batch_self_test_rollback'), 'M20 no ejecuta el autotest transaccional de la RPC real.');
 
+assert(ingestionRecoverySql.includes('ingestion_status text not null'), 'M22 no añade un estado explícito de ingesta.');
+assert(ingestionRecoverySql.includes("check (ingestion_status in ('processing', 'complete', 'failed'))"), 'M22 no limita los estados de ingesta válidos.');
+assert(ingestionRecoverySql.includes('pull.fight_id > coalesce(report.last_processed_fight_id, 0)'), 'M22 no detecta el trabajo parcial anterior al despliegue mediante el cursor confirmado.');
+assert(ingestionHardeningSql.includes('for select using (ingestion_status = \'complete\')'), 'M23 permite leer pulls parciales como evidencia completa.');
+assert(ingestionHardeningSql.includes("source_pull.ingestion_status = 'complete'"), 'M23 permite que Fiabilidad v2 cuente pulls parciales con service_role.');
+const analyzeReport = readFileSync(join(root, 'supabase', 'functions', 'analyze-report', 'index.ts'), 'utf8');
+assert(analyzeReport.includes("ingestion_status: 'processing'"), 'analyze-report no abre el estado lógico de ingesta.');
+assert(analyzeReport.includes("update({ ingestion_status: 'complete', ingestion_error: null })"), 'analyze-report no confirma la completitud del pull.');
+assert(analyzeReport.indexOf("update({ ingestion_status: 'complete', ingestion_error: null })") < analyzeReport.lastIndexOf('last_processed_fight_id: fight.id'), 'analyze-report avanza el cursor antes de confirmar el pull.');
+assert(analyzeReport.includes(".update({ ingestion_status: 'failed', ingestion_error: detail })"), 'analyze-report no conserva el diagnóstico de una ingesta parcial.');
+
 const aliasSync = readFileSync(join(root, 'supabase', 'functions', 'sync-mechanic-aliases', 'index.ts'), 'utf8');
 assert(!aliasSync.includes("onConflict: 'boss_id,difficulty,mechanic_key,ability_id,normalized_name'"), 'El UPSERT de aliases no coincide con los índices parciales de M12.');
 assert(aliasSync.includes(".eq('ability_id', values.ability_id)") && aliasSync.includes(".eq('normalized_name', values.normalized_name)"), 'La sincronización de aliases debe resolver ambos identificadores activos.');
@@ -160,16 +177,16 @@ const edgeReasonCodes = [...edgeBuilder.matchAll(/'([A-Z][A-Z_]+)'/g)].map((matc
 assert(edgeReasonCodes.every((reason) => contractReasons.includes(reason)), 'El builder de responsibility edges contiene reason codes fuera del contrato M14.');
 
 const environment = readFileSync(join(root, 'src', 'environments', 'environment.ts'), 'utf8');
-const expectedFlags = [
-  'combatEvaluationContextV2',
-  'mechanicPolicyV2',
-  'mechanicResponsibilityV2',
-  'consumableEvaluatorV2',
-  'playerInfographicV3',
-  'reliabilityExecutionV3',
-];
-for (const flag of expectedFlags) {
-  assert(new RegExp(`${flag}:\\s*false`).test(environment), `${flag} no nace apagado.`);
+const expectedFlagStates = new Map([
+  ['combatEvaluationContextV2', true],
+  ['mechanicPolicyV2', true],
+  ['mechanicResponsibilityV2', true],
+  ['consumableEvaluatorV2', true],
+  ['playerInfographicV3', true],
+  ['reliabilityExecutionV3', true],
+]);
+for (const [flag, enabled] of expectedFlagStates) {
+  assert(new RegExp(`${flag}:\\s*${enabled}`).test(environment), `${flag} no coincide con el rollout esperado (${enabled}).`);
 }
 
-console.log(`Causal schema OK: ${migrations.length + extensionMigrations.length} migraciones, ${contractReasons.length} reason codes y ${expectedFlags.length} flags apagados.`);
+console.log(`Causal schema OK: ${migrations.length + extensionMigrations.length + 2} migraciones, ${contractReasons.length} reason codes y ${expectedFlagStates.size} flags de rollout explícitos.`);
