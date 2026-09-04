@@ -899,6 +899,19 @@ export function resolveEffectiveDefensiveKit(
       // esto, combinar con la ruta de reemplazo entrante haría presenceOr()
       // contra un 'present' de baseline no demostrado y nunca lo corregiría.
       let buildPresenceHasDirectRoute = false;
+      // §E2.6 (Acquisition Safety Closure — false-negative fix): valor de
+      // `eligible` justo antes de que la puerta legacy de adquisición
+      // directa no probada (más abajo, "sin prueba positiva de exclusión")
+      // lo fuerce a false. Captura CUALQUIER bloqueo legítimo previo
+      // (activationMode==='passive', conversión pasiva por talento) porque
+      // se lee inmediatamente antes de esa puerta específica — no antes de
+      // toda la resolución. Si un cast validado (§E2.5) sube buildPresence
+      // de 'unknown' a 'present' para ESTE mismo defensivo, `eligible` se
+      // restaura a este valor exacto (nunca se fuerza a true a ciegas). Si
+      // la puerta nunca corre (el spellId no es un candidato de
+      // talent_spell_lookup, o sí resuelve seleccionado, o el build no está
+      // resuelto), queda en null y no hay nada que restaurar.
+      let eligibleBeforeUnprovenDirectAcquisitionGate: boolean | null = null;
       const provenance: ResolutionStep[] = [
         {
           kind: 'catalog_base',
@@ -1071,6 +1084,9 @@ export function resolveEffectiveDefensiveKit(
           // scoring canónico es idéntico se toque o no eligible aquí — así
           // que se deja intacto para no migrar de golpe defensive-plan-solver
           // (ese trabajo es E9, no E2.5) ni romper tests/consumidores legacy.
+          // §E2.6: se captura el valor de `eligible` INMEDIATAMENTE antes de
+          // esta asignación — ver declaración de la variable más arriba.
+          eligibleBeforeUnprovenDirectAcquisitionGate = eligible;
           eligible = false;
           confidence = weakerConfidence(confidence, 'uncertain');
           buildPresence = 'unknown';
@@ -1186,6 +1202,23 @@ export function resolveEffectiveDefensiveKit(
       // resolver solo lo consume.
       const castEvidence = input.demonstratedPersistentCastSpellIds?.get(entry.spellId);
       if (buildPresence !== 'present' && castEvidence != null) {
+        // §E2.6 (Acquisition Safety Closure — false-negative fix): la puerta
+        // legacy de adquisición directa no probada (§E2.5, arriba) dejaba
+        // `eligible=false` sin tocarlo nunca — pero isDefensiveKitMember /
+        // createsMissableOpportunity exigen `eligible && buildPresence===
+        // 'present'`, así que un cast validado que sube buildPresence a
+        // 'present' no bastaba: el defensivo desaparecía igual del kit real.
+        // Fixture real: Wargreymon / Anti-Magic Shell (48707) —
+        // buildPresence pasa a 'present' vía observed_cast_same_build_
+        // fingerprint pero eligible se quedaba en false.
+        // Se restaura `eligible` al valor que tenía justo antes de esa
+        // puerta (nunca se fuerza a true a ciegas): si ya era false por un
+        // bloqueo legítimo previo (activationMode pasivo, conversión por
+        // talento), sigue false. Si la puerta nunca corrió para este
+        // spellId, no hay nada que restaurar.
+        if (eligibleBeforeUnprovenDirectAcquisitionGate != null) {
+          eligible = eligibleBeforeUnprovenDirectAcquisitionGate;
+        }
         buildPresence = 'present';
         buildPresenceConfidence = weakerConfidence(buildPresenceConfidence, 'inferred');
         buildPresenceEvidence = castEvidence;

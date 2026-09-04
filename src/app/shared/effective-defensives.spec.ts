@@ -1429,6 +1429,120 @@ describe('resolveEffectiveDefensiveKit — E2.5 Acquisition Safety Closure', () 
   });
 });
 
+// §E2.6 (Acquisition Safety Closure — false-negative fix, 2026-09-04): E2.5
+// correctly upgrades buildPresence from 'unknown' to 'present' via validated
+// cast evidence, but the legacy direct-acquisition gate ("candidate in
+// allTalentSpellIds, not found selected") set eligible=false and the cast
+// upgrade never restored it — isDefensiveKitMember/createsMissableOpportunity
+// require `eligible && buildPresence==='present'`, so the upgrade was
+// silently discarded downstream. Real fixture: Wargreymon / Anti-Magic Shell
+// (48707) resolved to buildPresence='present' via
+// observed_cast_same_build_fingerprint but eligible stayed false.
+describe('resolveEffectiveDefensiveKit — E2.6 false-negative fix: eligible restoration on cast-evidence upgrade', () => {
+  it('unselected allTalentSpellIds candidate without cast evidence: unknown / eligible=false / non-member (unchanged from E2.5)', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [], allTalentSpellIds: new Set([talentDefensive.spellId]), talentLookupComplete: true }),
+      data({ catalog: [talentDefensive], semantics: [semanticEntry({ spellId: talentDefensive.spellId })] }),
+    );
+    expect(resolved.buildPresence).toBe('unknown');
+    expect(resolved.eligible).toBe(false);
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+  });
+
+  it('same-pull validated cast + verified personal_survival semantics: present / eligible=true / member=true / missable=true', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const kit = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map([[talentDefensive.spellId, 'observed_cast_same_pull']]),
+      }),
+      data({ catalog: [talentDefensive], semantics: [semanticEntry({ spellId: talentDefensive.spellId })] }),
+    );
+    const resolved = kit.find((d) => d.spellId === talentDefensive.spellId)!;
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_pull');
+    expect(resolved.eligible).toBe(true);
+    expect(resolved.isDefensiveKitMember).toBe(true);
+    expect(resolved.createsMissableOpportunity).toBe(true);
+  });
+
+  it('exact-fingerprint historical cast: same result as same-pull evidence', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const kit = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map([[talentDefensive.spellId, 'observed_cast_same_build_fingerprint']]),
+      }),
+      data({ catalog: [talentDefensive], semantics: [semanticEntry({ spellId: talentDefensive.spellId })] }),
+    );
+    const resolved = kit.find((d) => d.spellId === talentDefensive.spellId)!;
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_build_fingerprint');
+    expect(resolved.eligible).toBe(true);
+    expect(resolved.isDefensiveKitMember).toBe(true);
+    expect(resolved.createsMissableOpportunity).toBe(true);
+  });
+
+  it('pre-existing legitimate eligible=false blocker (talent-selected passive conversion) + cast evidence: remains eligible=false', () => {
+    const converterSpellId = 99001; // fixture-only — talento que convierte la ability en pasiva
+    const talentDefensive: EffectiveDefensiveCatalogEntry = {
+      ...fade,
+      spellId: 19236,
+      name: 'Desperate Prayer',
+      passiveConversionSpellIds: [converterSpellId],
+    };
+    const kit = resolveEffectiveDefensiveKit(
+      input({
+        // El conversor está seleccionado (bloqueo legítimo, activationMode
+        // pasa a 'passive' y eligible=false) — el propio spellId 19236 NO
+        // está seleccionado, así que además atraviesa la puerta de
+        // adquisición directa no probada (buildPresence='unknown').
+        talentBuild: [{ id: 1, nodeID: 10, rank: 1, spellId: converterSpellId }],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map([[talentDefensive.spellId, 'observed_cast_same_pull']]),
+      }),
+      data({ catalog: [talentDefensive], semantics: [semanticEntry({ spellId: talentDefensive.spellId })] }),
+    );
+    const resolved = kit.find((d) => d.spellId === talentDefensive.spellId)!;
+    // El cast evidence sí sube buildPresence a 'present' (nunca se pierde),
+    // pero eligible se restaura al valor PREVIO a la puerta de adquisición
+    // directa — que ya era false por el bloqueo legítimo de conversión a
+    // pasiva, no por la puerta en sí. No se fuerza a true a ciegas.
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.eligible).toBe(false);
+    expect(resolved.isDefensiveKitMember).toBe(false);
+  });
+
+  it('Wargreymon-style Anti-Magic Shell fixture: observed cast evidence resolves a real kit member', () => {
+    const amsSpellId = 48707;
+    const ams: EffectiveDefensiveCatalogEntry = { ...fade, spellId: amsSpellId, name: 'Anti-Magic Shell', className: 'DeathKnight', specName: null };
+    const kit = resolveEffectiveDefensiveKit(
+      input({
+        className: 'DeathKnight',
+        specName: 'Frost',
+        talentBuild: [],
+        allTalentSpellIds: new Set([amsSpellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map([[amsSpellId, 'observed_cast_same_build_fingerprint']]),
+      }),
+      data({ catalog: [ams], semantics: [semanticEntry({ spellId: amsSpellId, className: 'DeathKnight' })] }),
+    );
+    const resolved = kit.find((d) => d.spellId === amsSpellId)!;
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_build_fingerprint');
+    expect(resolved.eligible).toBe(true);
+    expect(resolved.isDefensiveKitMember).toBe(true);
+    expect(resolved.createsMissableOpportunity).toBe(true);
+  });
+});
+
 // §E1 audit fix (2026-09-04) — "static replacement target presence": Ice
 // Cold (414658) y Demonic Healthstone (452930) NO están, ellos mismos, en
 // talent_spell_lookup (no son un nodo de talento) — solo se conceden cuando
