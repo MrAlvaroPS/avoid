@@ -59,6 +59,39 @@ describe('parseDamageApplicability', () => {
   it('rejects a non-boolean requiresX field', () => {
     expect(parseDamageApplicability({ requiresDodgeable: 'yes' }).value).toBeNull();
   });
+
+  // §E1 audit fix (2026-09-04): schools[]/deliveryScopes[] solo se
+  // validaban como string[] genérico — un typo pasaba como válido y se
+  // comportaba como "sin restricción demostrada" en canDefensiveCover(),
+  // fail-open de facto. Cada miembro debe pertenecer al enum real.
+  it('a typo in deliveryScopes (e.g. "spel" instead of "spell") fails closed instead of silently becoming unrestricted applicability', () => {
+    const result = parseDamageApplicability({ deliveryScopes: ['spel'] });
+    expect(result.value).toBeNull();
+    expect(result.error).toMatch(/no reconocido/);
+  });
+
+  it('a typo in schools (e.g. "Frots" instead of "Frost") fails closed', () => {
+    const result = parseDamageApplicability({ schools: ['Frots'] });
+    expect(result.value).toBeNull();
+    expect(result.error).toMatch(/no reconocido/);
+  });
+
+  it('accepts every documented schools/deliveryScopes value, including the "all" escape hatch', () => {
+    expect(parseDamageApplicability({ schools: ['Physical', 'Holy', 'Fire', 'Nature', 'Frost', 'Shadow', 'Arcane'] }).error).toBeNull();
+    expect(
+      parseDamageApplicability({
+        deliveryScopes: ['all', 'aoe', 'single_target', 'melee', 'ranged', 'spell', 'environmental', 'direct', 'periodic'],
+      }).error,
+    ).toBeNull();
+  });
+
+  it('an empty array is still valid (distinct from a typo — [] never fails closed)', () => {
+    expect(parseDamageApplicability({ schools: [], deliveryScopes: [] }).error).toBeNull();
+  });
+
+  it('a value that is not a WoW school (e.g. "Chaos", present in the prompt vocabulary but not in the canonical WowSchool contract) is rejected', () => {
+    expect(parseDamageApplicability({ schools: ['Chaos'] }).value).toBeNull();
+  });
 });
 
 describe('mergeApplicability', () => {
@@ -153,6 +186,13 @@ describe('parseSpecSemanticProfiles', () => {
     expect(result.profiles[0].spec).toBe('Arms');
     expect(result.invalid).toHaveLength(1);
     expect(result.invalid[0].spec).toBe('Protection');
+  });
+
+  it('a typo inside a spec profile\'s nested applicability.deliveryScopes fails the whole profile closed, not just a warning', () => {
+    const typoProfile = { ...validArms, applicability: { ...validArms.applicability, deliveryScopes: ['aoe', 'melle'] } };
+    const result = parseSpecSemanticProfileEntry(typoProfile);
+    expect(result.value).toBeNull();
+    expect(result.error).toMatch(/no reconocido/);
   });
 
   it('a non-array input never crashes — returns empty profiles plus an invalid entry', () => {

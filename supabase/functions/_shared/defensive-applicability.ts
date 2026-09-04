@@ -52,6 +52,8 @@ export interface DamageApplicability {
 }
 
 export type WowSchool = 'Physical' | 'Holy' | 'Fire' | 'Nature' | 'Frost' | 'Shadow' | 'Arcane';
+/** §E1 audit fix (2026-09-04): lista canónica para validación estricta de applicability.schools[] — ver defensive-semantic-payload-validation.ts. Debe seguir coincidiendo exactamente con el union type de arriba. */
+export const WOW_SCHOOLS: readonly WowSchool[] = ['Physical', 'Holy', 'Fire', 'Nature', 'Frost', 'Shadow', 'Arcane'];
 
 /**
  * Lo que se sabe REALMENTE del daño/mecánica de UN hit concreto (un evento
@@ -141,6 +143,9 @@ function schoolCoverageVerdict(allowed: ReadonlySet<WowSchool>, damageSchools: W
 const TARGET_SCOPE_TAGS = new Set(['aoe', 'single_target']);
 const DELIVERY_METHOD_TAGS = new Set(['melee', 'ranged', 'spell', 'environmental']);
 const TIMING_TAGS = new Set(['direct', 'periodic']);
+
+/** §E1 audit fix (2026-09-04): lista canónica para validación estricta de applicability.deliveryScopes[] — 'all' (escape hatch global) + los tres grupos ortogonales de arriba. Derivada de ellos para que nunca puedan desincronizarse. */
+export const DELIVERY_SCOPE_TAGS: readonly string[] = ['all', ...TARGET_SCOPE_TAGS, ...DELIVERY_METHOD_TAGS, ...TIMING_TAGS];
 
 type DeliveryGroup = 'target_scope' | 'delivery_method' | 'timing';
 

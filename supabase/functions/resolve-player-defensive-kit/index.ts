@@ -146,15 +146,26 @@ Deno.serve(async (req: Request) => {
     const talentLookupPromise = gameBuild
       ? supabase.from('talent_spell_lookup').select('entry_to_spell').eq('build', gameBuild).maybeSingle()
       : Promise.resolve({ data: null, error: null });
+    // §E2 (iris-defensive-canonicalization-v1-plan.md — "Conectar
+    // resolve-player-defensive-kit a semantic catalog/rules"): la VISTA ya
+    // trae class resuelto, igual que cooldown_catalog. defensive_semantic_rules
+    // no tiene columna class propia (una regla vive por spellId, no por
+    // clase) — se carga completa (tabla pequeña, ~120 filas) y es
+    // resolveEffectiveDefensiveKit() quien filtra por targetSpellId/spec/
+    // gameBuild; el endpoint no reimplementa esa lógica.
+    const semanticsPromise = supabase.from('defensive_ability_semantic_catalog').select('*').eq('class', className);
+    const semanticRulesPromise = supabase.from('defensive_semantic_rules').select('*');
 
-    const [catalogResult, profilesResult, rulesResult, overridesResult, talentLookupResult] = await Promise.all([
+    const [catalogResult, profilesResult, rulesResult, overridesResult, talentLookupResult, semanticsResult, semanticRulesResult] = await Promise.all([
       catalogPromise,
       profilesPromise,
       rulesPromise,
       overridesPromise,
       talentLookupPromise,
+      semanticsPromise,
+      semanticRulesPromise,
     ]);
-    for (const result of [catalogResult, profilesResult, rulesResult, overridesResult, talentLookupResult]) {
+    for (const result of [catalogResult, profilesResult, rulesResult, overridesResult, talentLookupResult, semanticsResult, semanticRulesResult]) {
       if (result.error) throw result.error;
     }
 
@@ -163,6 +174,8 @@ Deno.serve(async (req: Request) => {
       specProfileRows: profilesResult.data ?? [],
       modifierRuleRows: rulesResult.data ?? [],
       overrideRows: overridesResult.data ?? [],
+      semanticRows: semanticsResult.data ?? [],
+      semanticRuleRows: semanticRulesResult.data ?? [],
     });
 
     const entryToSpell = talentLookupResult.data?.entry_to_spell as Record<string, number> | undefined;

@@ -39,7 +39,7 @@ import {
   type DefensiveOpportunityMode,
   type DefensiveIntent,
 } from './defensive-classification-semantics.ts';
-import { TIMING_RELATIONS, type DamageApplicability, type TimingRelation } from './defensive-applicability.ts';
+import { TIMING_RELATIONS, WOW_SCHOOLS, DELIVERY_SCOPE_TAGS, type DamageApplicability, type TimingRelation } from './defensive-applicability.ts';
 
 const USAGE_ROLE_SET = new Set<string>(DEFENSIVE_USAGE_ROLES);
 const ACTIVATION_SCOPE_SET = new Set<string>(DEFENSIVE_ACTIVATION_SCOPES);
@@ -51,6 +51,14 @@ const DEFENSIVE_INTENT_SET = new Set<string>(DEFENSIVE_INTENTS);
 const TIMING_RELATION_SET = new Set<string>(TIMING_RELATIONS);
 const SCHOOL_SCOPE_SET = new Set(['all', 'physical', 'magic', 'specific', 'none', 'unknown']);
 const CONFIDENCE_SET = new Set(['high', 'medium', 'low']);
+// §E1 audit fix (2026-09-04): schools[]/deliveryScopes[] solo se validaban
+// como string[] genérico — un typo como 'spel' en vez de 'spell' pasaba
+// como válido y silenciosamente se comportaba como "sin restricción
+// demostrada" en canDefensiveCover() (fail-open de facto). Ahora cada
+// miembro se valida contra el enum real; un valor desconocido invalida todo
+// el payload de applicability (fail-closed, igual que una clave inesperada).
+const WOW_SCHOOL_SET = new Set<string>(WOW_SCHOOLS);
+const DELIVERY_SCOPE_TAG_SET = new Set<string>(DELIVERY_SCOPE_TAGS);
 
 export interface ParseResult<T> {
   value: T | null;
@@ -67,12 +75,13 @@ function rejectUnknownKeys(raw: Record<string, unknown>, allowed: ReadonlySet<st
   return null;
 }
 
-function optionalStringArray(raw: unknown, field: string): ParseResult<string[] | null> {
+/** Array de enums estricto: cada elemento debe pertenecer a `allowed` — un solo valor desconocido (typo incluido) invalida el array completo, nunca se descarta en silencio ni se trata como "sin restricción". */
+function optionalEnumArray<T extends string>(raw: unknown, field: string, allowed: ReadonlySet<string>): ParseResult<T[] | null> {
   if (raw === undefined || raw === null) return { value: null, error: null };
-  if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== 'string')) {
-    return { value: null, error: `${field} debe ser un array de strings o null` };
-  }
-  return { value: raw as string[], error: null };
+  if (!Array.isArray(raw)) return { value: null, error: `${field} debe ser un array o null` };
+  const invalid = raw.filter((entry) => typeof entry !== 'string' || !allowed.has(entry));
+  if (invalid.length) return { value: null, error: `${field} contiene valor(es) no reconocido(s): ${invalid.map((v) => JSON.stringify(v)).join(', ')}` };
+  return { value: raw as T[], error: null };
 }
 
 function optionalNullableBoolean(raw: unknown, field: string): ParseResult<boolean | null> {
@@ -118,9 +127,9 @@ export function parseDamageApplicability(raw: unknown, label = 'applicability'):
 
   const schoolScope = optionalEnum<DamageApplicability['schoolScope'] & string>(raw['schoolScope'], `${label}.schoolScope`, SCHOOL_SCOPE_SET);
   if (schoolScope.error) return { value: null, error: schoolScope.error };
-  const schools = optionalStringArray(raw['schools'], `${label}.schools`);
+  const schools = optionalEnumArray<string>(raw['schools'], `${label}.schools`, WOW_SCHOOL_SET);
   if (schools.error) return { value: null, error: schools.error };
-  const deliveryScopes = optionalStringArray(raw['deliveryScopes'], `${label}.deliveryScopes`);
+  const deliveryScopes = optionalEnumArray<string>(raw['deliveryScopes'], `${label}.deliveryScopes`, DELIVERY_SCOPE_TAG_SET);
   if (deliveryScopes.error) return { value: null, error: deliveryScopes.error };
   const requiresDodgeable = optionalNullableBoolean(raw['requiresDodgeable'], `${label}.requiresDodgeable`);
   if (requiresDodgeable.error) return { value: null, error: requiresDodgeable.error };

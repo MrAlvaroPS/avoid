@@ -384,6 +384,57 @@ function resolveScalarConflict<T>(proposals: { value: T; ruleId: string }[]): { 
   return { value: proposals[0].value, conflict: false, ruleIds: proposals.map((proposal) => proposal.ruleId) };
 }
 
+/**
+ * §E1 audit fix (2026-09-04) — "static replacement target presence": ¿está
+ * SELECCIONADO un spellId concreto (un talento, o el modificador que concede
+ * un reemplazo estático) en este build? Extraída de la rama que ya usaba
+ * el bloque de talent-gating de entry.spellId para no duplicar la lógica al
+ * aplicarla también al MODIFICADOR de una regla `replace` entrante (ver
+ * inboundReplacementsBySpellId más abajo) — misma fuente de verdad para
+ * "seleccionado" en ambos casos.
+ */
+function talentSelectionPresence(
+  modifierSpellId: number,
+  ranks: Map<number, number>,
+  normalizedBuild: TalentBuildNode[] | null,
+  unresolvedSelectedNodes: boolean,
+  gameBuildConfidence: DefensiveResolutionConfidence,
+): { presence: BuildPresence; confidence: DefensiveResolutionConfidence; reason: string } {
+  if (normalizedBuild == null) {
+    return {
+      presence: 'unknown',
+      confidence: 'uncertain',
+      reason: `No hay snapshot de build para demostrar si el modificador (spellId ${modifierSpellId}) está seleccionado.`,
+    };
+  }
+  if (ranks.has(modifierSpellId)) {
+    return {
+      presence: 'present',
+      confidence: gameBuildConfidence,
+      reason: `El modificador (spellId ${modifierSpellId}) está seleccionado en el build observado.`,
+    };
+  }
+  if (unresolvedSelectedNodes) {
+    return {
+      presence: 'unknown',
+      confidence: 'uncertain',
+      reason: `Hay nodos seleccionados sin spellId; no se puede demostrar si el modificador (spellId ${modifierSpellId}) falta.`,
+    };
+  }
+  return {
+    presence: 'absent',
+    confidence: gameBuildConfidence,
+    reason: `El modificador (spellId ${modifierSpellId}) no está seleccionado en un build completamente resuelto.`,
+  };
+}
+
+/** present > unknown > absent — combina rutas de adquisición INDEPENDIENTES (OR): basta con que una demuestre presencia. */
+function presenceOr(a: BuildPresence, b: BuildPresence): BuildPresence {
+  if (a === 'present' || b === 'present') return 'present';
+  if (a === 'unknown' || b === 'unknown') return 'unknown';
+  return 'absent';
+}
+
 const OPERATION_ORDER: Record<DefensiveModifierOperation, number> = {
   set_ms: 0,
   multiply: 1,
@@ -716,6 +767,29 @@ export function resolveEffectiveDefensiveKit(
   const unresolvedSelectedNodes = (normalizedBuild ?? []).some((node) => node.rank > 0 && !positiveInteger(node.spellId));
   const gameBuildConfidence = input.gameBuildConfidence ?? (input.gameBuild ? 'verified' : 'uncertain');
 
+  // §E1 audit fix — "static replacement target presence": precalculado UNA
+  // vez por llamada (no por fila del catálogo) para no reparsear el mismo
+  // payload por cada entrada. Solo reglas 'replace' verificadas, del
+  // game_build exacto (sin fallback legacy — mismo criterio que el resto de
+  // reglas semánticas, §8/§16) y cuya spec aplique. `automatic` distingue
+  // talent_selected/hero_talent_selected (resoluble desde el build estático)
+  // de runtime_state/other/passive_selected (nunca resoluble aquí — el
+  // spellId destino queda 'unknown', jamás 'present' por defecto).
+  const inboundReplacementsBySpellId = new Map<number, { modifierSpellId: number; ruleId: string; automatic: boolean }[]>();
+  for (const rule of data.semanticRules ?? []) {
+    if (rule.ruleType !== 'replace' || !rule.verified || rule.gameBuild !== input.gameBuild) continue;
+    if (rule.specNames != null && (input.specName == null || !rule.specNames.includes(input.specName))) continue;
+    const parsed = parseReplacementRulePayload(rule.payload);
+    if (!parsed.value?.replacementSpellId) continue;
+    const list = inboundReplacementsBySpellId.get(parsed.value.replacementSpellId) ?? [];
+    list.push({
+      modifierSpellId: rule.modifierSpellId,
+      ruleId: rule.id,
+      automatic: AUTOMATIC_SEMANTIC_RULE_CONDITIONS.has(parsed.value.condition),
+    });
+    inboundReplacementsBySpellId.set(parsed.value.replacementSpellId, list);
+  }
+
   return data.catalog
     .filter((entry) => !entry.excluded && entry.className === input.className && specApplies(entry, input.specName))
     .filter((entry) => input.includeExternal !== false || entry.category !== 'external_defensive')
@@ -734,8 +808,13 @@ export function resolveEffectiveDefensiveKit(
       // sobrescribir estos tres valores juntos cuando el defensivo SÍ es un
       // nodo de talento — nunca se vuelve a derivar por separado.
       let buildPresence: BuildPresence = 'present';
-      let buildPresenceReason = 'No es un nodo de talento — disponible en el baseline de la clase/spec.';
+      let buildPresenceReason = 'No es un nodo de talento ni el destino de un reemplazo estático conocido — disponible en el baseline de la clase/spec.';
       let buildPresenceConfidence: DefensiveResolutionConfidence = gameBuildConfidence;
+      // §E1 audit fix: distingue "el bloque de talent-gating de entry.spellId
+      // sí corrió" de "sigue en el default de baseline sin evaluar" — sin
+      // esto, combinar con la ruta de reemplazo entrante haría presenceOr()
+      // contra un 'present' de baseline no demostrado y nunca lo corregiría.
+      let buildPresenceHasDirectRoute = false;
       const provenance: ResolutionStep[] = [
         {
           kind: 'catalog_base',
@@ -840,6 +919,7 @@ export function resolveEffectiveDefensiveKit(
       }
 
       if (input.allTalentSpellIds?.has(entry.spellId)) {
+        buildPresenceHasDirectRoute = true;
         if (normalizedBuild == null) {
           confidence = weakerConfidence(confidence, 'uncertain');
           buildPresence = 'unknown';
@@ -885,6 +965,62 @@ export function resolveEffectiveDefensiveKit(
             after: false,
             description: 'El defensivo es un talento y no está seleccionado en este build.',
           });
+        }
+      }
+
+      // §E1 audit fix — "static replacement target presence" (2026-09-04):
+      // un spellId que solo se alcanza mediante un reemplazo estático
+      // verificado (Ice Cold←Ice Block/414659, Demonic Healthstone←
+      // Healthstone/386689 son los dos casos reales encontrados en la DB)
+      // NUNCA puede quedarse en el baseline 'present' solo porque el propio
+      // spellId no es, él mismo, un nodo de talento — su presencia real
+      // depende de si el MODIFICADOR que concede el reemplazo está
+      // seleccionado. Sin ruta directa (buildPresenceHasDirectRoute=false),
+      // esta ruta SUSTITUYE el baseline por completo; con ruta directa
+      // (el mismo spellId es también, independientemente, un nodo de
+      // talento) se combina con OR — cualquier ruta genuinamente
+      // independiente que demuestre presencia basta.
+      const inboundReplacements = inboundReplacementsBySpellId.get(entry.spellId) ?? [];
+      if (inboundReplacements.length) {
+        const routeResults = inboundReplacements.map((route) => ({
+          ...(route.automatic
+            ? talentSelectionPresence(route.modifierSpellId, ranks, normalizedBuild, unresolvedSelectedNodes, gameBuildConfidence)
+            : {
+                presence: 'unknown' as BuildPresence,
+                confidence: 'uncertain' as DefensiveResolutionConfidence,
+                reason: `El modificador (spellId ${route.modifierSpellId}) tiene una condición no estática (runtime_state/other/passive_selected) — su selección no se puede demostrar desde el build (§9).`,
+              }),
+          ruleId: route.ruleId,
+        }));
+        const inboundCombined = routeResults.reduce<BuildPresence>((acc, route) => presenceOr(acc, route.presence), 'absent');
+        const inboundConfidence = routeResults.reduce(
+          (worst, route) => weakerConfidence(worst, route.confidence),
+          gameBuildConfidence as DefensiveResolutionConfidence,
+        );
+        const inboundReason = `Solo alcanzable mediante reemplazo estático (regla${inboundReplacements.length > 1 ? 's' : ''} ${routeResults.map((r) => r.ruleId).join(', ')}): ${routeResults.map((r) => r.reason).join(' ')}`;
+
+        if (buildPresenceHasDirectRoute) {
+          const combined = presenceOr(buildPresence, inboundCombined);
+          if (combined !== buildPresence) {
+            buildPresence = combined;
+            buildPresenceReason = `${buildPresenceReason} Además, ${inboundReason}`;
+            buildPresenceConfidence = weakerConfidence(buildPresenceConfidence, inboundConfidence);
+          }
+        } else {
+          // Sin ruta directa: el reemplazo entrante ES la única fuente de
+          // verdad — reemplaza el baseline 'present' no demostrado (bug real
+          // corregido por esta auditoría E1: Ice Cold/Demonic Healthstone no
+          // están en talent_spell_lookup por sí mismos y por eso caían aquí
+          // como "no talent-gated" cuando en realidad solo existen si se
+          // seleccionó el modificador correspondiente).
+          buildPresence = inboundCombined;
+          buildPresenceReason = inboundReason;
+          buildPresenceConfidence = inboundConfidence;
+          if (inboundCombined === 'absent') {
+            eligible = false;
+          } else if (inboundCombined === 'unknown') {
+            confidence = weakerConfidence(confidence, 'uncertain');
+          }
         }
       }
 

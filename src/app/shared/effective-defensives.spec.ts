@@ -1187,3 +1187,161 @@ describe('resolveEffectiveDefensiveKit — E1 Effective Defensive Semantics Clos
     expect(withoutEvidence.buildPresence).toBe('absent');
   });
 });
+
+// §E1 audit fix (2026-09-04) — "static replacement target presence": Ice
+// Cold (414658) y Demonic Healthstone (452930) NO están, ellos mismos, en
+// talent_spell_lookup (no son un nodo de talento) — solo se conceden cuando
+// su modificador respectivo (414659 / 386689) está seleccionado. Antes de
+// este fix, el resolver los trataba como "no talent-gated" → baseline
+// buildPresence='present' incondicional, violando "original + replacement
+// nunca representan dos oportunidades independientes". Los spellIds de
+// abajo son EXCLUSIVAMENTE fixtures — la lógica de producción nunca los
+// menciona por nombre (ver inboundReplacementsBySpellId en
+// effective-defensives.ts, genérico para cualquier regla replace).
+describe('resolveEffectiveDefensiveKit — E1 audit fix: static replacement target presence', () => {
+  const ICE_BLOCK_SPELL_ID = 45438;
+  const ICE_COLD_SPELL_ID = 414658;
+  const ICE_COLD_TALENT_MODIFIER_ID = 414659;
+  const HEALTHSTONE_SPELL_ID = 6262;
+  const DEMONIC_HEALTHSTONE_SPELL_ID = 452930;
+  const DEMONIC_HEALTHSTONE_TALENT_MODIFIER_ID = 386689;
+
+  function iceBlock(): EffectiveDefensiveCatalogEntry {
+    return { ...fade, spellId: ICE_BLOCK_SPELL_ID, name: 'Ice Block', className: 'Mage', specName: null };
+  }
+  function iceCold(): EffectiveDefensiveCatalogEntry {
+    return { ...fade, spellId: ICE_COLD_SPELL_ID, name: 'Ice Cold', className: 'Mage', specName: null };
+  }
+  function iceColdReplaceRule(): EffectiveDefensiveSemanticRule {
+    return semanticRule({
+      id: 'ice-cold-replace',
+      modifierSpellId: ICE_COLD_TALENT_MODIFIER_ID,
+      targetSpellId: ICE_BLOCK_SPELL_ID,
+      ruleType: 'replace',
+      payload: { condition: 'talent_selected', replacementSpellId: ICE_COLD_SPELL_ID, triggerName: 'Ice Cold' },
+    });
+  }
+  function mageSemantics(): EffectiveDefensiveSemanticEntry[] {
+    return [
+      semanticEntry({ spellId: ICE_BLOCK_SPELL_ID, className: 'Mage', mechanisms: ['immunity'] }),
+      semanticEntry({ spellId: ICE_COLD_SPELL_ID, className: 'Mage', mechanisms: ['mitigation'] }),
+    ];
+  }
+  function mageInput(overrides: Partial<ResolveDefensiveKitInput> = {}): ResolveDefensiveKitInput {
+    return input({ className: 'Mage', specName: null, ...overrides });
+  }
+  function mageData(overrides: Partial<EffectiveDefensiveData> = {}): EffectiveDefensiveData {
+    return data({ catalog: [iceBlock(), iceCold()], semantics: mageSemantics(), semanticRules: [iceColdReplaceRule()], ...overrides });
+  }
+
+  it('Ice Cold talent NOT selected: Ice Block present/member, Ice Cold absent/non-member', () => {
+    const kit = resolveEffectiveDefensiveKit(mageInput({ talentBuild: [] }), mageData());
+    const iceBlockResolved = kit.find((d) => d.spellId === ICE_BLOCK_SPELL_ID)!;
+    const iceColdResolved = kit.find((d) => d.spellId === ICE_COLD_SPELL_ID)!;
+
+    expect(iceBlockResolved.buildPresence).toBe('present');
+    expect(iceBlockResolved.eligible).toBe(true);
+    expect(iceBlockResolved.isDefensiveKitMember).toBe(true);
+
+    // El bug real: antes de este fix, Ice Cold no siendo él mismo un nodo de
+    // talento caía al baseline 'present' incondicional. Ahora depende del
+    // modificador que lo concede.
+    expect(iceColdResolved.buildPresence).toBe('absent');
+    expect(iceColdResolved.isDefensiveKitMember).toBe(false);
+    expect(iceColdResolved.createsMissableOpportunity).toBe(false);
+  });
+
+  it('Ice Cold talent selected: Ice Block replaced/non-member, Ice Cold present/member', () => {
+    const kit = resolveEffectiveDefensiveKit(
+      mageInput({ talentBuild: [{ id: 1, nodeID: 10, rank: 1, spellId: ICE_COLD_TALENT_MODIFIER_ID }] }),
+      mageData(),
+    );
+    const iceBlockResolved = kit.find((d) => d.spellId === ICE_BLOCK_SPELL_ID)!;
+    const iceColdResolved = kit.find((d) => d.spellId === ICE_COLD_SPELL_ID)!;
+
+    expect(iceBlockResolved.eligible).toBe(false); // reemplazado — mecanismo ya existente, sin cambios
+    expect(iceBlockResolved.isDefensiveKitMember).toBe(false);
+
+    expect(iceColdResolved.buildPresence).toBe('present');
+    expect(iceColdResolved.eligible).toBe(true);
+    expect(iceColdResolved.isDefensiveKitMember).toBe(true);
+    expect(iceColdResolved.createsMissableOpportunity).toBe(true);
+  });
+
+  it('at no build state may Ice Block + Ice Cold create two simultaneous missable opportunities (not-selected / selected / build-unresolved)', () => {
+    const states: ResolveDefensiveKitInput[] = [
+      mageInput({ talentBuild: [] }),
+      mageInput({ talentBuild: [{ id: 1, nodeID: 10, rank: 1, spellId: ICE_COLD_TALENT_MODIFIER_ID }] }),
+      mageInput({ talentBuild: null }), // build no resuelto en absoluto
+    ];
+    for (const state of states) {
+      const kit = resolveEffectiveDefensiveKit(state, mageData());
+      const missableCount = kit.filter((d) => d.spellId === ICE_BLOCK_SPELL_ID || d.spellId === ICE_COLD_SPELL_ID).filter((d) => d.createsMissableOpportunity).length;
+      expect(missableCount).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('same invariant for Healthstone/Demonic Healthstone: talent not selected → Healthstone present/member, Demonic Healthstone absent/non-member', () => {
+    const catalog = [
+      { ...fade, spellId: HEALTHSTONE_SPELL_ID, name: 'Healthstone', className: 'Warlock', specName: null },
+      { ...fade, spellId: DEMONIC_HEALTHSTONE_SPELL_ID, name: 'Demonic Healthstone', className: 'Warlock', specName: null },
+    ];
+    const semantics = [
+      semanticEntry({ spellId: HEALTHSTONE_SPELL_ID, className: 'Warlock', mechanisms: ['sustain'] }),
+      semanticEntry({ spellId: DEMONIC_HEALTHSTONE_SPELL_ID, className: 'Warlock', mechanisms: ['sustain'] }),
+    ];
+    const replaceRule = semanticRule({
+      id: 'demonic-healthstone-replace',
+      modifierSpellId: DEMONIC_HEALTHSTONE_TALENT_MODIFIER_ID,
+      targetSpellId: HEALTHSTONE_SPELL_ID,
+      ruleType: 'replace',
+      payload: { condition: 'talent_selected', replacementSpellId: DEMONIC_HEALTHSTONE_SPELL_ID, triggerName: 'Pact of Gluttony' },
+    });
+    const warlockInput = (overrides: Partial<ResolveDefensiveKitInput> = {}) => input({ className: 'Warlock', specName: null, ...overrides });
+    const warlockData = data({ catalog, semantics, semanticRules: [replaceRule] });
+
+    const notSelected = resolveEffectiveDefensiveKit(warlockInput({ talentBuild: [] }), warlockData);
+    const healthstoneNotSelected = notSelected.find((d) => d.spellId === HEALTHSTONE_SPELL_ID)!;
+    const demonicNotSelected = notSelected.find((d) => d.spellId === DEMONIC_HEALTHSTONE_SPELL_ID)!;
+    expect(healthstoneNotSelected.buildPresence).toBe('present');
+    expect(healthstoneNotSelected.isDefensiveKitMember).toBe(true);
+    expect(demonicNotSelected.buildPresence).toBe('absent');
+    expect(demonicNotSelected.isDefensiveKitMember).toBe(false);
+
+    const selected = resolveEffectiveDefensiveKit(
+      warlockInput({ talentBuild: [{ id: 1, nodeID: 10, rank: 1, spellId: DEMONIC_HEALTHSTONE_TALENT_MODIFIER_ID }] }),
+      warlockData,
+    );
+    const healthstoneSelected = selected.find((d) => d.spellId === HEALTHSTONE_SPELL_ID)!;
+    const demonicSelected = selected.find((d) => d.spellId === DEMONIC_HEALTHSTONE_SPELL_ID)!;
+    expect(healthstoneSelected.eligible).toBe(false);
+    expect(healthstoneSelected.isDefensiveKitMember).toBe(false);
+    expect(demonicSelected.buildPresence).toBe('present');
+    expect(demonicSelected.isDefensiveKitMember).toBe(true);
+
+    for (const kit of [notSelected, selected]) {
+      const missableCount = kit
+        .filter((d) => d.spellId === HEALTHSTONE_SPELL_ID || d.spellId === DEMONIC_HEALTHSTONE_SPELL_ID)
+        .filter((d) => d.createsMissableOpportunity).length;
+      expect(missableCount).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('a replacement target that is ALSO independently talent-gated preserves that independent route (OR — never silently overridden by the replacement route)', () => {
+    // Caso genérico defendido por la especificación ("preservar cualquier
+    // ruta de adquisición genuinamente independiente") — no corresponde a
+    // ninguna ability real conocida hoy: aquí Ice Cold es (hipotéticamente)
+    // TAMBIÉN su propio nodo de talento, seleccionado, mientras el
+    // modificador del reemplazo (414659) NO lo está. La ruta directa por sí
+    // sola ya demuestra presencia — el resolver no debe perderla al combinar
+    // con la ruta de reemplazo (que aquí es 'absent').
+    const selectedDirectlyNotViaReplacement: ResolveDefensiveKitInput = {
+      ...mageInput({ talentBuild: [{ id: 2, nodeID: 20, rank: 1, spellId: ICE_COLD_SPELL_ID }] }),
+      allTalentSpellIds: new Set([ICE_COLD_SPELL_ID]),
+    };
+    const kit = resolveEffectiveDefensiveKit(selectedDirectlyNotViaReplacement, mageData());
+    const iceColdResolved = kit.find((d) => d.spellId === ICE_COLD_SPELL_ID)!;
+    expect(iceColdResolved.buildPresence).toBe('present');
+    expect(iceColdResolved.isDefensiveKitMember).toBe(true);
+  });
+});
