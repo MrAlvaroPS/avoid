@@ -133,12 +133,25 @@ const PERSONAL_SURVIVAL_USAGE_ROLES = new Set(['personal_survival', 'survival_st
  * diferencia de category/targetingMode. Nunca marca materiallyUnresolved a
  * un candidato que YA es isDefensiveKitMember (evita solapar los dos
  * conjuntos — un miembro del kit resuelto nunca necesita este bloqueo).
+ *
+ * §Pre-E6 fix #1 (2026-09-04, "pending + unknown role must fail closed"):
+ * `semanticStatus==='pending'` se comprueba ANTES del gate por usageRole,
+ * no después. Con el orden anterior, una fila futura todavía sin
+ * clasificar (`pending`, `usageRole` en su default `'unknown'`) no entraba
+ * en `PERSONAL_SURVIVAL_USAGE_ROLES` y por tanto NUNCA bloqueaba
+ * `no_applicable_resource` — exactamente el caso que este predicado existe
+ * para bloquear (podría resultar ser personal_survival tras clasificarse).
+ * El resto de motivos (buildPresence unknown/resolutionStatus conflict o
+ * unresolved/unresolvedRuntimeRules) siguen exigiendo el gate de usageRole
+ * — no hay razón para que un unresolvedRuntimeRule de una utility/
+ * healer_throughput/external etc. genere incertidumbre en un episodio que
+ * no tiene nada que ver con ella.
  */
 function isMateriallyUnresolved(r: ResolvedDefensive): boolean {
   if (r.isDefensiveKitMember) return false;
+  if (r.semanticStatus === 'pending') return true;
   if (!PERSONAL_SURVIVAL_USAGE_ROLES.has(r.usageRole)) return false;
   return (
-    r.semanticStatus === 'pending' ||
     r.buildPresence === 'unknown' ||
     r.resolutionStatus === 'conflict' ||
     r.resolutionStatus === 'unresolved' ||

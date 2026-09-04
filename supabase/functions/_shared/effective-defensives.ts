@@ -209,7 +209,26 @@ export interface EffectiveDefensiveSemanticEntry {
   opportunityMode: DefensiveOpportunityMode;
   defensiveIntent: DefensiveIntent;
   semanticStatus: DefensiveSemanticStatus;
-  semanticVersion: string;
+  /**
+   * §Pre-E6 fix #2 (2026-09-04, "semanticVersion TYPE CONTRACT"): la
+   * columna real `defensive_ability_semantics.semantic_version` es
+   * `NOT NULL` en producción (340/340 filas no-nulas hoy) — ese invariante
+   * de la base de datos NO cambia. Este boundary de TypeScript es
+   * deliberadamente `string | null` porque `effectiveDefensiveDataFromDatabaseRows()`
+   * parsea filas de entrada NO confiables/externas (`Record<string, unknown>`
+   * crudo de Supabase) con `nullableString()` — el mismo patrón fail-closed
+   * que ya usa cada otro campo de esta interfaz — y `ResolvedDefensive.
+   * semanticVersion` YA era `string | null` desde el resolver final. Antes
+   * de este fix, esta interfaz intermedia era la única que mentía
+   * (`string`, no nullable) sobre un dato que su propio parser podía
+   * producir en `null` — un desajuste de tipos puramente de compilación,
+   * nunca observado en runtime porque la columna real nunca es null, pero
+   * que dejaba el boundary deshonesto y rompía `deno check`
+   * (verify:causal-runtime). No se inventa un fallback ni se hace
+   * `stringify(null)` — se alinea el tipo con el dato real que el parser
+   * puede producir.
+   */
+  semanticVersion: string | null;
   semanticConfidence: DefensiveResolutionConfidence;
   locked: boolean;
   // ---- §E1: campos v10 que ya escribe classify-defensives, cerrados aquí ----
