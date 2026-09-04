@@ -52,7 +52,24 @@ export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0'
 // INDEPENDIENTE de EFFECTIVE_DEFENSIVE_RESOLVER_VERSION (timing) a propósito
 // (ver comentario de arriba); nada público consume todavía este string, así
 // que el bump no dispara ningún gate de homogeneidad existente.
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.1.0';
+// §E1 auditoría de roster (2026-09-04): bump 1.1.0→1.1.1 implícito por los
+// dos cierres de la auditoría (static replacement target presence +
+// validación estricta de enums en schools/deliveryScopes) — cambio de
+// comportamiento observable en buildPresence/membership, absorbido en el
+// bump siguiente porque ambos ocurrieron en la misma sesión de trabajo.
+// §E2.1 (2026-09-04): bump 1.1.0→1.2.0. knownTalentEntryIds cambia
+// observablemente unresolvedSelectedNodes → buildPresence/membership para
+// cualquier caller que empiece a pasarlo (comportamiento fail-closed sin
+// cambios para los que no lo pasan todavía).
+// §E2.5 "Acquisition Safety Closure" (2026-09-04): bump 1.2.0→1.3.0. La rama
+// "candidato de allTalentSpellIds, no seleccionado, build resuelto" deja de
+// producir 'absent' (era una inferencia negativa inválida, demostrado
+// empíricamente en E2.2-E2.4: 30/31 casos auditados tenían una ruta de
+// adquisición real que WCL nunca reporta) — ahora produce 'unknown'. Se
+// activa demonstratedPersistentCastSpellIds como prueba positiva de
+// presencia. Cambio de comportamiento observable real en buildPresence/
+// membership para cualquier caller que ya pasara allTalentSpellIds.
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.3.0';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 // §E1 — presencia real en ESTE build, independiente de "elegible ahora mismo"
@@ -63,6 +80,26 @@ export const LEGACY_GAME_BUILD = 'legacy-current';
 // ya decidía `eligible` por talent-gating, reutilizado aquí sin duplicar
 // lógica).
 export type BuildPresence = 'present' | 'absent' | 'unknown';
+
+// §E2.5 (2026-09-04, "Acquisition Safety Closure" — cierre de la auditoría
+// E2.2-E2.4): E2.2-E2.4 demostraron empíricamente que
+// "spellId ∈ allTalentSpellIds + no aparece seleccionado en WCL" NO es
+// prueba de ausencia — 30 de 31 abilities "absent" auditadas resultaron
+// tener una ruta de adquisición real que WCL nunca reporta (auto-granted,
+// fuera del árbol comprable, etc.), demostrado por casts reales
+// consistentes. La regla canónica pasa a ser estrictamente evidencial:
+// prueba positiva → present; prueba positiva de EXCLUSIÓN → absent; ninguna
+// de las dos → unknown. Este código documenta EXACTAMENTE qué evidencia
+// produjo cada buildPresence, para que sea auditable sin tener que releer
+// buildPresenceReason en prosa.
+export type BuildPresenceEvidence =
+  | 'baseline_kit'
+  | 'selected_talent'
+  | 'static_replacement'
+  | 'replacement_not_selected'
+  | 'observed_cast_same_pull'
+  | 'observed_cast_same_build_fingerprint'
+  | 'unresolved_acquisition';
 
 // §E1 §6/§11/§14: estado final de la resolución semántica DESPUÉS de aplicar
 // spec-profile + reglas estáticas + validación final. 'conflict' es la única
@@ -244,15 +281,34 @@ export interface ResolveDefensiveKitInput {
   /** false significa que el lookup falló/no existe; undefined permite usar el resolver con catálogo sin talent gating. */
   talentLookupComplete?: boolean;
   /**
-   * §E1 §3: "un cast real puede aportar prueba positiva de presencia cuando
-   * el caller tenga evidencia de que es una ability persistente del build".
-   * Deliberadamente estrecho: SOLO puede subir buildPresence a 'present'
-   * (absent→present, unknown→present) — nunca se usa para degradar ni para
-   * demostrar ausencia (la ausencia de un cast no prueba nada, ver invariante
-   * 16). Ningún caller real lo pasa todavía (E2/E7 deciden esa evidencia);
-   * omitirlo es un no-op total, compatible con todas las llamadas existentes.
+   * §E2.1 (2026-09-04, corrección de build-provenance): TODOS los
+   * TraitNodeEntry.ID que existen de verdad en el DB2 de este build,
+   * resuelvan o no a un spellId (ver wago-db2-client.ts TalentSpellLookup.
+   * knownEntryIds). Sin esto, un nodo seleccionado sin spellId SIEMPRE se
+   * trata como "genuinamente sin resolver" (comportamiento previo,
+   * conservador) — con esto, un nodo seleccionado sin spellId que SÍ está
+   * en este set es un nodo estructural conocido (p. ej. el selector de Hero
+   * Talents) y NO cuenta como sin resolver. omitido/null preserva el
+   * comportamiento fail-closed anterior sin cambios (compatibilidad total
+   * con callers que no lo pasan todavía).
    */
-  demonstratedPersistentCastSpellIds?: ReadonlySet<number> | null;
+  knownTalentEntryIds?: ReadonlySet<number> | null;
+  /**
+   * §E1 §3 / §E2.5 activación: "un cast real puede aportar prueba positiva de
+   * presencia cuando el caller tenga evidencia de que es una ability
+   * persistente del build". Deliberadamente estrecho: SOLO puede subir
+   * buildPresence a 'present' (absent→present, unknown→present) — nunca se
+   * usa para degradar ni para demostrar ausencia (la ausencia de un cast no
+   * prueba nada, ver invariante 16). El VALOR de cada entrada es el código de
+   * evidencia exacto que produjo esa entrada (same-pull vs cross-pull con el
+   * mismo build_fingerprint no nulo) — el resolver nunca decide esa
+   * distinción por sí mismo, la recibe ya resuelta del caller (§E2.5: el
+   * caller es quien aplica la regla de alcance de fingerprint y el guard de
+   * habilidades persistentes; el resolver solo consume el resultado ya
+   * validado). Omitirlo es un no-op total, compatible con toda llamada que
+   * no lo pase.
+   */
+  demonstratedPersistentCastSpellIds?: ReadonlyMap<number, 'observed_cast_same_pull' | 'observed_cast_same_build_fingerprint'> | null;
 }
 
 export interface EffectiveDefensiveData {
@@ -335,6 +391,8 @@ export interface ResolvedDefensive {
   buildPresence: BuildPresence;
   buildPresenceReason: string;
   buildPresenceConfidence: DefensiveResolutionConfidence;
+  /** §E2.5: código de evidencia estructurado — auditable sin parsear buildPresenceReason. Ver BuildPresenceEvidence. */
+  buildPresenceEvidence: BuildPresenceEvidence;
   /** Applicability EFECTIVA final (spec-profile override + applicabilityPatch de reglas automáticas ya fusionados) — el Episode Evaluator no debe volver a leer applicability por su cuenta cuando se conecte en E4. */
   applicability: DamageApplicability | null;
   applicabilityConfidence: 'high' | 'medium' | 'low' | null;
@@ -754,6 +812,22 @@ function matchingOverride(
     })[0] ?? null;
 }
 
+/**
+ * §E2.1 — un nodo SELECCIONADO sin spellId es "genuinamente sin resolver"
+ * solo si no se puede dar cuenta de él con el snapshot DB2 (knownEntryIds).
+ * Sin snapshot (knownEntryIds null/undefined — caller no actualizado
+ * todavía): comportamiento previo sin cambios, fail-closed total. Con
+ * snapshot: un entry conocido en el DB2 de este build es un nodo
+ * estructural/sin spell legítimo (nunca se le inventa un spellId) y NO
+ * cuenta como sin resolver; solo un entry que NI SIQUIERA está en el
+ * snapshot sigue siendo genuinamente irresoluble.
+ */
+function isGenuinelyUnresolvedNode(node: TalentBuildNode, knownEntryIds: ReadonlySet<number> | null | undefined): boolean {
+  if (node.rank <= 0 || positiveInteger(node.spellId)) return false;
+  if (knownEntryIds == null) return true;
+  return !knownEntryIds.has(node.id);
+}
+
 function ruleValue(rule: EffectiveDefensiveModifierRule, rank: number): number {
   return rule.value * (rule.perRank ? rank : 1);
 }
@@ -764,7 +838,7 @@ export function resolveEffectiveDefensiveKit(
 ): ResolvedDefensive[] {
   const normalizedBuild = normalizeTalentBuild(input.talentBuild);
   const ranks = buildRanks(normalizedBuild);
-  const unresolvedSelectedNodes = (normalizedBuild ?? []).some((node) => node.rank > 0 && !positiveInteger(node.spellId));
+  const unresolvedSelectedNodes = (normalizedBuild ?? []).some((node) => isGenuinelyUnresolvedNode(node, input.knownTalentEntryIds));
   const gameBuildConfidence = input.gameBuildConfidence ?? (input.gameBuild ? 'verified' : 'uncertain');
 
   // §E1 audit fix — "static replacement target presence": precalculado UNA
@@ -775,7 +849,7 @@ export function resolveEffectiveDefensiveKit(
   // talent_selected/hero_talent_selected (resoluble desde el build estático)
   // de runtime_state/other/passive_selected (nunca resoluble aquí — el
   // spellId destino queda 'unknown', jamás 'present' por defecto).
-  const inboundReplacementsBySpellId = new Map<number, { modifierSpellId: number; ruleId: string; automatic: boolean }[]>();
+  const inboundReplacementsBySpellId = new Map<number, { modifierSpellId: number; ruleId: string; automatic: boolean; condition: string }[]>();
   for (const rule of data.semanticRules ?? []) {
     if (rule.ruleType !== 'replace' || !rule.verified || rule.gameBuild !== input.gameBuild) continue;
     if (rule.specNames != null && (input.specName == null || !rule.specNames.includes(input.specName))) continue;
@@ -786,6 +860,7 @@ export function resolveEffectiveDefensiveKit(
       modifierSpellId: rule.modifierSpellId,
       ruleId: rule.id,
       automatic: AUTOMATIC_SEMANTIC_RULE_CONDITIONS.has(parsed.value.condition),
+      condition: parsed.value.condition,
     });
     inboundReplacementsBySpellId.set(parsed.value.replacementSpellId, list);
   }
@@ -810,6 +885,15 @@ export function resolveEffectiveDefensiveKit(
       let buildPresence: BuildPresence = 'present';
       let buildPresenceReason = 'No es un nodo de talento ni el destino de un reemplazo estático conocido — disponible en el baseline de la clase/spec.';
       let buildPresenceConfidence: DefensiveResolutionConfidence = gameBuildConfidence;
+      let buildPresenceEvidence: BuildPresenceEvidence = 'baseline_kit';
+      // §E2.5: declarado aquí (no en el bloque semántico, donde vivía antes)
+      // para que la ruta de reemplazo entrante (más abajo, todavía dentro del
+      // bloque de TIMING) pueda registrar también sus condiciones runtime no
+      // estáticas en el mismo array — antes esa ruta producía 'unknown' sin
+      // dejar rastro en unresolvedRuntimeRules, y el guard de
+      // demonstratedPersistentCastSpellIds necesita esa señal para excluir
+      // "runtime replacements" del §E2.5.
+      const unresolvedRuntimeRules: UnresolvedRuntimeRule[] = [];
       // §E1 audit fix: distingue "el bloque de talent-gating de entry.spellId
       // sí corrió" de "sigue en el default de baseline sin evaluar" — sin
       // esto, combinar con la ruta de reemplazo entrante haría presenceOr()
@@ -924,7 +1008,8 @@ export function resolveEffectiveDefensiveKit(
           confidence = weakerConfidence(confidence, 'uncertain');
           buildPresence = 'unknown';
           buildPresenceConfidence = 'uncertain';
-          buildPresenceReason = 'El defensivo es talent-gated, pero no hay snapshot de build; no se puede demostrar presencia ni ausencia.';
+          buildPresenceEvidence = 'unresolved_acquisition';
+          buildPresenceReason = 'El defensivo es un candidato de talent_spell_lookup, pero no hay snapshot de build; no se puede demostrar presencia ni ausencia.';
           provenance.push({
             kind: 'eligibility',
             field: 'eligible',
@@ -934,6 +1019,7 @@ export function resolveEffectiveDefensiveKit(
           });
         } else if (ranks.has(entry.spellId)) {
           buildPresence = 'present';
+          buildPresenceEvidence = 'selected_talent';
           buildPresenceReason = 'El nodo del defensivo está seleccionado en el build observado.';
           provenance.push({
             kind: 'eligibility',
@@ -946,6 +1032,7 @@ export function resolveEffectiveDefensiveKit(
           confidence = weakerConfidence(confidence, 'uncertain');
           buildPresence = 'unknown';
           buildPresenceConfidence = 'uncertain';
+          buildPresenceEvidence = 'unresolved_acquisition';
           buildPresenceReason = 'Hay nodos seleccionados sin spellId; no se puede demostrar que el defensivo falte (ni que esté presente).';
           provenance.push({
             kind: 'eligibility',
@@ -955,15 +1042,47 @@ export function resolveEffectiveDefensiveKit(
             description: 'Hay nodos seleccionados sin spellId; no se puede demostrar que el defensivo falte.',
           });
         } else {
+          // §E2.5 (Acquisition Safety Closure) — CORRECCIÓN DEL BUG REAL
+          // encontrado por la auditoría E2.2-E2.4: "spellId ∈
+          // allTalentSpellIds + no aparece seleccionado en un build
+          // resuelto" NO es prueba de exclusión. allTalentSpellIds es un
+          // conjunto CANDIDATO (todo entry del DB2 que resuelve a un
+          // spellId, resuelva o no a un nodo realmente comprable — ver
+          // wago-db2-client.ts) — no una prueba de que la ability exija
+          // selección explícita. 30 de 31 "absent" auditadas en E2.2-E2.4
+          // (AMS, Death Pact, Halo, Numbing Poison, Healing Tide Totem,
+          // Ironfur, Intervene/Interpose/Demolish, Consumption, Temporal
+          // Barrier, Dream Flight, Healing Elixir, Prayer of Healing...)
+          // resultaron tener una ruta de adquisición real que WCL nunca
+          // reporta, demostrado por casts reales consistentes. ANTES: esta
+          // rama marcaba eligible=false y buildPresence='absent'. AHORA:
+          // sin prueba positiva de exclusión (§E2.5 regla canónica), esto
+          // es 'unknown', nunca 'absent'. `eligible` se conserva sin tocar
+          // (compatibilidad legacy explícita, ver comentario de ese campo)
+          // — el gate de scoring real (isDefensiveKitMember/
+          // createsMissableOpportunity) ya exige buildPresence==='present'
+          // aparte de eligible, así que este cambio por sí solo cierra el
+          // bug de scoring sin tocar consumidores legacy de `eligible`.
+          // `eligible` en sí SÍ se conserva exactamente como antes (sigue
+          // pasando a false aquí) — es un campo legacy explícitamente fuera
+          // de alcance de este cierre (ver comentario en su declaración);
+          // como isDefensiveKitMember/createsMissableOpportunity ya exigen
+          // buildPresence==='present' ADEMÁS de eligible, el resultado de
+          // scoring canónico es idéntico se toque o no eligible aquí — así
+          // que se deja intacto para no migrar de golpe defensive-plan-solver
+          // (ese trabajo es E9, no E2.5) ni romper tests/consumidores legacy.
           eligible = false;
-          buildPresence = 'absent';
-          buildPresenceReason = 'El talento no está seleccionado en un build completamente resuelto — lookup completo, sin nodos sin resolver.';
+          confidence = weakerConfidence(confidence, 'uncertain');
+          buildPresence = 'unknown';
+          buildPresenceConfidence = 'uncertain';
+          buildPresenceEvidence = 'unresolved_acquisition';
+          buildPresenceReason = 'El defensivo es un candidato de talent_spell_lookup y no aparece seleccionado en un build resuelto, pero eso no basta para demostrar exclusión (§E2.5) — puede ser una ability auto-granted o fuera del árbol comprable que WCL nunca reporta.';
           provenance.push({
             kind: 'eligibility',
             field: 'eligible',
             before: true,
             after: false,
-            description: 'El defensivo es un talento y no está seleccionado en este build.',
+            description: 'El defensivo es un candidato de talent_spell_lookup, pero no aparece seleccionado; sin prueba positiva de exclusión, buildPresence no se demuestra ausente (§E2.5) — eligible se conserva en false por compatibilidad legacy (ver comentario del campo).',
           });
         }
       }
@@ -982,22 +1101,51 @@ export function resolveEffectiveDefensiveKit(
       // independiente que demuestre presencia basta.
       const inboundReplacements = inboundReplacementsBySpellId.get(entry.spellId) ?? [];
       if (inboundReplacements.length) {
-        const routeResults = inboundReplacements.map((route) => ({
-          ...(route.automatic
-            ? talentSelectionPresence(route.modifierSpellId, ranks, normalizedBuild, unresolvedSelectedNodes, gameBuildConfidence)
-            : {
-                presence: 'unknown' as BuildPresence,
-                confidence: 'uncertain' as DefensiveResolutionConfidence,
-                reason: `El modificador (spellId ${route.modifierSpellId}) tiene una condición no estática (runtime_state/other/passive_selected) — su selección no se puede demostrar desde el build (§9).`,
-              }),
-          ruleId: route.ruleId,
-        }));
+        const routeResults = inboundReplacements.map((route) => {
+          if (!route.automatic) {
+            // §E2.5: además de degradar a 'unknown', se registra como regla
+            // runtime no resuelta EN EL MISMO array que usa el resto del
+            // resolver (unresolvedRuntimeRules) — antes esta rama producía
+            // 'unknown' sin dejar rastro ahí, y el guard de
+            // demonstratedPersistentCastSpellIds (aplicado por el caller)
+            // necesita poder ver "esta ability solo se alcanza por una
+            // condición runtime" para excluirla de la evidencia de cast.
+            unresolvedRuntimeRules.push({
+              ruleId: route.ruleId,
+              condition: route.condition,
+              reason: `Reemplazo entrante condicionado a "${route.condition}" (modificador spellId ${route.modifierSpellId}) — no se aplica sobre el build estático (§9); requiere una fuente de evidencia runtime que todavía no existe.`,
+            });
+            return {
+              presence: 'unknown' as BuildPresence,
+              confidence: 'uncertain' as DefensiveResolutionConfidence,
+              reason: `El modificador (spellId ${route.modifierSpellId}) tiene una condición no estática (runtime_state/other/passive_selected) — su selección no se puede demostrar desde el build (§9).`,
+              evidence: 'unresolved_acquisition' as BuildPresenceEvidence,
+              ruleId: route.ruleId,
+            };
+          }
+          const resolved = talentSelectionPresence(route.modifierSpellId, ranks, normalizedBuild, unresolvedSelectedNodes, gameBuildConfidence);
+          return {
+            ...resolved,
+            evidence: (resolved.presence === 'present'
+              ? 'static_replacement'
+              : resolved.presence === 'absent'
+                ? 'replacement_not_selected'
+                : 'unresolved_acquisition') as BuildPresenceEvidence,
+            ruleId: route.ruleId,
+          };
+        });
         const inboundCombined = routeResults.reduce<BuildPresence>((acc, route) => presenceOr(acc, route.presence), 'absent');
         const inboundConfidence = routeResults.reduce(
           (worst, route) => weakerConfidence(worst, route.confidence),
           gameBuildConfidence as DefensiveResolutionConfidence,
         );
         const inboundReason = `Solo alcanzable mediante reemplazo estático (regla${inboundReplacements.length > 1 ? 's' : ''} ${routeResults.map((r) => r.ruleId).join(', ')}): ${routeResults.map((r) => r.reason).join(' ')}`;
+        // §E2.5: evidencia del/de los route(s) que realmente ganaron la
+        // combinación — mismo orden de prioridad que presenceOr (present >
+        // unknown > absent), así buildPresenceEvidence nunca queda
+        // desincronizado de buildPresence.
+        const inboundEvidence: BuildPresenceEvidence =
+          routeResults.find((r) => r.presence === inboundCombined)?.evidence ?? 'unresolved_acquisition';
 
         if (buildPresenceHasDirectRoute) {
           const combined = presenceOr(buildPresence, inboundCombined);
@@ -1005,6 +1153,7 @@ export function resolveEffectiveDefensiveKit(
             buildPresence = combined;
             buildPresenceReason = `${buildPresenceReason} Además, ${inboundReason}`;
             buildPresenceConfidence = weakerConfidence(buildPresenceConfidence, inboundConfidence);
+            buildPresenceEvidence = inboundEvidence;
           }
         } else {
           // Sin ruta directa: el reemplazo entrante ES la única fuente de
@@ -1016,7 +1165,12 @@ export function resolveEffectiveDefensiveKit(
           buildPresence = inboundCombined;
           buildPresenceReason = inboundReason;
           buildPresenceConfidence = inboundConfidence;
+          buildPresenceEvidence = inboundEvidence;
           if (inboundCombined === 'absent') {
+            // §E2.5: ÚNICA forma preservada de negativo explícito — el
+            // modificador que concede el reemplazo está demostrablemente NO
+            // seleccionado en un build resuelto (regla verificada, no
+            // ambigüedad de allTalentSpellIds). Se mantiene sin cambios.
             eligible = false;
           } else if (inboundCombined === 'unknown') {
             confidence = weakerConfidence(confidence, 'uncertain');
@@ -1024,14 +1178,21 @@ export function resolveEffectiveDefensiveKit(
         }
       }
 
-      // §E1 §3: un cast real demostrablemente persistente del build SOLO
-      // puede subir buildPresence — nunca lo baja ni demuestra ausencia. No
-      // hay caller real todavía que pase esto (E2/E7); es un no-op total en
-      // toda llamada existente.
-      if (buildPresence !== 'present' && input.demonstratedPersistentCastSpellIds?.has(entry.spellId)) {
+      // §E1 §3 / §E2.5 activación: un cast real demostrablemente persistente
+      // del build SOLO puede subir buildPresence — nunca lo baja ni
+      // demuestra ausencia (invariante 16, sin cambios). El VALOR del mapa
+      // es el código de evidencia exacto (same-pull vs cross-pull con
+      // fingerprint no nulo) — decidido enteramente por el caller, el
+      // resolver solo lo consume.
+      const castEvidence = input.demonstratedPersistentCastSpellIds?.get(entry.spellId);
+      if (buildPresence !== 'present' && castEvidence != null) {
         buildPresence = 'present';
         buildPresenceConfidence = weakerConfidence(buildPresenceConfidence, 'inferred');
-        buildPresenceReason = 'Un cast real observado en este pull demuestra que la ability pertenece al build, pese a que el talent-gating no lo confirmaba.';
+        buildPresenceEvidence = castEvidence;
+        buildPresenceReason =
+          castEvidence === 'observed_cast_same_pull'
+            ? 'Un cast real observado en este mismo pull demuestra que la ability pertenece al build, pese a que la evidencia de talento no lo confirmaba.'
+            : 'Un cast real observado en otro pull con el mismo talent_build_fingerprint exacto (no nulo) demuestra que la ability pertenece a este build, pese a que la evidencia de talento no lo confirmaba.';
       }
       provenance.push({
         kind: 'eligibility',
@@ -1302,7 +1463,6 @@ export function resolveEffectiveDefensiveKit(
       const semanticProvenance: SemanticResolutionStep[] = [];
       let applicability: DamageApplicability | null = semanticBase?.applicability ?? null;
       let applicabilityConfidence: 'high' | 'medium' | 'low' | null = semanticBase?.applicabilityConfidence ?? null;
-      const unresolvedRuntimeRules: UnresolvedRuntimeRule[] = [];
       // §E1: 'unresolved' cuando no hay nada que evaluar todavía (llamada
       // legacy timing-only) o cuando la fila sigue pending; 'resolved' es el
       // punto de partida optimista una vez hay una fila verified/rejected —
@@ -1708,6 +1868,7 @@ export function resolveEffectiveDefensiveKit(
         buildPresence,
         buildPresenceReason,
         buildPresenceConfidence,
+        buildPresenceEvidence,
         applicability,
         applicabilityConfidence,
         resolutionStatus,
@@ -1717,4 +1878,89 @@ export function resolveEffectiveDefensiveKit(
       };
     })
     .sort((a, b) => a.spellId - b.spellId);
+}
+
+// ---------------------------------------------------------------------------
+// §E2.5 "Acquisition Safety Closure" — activación de
+// demonstratedPersistentCastSpellIds como prueba positiva de presencia.
+//
+// Deliberadamente puro (sin Deno/Supabase): el caller (resolve-player-
+// defensive-kit) hace UNA primera resolución sin evidencia de cast (para
+// obtener activationMode/unresolvedRuntimeRules por spellId — el "persistent
+// ability guard"), llama a esta función con los casts crudos ya clasificados
+// same-pull / cross-pull, y usa el resultado como
+// input.demonstratedPersistentCastSpellIds en una SEGUNDA resolución. El
+// resolver en sí nunca decide "same pull" vs "same fingerprint" — eso lo
+// decide el caller aquí, con datos que el resolver puro no tiene (pull_id,
+// fingerprints de otros pulls).
+// ---------------------------------------------------------------------------
+
+/** UN cast observado de un spellId candidato, ya clasificado por el caller — nunca datos crudos de WCL sin procesar. */
+export interface ObservedCastForEvidence {
+  spellId: number;
+  /** true = el cast pertenece al MISMO pull que se está resolviendo ahora mismo. */
+  samePull: boolean;
+  /**
+   * talent_build_fingerprint EXACTO del pull de origen de este cast —
+   * null si ese pull nunca se fingerprintó. Un fingerprint null NUNCA es
+   * evidencia válida (§E2.5: "Do not use null-fingerprint historical pulls
+   * as build-level proof") — se compara por igualdad estricta de string
+   * contra currentBuildFingerprint, nunca se asume "probablemente el mismo
+   * build" por cercanía temporal ni por ausencia de dato.
+   */
+  pullTalentBuildFingerprint: string | null;
+}
+
+/**
+ * "Persistent ability guard" (§E2.5): un spellId solo puede entrar al mapa
+ * de evidencia si, en la resolución SIN evidencia de cast (`firstPassKit`),
+ * su fila es una activación manual real y estática — nunca:
+ *  - activationMode !== 'active' (pasivas/autocast — nunca se pulsan),
+ *  - unresolvedRuntimeRules no vacío (variantes runtime_state/other/
+ *    passive_selected, o un reemplazo entrante condicionado a runtime — ver
+ *    ambos puntos de push en resolveEffectiveDefensiveKit).
+ * No hay lista de spellIds hardcodeada en ningún punto de esta función — el
+ * guard se deriva enteramente de campos que el resolver YA calculó.
+ */
+function passesPersistentAbilityGuard(entry: Pick<ResolvedDefensive, 'activationMode' | 'unresolvedRuntimeRules'>): boolean {
+  return entry.activationMode === 'active' && entry.unresolvedRuntimeRules.length === 0;
+}
+
+/**
+ * Produce el mapa validado de evidencia de cast persistente para pasar como
+ * `ResolveDefensiveKitInput.demonstratedPersistentCastSpellIds` en una
+ * segunda resolución. Reglas de alcance (§E2.5), aplicadas aquí y solo aquí:
+ *  - same-pull siempre es válido (evidencia más fuerte, gana si coexiste con
+ *    cross-pull para el mismo spellId);
+ *  - cross-pull solo es válido si AMBOS fingerprints (el del pull actual y
+ *    el del pull de origen del cast) son no nulos y coinciden exactamente —
+ *    nunca se propaga evidencia entre fingerprints distintos, nunca se usa
+ *    un pull sin fingerprintar como prueba de build;
+ *  - el guard de arriba se aplica ANTES de aceptar cualquier evidencia,
+ *    same-pull o cross-pull por igual.
+ */
+export function computeDemonstratedPersistentCastSpellIds(
+  observedCasts: readonly ObservedCastForEvidence[],
+  currentBuildFingerprint: string | null,
+  firstPassKit: readonly ResolvedDefensive[],
+): Map<number, 'observed_cast_same_pull' | 'observed_cast_same_build_fingerprint'> {
+  const result = new Map<number, 'observed_cast_same_pull' | 'observed_cast_same_build_fingerprint'>();
+  const kitBySpellId = new Map(firstPassKit.map((entry) => [entry.spellId, entry]));
+
+  for (const cast of observedCasts) {
+    if (result.get(cast.spellId) === 'observed_cast_same_pull') continue; // ya tiene la evidencia más fuerte posible para este spellId
+
+    const entry = kitBySpellId.get(cast.spellId);
+    if (!entry || !passesPersistentAbilityGuard(entry)) continue;
+
+    if (cast.samePull) {
+      result.set(cast.spellId, 'observed_cast_same_pull');
+      continue;
+    }
+    if (currentBuildFingerprint != null && cast.pullTalentBuildFingerprint != null && cast.pullTalentBuildFingerprint === currentBuildFingerprint) {
+      result.set(cast.spellId, 'observed_cast_same_build_fingerprint');
+    }
+  }
+
+  return result;
 }

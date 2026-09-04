@@ -3,11 +3,13 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { errorMessage } from '../_shared/error-message.ts';
 import {
   EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+  computeDemonstratedPersistentCastSpellIds,
   effectiveDefensiveDataFromDatabaseRows,
   fingerprintTalentBuild,
   normalizeTalentBuild,
   resolveEffectiveDefensiveKit,
   type DefensiveResolutionConfidence,
+  type ObservedCastForEvidence,
   type TalentBuildNode,
 } from '../_shared/effective-defensives.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
@@ -37,6 +39,13 @@ interface LatestBuildRow {
   observed_at: string;
   report_code: string;
   pull_id: string;
+}
+
+/** Fila mínima de player_pull_records necesaria para §E2.5 (evidencia de cast persistente). */
+interface DefensiveCastPullRow {
+  pull_id: string;
+  talent_build_fingerprint?: string | null;
+  defensive_casts: { spellId?: number; timestampsMs?: number[] }[] | null;
 }
 
 const CONFIDENCES = new Set<DefensiveResolutionConfidence>(['verified', 'inferred', 'fallback', 'uncertain']);
@@ -144,7 +153,7 @@ Deno.serve(async (req: Request) => {
       ? supabase.from('player_defensive_overrides').select('*').eq('class', className).eq('game_build', gameBuild).eq('active', true)
       : Promise.resolve({ data: [], error: null });
     const talentLookupPromise = gameBuild
-      ? supabase.from('talent_spell_lookup').select('entry_to_spell').eq('build', gameBuild).maybeSingle()
+      ? supabase.from('talent_spell_lookup').select('entry_to_spell,known_entry_ids').eq('build', gameBuild).maybeSingle()
       : Promise.resolve({ data: null, error: null });
     // §E2 (iris-defensive-canonicalization-v1-plan.md — "Conectar
     // resolve-player-defensive-kit a semantic catalog/rules"): la VISTA ya
@@ -182,6 +191,12 @@ Deno.serve(async (req: Request) => {
     const lookupValues = entryToSpell ? Object.values(entryToSpell) : null;
     const allTalentSpellIds = lookupValues ? new Set(lookupValues.map(Number).filter((value) => Number.isInteger(value) && value > 0)) : null;
     if (gameBuild && !allTalentSpellIds) warnings.push(`No existe talent_spell_lookup para ${gameBuild}; eligibility puede quedar en fallback.`);
+    // §E2.1: TraitNodeEntry conocidos del DB2, resuelvan o no a spell — sin
+    // esto un nodo estructural (p. ej. selector de Hero Talents) se trata
+    // como "genuinamente sin resolver" y bloquea buildPresence='absent'
+    // para TODO el build (ver known_entry_ids en talent_spell_lookup).
+    const knownEntryIdsRaw = talentLookupResult.data?.known_entry_ids as number[] | undefined;
+    const knownTalentEntryIds = knownEntryIdsRaw?.length ? new Set(knownEntryIdsRaw) : null;
 
     // Los nodos persistidos por versiones anteriores pueden no llevar
     // spellId. El id de WCL es TraitNodeEntry.ID, justo la clave del lookup.
@@ -201,21 +216,77 @@ Deno.serve(async (req: Request) => {
     }
     const buildFingerprint = gameBuild ? (computedFingerprint ?? body.buildFingerprint ?? latest?.talent_build_fingerprint ?? null) : null;
 
-    const kit = resolveEffectiveDefensiveKit(
-      {
-        className,
-        specName,
-        talentBuild,
-        buildFingerprint,
-        gameBuild,
-        gameBuildConfidence,
-        playerIdentity: playerName ? { characterId: body.characterId, playerName } : undefined,
-        includeExternal: body.includeExternal,
-        allTalentSpellIds,
-        talentLookupComplete: allTalentSpellIds != null,
-      },
-      resolverData,
-    );
+    const resolverInput = {
+      className,
+      specName,
+      talentBuild,
+      buildFingerprint,
+      gameBuild,
+      gameBuildConfidence,
+      playerIdentity: playerName ? { characterId: body.characterId, playerName } : undefined,
+      includeExternal: body.includeExternal,
+      allTalentSpellIds,
+      talentLookupComplete: allTalentSpellIds != null,
+      knownTalentEntryIds,
+    };
+
+    // §E2.5 "Acquisition Safety Closure": primera resolución SIN evidencia de
+    // cast — necesaria para el "persistent ability guard" (activationMode/
+    // unresolvedRuntimeRules por spellId, ver computeDemonstratedPersistentCastSpellIds).
+    const firstPassKit = resolveEffectiveDefensiveKit(resolverInput, resolverData);
+
+    // Casts reales: same-pull (este mismo pull_id) + cross-pull con el MISMO
+    // talent_build_fingerprint exacto no nulo, misma clase/spec/game_build
+    // (§E2.5 — nunca se propaga evidencia entre fingerprints distintos ni se
+    // usa un pull sin fingerprintar como prueba de build). Best-effort: un
+    // fallo aquí nunca bloquea la resolución, solo la deja sin evidencia de
+    // cast (degrada a la primera pasada, fail-closed).
+    let demonstratedPersistentCastSpellIds: ReturnType<typeof computeDemonstratedPersistentCastSpellIds> | null = null;
+    try {
+      const samePullPromise = playerName && latest?.pull_id
+        ? supabase.from('player_pull_records').select('pull_id,talent_build_fingerprint,defensive_casts').eq('pull_id', latest.pull_id).eq('player_name', playerName).maybeSingle()
+        : Promise.resolve({ data: null, error: null });
+      const crossPullPromise = playerName && gameBuild && buildFingerprint
+        ? supabase
+            .from('player_pull_records')
+            .select('pull_id,talent_build_fingerprint,defensive_casts')
+            .eq('player_name', playerName)
+            .eq('class', className)
+            .eq('game_build', gameBuild)
+            .eq('talent_build_fingerprint', buildFingerprint)
+            .not('talent_build_fingerprint', 'is', null)
+            .limit(200)
+        : Promise.resolve({ data: [], error: null });
+      const [samePullResult, crossPullResult] = await Promise.all([samePullPromise, crossPullPromise]);
+      if (samePullResult.error) throw samePullResult.error;
+      if (crossPullResult.error) throw crossPullResult.error;
+
+      const observedCasts: ObservedCastForEvidence[] = [];
+      const pushCastsFromRow = (row: DefensiveCastPullRow, samePull: boolean) => {
+        for (const cast of row.defensive_casts ?? []) {
+          if (typeof cast.spellId !== 'number' || !(cast.timestampsMs?.length)) continue; // solo casts realmente observados, nunca "elegible pero nunca lanzado"
+          observedCasts.push({ spellId: cast.spellId, samePull, pullTalentBuildFingerprint: samePull ? null : (row.talent_build_fingerprint ?? null) });
+        }
+      };
+      const samePullRow = samePullResult.data as DefensiveCastPullRow | null;
+      if (samePullRow) pushCastsFromRow(samePullRow, true);
+      for (const row of (crossPullResult.data ?? []) as DefensiveCastPullRow[]) {
+        if (row.pull_id === latest?.pull_id) continue; // ya cubierto arriba como same-pull
+        pushCastsFromRow(row, false);
+      }
+
+      if (observedCasts.length) {
+        demonstratedPersistentCastSpellIds = computeDemonstratedPersistentCastSpellIds(observedCasts, buildFingerprint, firstPassKit);
+      }
+    } catch (err) {
+      warnings.push(`No se pudo cargar evidencia de cast persistente (no bloqueante): ${errorMessage(err)}`);
+    }
+
+    // Segunda resolución CON la evidencia de cast validada — no-op total si
+    // no se encontró ninguna (demonstratedPersistentCastSpellIds queda null).
+    const kit = demonstratedPersistentCastSpellIds?.size
+      ? resolveEffectiveDefensiveKit({ ...resolverInput, demonstratedPersistentCastSpellIds }, resolverData)
+      : firstPassKit;
 
     return jsonResponse({
       ok: true,

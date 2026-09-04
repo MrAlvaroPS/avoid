@@ -339,23 +339,28 @@ Deno.serve(async (req: Request) => {
       // caliente sin quitar el fallback (si build o caché fallan, sigue sin
       // bloquear el análisis).
       let talentSpellLookup: Map<number, number> | null = null;
+      let knownTalentEntryIds: Set<number> | null = null;
       let currentGameBuild: string | null = null;
       try {
         const namespace = await getCurrentBuildNamespace();
         if (namespace) {
           const build = buildFromBlizzardNamespace(namespace);
           currentGameBuild = build;
-          const { data: cached } = await supabase.from('talent_spell_lookup').select('entry_to_spell').eq('build', build).maybeSingle();
+          const { data: cached } = await supabase.from('talent_spell_lookup').select('entry_to_spell,known_entry_ids').eq('build', build).maybeSingle();
           if (cached) {
             talentSpellLookup = new Map(Object.entries(cached.entry_to_spell as Record<string, number>).map(([id, spellId]) => [Number(id), spellId]));
+            // §E2.1: filas cacheadas antes de esta corrección tienen known_entry_ids=[] — se repuebla en la próxima sincronización de este build, no bloquea mientras tanto (degrada al comportamiento previo, fail-closed).
+            knownTalentEntryIds = new Set((cached.known_entry_ids as number[] | null) ?? []);
           } else {
-            const fresh = (await fetchTalentSpellLookup(build)).entryIdToSpellId;
-            talentSpellLookup = fresh;
-            const entry_to_spell = Object.fromEntries([...fresh.entries()].map(([id, spellId]) => [String(id), spellId]));
+            const fresh = await fetchTalentSpellLookup(build);
+            talentSpellLookup = fresh.entryIdToSpellId;
+            knownTalentEntryIds = fresh.knownEntryIds;
+            const entry_to_spell = Object.fromEntries([...fresh.entryIdToSpellId.entries()].map(([id, spellId]) => [String(id), spellId]));
+            const known_entry_ids = [...fresh.knownEntryIds];
             // Best-effort: si el insert falla (ej. carrera con otra invocación
             // guardando el mismo build a la vez), no bloquea — se recalculará
             // en la siguiente invocación sin caché, sin más coste que hoy.
-            await supabase.from('talent_spell_lookup').upsert({ build, entry_to_spell }).then(
+            await supabase.from('talent_spell_lookup').upsert({ build, entry_to_spell, known_entry_ids }).then(
               () => { },
               (err) => console.error('No se pudo cachear talent_spell_lookup (no bloqueante):', err),
             );
@@ -1211,6 +1216,7 @@ Deno.serve(async (req: Request) => {
             }) ?? null) as TalentBuildNode[] | null,
           );
           const shadowTalentLookup = observedBuild.gameBuild === currentGameBuild ? talentSpellLookup : null;
+          const shadowKnownEntryIds = observedBuild.gameBuild === currentGameBuild ? knownTalentEntryIds : null;
           const talentBuild = normalizeTalentBuild(
             rawTalentBuild?.map((node) => {
               const spellId = shadowTalentLookup?.get(node.id);
@@ -1233,6 +1239,7 @@ Deno.serve(async (req: Request) => {
                 playerIdentity: { playerName: actor.name },
                 allTalentSpellIds: shadowTalentLookup ? new Set(shadowTalentLookup.values()) : null,
                 talentLookupComplete: shadowTalentLookup != null,
+                knownTalentEntryIds: shadowKnownEntryIds,
               },
               resolverData,
             )

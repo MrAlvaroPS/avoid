@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
   EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION,
+  computeDemonstratedPersistentCastSpellIds,
   effectiveDefensiveDataFromDatabaseRows,
   fingerprintTalentBuild,
   inferCurrentGameBuildObservation,
@@ -11,7 +12,9 @@ import {
   type EffectiveDefensiveModifierRule,
   type EffectiveDefensiveSemanticEntry,
   type EffectiveDefensiveSemanticRule,
+  type ObservedCastForEvidence,
   type ResolveDefensiveKitInput,
+  type ResolvedDefensive,
 } from '../../../supabase/functions/_shared/effective-defensives';
 
 const GAME_BUILD = '12.1.0.68914';
@@ -188,6 +191,101 @@ describe('resolveEffectiveDefensiveKit', () => {
 
     expect(resolved.eligible).toBe(true);
     expect(resolved.confidence).toBe('uncertain');
+  });
+
+  // §E2.1 (2026-09-04) — corrección de build-provenance: el E2 audit
+  // encontró que TODO el roster tiene un nodo seleccionado sin spellId que
+  // en realidad es un TraitNodeEntry real del DB2 (probablemente el selector
+  // de Hero Talents) — no un talento genuinamente sin resolver.
+  // knownTalentEntryIds es lo que permite distinguirlos sin inventar spellIds.
+  describe('knownTalentEntryIds — nodo estructural vs. genuinamente sin resolver', () => {
+    const heroTalentSelectorNodeId = 123325; // fixture only — nunca hardcoded en lógica de producción
+    const otherTalent = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+
+    // §E2.5: el REPLACEMENT_TARGET (Ice Cold-style) sigue siendo la única
+    // ruta donde buildPresence='absent' es alcanzable con evidencia directa
+    // de talento — la ruta DIRECTA (entry.spellId ∈ allTalentSpellIds) ya
+    // nunca produce 'absent' por sí sola (ver el describe de más abajo). El
+    // valor de knownTalentEntryIds ahora vive aquí: sin reconocer el nodo
+    // estructural, unresolvedSelectedNodes bloquearía incluso esta 'absent'
+    // legítima, degradándola a 'unknown'.
+    it('un nodo estructural conocido no bloquea buildPresence=absent en la ruta de reemplazo entrante (modificador demostrablemente no seleccionado)', () => {
+      const replacementSpellId = 555555;
+      const resolved = resolveEffectiveDefensiveKit(
+        input({ talentBuild: [{ id: heroTalentSelectorNodeId, nodeID: 500, rank: 1 }], knownTalentEntryIds: new Set([heroTalentSelectorNodeId]) }),
+        data({
+          catalog: [fade, { ...fade, spellId: replacementSpellId, name: 'Replacement' }],
+          semantics: [semanticEntry()],
+          semanticRules: [semanticRule({ ruleType: 'replace', payload: { condition: 'talent_selected', replacementSpellId } })],
+        }),
+      );
+      const replacement = resolved.find((d) => d.spellId === replacementSpellId)!;
+      expect(replacement.buildPresence).toBe('absent');
+      expect(replacement.buildPresenceEvidence).toBe('replacement_not_selected');
+      expect(replacement.isDefensiveKitMember).toBe(false);
+    });
+
+    it('sin reconocer el nodo estructural, la misma ruta de reemplazo degrada a unknown en vez de absent (fail-closed, nunca inventa)', () => {
+      const replacementSpellId = 555555;
+      const resolved = resolveEffectiveDefensiveKit(
+        input({ talentBuild: [{ id: heroTalentSelectorNodeId, nodeID: 500, rank: 1 }] }), // knownTalentEntryIds omitido
+        data({
+          catalog: [fade, { ...fade, spellId: replacementSpellId, name: 'Replacement' }],
+          semantics: [semanticEntry()],
+          semanticRules: [semanticRule({ ruleType: 'replace', payload: { condition: 'talent_selected', replacementSpellId } })],
+        }),
+      );
+      const replacement = resolved.find((d) => d.spellId === replacementSpellId)!;
+      expect(replacement.buildPresence).toBe('unknown');
+    });
+
+    it('el mismo nodo sin spellId, si NO está en el DB2 snapshot, sigue bloqueando (fail-closed preservado)', () => {
+      const [resolved] = resolveEffectiveDefensiveKit(
+        input({
+          talentBuild: [{ id: heroTalentSelectorNodeId, nodeID: 500, rank: 1 }],
+          allTalentSpellIds: new Set([otherTalent.spellId]),
+          talentLookupComplete: true,
+          knownTalentEntryIds: new Set([999999]), // el nodo real NO está en el snapshot conocido
+        }),
+        data({ catalog: [otherTalent] }),
+      );
+      expect(resolved.buildPresence).toBe('unknown');
+      expect(resolved.eligible).toBe(true); // no se oculta — sigue sin demostrarse que falte
+    });
+
+    it('sin knownTalentEntryIds en absoluto (caller no actualizado), comportamiento previo sin cambios: unknown, nunca absent', () => {
+      const [resolved] = resolveEffectiveDefensiveKit(
+        input({
+          talentBuild: [{ id: heroTalentSelectorNodeId, nodeID: 500, rank: 1 }],
+          allTalentSpellIds: new Set([otherTalent.spellId]),
+          talentLookupComplete: true,
+          // knownTalentEntryIds omitido a propósito
+        }),
+        data({ catalog: [otherTalent] }),
+      );
+      expect(resolved.buildPresence).toBe('unknown');
+    });
+
+    it('unknown nunca penaliza: ni eligible ni createsMissableOpportunity se ven afectados por el nodo estructural reconocido', () => {
+      const survivalSemantics = [
+        { spellId: otherTalent.spellId, className: 'Priest', usageRole: 'personal_survival' as const, activationScope: 'self' as const, primaryBeneficiary: 'self' as const, secondaryPropagation: 'none' as const, mechanisms: ['mitigation' as const], opportunityMode: 'normal' as const, defensiveIntent: 'primary' as const, semanticStatus: 'verified' as const, semanticVersion: 'v', semanticConfidence: 'inferred' as const, locked: false, applicability: null, applicabilityConfidence: null, applicabilityError: null, specSemanticProfiles: [], invalidSpecSemanticProfiles: [] },
+      ];
+      const [resolved] = resolveEffectiveDefensiveKit(
+        input({
+          talentBuild: [
+            { id: heroTalentSelectorNodeId, nodeID: 500, rank: 1 }, // estructural, reconocido
+            { id: 90, nodeID: 91, rank: 1, spellId: otherTalent.spellId }, // el talento SÍ seleccionado
+          ],
+          allTalentSpellIds: new Set([otherTalent.spellId]),
+          talentLookupComplete: true,
+          knownTalentEntryIds: new Set([heroTalentSelectorNodeId]),
+        }),
+        data({ catalog: [otherTalent], semantics: survivalSemantics }),
+      );
+      expect(resolved.buildPresence).toBe('present');
+      expect(resolved.isDefensiveKitMember).toBe(true);
+      expect(resolved.createsMissableOpportunity).toBe(true);
+    });
   });
 
   it('applies a per-rank modifier and resolves Fade 30s to 20s at rank 2', () => {
@@ -1173,18 +1271,161 @@ describe('resolveEffectiveDefensiveKit — E1 Effective Defensive Semantics Clos
         talentBuild: [],
         allTalentSpellIds: new Set([talentDefensive.spellId]),
         talentLookupComplete: true,
-        demonstratedPersistentCastSpellIds: new Set([talentDefensive.spellId]),
+        demonstratedPersistentCastSpellIds: new Map([[talentDefensive.spellId, 'observed_cast_same_pull']]),
       }),
       data({ catalog: [talentDefensive] }),
     );
-    // Sin evidencia de cast, este defensivo quedaría 'absent' (no seleccionado, build completamente resuelto) — la evidencia de cast lo sube a 'present'.
+    // §E2.5: sin evidencia de cast este defensivo queda 'unknown' (candidato
+    // de allTalentSpellIds, no seleccionado, sin prueba positiva de
+    // exclusión — nunca 'absent', ver el describe de más abajo) — la
+    // evidencia de cast lo sube a 'present'.
     expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_pull');
 
     const [withoutEvidence] = resolveEffectiveDefensiveKit(
       input({ talentBuild: [], allTalentSpellIds: new Set([talentDefensive.spellId]), talentLookupComplete: true }),
       data({ catalog: [talentDefensive] }),
     );
-    expect(withoutEvidence.buildPresence).toBe('absent');
+    expect(withoutEvidence.buildPresence).toBe('unknown');
+  });
+});
+
+// §E2.5 "Acquisition Safety Closure" (2026-09-04) — E2.2-E2.4 demostraron
+// empíricamente que "spellId ∈ allTalentSpellIds + no aparece seleccionado
+// en un build resuelto" NO es prueba de ausencia (30 de 31 "absent"
+// auditadas resultaron ser falsos negativos: AMS, Death Pact, Halo, Numbing
+// Poison, Healing Tide Totem, Ironfur, Intervene/Interpose/Demolish...).
+// Regla canónica: prueba positiva de presencia → present; prueba positiva
+// de EXCLUSIÓN → absent; ninguna de las dos → unknown. La ruta directa
+// (entry.spellId ∈ allTalentSpellIds) ya NUNCA produce 'absent' por sí
+// sola — solo la ruta de reemplazo entrante (un modificador verificado
+// demostrablemente no seleccionado, ver el describe de knownTalentEntryIds
+// más arriba) preserva un negativo explícito.
+describe('resolveEffectiveDefensiveKit — E2.5 Acquisition Safety Closure', () => {
+  it('spell in allTalentSpellIds but not selected in a fully resolved build → unknown, never absent', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [], allTalentSpellIds: new Set([talentDefensive.spellId]), talentLookupComplete: true }),
+      data({ catalog: [talentDefensive] }),
+    );
+    expect(resolved.buildPresence).toBe('unknown');
+    expect(resolved.buildPresenceEvidence).toBe('unresolved_acquisition');
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+  });
+
+  it('a selected talent still resolves to present (positive proof preserved)', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: talentDefensive.spellId }],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+      }),
+      data({ catalog: [talentDefensive] }),
+    );
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceEvidence).toBe('selected_talent');
+  });
+
+  it('Ice Block / Ice Cold: exactly one missable, unchanged by the acquisition-safety closure', () => {
+    const iceBlockSpellId = 45438;
+    const iceColdSpellId = 414658;
+    const iceColdModifierId = 414659;
+    const iceBlock: EffectiveDefensiveCatalogEntry = { ...fade, spellId: iceBlockSpellId, name: 'Ice Block', className: 'Mage', specName: null };
+    const iceCold: EffectiveDefensiveCatalogEntry = { ...fade, spellId: iceColdSpellId, name: 'Ice Cold', className: 'Mage', specName: null };
+    const replaceRule = semanticRule({
+      id: 'ice-cold-replace',
+      modifierSpellId: iceColdModifierId,
+      targetSpellId: iceBlockSpellId,
+      ruleType: 'replace',
+      payload: { condition: 'talent_selected', replacementSpellId: iceColdSpellId },
+    });
+    const semantics = [
+      semanticEntry({ spellId: iceBlockSpellId, className: 'Mage', mechanisms: ['immunity'] }),
+      semanticEntry({ spellId: iceColdSpellId, className: 'Mage', mechanisms: ['mitigation'] }),
+    ];
+    const mageInput = (overrides: Partial<ResolveDefensiveKitInput> = {}) => input({ className: 'Mage', specName: null, ...overrides });
+    const mageData = data({ catalog: [iceBlock, iceCold], semantics, semanticRules: [replaceRule] });
+
+    for (const talentBuild of [[], [{ id: 1, nodeID: 10, rank: 1, spellId: iceColdModifierId }]]) {
+      const kit = resolveEffectiveDefensiveKit(mageInput({ talentBuild }), mageData);
+      const missableCount = kit.filter((d) => (d.spellId === iceBlockSpellId || d.spellId === iceColdSpellId) && d.createsMissableOpportunity).length;
+      expect(missableCount).toBe(1);
+    }
+  });
+
+  it('Healthstone / Demonic Healthstone: exactly one missable, unchanged by the acquisition-safety closure', () => {
+    const healthstoneSpellId = 6262;
+    const demonicSpellId = 452930;
+    const modifierId = 386689;
+    const catalog = [
+      { ...fade, spellId: healthstoneSpellId, name: 'Healthstone', className: 'Warlock', specName: null },
+      { ...fade, spellId: demonicSpellId, name: 'Demonic Healthstone', className: 'Warlock', specName: null },
+    ];
+    const semantics = [
+      semanticEntry({ spellId: healthstoneSpellId, className: 'Warlock', mechanisms: ['sustain'] }),
+      semanticEntry({ spellId: demonicSpellId, className: 'Warlock', mechanisms: ['sustain'] }),
+    ];
+    const replaceRule = semanticRule({
+      id: 'demonic-healthstone-replace',
+      modifierSpellId: modifierId,
+      targetSpellId: healthstoneSpellId,
+      ruleType: 'replace',
+      payload: { condition: 'talent_selected', replacementSpellId: demonicSpellId },
+    });
+    const warlockInput = (overrides: Partial<ResolveDefensiveKitInput> = {}) => input({ className: 'Warlock', specName: null, ...overrides });
+    const warlockData = data({ catalog, semantics, semanticRules: [replaceRule] });
+
+    for (const talentBuild of [[], [{ id: 1, nodeID: 10, rank: 1, spellId: modifierId }]]) {
+      const kit = resolveEffectiveDefensiveKit(warlockInput({ talentBuild }), warlockData);
+      const missableCount = kit.filter((d) => (d.spellId === healthstoneSpellId || d.spellId === demonicSpellId) && d.createsMissableOpportunity).length;
+      expect(missableCount).toBe(1);
+    }
+  });
+
+  it('same-pull cast evidence upgrades unknown to present', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map([[talentDefensive.spellId, 'observed_cast_same_pull']]),
+      }),
+      data({ catalog: [talentDefensive] }),
+    );
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_pull');
+  });
+
+  it('same exact non-null build-fingerprint historical cast evidence upgrades unknown to present', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map([[talentDefensive.spellId, 'observed_cast_same_build_fingerprint']]),
+      }),
+      data({ catalog: [talentDefensive] }),
+    );
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_build_fingerprint');
+  });
+
+  it('a spellId absent from demonstratedPersistentCastSpellIds gets no proof at all (caller already excluded different-fingerprint/null-fingerprint casts)', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map(), // caller determined no valid evidence exists (different fingerprint / null fingerprint cases never make it into this map)
+      }),
+      data({ catalog: [talentDefensive] }),
+    );
+    expect(resolved.buildPresence).toBe('unknown');
   });
 });
 
@@ -1343,5 +1584,110 @@ describe('resolveEffectiveDefensiveKit — E1 audit fix: static replacement targ
     const iceColdResolved = kit.find((d) => d.spellId === ICE_COLD_SPELL_ID)!;
     expect(iceColdResolved.buildPresence).toBe('present');
     expect(iceColdResolved.isDefensiveKitMember).toBe(true);
+  });
+});
+
+// §E2.5 — computeDemonstratedPersistentCastSpellIds: función pura que
+// decide qué casts observados cuentan como prueba positiva de presencia,
+// aplicando la regla de alcance de fingerprint y el "persistent ability
+// guard" descritos en la especificación. Dos-pasadas real (sin evidencia →
+// calcular evidencia → con evidencia) para que las pruebas sean honestas
+// sobre cómo la usa el caller real, en vez de fabricar ResolvedDefensive a
+// mano.
+describe('computeDemonstratedPersistentCastSpellIds', () => {
+  const CURRENT_FINGERPRINT = 'sha256:' + 'a'.repeat(64);
+  const OTHER_FINGERPRINT = 'sha256:' + 'b'.repeat(64);
+  const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+
+  function firstPassKit(overrides: Partial<ResolveDefensiveKitInput> = {}, dataOverrides: Partial<EffectiveDefensiveData> = {}): ResolvedDefensive[] {
+    return resolveEffectiveDefensiveKit(
+      input({ talentBuild: [], allTalentSpellIds: new Set([talentDefensive.spellId]), talentLookupComplete: true, ...overrides }),
+      data({ catalog: [talentDefensive], ...dataOverrides }),
+    );
+  }
+
+  it('a same-pull cast is valid evidence regardless of fingerprints', () => {
+    const kit = firstPassKit();
+    const casts: ObservedCastForEvidence[] = [{ spellId: talentDefensive.spellId, samePull: true, pullTalentBuildFingerprint: null }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, null, kit);
+    expect(evidence.get(talentDefensive.spellId)).toBe('observed_cast_same_pull');
+  });
+
+  it('a cross-pull cast with the exact same non-null build fingerprint is valid evidence', () => {
+    const kit = firstPassKit();
+    const casts: ObservedCastForEvidence[] = [{ spellId: talentDefensive.spellId, samePull: false, pullTalentBuildFingerprint: CURRENT_FINGERPRINT }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, CURRENT_FINGERPRINT, kit);
+    expect(evidence.get(talentDefensive.spellId)).toBe('observed_cast_same_build_fingerprint');
+  });
+
+  it('a cross-pull cast with a DIFFERENT fingerprint proves nothing', () => {
+    const kit = firstPassKit();
+    const casts: ObservedCastForEvidence[] = [{ spellId: talentDefensive.spellId, samePull: false, pullTalentBuildFingerprint: OTHER_FINGERPRINT }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, CURRENT_FINGERPRINT, kit);
+    expect(evidence.has(talentDefensive.spellId)).toBe(false);
+  });
+
+  it('a cross-pull cast whose origin pull was never fingerprinted (null) proves nothing, even if the current build has a fingerprint', () => {
+    const kit = firstPassKit();
+    const casts: ObservedCastForEvidence[] = [{ spellId: talentDefensive.spellId, samePull: false, pullTalentBuildFingerprint: null }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, CURRENT_FINGERPRINT, kit);
+    expect(evidence.has(talentDefensive.spellId)).toBe(false);
+  });
+
+  it('a cross-pull cast proves nothing when the CURRENT build itself has no fingerprint, even if the historical pull happens to share the same string', () => {
+    const kit = firstPassKit();
+    const casts: ObservedCastForEvidence[] = [{ spellId: talentDefensive.spellId, samePull: false, pullTalentBuildFingerprint: CURRENT_FINGERPRINT }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, null, kit);
+    expect(evidence.has(talentDefensive.spellId)).toBe(false);
+  });
+
+  it('persistent ability guard: a cast for a runtime-conditioned replacement route proves nothing', () => {
+    const replacementSpellId = 555555;
+    const nonAutomaticRule = semanticRule({
+      id: 'runtime-replace',
+      ruleType: 'replace',
+      payload: { condition: 'runtime_state', replacementSpellId },
+    });
+    const kit = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [] }),
+      data({
+        catalog: [fade, { ...fade, spellId: replacementSpellId, name: 'Replacement' }],
+        semantics: [semanticEntry()],
+        semanticRules: [nonAutomaticRule],
+      }),
+    );
+    const replacementEntry = kit.find((d) => d.spellId === replacementSpellId)!;
+    expect(replacementEntry.unresolvedRuntimeRules.length).toBeGreaterThan(0); // confirma que el guard tiene señal real que leer
+    const casts: ObservedCastForEvidence[] = [{ spellId: replacementSpellId, samePull: true, pullTalentBuildFingerprint: null }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, null, kit);
+    expect(evidence.has(replacementSpellId)).toBe(false);
+  });
+
+  it('persistent ability guard: a cast for a passive-activation entry proves nothing', () => {
+    const passiveDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 77001, name: 'Some Passive', activationMode: 'passive' };
+    const kit = firstPassKit({}, { catalog: [talentDefensive, passiveDefensive] });
+    const casts: ObservedCastForEvidence[] = [{ spellId: passiveDefensive.spellId, samePull: true, pullTalentBuildFingerprint: null }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, null, kit);
+    expect(evidence.has(passiveDefensive.spellId)).toBe(false);
+  });
+
+  it('a same-pull cast wins over an already-recorded cross-pull entry for the same spellId (strongest evidence kept)', () => {
+    const kit = firstPassKit();
+    const casts: ObservedCastForEvidence[] = [
+      { spellId: talentDefensive.spellId, samePull: false, pullTalentBuildFingerprint: CURRENT_FINGERPRINT },
+      { spellId: talentDefensive.spellId, samePull: true, pullTalentBuildFingerprint: null },
+    ];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, CURRENT_FINGERPRINT, kit);
+    expect(evidence.get(talentDefensive.spellId)).toBe('observed_cast_same_pull');
+  });
+
+  it('end-to-end: valid evidence from the first pass upgrades buildPresence to present in a second pass', () => {
+    const kit = firstPassKit();
+    expect(kit[0].buildPresence).toBe('unknown'); // sin evidencia, candidato de allTalentSpellIds no seleccionado
+    const casts: ObservedCastForEvidence[] = [{ spellId: talentDefensive.spellId, samePull: true, pullTalentBuildFingerprint: null }];
+    const evidence = computeDemonstratedPersistentCastSpellIds(casts, null, kit);
+    const secondPass = firstPassKit({ demonstratedPersistentCastSpellIds: evidence });
+    expect(secondPass[0].buildPresence).toBe('present');
+    expect(secondPass[0].buildPresenceEvidence).toBe('observed_cast_same_pull');
   });
 });

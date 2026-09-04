@@ -83,12 +83,15 @@ Deno.serve(async (req: Request) => {
 
     const { data: lookup, error: lookupError } = await supabase
       .from('talent_spell_lookup')
-      .select('entry_to_spell')
+      .select('entry_to_spell,known_entry_ids')
       .eq('build', gameBuild)
       .maybeSingle();
     if (lookupError) throw lookupError;
     const entryToSpell = lookup?.entry_to_spell as Record<string, number> | undefined;
     if (!entryToSpell) return jsonResponse({ ok: false, error: `Falta talent_spell_lookup exacto para ${gameBuild}` }, 409);
+    // §E2.1: ver knownTalentEntryIds en effective-defensives.ts.
+    const knownEntryIdsRaw = lookup?.known_entry_ids as number[] | undefined;
+    const knownTalentEntryIds = knownEntryIdsRaw?.length ? new Set(knownEntryIdsRaw) : null;
     const talentBuild = normalizeTalentBuild(
       (latest.talent_build as TalentBuildNode[] | null)?.map((node) => {
         const spellId = node.spellId ?? Number(entryToSpell[String(node.id)]);
@@ -122,6 +125,7 @@ Deno.serve(async (req: Request) => {
         includeExternal: true,
         allTalentSpellIds: new Set(Object.values(entryToSpell).map(Number).filter((value) => Number.isInteger(value) && value > 0)),
         talentLookupComplete: true,
+        knownTalentEntryIds,
       },
       effectiveDefensiveDataFromDatabaseRows({
         catalogRows: catalogResult.data ?? [],

@@ -222,7 +222,7 @@ Deno.serve(async (req: Request) => {
       supabase.from('defensive_modifier_rules').select('*').in('class', classes).eq('active', true),
       supabase.from('player_defensive_overrides').select('*').in('class', classes).eq('active', true),
       builds.length
-        ? supabase.from('talent_spell_lookup').select('build,entry_to_spell').in('build', builds)
+        ? supabase.from('talent_spell_lookup').select('build,entry_to_spell,known_entry_ids').in('build', builds)
         : Promise.resolve({ data: [], error: null }),
     ]);
     for (const result of [catalogResult, profileResult, ruleResult, overrideResult, lookupResult]) {
@@ -236,6 +236,12 @@ Deno.serve(async (req: Request) => {
     });
     const lookupByBuild = new Map(
       ((lookupResult.data ?? []) as { build: string; entry_to_spell: Record<string, number> }[]).map((row) => [row.build, row.entry_to_spell]),
+    );
+    // §E2.1: ver knownTalentEntryIds en effective-defensives.ts — evita que un
+    // nodo estructural sin spell (p. ej. selector de Hero Talents) bloquee
+    // buildPresence='absent' para todo el build.
+    const knownEntryIdsByBuild = new Map(
+      ((lookupResult.data ?? []) as { build: string; known_entry_ids?: number[] }[]).map((row) => [row.build, new Set(row.known_entry_ids ?? [])]),
     );
 
     stage = 'resolve_effective_kits';
@@ -276,6 +282,7 @@ Deno.serve(async (req: Request) => {
           includeExternal: true,
           allTalentSpellIds,
           talentLookupComplete: allTalentSpellIds != null,
+          knownTalentEntryIds: gameBuild ? (knownEntryIdsByBuild.get(gameBuild) ?? null) : null,
         },
         resolverData,
       );
