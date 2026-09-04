@@ -20,6 +20,7 @@ function unrestrictedApplicability(overrides: Partial<DamageApplicability> = {})
     requiresParryable: null,
     requiresBlockable: null,
     requiresSourceAffectedBySpell: null,
+    timingRelation: null,
     ...overrides,
   };
 }

@@ -77,6 +77,48 @@ function data(overrides: Partial<EffectiveDefensiveData> = {}): EffectiveDefensi
   };
 }
 
+function semanticEntry(overrides: Partial<EffectiveDefensiveSemanticEntry> = {}): EffectiveDefensiveSemanticEntry {
+  return {
+    spellId: fade.spellId,
+    className: 'Priest',
+    usageRole: 'personal_survival',
+    activationScope: 'self',
+    primaryBeneficiary: 'self',
+    secondaryPropagation: 'none',
+    mechanisms: ['mitigation'],
+    opportunityMode: 'normal',
+    defensiveIntent: 'primary',
+    semanticStatus: 'verified',
+    semanticVersion: 'defensive-semantics@1.0.0',
+    semanticConfidence: 'inferred',
+    locked: false,
+    applicability: null,
+    applicabilityConfidence: null,
+    applicabilityError: null,
+    specSemanticProfiles: [],
+    invalidSpecSemanticProfiles: [],
+    ...overrides,
+  };
+}
+
+function semanticRule(overrides: Partial<EffectiveDefensiveSemanticRule> = {}): EffectiveDefensiveSemanticRule {
+  return {
+    id: 'rule-1',
+    modifierSpellId: MODIFIER_SPELL_ID,
+    targetSpellId: fade.spellId,
+    specNames: null,
+    gameBuild: GAME_BUILD,
+    ruleType: 'augment',
+    // §E1: condition es obligatorio para que la regla sea AUTOMÁTICA
+    // (talent_selected/hero_talent_selected) — payload sin condition (o con
+    // runtime_state/other) queda en unresolvedRuntimeRules, no se aplica.
+    payload: { condition: 'talent_selected' },
+    source: 'test',
+    verified: true,
+    ...overrides,
+  };
+}
+
 describe('resolveEffectiveDefensiveKit', () => {
   it('uses the catalog baseline when no profile, rule or override applies', () => {
     const [resolved] = resolveEffectiveDefensiveKit(input(), data());
@@ -480,40 +522,6 @@ describe('database row adapter and game-build observation', () => {
 // de los casos de aceptación del plan (§7): Bear Form, AMS, Death Strike,
 // Mirror Image + Refractive Images.
 describe('resolveEffectiveDefensiveKit — Paso C semantic resolution', () => {
-  function semanticEntry(overrides: Partial<EffectiveDefensiveSemanticEntry> = {}): EffectiveDefensiveSemanticEntry {
-    return {
-      spellId: fade.spellId,
-      className: 'Priest',
-      usageRole: 'personal_survival',
-      activationScope: 'self',
-      primaryBeneficiary: 'self',
-      secondaryPropagation: 'none',
-      mechanisms: ['mitigation'],
-      opportunityMode: 'normal',
-      defensiveIntent: 'primary',
-      semanticStatus: 'verified',
-      semanticVersion: 'defensive-semantics@1.0.0',
-      semanticConfidence: 'inferred',
-      locked: false,
-      ...overrides,
-    };
-  }
-
-  function semanticRule(overrides: Partial<EffectiveDefensiveSemanticRule> = {}): EffectiveDefensiveSemanticRule {
-    return {
-      id: 'rule-1',
-      modifierSpellId: MODIFIER_SPELL_ID,
-      targetSpellId: fade.spellId,
-      specNames: null,
-      gameBuild: GAME_BUILD,
-      ruleType: 'augment',
-      payload: {},
-      source: 'test',
-      verified: true,
-      ...overrides,
-    };
-  }
-
   it('leaves every semantic field at its neutral default when the caller does not pass data.semantics (legacy timing-only callers stay unaffected)', () => {
     const [resolved] = resolveEffectiveDefensiveKit(input(), data());
     expect(resolved.semanticResolved).toBe(false);
@@ -598,7 +606,13 @@ describe('resolveEffectiveDefensiveKit — Paso C semantic resolution', () => {
         semantics: [semanticEntry({ usageRole: 'utility', mechanisms: [], opportunityMode: 'none' })],
         semanticRules: [
           semanticRule({
-            payload: { modifierName: 'Refractive Images', setUsageRole: 'personal_survival', setOpportunityMode: 'normal', addMechanisms: ['mitigation'] },
+            payload: {
+              condition: 'talent_selected',
+              modifierName: 'Refractive Images',
+              setUsageRole: 'personal_survival',
+              setOpportunityMode: 'normal',
+              addMechanisms: ['mitigation'],
+            },
           }),
         ],
       }),
@@ -633,16 +647,543 @@ describe('resolveEffectiveDefensiveKit — Paso C semantic resolution', () => {
     expect(resolved.semanticProvenance.some((step) => step.kind === 'semantic_rule_suppress')).toBe(true);
   });
 
-  it('a replace rule marks the original spell ineligible and records the replacement spellId in the provenance', () => {
+  it('a replace rule marks the original spell ineligible and records the replacement spellId in the provenance (replacement resolvable in the catalog)', () => {
     const replacementSpellId = 555555;
     const [resolved] = resolveEffectiveDefensiveKit(
       input({ talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
       data({
+        // §E1 §12: el sustituto debe poder resolverse en el catálogo de esta
+        // clase para que el replace cuente como resuelto — sin esta fila el
+        // resolver lo marca semantic_rule_replace_unresolved (ver el test
+        // dedicado a Ice Cold más abajo).
+        catalog: [fade, { ...fade, spellId: replacementSpellId, name: 'Ice Cold' }],
         semantics: [semanticEntry()],
-        semanticRules: [semanticRule({ ruleType: 'replace', payload: { replacementSpellId } })],
+        semanticRules: [semanticRule({ ruleType: 'replace', payload: { condition: 'talent_selected', replacementSpellId } })],
       }),
     );
     expect(resolved.eligible).toBe(false);
     expect(resolved.semanticProvenance.some((step) => step.kind === 'semantic_rule_replace' && step.description.includes(String(replacementSpellId)))).toBe(true);
+  });
+
+  // §E1 §12 — fixture de aceptación explícito de la especificación: Ice Cold
+  // reemplaza a Ice Block por talento, pero si el sustituto no existe en el
+  // catálogo de esta clase, el original queda reemplazado (no missable) y el
+  // sustituto queda unresolved — nunca se inventa un recurso.
+  it('Ice Cold-style replacement whose target cannot be resolved in the catalog: original stays replaced (non-missable), flagged unresolved — no resource is invented', () => {
+    const replacementSpellId = 414658; // Ice Cold — deliberadamente ausente del catálogo de este fixture
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({
+        semantics: [semanticEntry()],
+        semanticRules: [
+          semanticRule({ id: 'ice-cold-replace', ruleType: 'replace', payload: { condition: 'talent_selected', replacementSpellId } }),
+        ],
+      }),
+    );
+    expect(resolved.eligible).toBe(false);
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+    expect(resolved.resolutionStatus).toBe('unresolved');
+    expect(
+      resolved.semanticProvenance.some(
+        (step) => step.kind === 'semantic_rule_replace_unresolved' && step.description.includes(String(replacementSpellId)),
+      ),
+    ).toBe(true);
+  });
+});
+
+// §E1 — Effective Defensive Semantics Closure. Fixtures de aceptación
+// tomados directamente de datos reales de Supabase (2026-09-04): la fila de
+// Fade/Translucent Image, la de Avatar Arms/Protection (con la corrupción
+// real encontrada), la de Shield Block (semantic_status=pending real) y la
+// de Shield of the Righteous/Protection (specSemanticProfiles real).
+describe('resolveEffectiveDefensiveKit — E1 Effective Defensive Semantics Closure', () => {
+  const ICE_COLD_TALENT_SPELL_ID = 373446; // Translucent Image, en la vida real
+  const IGNORE_PAIN_SPELL_ID = 190456;
+  const SHIELD_BLOCK_SPELL_ID = 2565;
+  const AVATAR_SPELL_ID = 107574;
+  const SOTR_SPELL_ID = 53600;
+
+  function fadeInput(overrides: Partial<ResolveDefensiveKitInput> = {}): ResolveDefensiveKitInput {
+    return input({ className: 'Priest', specName: 'Shadow', ...overrides });
+  }
+
+  it('Fade + Translucent Image: base utility row becomes hybrid_survival/credit_only with a merged applicabilityPatch when the talent is selected (real Supabase rule)', () => {
+    const semantics: EffectiveDefensiveSemanticEntry[] = [
+      {
+        spellId: fade.spellId,
+        className: 'Priest',
+        usageRole: 'utility',
+        activationScope: 'self',
+        primaryBeneficiary: 'none',
+        secondaryPropagation: 'none',
+        mechanisms: [],
+        opportunityMode: 'none',
+        defensiveIntent: 'unknown',
+        semanticStatus: 'verified',
+        semanticVersion: 'defensive-semantics@v10',
+        semanticConfidence: 'inferred',
+        locked: false,
+        applicability: { schoolScope: 'none', schools: null, deliveryScopes: null, requiresDodgeable: null, requiresParryable: null, requiresBlockable: null, requiresSourceAffectedBySpell: null, timingRelation: 'unknown' },
+        applicabilityConfidence: 'high',
+        applicabilityError: null,
+        specSemanticProfiles: [],
+        invalidSpecSemanticProfiles: [],
+      },
+    ];
+    const translucentImage = semanticRule({
+      id: 'translucent-image',
+      modifierSpellId: ICE_COLD_TALENT_SPELL_ID,
+      targetSpellId: fade.spellId,
+      payload: {
+        condition: 'talent_selected',
+        modifierName: 'Translucent Image',
+        setUsageRole: 'hybrid_survival',
+        setDefensiveIntent: 'hybrid',
+        setOpportunityMode: 'credit_only',
+        setPrimaryBeneficiary: 'self',
+        addMechanisms: ['mitigation'],
+        applicabilityPatch: {
+          schoolScope: 'all',
+          schools: [],
+          deliveryScopes: ['all'],
+          requiresDodgeable: false,
+          requiresParryable: false,
+          requiresBlockable: false,
+          requiresSourceAffectedBySpell: false,
+          timingRelation: 'before_or_during',
+        },
+      },
+    });
+
+    const [withTalent] = resolveEffectiveDefensiveKit(
+      fadeInput({ talentBuild: [{ id: 1, nodeID: 2, rank: 1, spellId: ICE_COLD_TALENT_SPELL_ID }] }),
+      data({ semantics, semanticRules: [translucentImage] }),
+    );
+    expect(withTalent.usageRole).toBe('hybrid_survival');
+    expect(withTalent.primaryBeneficiary).toBe('self');
+    expect(withTalent.mechanisms).toEqual(['mitigation']);
+    expect(withTalent.opportunityMode).toBe('credit_only');
+    // hybrid_survival cuenta para Uso (kit member) pero nunca fabrica missed_ready — solo personal_survival+normal puede.
+    expect(withTalent.isDefensiveKitMember).toBe(true);
+    expect(withTalent.createsMissableOpportunity).toBe(false);
+    expect(withTalent.applicability).toMatchObject({ schoolScope: 'all', deliveryScopes: ['all'], timingRelation: 'before_or_during', requiresBlockable: false });
+    expect(withTalent.resolutionStatus).toBe('resolved');
+
+    const [withoutTalent] = resolveEffectiveDefensiveKit(fadeInput({ talentBuild: [] }), data({ semantics, semanticRules: [translucentImage] }));
+    expect(withoutTalent.usageRole).toBe('utility');
+    expect(withoutTalent.isDefensiveKitMember).toBe(false);
+    expect(withoutTalent.applicability).toMatchObject({ schoolScope: 'none' });
+  });
+
+  it('Avatar Arms specSemanticProfile: only the matching spec overrides base semantics — Fury (no matching profile) keeps the base utility row', () => {
+    const avatarCatalog: EffectiveDefensiveCatalogEntry = { ...fade, spellId: AVATAR_SPELL_ID, name: 'Avatar', className: 'Warrior', specName: 'Arms/Fury/Protection' };
+    const rows = effectiveDefensiveDataFromDatabaseRows({
+      catalogRows: [],
+      semanticRows: [
+        {
+          spell_id: AVATAR_SPELL_ID,
+          class: 'Warrior',
+          usage_role: 'utility',
+          activation_scope: 'self',
+          primary_beneficiary: 'self',
+          secondary_propagation: 'none',
+          mechanisms: [],
+          opportunity_mode: 'none',
+          defensive_intent: 'unknown',
+          semantic_status: 'verified',
+          semantic_version: 'defensive-semantics@v10',
+          confidence: 'inferred',
+          locked: false,
+          applicability: { schoolScope: 'none', schools: [], deliveryScopes: [], timingRelation: 'unknown' },
+          applicability_confidence: 'high',
+          spec_semantic_profiles: [
+            {
+              spec: 'Arms',
+              usageRole: 'hybrid_survival',
+              defensiveIntent: 'hybrid',
+              activationScope: 'self',
+              primaryBeneficiary: 'self',
+              secondaryPropagation: 'none',
+              mechanisms: ['mitigation'],
+              opportunityMode: 'credit_only',
+              applicability: { schoolScope: 'all', schools: [], deliveryScopes: ['aoe'], timingRelation: 'before_or_during' },
+              source: 'wowhead',
+              confidence: 'high',
+            },
+          ],
+        },
+      ],
+    });
+
+    const [arms] = resolveEffectiveDefensiveKit(
+      input({ className: 'Warrior', specName: 'Arms' }),
+      data({ catalog: [avatarCatalog], semantics: rows.semantics }),
+    );
+    expect(arms.usageRole).toBe('hybrid_survival');
+    expect(arms.mechanisms).toEqual(['mitigation']);
+    expect(arms.applicability).toMatchObject({ schoolScope: 'all', deliveryScopes: ['aoe'] });
+    expect(arms.isDefensiveKitMember).toBe(true);
+    expect(arms.resolutionStatus).toBe('resolved');
+
+    const [fury] = resolveEffectiveDefensiveKit(
+      input({ className: 'Warrior', specName: 'Fury' }),
+      data({ catalog: [avatarCatalog], semantics: rows.semantics }),
+    );
+    expect(fury.usageRole).toBe('utility');
+    expect(fury.isDefensiveKitMember).toBe(false);
+  });
+
+  it('malformed Avatar/Protection specSemanticProfile (real corruption: a markdown-link fragment merged into the requiresDodgeable key) is rejected — Arms keeps resolving normally', () => {
+    // Reproduce EXACTAMENTE la corrupción real encontrada en Supabase: el
+    // objeto de applicability del perfil Protection trae una clave
+    // desconocida (fragmento de markdown-link fusionado con
+    // "requiresDodgeable") en vez de la clave real — JSON válido, semántica
+    // corrupta.
+    const corruptedKey =
+      'requiresDodgeable](https://www.wowhead.com/spell=107574/avatar%22,%22confidence%22:%22high%22},{%22spec%22:%22Protection%22,%22usageRole%22:%22hybrid_survival%22,%22requiresDodgeable)';
+    const rows = effectiveDefensiveDataFromDatabaseRows({
+      catalogRows: [],
+      semanticRows: [
+        {
+          spell_id: AVATAR_SPELL_ID,
+          class: 'Warrior',
+          usage_role: 'utility',
+          activation_scope: 'self',
+          primary_beneficiary: 'self',
+          secondary_propagation: 'none',
+          mechanisms: [],
+          opportunity_mode: 'none',
+          defensive_intent: 'unknown',
+          semantic_status: 'verified',
+          semantic_version: 'defensive-semantics@v10',
+          confidence: 'inferred',
+          locked: false,
+          applicability: { schoolScope: 'none', schools: [], deliveryScopes: [], timingRelation: 'unknown' },
+          applicability_confidence: 'high',
+          spec_semantic_profiles: [
+            {
+              spec: 'Arms',
+              usageRole: 'hybrid_survival',
+              defensiveIntent: 'hybrid',
+              activationScope: 'self',
+              primaryBeneficiary: 'self',
+              secondaryPropagation: 'none',
+              mechanisms: ['mitigation'],
+              opportunityMode: 'credit_only',
+              applicability: { schoolScope: 'all', schools: [], deliveryScopes: ['aoe'], timingRelation: 'before_or_during' },
+              source: 'wowhead',
+              confidence: 'high',
+            },
+            {
+              spec: 'Protection',
+              usageRole: 'hybrid_survival',
+              defensiveIntent: 'hybrid',
+              activationScope: 'self',
+              primaryBeneficiary: 'self',
+              secondaryPropagation: 'none',
+              mechanisms: ['mitigation'],
+              opportunityMode: 'credit_only',
+              applicability: {
+                schoolScope: 'all',
+                schools: [],
+                deliveryScopes: ['all'],
+                timingRelation: 'before_or_during',
+                requiresBlockable: null,
+                requiresParryable: null,
+                requiresSourceAffectedBySpell: null,
+                [corruptedKey]: null,
+              },
+              source: 'wowhead',
+              confidence: 'high',
+            },
+          ],
+        },
+      ],
+    });
+
+    const semanticEntryRow = rows.semantics![0];
+    // El parser aísla el elemento corrupto — Arms sigue siendo válido, solo Protection cae a invalid.
+    expect(semanticEntryRow.specSemanticProfiles).toHaveLength(1);
+    expect(semanticEntryRow.specSemanticProfiles[0].spec).toBe('Arms');
+    expect(semanticEntryRow.invalidSpecSemanticProfiles).toHaveLength(1);
+    expect(semanticEntryRow.invalidSpecSemanticProfiles[0].spec).toBe('Protection');
+
+    const avatarCatalog: EffectiveDefensiveCatalogEntry = { ...fade, spellId: AVATAR_SPELL_ID, name: 'Avatar', className: 'Warrior', specName: 'Arms/Fury/Protection' };
+    const [protection] = resolveEffectiveDefensiveKit(
+      input({ className: 'Warrior', specName: 'Protection' }),
+      data({ catalog: [avatarCatalog], semantics: rows.semantics }),
+    );
+    // El perfil corrupto NUNCA se adivina como bueno: no se aplica ningún
+    // override, la fila queda en conflict, nunca member ni missable.
+    expect(protection.resolutionStatus).toBe('conflict');
+    expect(protection.isDefensiveKitMember).toBe(false);
+    expect(protection.createsMissableOpportunity).toBe(false);
+    expect(protection.semanticProvenance.some((step) => step.kind === 'spec_profile_invalid')).toBe(true);
+
+    const [arms] = resolveEffectiveDefensiveKit(
+      input({ className: 'Warrior', specName: 'Arms' }),
+      data({ catalog: [avatarCatalog], semantics: rows.semantics }),
+    );
+    expect(arms.resolutionStatus).toBe('resolved');
+    expect(arms.usageRole).toBe('hybrid_survival');
+  });
+
+  it('Shield of the Righteous Protection specSemanticProfile: active_mitigation is never a personal kit member (rotational tank maintenance, not a strategic cooldown)', () => {
+    const sotrCatalog: EffectiveDefensiveCatalogEntry = { ...fade, spellId: SOTR_SPELL_ID, name: 'Shield of the Righteous', className: 'Paladin', specName: 'Holy/Protection/Retribution' };
+    const rows = effectiveDefensiveDataFromDatabaseRows({
+      catalogRows: [],
+      semanticRows: [
+        {
+          spell_id: SOTR_SPELL_ID,
+          class: 'Paladin',
+          usage_role: 'rotational_survival',
+          activation_scope: 'enemy',
+          primary_beneficiary: 'self',
+          secondary_propagation: 'none',
+          mechanisms: ['mitigation'],
+          opportunity_mode: 'none',
+          defensive_intent: 'unknown',
+          semantic_status: 'verified',
+          semantic_version: 'defensive-semantics@v10',
+          confidence: 'inferred',
+          locked: false,
+          applicability: { schoolScope: 'physical', schools: [], deliveryScopes: ['all'], timingRelation: 'before_or_during' },
+          applicability_confidence: 'high',
+          spec_semantic_profiles: [
+            {
+              spec: 'Protection',
+              usageRole: 'active_mitigation',
+              defensiveIntent: 'primary',
+              activationScope: 'enemy',
+              primaryBeneficiary: 'self',
+              secondaryPropagation: 'none',
+              mechanisms: ['mitigation'],
+              opportunityMode: 'none',
+              applicability: { schoolScope: 'physical', schools: [], deliveryScopes: ['all'], timingRelation: 'before_or_during' },
+              source: 'wowhead',
+              confidence: 'high',
+            },
+          ],
+        },
+      ],
+    });
+
+    const [protection] = resolveEffectiveDefensiveKit(
+      input({ className: 'Paladin', specName: 'Protection' }),
+      data({ catalog: [sotrCatalog], semantics: rows.semantics }),
+    );
+    expect(protection.usageRole).toBe('active_mitigation');
+    expect(protection.isDefensiveKitMember).toBe(false);
+    expect(protection.createsMissableOpportunity).toBe(false);
+    expect(protection.resolutionStatus).toBe('resolved');
+  });
+
+  it('Ignore Pain with unresolved build presence: a semantically perfect personal_survival never becomes a member while presence is unknown ("cannot prove it is missing")', () => {
+    const ignorePain: EffectiveDefensiveCatalogEntry = { ...fade, spellId: IGNORE_PAIN_SPELL_ID, name: 'Ignore Pain', className: 'Warrior', specName: 'Arms' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        className: 'Warrior',
+        specName: 'Arms',
+        talentBuild: null, // sin snapshot de build
+        allTalentSpellIds: new Set([IGNORE_PAIN_SPELL_ID]), // pero SÍ sabemos que es un nodo de talento
+      }),
+      data({
+        catalog: [ignorePain],
+        semantics: [semanticEntry({ spellId: IGNORE_PAIN_SPELL_ID, className: 'Warrior', usageRole: 'personal_survival', mechanisms: ['absorption'] })],
+      }),
+    );
+    expect(resolved.buildPresence).toBe('unknown');
+    expect(resolved.eligible).toBe(true); // no se oculta — sin evidencia de que falte
+    expect(resolved.isDefensiveKitMember).toBe(false); // pero tampoco se demuestra que esté: nunca member
+    expect(resolved.createsMissableOpportunity).toBe(false);
+  });
+
+  it('Shield Block pending (real semantic_status in Supabase): never a member, resolutionStatus unresolved, regardless of how solid the build presence is', () => {
+    const shieldBlock: EffectiveDefensiveCatalogEntry = { ...fade, spellId: SHIELD_BLOCK_SPELL_ID, name: 'Shield Block', className: 'Warrior', specName: 'Protection' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ className: 'Warrior', specName: 'Protection' }),
+      data({
+        catalog: [shieldBlock],
+        semantics: [
+          semanticEntry({
+            spellId: SHIELD_BLOCK_SPELL_ID,
+            className: 'Warrior',
+            semanticStatus: 'pending',
+            usageRole: 'unknown',
+            primaryBeneficiary: 'unknown',
+            mechanisms: [],
+            opportunityMode: 'none',
+          }),
+        ],
+      }),
+    );
+    expect(resolved.buildPresence).toBe('present'); // no talent-gated en este fixture — baseline
+    expect(resolved.semanticStatus).toBe('pending');
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+    expect(resolved.resolutionStatus).toBe('unresolved');
+  });
+
+  it('AMS-style multiple simultaneous hero-talent augments merge order-independently (real Blood DK data: Vestigial Shell + Blood Feast + Osmosis + Unyielding Will)', () => {
+    const amsSpellId = 48707;
+    const ams: EffectiveDefensiveCatalogEntry = { ...fade, spellId: amsSpellId, name: 'Anti-Magic Shell', className: 'DeathKnight', specName: 'Blood/Frost/Unholy' };
+    const vestigialShell = semanticRule({
+      id: 'vestigial-shell',
+      modifierSpellId: 454851,
+      targetSpellId: amsSpellId,
+      specNames: ['Blood', 'Frost', 'Unholy'],
+      payload: { condition: 'talent_selected', modifierName: 'Vestigial Shell', setSecondaryPropagation: 'automatic_ally' },
+    });
+    const bloodFeast = semanticRule({
+      id: 'blood-feast',
+      modifierSpellId: 391386,
+      targetSpellId: amsSpellId,
+      specNames: ['Blood'],
+      payload: { condition: 'talent_selected', modifierName: 'Blood Feast', addMechanisms: ['sustain'] },
+    });
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        className: 'DeathKnight',
+        specName: 'Blood',
+        talentBuild: [
+          { id: 1, nodeID: 10, rank: 1, spellId: 454851 },
+          { id: 2, nodeID: 11, rank: 1, spellId: 391386 },
+        ],
+      }),
+      data({
+        catalog: [ams],
+        semantics: [semanticEntry({ spellId: amsSpellId, className: 'DeathKnight', mechanisms: ['absorption'] })],
+        semanticRules: [vestigialShell, bloodFeast],
+      }),
+    );
+    // Ambas reglas se aplican a la vez sin conflicto — union de mechanisms, secondaryPropagation del único rule que lo propone.
+    expect(resolved.mechanisms).toEqual(expect.arrayContaining(['absorption', 'sustain']));
+    expect(resolved.secondaryPropagation).toBe('automatic_ally');
+    expect(resolved.resolutionStatus).toBe('resolved');
+    expect(resolved.isDefensiveKitMember).toBe(true);
+  });
+
+  it('two automatic rules proposing incompatible values for the same field never pick one by arbitrary order — resolutionStatus=conflict, never missable', () => {
+    const ruleA = semanticRule({ id: 'rule-a', payload: { condition: 'talent_selected', setUsageRole: 'personal_survival' } });
+    const ruleB = semanticRule({ id: 'rule-b', modifierSpellId: MODIFIER_SPELL_ID + 1, payload: { condition: 'talent_selected', setUsageRole: 'utility' } });
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [
+          { id: 1, nodeID: 10, rank: 1, spellId: MODIFIER_SPELL_ID },
+          { id: 2, nodeID: 11, rank: 1, spellId: MODIFIER_SPELL_ID + 1 },
+        ],
+      }),
+      data({ semantics: [semanticEntry({ usageRole: 'unknown', mechanisms: [], opportunityMode: 'none' })], semanticRules: [ruleA, ruleB] }),
+    );
+    expect(resolved.resolutionStatus).toBe('conflict');
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+    expect(resolved.semanticProvenance.some((step) => step.kind === 'semantic_rule_conflict')).toBe(true);
+  });
+
+  it('runtime_state condition is never applied automatically — surfaces in unresolvedRuntimeRules without increasing certainty', () => {
+    const runtimeRule = semanticRule({ payload: { condition: 'runtime_state', setUsageRole: 'personal_survival', addMechanisms: ['mitigation'] } });
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 1, nodeID: 10, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({ semantics: [semanticEntry({ usageRole: 'utility', mechanisms: [], opportunityMode: 'none' })], semanticRules: [runtimeRule] }),
+    );
+    expect(resolved.usageRole).toBe('utility'); // no se aplicó
+    expect(resolved.unresolvedRuntimeRules).toHaveLength(1);
+    expect(resolved.unresolvedRuntimeRules[0]).toMatchObject({ ruleId: 'rule-1', condition: 'runtime_state' });
+    expect(resolved.isDefensiveKitMember).toBe(false);
+  });
+
+  it('an unverified rule never changes anything, including suppress/replace/convert_to_passive (bug fix: the original resolver only checked verified for augment)', () => {
+    const [suppressed] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 1, nodeID: 10, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({
+        semantics: [semanticEntry()],
+        semanticRules: [semanticRule({ ruleType: 'suppress', verified: false })],
+      }),
+    );
+    expect(suppressed.eligible).toBe(true);
+    expect(suppressed.isDefensiveKitMember).toBe(true);
+    expect(suppressed.semanticProvenance.some((step) => step.kind === 'semantic_rule_unverified')).toBe(true);
+  });
+
+  it('a semantic rule from a different game build never modifies anything, even with no legacy fallback (stricter than timing modifierRules on purpose)', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 1, nodeID: 10, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({
+        semantics: [semanticEntry({ usageRole: 'utility', mechanisms: [], opportunityMode: 'none' })],
+        semanticRules: [semanticRule({ gameBuild: '12.0.0.60000', payload: { condition: 'talent_selected', setUsageRole: 'personal_survival' } })],
+      }),
+    );
+    expect(resolved.usageRole).toBe('utility');
+  });
+
+  it('a spec-profile that is individually well-formed but produces an incoherent final combination fails final validation — resolutionStatus=conflict, never member', () => {
+    const rows = effectiveDefensiveDataFromDatabaseRows({
+      catalogRows: [],
+      semanticRows: [
+        {
+          spell_id: fade.spellId,
+          class: 'Priest',
+          usage_role: 'utility',
+          activation_scope: 'self',
+          primary_beneficiary: 'none',
+          secondary_propagation: 'none',
+          mechanisms: [],
+          opportunity_mode: 'none',
+          defensive_intent: 'unknown',
+          semantic_status: 'verified',
+          semantic_version: 'defensive-semantics@v10',
+          confidence: 'inferred',
+          locked: false,
+          spec_semantic_profiles: [
+            {
+              // survival_state exige opportunityMode=credit_only por contrato
+              // (defensiveSemanticError) — normal es incoherente. Cada campo
+              // es individualmente válido, así que el parser estructural lo
+              // deja pasar; la validación FINAL debe cazarlo igualmente.
+              spec: 'Shadow',
+              usageRole: 'survival_state',
+              defensiveIntent: 'primary',
+              activationScope: 'self',
+              primaryBeneficiary: 'self',
+              secondaryPropagation: 'none',
+              mechanisms: ['mitigation'],
+              opportunityMode: 'normal',
+              applicability: null,
+              source: 'test',
+              confidence: 'high',
+            },
+          ],
+        },
+      ],
+    });
+
+    const [resolved] = resolveEffectiveDefensiveKit(input(), data({ semantics: rows.semantics }));
+    expect(resolved.resolutionStatus).toBe('conflict');
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+    expect(resolved.semanticProvenance.some((step) => step.kind === 'final_validation_conflict')).toBe(true);
+  });
+
+  it('a demonstrated persistent cast can only upgrade buildPresence, never downgrade or prove absence', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        talentBuild: [],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Set([talentDefensive.spellId]),
+      }),
+      data({ catalog: [talentDefensive] }),
+    );
+    // Sin evidencia de cast, este defensivo quedaría 'absent' (no seleccionado, build completamente resuelto) — la evidencia de cast lo sube a 'present'.
+    expect(resolved.buildPresence).toBe('present');
+
+    const [withoutEvidence] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [], allTalentSpellIds: new Set([talentDefensive.spellId]), talentLookupComplete: true }),
+      data({ catalog: [talentDefensive] }),
+    );
+    expect(withoutEvidence.buildPresence).toBe('absent');
   });
 });

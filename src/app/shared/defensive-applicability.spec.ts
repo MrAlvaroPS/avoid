@@ -15,6 +15,7 @@ function applicability(overrides: Partial<DamageApplicability> = {}): DamageAppl
     requiresParryable: null,
     requiresBlockable: null,
     requiresSourceAffectedBySpell: null,
+    timingRelation: null,
     ...overrides,
   };
 }

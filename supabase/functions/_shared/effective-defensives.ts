@@ -10,6 +10,7 @@
 import {
   isDefensiveKitMember,
   createsMissableOpportunity,
+  defensiveSemanticError,
   type DefensiveSemanticInput,
   type DefensiveUsageRole,
   type DefensiveActivationScope,
@@ -20,6 +21,17 @@ import {
   type DefensiveIntent,
   type DefensiveSemanticStatus,
 } from './defensive-classification-semantics.ts';
+import type { DamageApplicability } from './defensive-applicability.ts';
+import {
+  mergeApplicability,
+  parseAugmentRulePayload,
+  parseDamageApplicability,
+  parseReplacementRulePayload,
+  parseSpecSemanticProfiles,
+  AUTOMATIC_SEMANTIC_RULE_CONDITIONS,
+  type InvalidSpecSemanticProfile,
+  type ValidatedSpecSemanticProfile,
+} from './defensive-semantic-payload-validation.ts';
 
 export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
 // §Paso C (iris-defensive-canonicalization-v1-plan.md §5): resolución
@@ -34,8 +46,37 @@ export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0'
 // — cuando el evaluator de episodios (Paso C, siguiente pieza) empiece a
 // depender de ella, su propio gate de homogeneidad se construye sobre ESTA
 // versión, no sobre EFFECTIVE_DEFENSIVE_RESOLVER_VERSION.
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.0.0';
+// §E1 (Effective Defensive Semantics Closure, 2026-09-04): bump 1.0.0→1.1.0.
+// Cierra buildPresence/specSemanticProfiles/applicabilidad efectiva/reglas
+// runtime no aplicadas/validación final — sigue siendo un marcador
+// INDEPENDIENTE de EFFECTIVE_DEFENSIVE_RESOLVER_VERSION (timing) a propósito
+// (ver comentario de arriba); nada público consume todavía este string, así
+// que el bump no dispara ningún gate de homogeneidad existente.
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.1.0';
 export const LEGACY_GAME_BUILD = 'legacy-current';
+
+// §E1 — presencia real en ESTE build, independiente de "elegible ahora mismo"
+// (eligible sigue existiendo, ver comentario en ResolvedDefensive más abajo).
+// 'unknown' NUNCA se convierte en 'absent' por omisión de evidencia — solo
+// hay tres formas legítimas de llegar a cada valor, ver la especificación E1
+// §3 y su reflejo exacto en resolveEffectiveDefensiveKit() (mismo bloque que
+// ya decidía `eligible` por talent-gating, reutilizado aquí sin duplicar
+// lógica).
+export type BuildPresence = 'present' | 'absent' | 'unknown';
+
+// §E1 §6/§11/§14: estado final de la resolución semántica DESPUÉS de aplicar
+// spec-profile + reglas estáticas + validación final. 'conflict' es la única
+// forma de blindar isDefensiveKitMember/createsMissableOpportunity contra
+// datos contradictorios sin tener que forzar cada predicado a mano en cada
+// punto de fallo — ver semanticsConflict más abajo.
+export type DefensiveEffectiveResolutionStatus = 'resolved' | 'unresolved' | 'conflict';
+
+/** §E1 §9: runtime_state/other (y, por ahora, passive_selected — ver defensive-semantic-payload-validation.ts) nunca se aplican sobre el build estático; se devuelven aquí para que una fuente de evidencia futura (E7+) pueda resolverlos, sin aumentar certeza mientras tanto. */
+export interface UnresolvedRuntimeRule {
+  ruleId: string;
+  condition: string;
+  reason: string;
+}
 
 export type DefensiveCategory = 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
 export type DefensiveTargetingMode = 'self' | 'ally' | 'both' | 'raid' | 'unknown';
@@ -120,6 +161,16 @@ export interface EffectiveDefensiveSemanticEntry {
   semanticVersion: string;
   semanticConfidence: DefensiveResolutionConfidence;
   locked: boolean;
+  // ---- §E1: campos v10 que ya escribe classify-defensives, cerrados aquí ----
+  /** Ya parseado por parseDamageApplicability en effectiveDefensiveDataFromDatabaseRows — nunca un cast directo del jsonb. null si no hay dato O si el jsonb estaba corrupto (ver applicabilityError). */
+  applicability: DamageApplicability | null;
+  applicabilityConfidence: 'high' | 'medium' | 'low' | null;
+  /** Motivo por el que `applicability` quedó en null pese a que la fila traía algo — null cuando no hay error (incluye "no había dato"). Nunca se ignora en silencio: el resolver lo vuelca a semanticProvenance. */
+  applicabilityError: string | null;
+  /** Overrides por spec ya validados elemento a elemento — ver parseSpecSemanticProfiles. Un elemento corrupto NO invalida los demás (Avatar Arms sigue resolviendo aunque Avatar Protection esté corrupto). */
+  specSemanticProfiles: ValidatedSpecSemanticProfile[];
+  /** Elementos de spec_semantic_profiles que fallaron el parseo estricto — el resolver los usa para decidir resolutionStatus si alguno reclama la spec del jugador. */
+  invalidSpecSemanticProfiles: InvalidSpecSemanticProfile[];
 }
 
 /** Fila de defensive_semantic_rules (semanticModifiers/replacementRules del prompt v10, ver classify-defensives). */
@@ -137,7 +188,25 @@ export interface EffectiveDefensiveSemanticRule {
 
 /** Traza de la resolución semántica — deliberadamente más simple que ResolutionStep (before/after no encaja bien con mechanisms[], que es un set, no un escalar). Suficiente para auditar/explicar, no para reconstruir el valor anterior campo a campo. */
 export interface SemanticResolutionStep {
-  kind: 'catalog_base' | 'no_match' | 'semantic_rule_augment' | 'semantic_rule_replace' | 'semantic_rule_suppress' | 'semantic_rule_convert_to_passive' | 'semantic_rule_unverified' | 'ineligible';
+  kind:
+    | 'catalog_base'
+    | 'no_match'
+    | 'semantic_rule_augment'
+    | 'semantic_rule_replace'
+    | 'semantic_rule_suppress'
+    | 'semantic_rule_convert_to_passive'
+    | 'semantic_rule_unverified'
+    | 'ineligible'
+    // ---- §E1 additions ----
+    | 'applicability_invalid'
+    | 'spec_profile_applied'
+    | 'spec_profile_invalid'
+    | 'semantic_rule_invalid_payload'
+    | 'semantic_rule_runtime_unresolved'
+    | 'semantic_rule_conflict'
+    | 'semantic_rule_replace_unresolved'
+    | 'applicability_patch_applied'
+    | 'final_validation_conflict';
   description: string;
   source?: string | null;
   ruleId?: string;
@@ -174,6 +243,16 @@ export interface ResolveDefensiveKitInput {
   allTalentSpellIds?: ReadonlySet<number> | null;
   /** false significa que el lookup falló/no existe; undefined permite usar el resolver con catálogo sin talent gating. */
   talentLookupComplete?: boolean;
+  /**
+   * §E1 §3: "un cast real puede aportar prueba positiva de presencia cuando
+   * el caller tenga evidencia de que es una ability persistente del build".
+   * Deliberadamente estrecho: SOLO puede subir buildPresence a 'present'
+   * (absent→present, unknown→present) — nunca se usa para degradar ni para
+   * demostrar ausencia (la ausencia de un cast no prueba nada, ver invariante
+   * 16). Ningún caller real lo pasa todavía (E2/E7 deciden esa evidencia);
+   * omitirlo es un no-op total, compatible con todas las llamadas existentes.
+   */
+  demonstratedPersistentCastSpellIds?: ReadonlySet<number> | null;
 }
 
 export interface EffectiveDefensiveData {
@@ -204,7 +283,7 @@ export interface ObservedGameBuild {
 
 export interface ResolutionStep {
   kind: 'catalog_base' | 'eligibility' | 'availability_rule' | 'spec_profile' | 'modifier' | 'conditional_modifier' | 'player_override' | 'validation';
-  field: DefensiveEffectField | 'eligible' | 'targeting_mode' | 'activation_mode';
+  field: DefensiveEffectField | 'eligible' | 'targeting_mode' | 'activation_mode' | 'build_presence';
   before: number | string | boolean | null;
   after: number | string | boolean | null;
   operation?: DefensiveModifierOperation;
@@ -250,12 +329,26 @@ export interface ResolvedDefensive {
   semanticConfidence: DefensiveResolutionConfidence;
   semanticResolverVersion: string;
   semanticProvenance: SemanticResolutionStep[];
+
+  // ---- §E1: Effective Defensive Semantics Closure ----
+  /** Presencia real en ESTE build — ortogonal a `eligible` (ver comentario ahí). 'unknown'/'absent' nunca pueden fabricar culpa; ver invariantes de la especificación E1 §16. */
+  buildPresence: BuildPresence;
+  buildPresenceReason: string;
+  buildPresenceConfidence: DefensiveResolutionConfidence;
+  /** Applicability EFECTIVA final (spec-profile override + applicabilityPatch de reglas automáticas ya fusionados) — el Episode Evaluator no debe volver a leer applicability por su cuenta cuando se conecte en E4. */
+  applicability: DamageApplicability | null;
+  applicabilityConfidence: 'high' | 'medium' | 'low' | null;
+  resolutionStatus: DefensiveEffectiveResolutionStatus;
+  /** runtime_state/other (y passive_selected) que existían para este spellId pero NO se aplicaron sobre el build estático — nunca aumentan membership/missability/applicability certainty (§9). */
+  unresolvedRuntimeRules: UnresolvedRuntimeRule[];
   /**
    * Predicados derivados (isDefensiveKitMember/createsMissableOpportunity de
    * defensive-classification-semantics.ts) YA cruzados con `eligible` de
    * este build concreto — invariante 1 del plan: un consumer nunca debe
    * recalcularlos ni ignorar `eligible` (un personal_survival semánticamente
    * perfecto pero no seleccionado en este build no es parte del kit real).
+   * §E1: además cruzados con `buildPresence === 'present'` y con
+   * `resolutionStatus !== 'conflict'` — ver especificación E1 §3/§16.
    */
   isDefensiveKitMember: boolean;
   createsMissableOpportunity: boolean;
@@ -267,6 +360,29 @@ const CONFIDENCE_RANK: Record<DefensiveResolutionConfidence, number> = {
   fallback: 2,
   uncertain: 3,
 };
+
+const RESOLUTION_STATUS_RANK: Record<DefensiveEffectiveResolutionStatus, number> = {
+  resolved: 0,
+  unresolved: 1,
+  conflict: 2,
+};
+
+function worseStatus(current: DefensiveEffectiveResolutionStatus, candidate: DefensiveEffectiveResolutionStatus): DefensiveEffectiveResolutionStatus {
+  return RESOLUTION_STATUS_RANK[candidate] > RESOLUTION_STATUS_RANK[current] ? candidate : current;
+}
+
+/**
+ * §E1 §6/§11: combina propuestas de VARIAS reglas automáticas para el MISMO
+ * campo sin depender del orden en que Postgres las devuelva — todas de
+ * acuerdo (mismo valor, comparado por JSON) → se aplica; alguna discrepa →
+ * conflict, no se elige ninguna por orden arbitrario.
+ */
+function resolveScalarConflict<T>(proposals: { value: T; ruleId: string }[]): { value: T | undefined; conflict: boolean; ruleIds: string[] } {
+  if (!proposals.length) return { value: undefined, conflict: false, ruleIds: [] };
+  const distinct = new Set(proposals.map((proposal) => JSON.stringify(proposal.value)));
+  if (distinct.size > 1) return { value: undefined, conflict: true, ruleIds: proposals.map((proposal) => proposal.ruleId) };
+  return { value: proposals[0].value, conflict: false, ruleIds: proposals.map((proposal) => proposal.ruleId) };
+}
 
 const OPERATION_ORDER: Record<DefensiveModifierOperation, number> = {
   set_ms: 0,
@@ -391,6 +507,22 @@ export function effectiveDefensiveDataFromDatabaseRows(rows: EffectiveDefensiveD
           semanticVersion: nullableString(row['semantic_version']),
           semanticConfidence: (nullableString(row['confidence']) ?? 'uncertain') as DefensiveResolutionConfidence,
           locked: row['locked'] === true,
+          // §E1: frontera del cast — ningún jsonb de aquí en adelante se
+          // convierte con `as`, se valida con los parsers estrictos. Un
+          // applicability/spec_semantic_profiles corrupto NUNCA se cuela
+          // como dato bueno; queda en null/[] + su motivo en *Error/invalid*,
+          // visible en semanticProvenance por el propio resolver.
+          ...(() => {
+            const parsedApplicability = parseDamageApplicability(row['applicability'], 'applicability');
+            const parsedProfiles = parseSpecSemanticProfiles(row['spec_semantic_profiles']);
+            return {
+              applicability: parsedApplicability.value,
+              applicabilityError: parsedApplicability.error,
+              applicabilityConfidence: (nullableString(row['applicability_confidence']) ?? null) as 'high' | 'medium' | 'low' | null,
+              specSemanticProfiles: parsedProfiles.profiles,
+              invalidSpecSemanticProfiles: parsedProfiles.invalid,
+            };
+          })(),
         }))
       : undefined,
     semanticRules: rows.semanticRuleRows
@@ -596,6 +728,14 @@ export function resolveEffectiveDefensiveKit(
       let rechargeMs: number | null = null;
       let targetingMode = TARGETING_MODES.has(entry.targetingMode) ? entry.targetingMode : 'unknown';
       let activationMode: DefensiveActivationMode = entry.activationMode === 'passive' ? 'passive' : 'active';
+      // §E1 — buildPresence por defecto: baseline de clase/spec no talent-gated
+      // (regla 1 de la especificación). El bloque de talent-gating de abajo
+      // reutiliza EXACTAMENTE la misma rama que ya decide `eligible` para
+      // sobrescribir estos tres valores juntos cuando el defensivo SÍ es un
+      // nodo de talento — nunca se vuelve a derivar por separado.
+      let buildPresence: BuildPresence = 'present';
+      let buildPresenceReason = 'No es un nodo de talento — disponible en el baseline de la clase/spec.';
+      let buildPresenceConfidence: DefensiveResolutionConfidence = gameBuildConfidence;
       const provenance: ResolutionStep[] = [
         {
           kind: 'catalog_base',
@@ -702,6 +842,9 @@ export function resolveEffectiveDefensiveKit(
       if (input.allTalentSpellIds?.has(entry.spellId)) {
         if (normalizedBuild == null) {
           confidence = weakerConfidence(confidence, 'uncertain');
+          buildPresence = 'unknown';
+          buildPresenceConfidence = 'uncertain';
+          buildPresenceReason = 'El defensivo es talent-gated, pero no hay snapshot de build; no se puede demostrar presencia ni ausencia.';
           provenance.push({
             kind: 'eligibility',
             field: 'eligible',
@@ -710,6 +853,8 @@ export function resolveEffectiveDefensiveKit(
             description: 'El defensivo es talent-gated, pero no hay snapshot de build; no se oculta y queda uncertain.',
           });
         } else if (ranks.has(entry.spellId)) {
+          buildPresence = 'present';
+          buildPresenceReason = 'El nodo del defensivo está seleccionado en el build observado.';
           provenance.push({
             kind: 'eligibility',
             field: 'eligible',
@@ -719,6 +864,9 @@ export function resolveEffectiveDefensiveKit(
           });
         } else if (unresolvedSelectedNodes) {
           confidence = weakerConfidence(confidence, 'uncertain');
+          buildPresence = 'unknown';
+          buildPresenceConfidence = 'uncertain';
+          buildPresenceReason = 'Hay nodos seleccionados sin spellId; no se puede demostrar que el defensivo falte (ni que esté presente).';
           provenance.push({
             kind: 'eligibility',
             field: 'eligible',
@@ -728,6 +876,8 @@ export function resolveEffectiveDefensiveKit(
           });
         } else {
           eligible = false;
+          buildPresence = 'absent';
+          buildPresenceReason = 'El talento no está seleccionado en un build completamente resuelto — lookup completo, sin nodos sin resolver.';
           provenance.push({
             kind: 'eligibility',
             field: 'eligible',
@@ -737,6 +887,23 @@ export function resolveEffectiveDefensiveKit(
           });
         }
       }
+
+      // §E1 §3: un cast real demostrablemente persistente del build SOLO
+      // puede subir buildPresence — nunca lo baja ni demuestra ausencia. No
+      // hay caller real todavía que pase esto (E2/E7); es un no-op total en
+      // toda llamada existente.
+      if (buildPresence !== 'present' && input.demonstratedPersistentCastSpellIds?.has(entry.spellId)) {
+        buildPresence = 'present';
+        buildPresenceConfidence = weakerConfidence(buildPresenceConfidence, 'inferred');
+        buildPresenceReason = 'Un cast real observado en este pull demuestra que la ability pertenece al build, pese a que el talent-gating no lo confirmaba.';
+      }
+      provenance.push({
+        kind: 'eligibility',
+        field: 'build_presence',
+        before: null,
+        after: buildPresence,
+        description: buildPresenceReason,
+      });
 
       const profileCandidates = data.specProfiles.filter(
         (profile) => profile.className === input.className && profile.specName === input.specName && profile.spellId === entry.spellId,
@@ -997,11 +1164,28 @@ export function resolveEffectiveDefensiveKit(
       const semanticStatus: DefensiveSemanticStatus = semanticBase?.semanticStatus ?? 'pending';
       const semanticConfidence: DefensiveResolutionConfidence = semanticBase?.semanticConfidence ?? 'uncertain';
       const semanticProvenance: SemanticResolutionStep[] = [];
+      let applicability: DamageApplicability | null = semanticBase?.applicability ?? null;
+      let applicabilityConfidence: 'high' | 'medium' | 'low' | null = semanticBase?.applicabilityConfidence ?? null;
+      const unresolvedRuntimeRules: UnresolvedRuntimeRule[] = [];
+      // §E1: 'unresolved' cuando no hay nada que evaluar todavía (llamada
+      // legacy timing-only) o cuando la fila sigue pending; 'resolved' es el
+      // punto de partida optimista una vez hay una fila verified/rejected —
+      // cualquier problema real encontrado más abajo solo puede EMPEORARLO
+      // (worseStatus), nunca mejorarlo.
+      let resolutionStatus: DefensiveEffectiveResolutionStatus = !semanticResolved || semanticStatus === 'pending' ? 'unresolved' : 'resolved';
+      let semanticsConflict = false;
+
       if (semanticBase) {
         semanticProvenance.push({
           kind: 'catalog_base',
           description: `usageRole=${usageRole} (semantic_status=${semanticStatus}) desde defensive_ability_semantics.`,
         });
+        if (semanticBase.applicabilityError) {
+          semanticProvenance.push({
+            kind: 'applicability_invalid',
+            description: `applicability corrupta en defensive_ability_semantics: ${semanticBase.applicabilityError} — se descarta, no se adivina.`,
+          });
+        }
       } else if (semanticResolved) {
         semanticProvenance.push({
           kind: 'no_match',
@@ -1009,76 +1193,305 @@ export function resolveEffectiveDefensiveKit(
         });
       }
 
+      // §E1 §6/§7: specSemanticProfile exacto ANTES de las reglas estáticas —
+      // solo profile.spec === playerSpec, validado previamente por
+      // parseSpecSemanticProfiles (nunca un cast directo del jsonb). Un
+      // perfil que reclama la spec del jugador pero es inválido bloquea la
+      // certeza (conflict) en vez de aplicar silenciosamente la fila base
+      // como si el override no existiera.
+      if (semanticBase && input.specName != null) {
+        const matchedProfile = semanticBase.specSemanticProfiles.find((profile) => profile.spec === input.specName);
+        const matchedInvalid = semanticBase.invalidSpecSemanticProfiles.find((invalid) => invalid.spec === input.specName);
+        if (matchedProfile) {
+          usageRole = matchedProfile.usageRole;
+          defensiveIntent = matchedProfile.defensiveIntent;
+          activationScope = matchedProfile.activationScope;
+          primaryBeneficiary = matchedProfile.primaryBeneficiary;
+          secondaryPropagation = matchedProfile.secondaryPropagation;
+          mechanisms = [...matchedProfile.mechanisms];
+          opportunityMode = matchedProfile.opportunityMode;
+          if (matchedProfile.applicability) {
+            applicability = matchedProfile.applicability;
+            applicabilityConfidence = matchedProfile.confidence;
+          }
+          semanticProvenance.push({
+            kind: 'spec_profile_applied',
+            description: `Override semántico por spec (${input.specName}) desde specSemanticProfiles: usageRole=${usageRole}.`,
+            source: matchedProfile.source,
+          });
+        } else if (matchedInvalid) {
+          semanticsConflict = true;
+          semanticProvenance.push({
+            kind: 'spec_profile_invalid',
+            description: `specSemanticProfiles trae un override para ${input.specName} pero es inválido (${matchedInvalid.error}) — se conserva la fila base sin adivinar el override; resolutionStatus=conflict.`,
+          });
+        }
+      }
+
       if (semanticResolved) {
-        const applicableSemanticRules = (data.semanticRules ?? []).filter(
-          (rule) =>
-            rule.targetSpellId === entry.spellId &&
-            (rule.specNames == null || (input.specName != null && rule.specNames.includes(input.specName))) &&
-            ranks.has(rule.modifierSpellId),
-        );
-        for (const rule of applicableSemanticRules) {
-          if (rule.ruleType === 'suppress') {
-            eligible = false;
-            semanticProvenance.push({
-              kind: 'semantic_rule_suppress',
-              description: `Suprimido por talento seleccionado (spellId ${rule.modifierSpellId}).`,
-              source: rule.source,
-              ruleId: rule.id,
-            });
-            continue;
-          }
-          if (rule.ruleType === 'convert_to_passive') {
-            activationMode = 'passive';
-            eligible = false;
-            semanticProvenance.push({
-              kind: 'semantic_rule_convert_to_passive',
-              description: `Convertido en pasivo por talento seleccionado (spellId ${rule.modifierSpellId}).`,
-              source: rule.source,
-              ruleId: rule.id,
-            });
-            continue;
-          }
-          if (rule.ruleType === 'replace') {
-            // El efectivo real pasa a ser replacementSpellId (otra fila del
-            // catálogo, si existe) — esta fila deja de ser la verdad, pero no
-            // se sintetiza aquí la fila sustituta: el caller decide si la
-            // busca por su propio spellId en el resto del kit resuelto.
-            eligible = false;
-            semanticProvenance.push({
-              kind: 'semantic_rule_replace',
-              description: `Reemplazado por talento seleccionado (spellId ${rule.modifierSpellId})${typeof rule.payload['replacementSpellId'] === 'number' ? `; sustituto spellId ${rule.payload['replacementSpellId']}` : ''}.`,
-              source: rule.source,
-              ruleId: rule.id,
-            });
-            continue;
-          }
-          // augment
+        // §E1 §8: solo son candidatas a AUTOMÁTICAS las reglas EXACTAS de
+        // este game_build — a diferencia de los modifierRules de timing (más
+        // arriba), las reglas semánticas NO tienen fallback legacy-current:
+        // "wrong game build → nunca modifica" (invariante 16). Orden por id
+        // (§6 cierre: nunca depender del orden de filas de Postgres).
+        const buildMatchedRules = (data.semanticRules ?? [])
+          .filter(
+            (rule) =>
+              rule.targetSpellId === entry.spellId &&
+              (rule.specNames == null || (input.specName != null && rule.specNames.includes(input.specName))) &&
+              rule.gameBuild === input.gameBuild &&
+              ranks.has(rule.modifierSpellId),
+          )
+          .sort((a, b) => a.id.localeCompare(b.id));
+
+        const automaticAugments: { rule: EffectiveDefensiveSemanticRule; payload: ReturnType<typeof parseAugmentRulePayload>['value'] & object }[] = [];
+
+        for (const rule of buildMatchedRules) {
+          // §E1 §8/§16: verified=false JAMÁS cambia nada, para NINGÚN
+          // rule_type — el resolver original solo comprobaba esto para
+          // 'augment'; suppress/replace/convert_to_passive se aplicaban sin
+          // comprobar verified. Bug real corregido aquí.
           if (!rule.verified) {
             semanticProvenance.push({
               kind: 'semantic_rule_unverified',
-              description: `Regla semántica sin verificar (spellId ${rule.modifierSpellId}) — no se aplica automáticamente, queda como evidencia.`,
+              description: `Regla semántica sin verificar (spellId ${rule.modifierSpellId}, rule_type=${rule.ruleType}) — no se aplica automáticamente, queda como evidencia.`,
               source: rule.source,
               ruleId: rule.id,
             });
             continue;
           }
-          const payload = rule.payload;
-          if (typeof payload['setUsageRole'] === 'string') usageRole = payload['setUsageRole'] as DefensiveUsageRole;
-          if (typeof payload['setDefensiveIntent'] === 'string') defensiveIntent = payload['setDefensiveIntent'] as DefensiveIntent;
-          if (typeof payload['setOpportunityMode'] === 'string') opportunityMode = payload['setOpportunityMode'] as DefensiveOpportunityMode;
-          if (typeof payload['setPrimaryBeneficiary'] === 'string') primaryBeneficiary = payload['setPrimaryBeneficiary'] as DefensivePrimaryBeneficiary;
-          if (typeof payload['setSecondaryPropagation'] === 'string') secondaryPropagation = payload['setSecondaryPropagation'] as DefensiveSecondaryPropagation;
-          const addMechanisms = Array.isArray(payload['addMechanisms']) ? (payload['addMechanisms'] as string[]) : [];
-          const removeMechanisms = Array.isArray(payload['removeMechanisms']) ? (payload['removeMechanisms'] as string[]) : [];
-          if (addMechanisms.length || removeMechanisms.length) {
-            mechanisms = [...new Set([...mechanisms.filter((m) => !removeMechanisms.includes(m)), ...addMechanisms])] as DefensiveMechanism[];
+
+          if (rule.ruleType === 'suppress' || rule.ruleType === 'replace' || rule.ruleType === 'convert_to_passive') {
+            const parsed = parseReplacementRulePayload(rule.payload);
+            if (!parsed.value) {
+              resolutionStatus = worseStatus(resolutionStatus, 'unresolved');
+              semanticProvenance.push({
+                kind: 'semantic_rule_invalid_payload',
+                description: `payload inválido para regla ${rule.ruleType} (spellId ${rule.modifierSpellId}): ${parsed.error} — no se aplica, queda como dato pendiente de saneamiento.`,
+                source: rule.source,
+                ruleId: rule.id,
+              });
+              continue;
+            }
+            if (!AUTOMATIC_SEMANTIC_RULE_CONDITIONS.has(parsed.value.condition)) {
+              unresolvedRuntimeRules.push({
+                ruleId: rule.id,
+                condition: parsed.value.condition,
+                reason: `Regla ${rule.ruleType} condicionada a "${parsed.value.condition}" — no se aplica sobre el build estático (§9); requiere una fuente de evidencia runtime que todavía no existe.`,
+              });
+              semanticProvenance.push({
+                kind: 'semantic_rule_runtime_unresolved',
+                description: `Regla ${rule.ruleType} (spellId ${rule.modifierSpellId}) diferida: condition="${parsed.value.condition}" no es estática.`,
+                source: rule.source,
+                ruleId: rule.id,
+              });
+              continue;
+            }
+            if (rule.ruleType === 'suppress') {
+              eligible = false;
+              semanticProvenance.push({
+                kind: 'semantic_rule_suppress',
+                description: `Suprimido por talento seleccionado (spellId ${rule.modifierSpellId}).`,
+                source: rule.source,
+                ruleId: rule.id,
+              });
+              continue;
+            }
+            if (rule.ruleType === 'convert_to_passive') {
+              activationMode = 'passive';
+              eligible = false;
+              semanticProvenance.push({
+                kind: 'semantic_rule_convert_to_passive',
+                description: `Convertido en pasivo por talento seleccionado (spellId ${rule.modifierSpellId}).`,
+                source: rule.source,
+                ruleId: rule.id,
+              });
+              continue;
+            }
+            // replace — el efectivo real pasa a ser replacementSpellId (otra
+            // fila del catálogo, si existe y se puede resolver). §E1 §12:
+            // original+replacement nunca representan dos oportunidades
+            // independientes — el original SIEMPRE queda eligible=false aquí,
+            // exista o no el sustituto; si el sustituto no se puede resolver
+            // en el catálogo de esta clase, no se inventa un recurso — queda
+            // unresolved y visible como gate de calidad de dataset.
+            eligible = false;
+            const replacementSpellId = parsed.value.replacementSpellId;
+            const replacementResolved =
+              replacementSpellId != null &&
+              data.catalog.some((candidate) => candidate.spellId === replacementSpellId && candidate.className === input.className && !candidate.excluded);
+            if (replacementSpellId != null && !replacementResolved) {
+              resolutionStatus = worseStatus(resolutionStatus, 'unresolved');
+              semanticProvenance.push({
+                kind: 'semantic_rule_replace_unresolved',
+                description: `Reemplazado por talento seleccionado (spellId ${rule.modifierSpellId}), pero el sustituto (spellId ${replacementSpellId}) no existe en el catálogo de ${input.className} — el original queda reemplazado (no missable), el sustituto queda unresolved; no se inventa un recurso.`,
+                source: rule.source,
+                ruleId: rule.id,
+              });
+            } else {
+              semanticProvenance.push({
+                kind: 'semantic_rule_replace',
+                description: `Reemplazado por talento seleccionado (spellId ${rule.modifierSpellId})${replacementSpellId != null ? `; sustituto spellId ${replacementSpellId}` : ''}.`,
+                source: rule.source,
+                ruleId: rule.id,
+              });
+            }
+            continue;
           }
-          semanticProvenance.push({
-            kind: 'semantic_rule_augment',
-            description: `Semántica modificada por talento seleccionado (spellId ${rule.modifierSpellId}): ${rule.payload['modifierName'] ?? 'talento'}.`,
-            source: rule.source,
-            ruleId: rule.id,
-          });
+
+          // augment
+          const parsed = parseAugmentRulePayload(rule.payload);
+          if (!parsed.value) {
+            resolutionStatus = worseStatus(resolutionStatus, 'unresolved');
+            semanticProvenance.push({
+              kind: 'semantic_rule_invalid_payload',
+              description: `payload inválido para regla augment (spellId ${rule.modifierSpellId}): ${parsed.error} — no se aplica, queda como dato pendiente de saneamiento.`,
+              source: rule.source,
+              ruleId: rule.id,
+            });
+            continue;
+          }
+          if (!AUTOMATIC_SEMANTIC_RULE_CONDITIONS.has(parsed.value.condition)) {
+            unresolvedRuntimeRules.push({
+              ruleId: rule.id,
+              condition: parsed.value.condition,
+              reason: `Regla augment condicionada a "${parsed.value.condition}" — no se aplica sobre el build estático (§9); requiere una fuente de evidencia runtime que todavía no existe.`,
+            });
+            semanticProvenance.push({
+              kind: 'semantic_rule_runtime_unresolved',
+              description: `Regla augment (spellId ${rule.modifierSpellId}) diferida: condition="${parsed.value.condition}" no es estática.`,
+              source: rule.source,
+              ruleId: rule.id,
+            });
+            continue;
+          }
+          automaticAugments.push({ rule, payload: parsed.value });
+        }
+
+        // §E1 §6/§11: TODAS las reglas automáticas se combinan en un único
+        // paso orden-independiente — se recogen las propuestas por campo y
+        // solo se aplican cuando coinciden; un desacuerdo es conflict, nunca
+        // "la última que llegó gana".
+        if (automaticAugments.length) {
+          const usageRoleResolved = resolveScalarConflict(
+            automaticAugments.filter((entry) => entry.payload.setUsageRole != null).map((entry) => ({ value: entry.payload.setUsageRole!, ruleId: entry.rule.id })),
+          );
+          const defensiveIntentResolved = resolveScalarConflict(
+            automaticAugments.filter((entry) => entry.payload.setDefensiveIntent != null).map((entry) => ({ value: entry.payload.setDefensiveIntent!, ruleId: entry.rule.id })),
+          );
+          const opportunityModeResolved = resolveScalarConflict(
+            automaticAugments.filter((entry) => entry.payload.setOpportunityMode != null).map((entry) => ({ value: entry.payload.setOpportunityMode!, ruleId: entry.rule.id })),
+          );
+          const primaryBeneficiaryResolved = resolveScalarConflict(
+            automaticAugments.filter((entry) => entry.payload.setPrimaryBeneficiary != null).map((entry) => ({ value: entry.payload.setPrimaryBeneficiary!, ruleId: entry.rule.id })),
+          );
+          const secondaryPropagationResolved = resolveScalarConflict(
+            automaticAugments.filter((entry) => entry.payload.setSecondaryPropagation != null).map((entry) => ({ value: entry.payload.setSecondaryPropagation!, ruleId: entry.rule.id })),
+          );
+          for (const [label, resolved, apply] of [
+            ['setUsageRole', usageRoleResolved, (v: DefensiveUsageRole) => (usageRole = v)],
+            ['setDefensiveIntent', defensiveIntentResolved, (v: DefensiveIntent) => (defensiveIntent = v)],
+            ['setOpportunityMode', opportunityModeResolved, (v: DefensiveOpportunityMode) => (opportunityMode = v)],
+            ['setPrimaryBeneficiary', primaryBeneficiaryResolved, (v: DefensivePrimaryBeneficiary) => (primaryBeneficiary = v)],
+            ['setSecondaryPropagation', secondaryPropagationResolved, (v: DefensiveSecondaryPropagation) => (secondaryPropagation = v)],
+          ] as const) {
+            if (resolved.conflict) {
+              semanticsConflict = true;
+              semanticProvenance.push({
+                kind: 'semantic_rule_conflict',
+                description: `Reglas automáticas incompatibles para ${label}: reglas ${resolved.ruleIds.join(', ')} proponen valores distintos — no se elige una por orden arbitrario, resolutionStatus=conflict.`,
+              });
+            } else if (resolved.value !== undefined) {
+              (apply as (v: string) => void)(resolved.value as string);
+            }
+          }
+
+          const allAdds = new Set<DefensiveMechanism>();
+          const allRemoves = new Set<DefensiveMechanism>();
+          for (const { payload } of automaticAugments) {
+            payload.addMechanisms.forEach((m) => allAdds.add(m));
+            payload.removeMechanisms.forEach((m) => allRemoves.add(m));
+          }
+          const contradictory = [...allAdds].filter((m) => allRemoves.has(m));
+          if (contradictory.length) {
+            semanticsConflict = true;
+            semanticProvenance.push({
+              kind: 'semantic_rule_conflict',
+              description: `Reglas automáticas contradictorias sobre mechanisms sin precedencia demostrada: ${contradictory.join(', ')} — esos mechanisms se conservan sin cambio; resolutionStatus=conflict.`,
+            });
+          }
+          const safeAdds = [...allAdds].filter((m) => !contradictory.includes(m));
+          const safeRemoves = [...allRemoves].filter((m) => !contradictory.includes(m));
+          if (safeAdds.length || safeRemoves.length) {
+            mechanisms = [...new Set([...mechanisms.filter((m) => !safeRemoves.includes(m)), ...safeAdds])];
+          }
+
+          // applicabilityPatch: mismo tratamiento orden-independiente por
+          // campo, luego un único mergeApplicability() determinista. Los
+          // valores que llegan aquí ya pasaron parseAugmentRulePayload
+          // (validación estricta) — esta recombinación es entre datos YA
+          // VALIDADOS, no el cast directo de jsonb crudo que prohíbe §5.
+          const patchProposals = automaticAugments.filter((entry) => entry.payload.applicabilityPatch != null);
+          if (patchProposals.length) {
+            const patchFieldNames = [
+              'schoolScope',
+              'schools',
+              'deliveryScopes',
+              'requiresDodgeable',
+              'requiresParryable',
+              'requiresBlockable',
+              'requiresSourceAffectedBySpell',
+              'timingRelation',
+            ] as const;
+            const mergedPatchFields: Record<string, unknown> = {};
+            let patchConflict = false;
+            for (const field of patchFieldNames) {
+              const proposals = patchProposals
+                .map((entry) => ({ value: entry.payload.applicabilityPatch![field], ruleId: entry.rule.id }))
+                .filter((proposal) => (Array.isArray(proposal.value) ? proposal.value.length > 0 : proposal.value != null));
+              const resolved = resolveScalarConflict(proposals);
+              if (resolved.conflict) {
+                patchConflict = true;
+                semanticProvenance.push({
+                  kind: 'semantic_rule_conflict',
+                  description: `Reglas automáticas incompatibles en applicabilityPatch.${field}: reglas ${resolved.ruleIds.join(', ')} — resolutionStatus=conflict.`,
+                });
+                continue;
+              }
+              if (resolved.value !== undefined) mergedPatchFields[field] = resolved.value;
+            }
+            if (patchConflict) semanticsConflict = true;
+            if (Object.keys(mergedPatchFields).length) {
+              const patch: DamageApplicability = {
+                schoolScope: null,
+                schools: null,
+                deliveryScopes: null,
+                requiresDodgeable: null,
+                requiresParryable: null,
+                requiresBlockable: null,
+                requiresSourceAffectedBySpell: null,
+                timingRelation: null,
+                ...mergedPatchFields,
+              } as DamageApplicability;
+              const nextApplicability = mergeApplicability(applicability, patch);
+              if (nextApplicability) {
+                applicability = nextApplicability;
+                semanticProvenance.push({
+                  kind: 'applicability_patch_applied',
+                  description: 'applicabilityPatch de reglas automáticas fusionada de forma determinista sobre la applicability efectiva.',
+                });
+              }
+            }
+          }
+
+          for (const { rule, payload } of automaticAugments) {
+            semanticProvenance.push({
+              kind: 'semantic_rule_augment',
+              description: `Semántica modificada por talento seleccionado (spellId ${rule.modifierSpellId}): ${payload.modifierName ?? 'talento'}.`,
+              source: rule.source,
+              ruleId: rule.id,
+            });
+          }
         }
       }
 
@@ -1090,12 +1503,38 @@ export function resolveEffectiveDefensiveKit(
         mechanisms,
         opportunityMode,
       };
-      // eligible cruzado explícitamente (invariante 1 del plan): un
-      // personal_survival perfecto que no está seleccionado en ESTE build no
-      // es parte del kit real de este pull, sin importar lo que diga el
-      // catálogo en abstracto.
-      const isKitMember = semanticResolved && eligible && isDefensiveKitMember(semanticStatus, activationMode, semanticInput);
-      const createsMissable = semanticResolved && eligible && createsMissableOpportunity(semanticStatus, activationMode, semanticInput);
+
+      // §E1 §14: validación final DESPUÉS de spec-profile + reglas — una fila
+      // base válida no garantiza que la combinación final lo sea. Corre
+      // incluso sin overrides (pending/no-match ya son válidos por
+      // construcción con sus defaults neutros, así que esto nunca penaliza
+      // esos casos — solo detecta corrupción real introducida por overrides).
+      if (semanticResolved) {
+        const finalError = defensiveSemanticError(semanticInput);
+        if (finalError) {
+          resolutionStatus = worseStatus(resolutionStatus, 'conflict');
+          semanticProvenance.push({
+            kind: 'final_validation_conflict',
+            description: `La combinación final de campos semánticos es inválida: ${finalError} — resolutionStatus=conflict, no member, no missable.`,
+          });
+        }
+      }
+      if (semanticsConflict) resolutionStatus = worseStatus(resolutionStatus, 'conflict');
+
+      // eligible/buildPresence/resolutionStatus cruzados explícitamente
+      // (invariante 1 del plan + especificación E1 §3/§16): un
+      // personal_survival semánticamente perfecto que no está seleccionado en
+      // ESTE build, cuya presencia no se puede demostrar, o cuya combinación
+      // final es contradictoria, no es parte del kit real de este pull.
+      const semanticsTrustworthy = resolutionStatus !== 'conflict';
+      const isKitMember =
+        semanticResolved && eligible && buildPresence === 'present' && semanticsTrustworthy && isDefensiveKitMember(semanticStatus, activationMode, semanticInput);
+      const createsMissable =
+        semanticResolved &&
+        eligible &&
+        buildPresence === 'present' &&
+        semanticsTrustworthy &&
+        createsMissableOpportunity(semanticStatus, activationMode, semanticInput);
 
       return {
         spellId: entry.spellId,
@@ -1130,6 +1569,13 @@ export function resolveEffectiveDefensiveKit(
         semanticConfidence,
         semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION,
         semanticProvenance,
+        buildPresence,
+        buildPresenceReason,
+        buildPresenceConfidence,
+        applicability,
+        applicabilityConfidence,
+        resolutionStatus,
+        unresolvedRuntimeRules,
         isDefensiveKitMember: isKitMember,
         createsMissableOpportunity: createsMissable,
       };

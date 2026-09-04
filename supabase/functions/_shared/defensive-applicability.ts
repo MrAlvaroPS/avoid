@@ -26,6 +26,18 @@
 
 export type ApplicabilityVerdict = 'yes' | 'no' | 'unknown';
 
+// §E1 (Effective Defensive Semantics Closure, iris-defensive-canonicalization-v1-plan.md
+// §5 Paso C): timingRelation ya lo escribe classify-defensives (prompt v10
+// §10/§13/§26) y ya vive en defensive_ability_semantics.applicability — solo
+// faltaba en este contrato TS. Deliberadamente NO se conecta todavía a
+// canDefensiveCover() (compatibilidad de school/delivery sigue siendo la
+// única fuente de canDefensiveCover) — solo viaja hasta ResolvedDefensive
+// para que el Episode Evaluator sea su único consumidor temporal cuando
+// decida compatibilidad de TIMING (antes/durante vs. tras el daño) por
+// separado de compatibilidad de DAÑO.
+export const TIMING_RELATIONS = ['before_or_during', 'after_damage', 'either', 'continuous_state', 'unknown'] as const;
+export type TimingRelation = (typeof TIMING_RELATIONS)[number];
+
 /** Forma exacta de defensive_ability_semantics.applicability (jsonb) — mismo schema que el prompt v10 de classify-defensives §10/§26. */
 export interface DamageApplicability {
   schoolScope: 'all' | 'physical' | 'magic' | 'specific' | 'none' | 'unknown' | null;
@@ -35,6 +47,8 @@ export interface DamageApplicability {
   requiresParryable: boolean | null;
   requiresBlockable: boolean | null;
   requiresSourceAffectedBySpell: boolean | null;
+  /** null = no determinado — nunca se adivina antes/durante vs. tras el daño. */
+  timingRelation: TimingRelation | null;
 }
 
 export type WowSchool = 'Physical' | 'Holy' | 'Fire' | 'Nature' | 'Frost' | 'Shadow' | 'Arcane';
