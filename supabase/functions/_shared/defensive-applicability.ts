@@ -14,6 +14,15 @@
 // puede convertirse en missed_ready aguas abajo (eso lo impone el evaluator
 // de verdicts, no este módulo, pero este módulo es lo que le da el motivo
 // exacto para no hacerlo).
+//
+// §Paso C-1 (2026-09-04, revisión real): `DamageDescriptor` deja de ser un
+// contrato de un solo valor por dimensión — la clasificación real v10 (300
+// filas ya en producción) demuestra que `deliveryScopes` es multi-tag desde
+// SIEMPRE (una ability puede ser simultáneamente single_target+melee+direct,
+// tres dimensiones ortogonales, no alternativas) y que `masterData.abilities.type`
+// es un bitmask que puede representar varias schools a la vez (Holy+Fire,
+// verificado en real). Este fichero se reescribe para reflejar eso —
+// ver damage-descriptor-wcl.ts para la extracción real desde WCL.
 
 export type ApplicabilityVerdict = 'yes' | 'no' | 'unknown';
 
@@ -28,22 +37,50 @@ export interface DamageApplicability {
   requiresSourceAffectedBySpell: boolean | null;
 }
 
+export type WowSchool = 'Physical' | 'Holy' | 'Fire' | 'Nature' | 'Frost' | 'Shadow' | 'Arcane';
+
 /**
- * Lo que se sabe REALMENTE del daño/mecánica de un episodio concreto. Todo
- * campo es `| null` = "no determinado" a propósito — no existe todavía una
- * fuente real que rellene esto desde WCL (la extracción de school/
- * deliveryScope por evento es trabajo aparte, ver registro de avance); con
- * todos los campos en null, canDefensiveCover() ya degrada correctamente a
- * 'unknown' en cuanto el defensivo tenga alguna restricción real.
+ * Lo que se sabe REALMENTE del daño/mecánica de UN hit concreto (un evento
+ * DamageTaken/DamageDone de WCL, o el hit dominante de un episodio). Todo
+ * campo es `| null` = "no determinado" a propósito.
+ *
+ * §revisión 2026-09-04 (verificación empírica real contra WCL, ver
+ * damage-descriptor-wcl.ts):
+ * - `schools`/`schoolMask`: `masterData.abilities[].type` es un bitmask
+ *   (verificado contra 2220 abilities reales) — una ability puede tener
+ *   VARIAS schools a la vez (Holy+Fire, Fire+Nature...). Nunca se reduce a
+ *   una sola — perder esa combinación fabricaría certeza donde hay
+ *   ambigüedad real.
+ * - `deliveryScopes`: multi-tag, tres dimensiones ORTOGONALES dentro del
+ *   mismo array (target scope: aoe/single_target — delivery method:
+ *   melee/ranged/spell/environmental — timing: direct/periodic). Dentro de
+ *   cada grupo los valores son alternativas; entre grupos la condición es
+ *   AND (ver groupDeliveryTags()/matchDeliveryScopes() más abajo).
+ * - `dodgeable`/`parryable`/`blockable`: verificados empíricamente contra
+ *   WCL real (filterExpression `missType`, cruzado contra el `hitType`
+ *   numérico de los eventos crudos en varios fights reales) — hitType
+ *   0=Miss, 1=Hit, 2=Crit, 4=Block, 7=Dodge, 8=Parry, 10=Immune. Solo se
+ *   afirma `true` con evidencia positiva (observada en este pull o en el
+ *   cache cross-pull, ver damage-descriptor-wcl.ts); la ausencia de
+ *   observación nunca se convierte en `false`.
+ * - `rawHitType`: se conserva SIEMPRE que el hit lo traiga, aunque el resto
+ *   de campos queden sin determinar (evidencia/auditoría — "por qué IRIS
+ *   decidió esto").
  */
 export interface DamageDescriptor {
-  school: 'Physical' | 'Holy' | 'Fire' | 'Nature' | 'Frost' | 'Shadow' | 'Arcane' | 'Chaos' | null;
-  deliveryScope: 'aoe' | 'single_target' | 'melee' | 'ranged' | 'spell' | 'direct' | 'periodic' | 'environmental' | null;
+  /** Schools decodificadas del bitmask — puede tener más de una (Holy+Fire, etc.). null = no determinado. */
+  schools: WowSchool[] | null;
+  /** Bitmask crudo de masterData.abilities[].type, para auditoría — 1=Physical,2=Holy,4=Fire,8=Nature,16=Frost,32=Shadow,64=Arcane. */
+  schoolMask: number | null;
+  /** Tags demostrados para ESTE hit concreto — subconjunto de aoe/single_target/melee/ranged/spell/environmental/direct/periodic. Cada dimensión no demostrada simplemente no aporta ningún tag de su grupo (no se inventa). */
+  deliveryScopes: string[] | null;
   dodgeable: boolean | null;
   parryable: boolean | null;
   blockable: boolean | null;
   /** Para requiresSourceAffectedBySpell (Fiery Brand-style): ¿el origen de este daño concreto está afectado por el spell del defensivo? */
   sourceAffectedBySpell: boolean | null;
+  /** hitType crudo de WCL, cuando el hit lo trae — evidencia/auditoría, independiente de si se pudo decodificar dodgeable/parryable/blockable. */
+  rawHitType: number | null;
 }
 
 export interface ApplicabilityResult {
@@ -55,6 +92,110 @@ const UNKNOWN_LOW_CONFIDENCE: ApplicabilityResult = {
   verdict: 'unknown',
   reason: 'applicabilityConfidence no es alta/media, o no hay applicability capturada — nunca puede generar missed_ready (invariante 5 del plan).',
 };
+
+// --- School: subconjunto/sin-solape/parcial — nunca se pierde una combinación ---
+
+const ALL_MAGIC_SCHOOLS: readonly WowSchool[] = ['Holy', 'Fire', 'Nature', 'Frost', 'Shadow', 'Arcane'];
+
+/**
+ * Compara las schools REALES del hit contra el conjunto que cubre el
+ * defensivo. Trichotomía deliberada (§revisión 2026-09-04, pedido
+ * explícito): solape TOTAL → yes; solape CERO → no; solape PARCIAL (un
+ * hit híbrido Physical+Shadow contra un defensivo que solo cubre magia) →
+ * unknown — la interacción real (¿protege la parte mágica? ¿nada si hay
+ * algo de físico?) no se puede demostrar desde aquí, no se inventa.
+ */
+function schoolCoverageVerdict(allowed: ReadonlySet<WowSchool>, damageSchools: WowSchool[] | null, scopeLabel: string): ApplicabilityResult | null {
+  if (!damageSchools || !damageSchools.length) {
+    return { verdict: 'unknown', reason: `Solo cubre ${scopeLabel}, pero la school de este daño no está determinada.` };
+  }
+  const covered = damageSchools.filter((s) => allowed.has(s));
+  if (covered.length === 0) {
+    return { verdict: 'no', reason: `Solo cubre ${scopeLabel}; este episodio es ${damageSchools.join('+')}.` };
+  }
+  if (covered.length === damageSchools.length) {
+    return null; // cobertura total — sigue con el resto de checks, no se corta aquí
+  }
+  return {
+    verdict: 'unknown',
+    reason: `Este episodio combina schools (${damageSchools.join('+')}) — solo ${covered.join('+')} está cubierta por este defensivo (${scopeLabel}); la interacción con el resto no se puede demostrar.`,
+  };
+}
+
+// --- deliveryScopes: tres grupos ortogonales, OR dentro, AND entre grupos ---
+
+const TARGET_SCOPE_TAGS = new Set(['aoe', 'single_target']);
+const DELIVERY_METHOD_TAGS = new Set(['melee', 'ranged', 'spell', 'environmental']);
+const TIMING_TAGS = new Set(['direct', 'periodic']);
+
+type DeliveryGroup = 'target_scope' | 'delivery_method' | 'timing';
+
+function tagGroup(tag: string): DeliveryGroup | null {
+  if (TARGET_SCOPE_TAGS.has(tag)) return 'target_scope';
+  if (DELIVERY_METHOD_TAGS.has(tag)) return 'delivery_method';
+  if (TIMING_TAGS.has(tag)) return 'timing';
+  return null; // 'all' u otro valor no reconocido — no forma grupo, se ignora aquí (tratado aparte)
+}
+
+const GROUP_LABELS: Record<DeliveryGroup, string> = {
+  target_scope: 'alcance (aoe/single_target)',
+  delivery_method: 'método de entrega (melee/ranged/spell/environmental)',
+  timing: 'timing (direct/periodic)',
+};
+
+/**
+ * Agrupa los tags de applicability.deliveryScopes por dimensión ortogonal.
+ * 'all' se trata aparte (escape hatch global, ver matchDeliveryScopes).
+ */
+function groupDeliveryTags(tags: string[]): Partial<Record<DeliveryGroup, Set<string>>> {
+  const groups: Partial<Record<DeliveryGroup, Set<string>>> = {};
+  for (const tag of tags) {
+    const group = tagGroup(tag);
+    if (!group) continue;
+    (groups[group] ??= new Set()).add(tag);
+  }
+  return groups;
+}
+
+/**
+ * AND entre grupos PRESENTES en applicability, OR dentro de cada grupo.
+ * Un grupo que applicability no restringe (ausente de deliveryScopes) no
+ * participa — no se inventa una restricción que la clasificación no puso.
+ * Un grupo restringido cuyo hit no demuestra NINGÚN tag de esa dimensión
+ * (damage.deliveryScopes no tiene ningún tag de ese grupo) → unknown para
+ * ese grupo, salvo que el hit SÍ demuestre un tag de ese grupo que no esté
+ * permitido (entonces es un 'no' inequívoco para ese grupo).
+ */
+function matchDeliveryScopes(applicabilityTags: string[], damageTags: string[] | null): ApplicabilityResult | null {
+  if (applicabilityTags.includes('all')) return null; // sin restricción — sigue con el resto de checks
+  const groups = groupDeliveryTags(applicabilityTags);
+  const damageSet = new Set(damageTags ?? []);
+  let anyUnknownGroup: DeliveryGroup | null = null;
+
+  for (const group of Object.keys(groups) as DeliveryGroup[]) {
+    const allowed = groups[group]!;
+    const demonstratedInGroup = [...damageSet].filter((tag) => tagGroup(tag) === group);
+    if (!demonstratedInGroup.length) {
+      anyUnknownGroup = anyUnknownGroup ?? group;
+      continue; // no demostrado para este grupo — no corta aquí, puede que otro grupo sí dé un 'no' definitivo
+    }
+    const overlaps = demonstratedInGroup.some((tag) => allowed.has(tag));
+    if (!overlaps) {
+      return {
+        verdict: 'no',
+        reason: `Solo cubre ${GROUP_LABELS[group]} = ${[...allowed].join('/')}; este episodio demuestra ${demonstratedInGroup.join('/')}.`,
+      };
+    }
+  }
+
+  if (anyUnknownGroup) {
+    return {
+      verdict: 'unknown',
+      reason: `Restringe por ${GROUP_LABELS[anyUnknownGroup]}, pero ese dato no está demostrado para este episodio.`,
+    };
+  }
+  return null; // todos los grupos restringidos tienen solape demostrado — sigue con el resto de checks
+}
 
 /**
  * `applicabilityConfidence` es el mismo campo que ya escribe classify-defensives
@@ -75,38 +216,25 @@ export function canDefensiveCover(
     return { verdict: 'no', reason: 'Este defensivo no mitiga daño (schoolScope=none) — no aplica a ningún episodio de daño.' };
   }
 
-  if (applicability.schoolScope === 'physical' || applicability.schoolScope === 'magic') {
-    if (damage.school == null) {
-      return { verdict: 'unknown', reason: `Solo cubre daño ${applicability.schoolScope === 'physical' ? 'físico' : 'mágico'}, pero la school de este daño no está determinada.` };
-    }
-    const isPhysical = damage.school === 'Physical';
-    if (applicability.schoolScope === 'physical' && !isPhysical) {
-      return { verdict: 'no', reason: `Solo cubre daño físico; este episodio es ${damage.school}.` };
-    }
-    if (applicability.schoolScope === 'magic' && isPhysical) {
-      return { verdict: 'no', reason: 'Solo cubre daño mágico; este episodio es físico.' };
-    }
+  if (applicability.schoolScope === 'physical') {
+    const result = schoolCoverageVerdict(new Set<WowSchool>(['Physical']), damage.schools, 'daño físico');
+    if (result) return result;
   }
-
+  if (applicability.schoolScope === 'magic') {
+    const result = schoolCoverageVerdict(new Set(ALL_MAGIC_SCHOOLS), damage.schools, 'daño mágico');
+    if (result) return result;
+  }
   if (applicability.schoolScope === 'specific') {
-    if (damage.school == null) {
-      return { verdict: 'unknown', reason: `Solo cubre ${applicability.schools?.join('/') ?? 'schools concretas'}, pero la school de este daño no está determinada.` };
-    }
     if (!applicability.schools?.length) {
       return { verdict: 'unknown', reason: 'schoolScope=specific sin lista de schools — dato incompleto, no se adivina.' };
     }
-    if (!applicability.schools.includes(damage.school)) {
-      return { verdict: 'no', reason: `Solo cubre ${applicability.schools.join('/')}; este episodio es ${damage.school}.` };
-    }
+    const result = schoolCoverageVerdict(new Set(applicability.schools as WowSchool[]), damage.schools, applicability.schools.join('/'));
+    if (result) return result;
   }
 
-  if (applicability.deliveryScopes?.length && !applicability.deliveryScopes.includes('all')) {
-    if (damage.deliveryScope == null) {
-      return { verdict: 'unknown', reason: `Solo cubre ${applicability.deliveryScopes.join('/')}, pero el tipo de entrega de este daño no está determinado.` };
-    }
-    if (!applicability.deliveryScopes.includes(damage.deliveryScope)) {
-      return { verdict: 'no', reason: `Solo cubre ${applicability.deliveryScopes.join('/')}; este episodio es ${damage.deliveryScope}.` };
-    }
+  if (applicability.deliveryScopes?.length) {
+    const result = matchDeliveryScopes(applicability.deliveryScopes, damage.deliveryScopes);
+    if (result) return result;
   }
 
   if (applicability.requiresDodgeable === true) {

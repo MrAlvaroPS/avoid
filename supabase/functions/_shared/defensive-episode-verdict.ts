@@ -1,35 +1,42 @@
-// §Paso C (iris-defensive-canonicalization-v1-plan.md §10/§11): el veredicto
-// canónico de un DefensiveEpisode. Reutiliza defensiveStatusAt() tal cual
-// (defensive-cooldowns.ts) — no se reinventa cast+cooldown, solo se aplica
-// en el instante relevante de CADA episodio en vez de solo en el instante de
-// una muerte.
+// §Paso C (iris-defensive-canonicalization-v1-plan.md §10/§11) — REESCRITO
+// 2026-09-04 tras revisión real que encontró un bug de invariante y una
+// simplificación de KPI incorrecta en la versión anterior de este fichero.
+// No se reescribe por gusto: hay tres cambios de fondo respecto a la
+// primera versión.
 //
-// §decisión explícita (feedback real, 2026-09-04): mientras no exista una
-// fuente real de DamageDescriptor (school/deliveryScope/dodgeable... — ver
-// defensive-applicability.ts), canDefensiveCover() devuelve 'unknown' para
-// prácticamente todo. En vez de bloquear este módulo hasta tener esa fuente,
-// se aplica la asimetría que ya pedía §29/invariante 5 del plan: 'unknown'
-// SIGUE sin poder generar nunca missed_ready (ya lo garantiza que
-// createsMissableOpportunity exige applicability!=='no' más abajo), pero SÍ
-// puede generar covered_verified cuando hay un cast real — "el defensivo
-// usado se asume correcto para la mecánica hasta que tengamos con qué
-// demostrar lo contrario". Marcado explícitamente en el reason de cada
-// verdict para que sea trivial de encontrar y endurecer el día que
-// DamageDescriptor deje de ser inerte.
+// 1) TRES KPI, no uno. Uso (¿pulsó algo?) y Response (¿lo que pulsó — o no
+//    pulsó — resolvió la presión?) son preguntas DISTINTAS que comparten el
+//    mismo episodio pero nunca deben colapsarse en un único verdict. Antes
+//    esta función devolvía un solo `verdict`; ahora devuelve
+//    `usageEngaged` (booleano, independiente) + `responseVerdict` (el
+//    estado canónico de 7 valores). "Barkskin demasiado pronto y no cubre"
+//    debe poder ser Uso=✅ / Response=❌ simultáneamente.
 //
-// Deliberadamente NO resuelve todavía la causa de un "todo en cooldown"
-// (unavailable_legitimate vs missed_due_to_mistime, §31 del plan) — eso
-// exige reconstruir la cadena causal completa de episodios anteriores de la
-// misma habilidad, un algoritmo distinto (secuencial, no por episodio
-// aislado). Ese caso degrada honestamente a 'uncertain' por ahora: no se
-// acusa sin poder demostrar la causa.
+// 2) BUG REAL corregido: la versión anterior dejaba que
+//    applicability==='unknown' + disponible + sin cast produjera
+//    `missed_ready` (el filtro era `applicability !== 'no'`, que incluye
+//    'unknown'). El propio comentario del fichero decía que unknown "nunca"
+//    podía generar missed_ready — la condición real lo permitía. Ahora
+//    missed_ready exige `applicability === 'yes'` estrictamente. Para
+//    CRÉDITO seguimos aceptando unknown (ver covered_verified vs el nuevo
+//    caso intermedio), para PENALIZACIÓN ya no.
+//
+// 3) La reconstrucción causal (más abajo, reconstructCausalAvailability)
+//    NUNCA produce missed_due_to_mistime por ausencia de un episodio
+//    anterior que justifique un cast — eso NO es evidencia positiva de mal
+//    uso (caso real señalado: daño sostenido/mecánicas Mythic que el
+//    detector de candidatos no llega a convertir en DefensiveEpisode). Sin
+//    evidencia positiva (que hoy no existe — vendría del evaluator de Plan,
+//    reservas rotas, etc.), degrada a `uncertain`. missed_due_to_mistime
+//    queda definido en el contrato pero, de momento, inalcanzable desde
+//    esta función — reservado para cuando exista esa fuente de evidencia.
 
 import type { DefensiveCooldown, DefensiveCooldownStatus } from './defensive-cooldowns.ts';
-import { defensiveStatusAt } from './defensive-cooldowns.ts';
+import { chargeAvailabilityAt, defensiveStatusAt } from './defensive-cooldowns.ts';
 import type { ApplicabilityVerdict } from './defensive-applicability.ts';
 import type { DefensiveMechanism } from './defensive-classification-semantics.ts';
 
-export type EpisodeVerdict =
+export type ResponseVerdict =
   | 'covered_verified'
   | 'missed_ready'
   | 'missed_due_to_mistime'
@@ -44,15 +51,9 @@ export interface EpisodeWindow {
   peakMs: number;
 }
 
-/**
- * Resumen ya calculado de un candidato para UN episodio concreto. Se separa
- * de resolveEpisodeVerdict() para que ese quede una función de decisión
- * pura y trivial de testear — el cálculo de timing (con su regla especial
- * para sustain) vive en summarizeCandidateForEpisode().
- */
 export interface EpisodeVerdictCandidate {
   spellId: number;
-  /** isDefensiveKitMember del resolver — puede cubrir (Bear Form incluido) aunque no pueda fallar. */
+  /** isDefensiveKitMember del resolver — puede acreditar Uso (Bear Form incluido) aunque no pueda fallar en Response. */
   isDefensiveKitMember: boolean;
   /** createsMissableOpportunity del resolver — el único que puede producir missed_ready. */
   createsMissableOpportunity: boolean;
@@ -62,103 +63,245 @@ export interface EpisodeVerdictCandidate {
 }
 
 export interface EpisodeVerdictResult {
-  verdict: EpisodeVerdict;
+  /** KPI Uso — independiente de si la respuesta fue correcta. */
+  usageEngaged: boolean;
+  usedSpellIds: number[];
+  /** KPI Response — el estado canónico de 7 valores. */
+  responseVerdict: ResponseVerdict;
   reason: string;
-  /** spellId que produjo la cobertura, solo si verdict==='covered_verified'. */
   coveredBySpellId: number | null;
 }
 
 const DEFAULT_SUSTAIN_GRACE_MS = 3000;
 
 /**
- * Calcula usedDuringEpisode/statusAtPeak para un candidato — sustain
- * (Frenzied Regeneration-style) tolera un cast en una ventana de gracia
- * INMEDIATAMENTE DESPUÉS del daño (§30 del plan: "sustain necesita su
- * propia relación temporal"); mitigation/absorption/immunity/avoidance
- * exigen que el cast caiga dentro del propio tramo del episodio (antes o
- * durante, nunca después — de lo contrario no protegió nada).
+ * Calcula usedDuringEpisode/statusAtPeak para un candidato.
+ *
+ * Timing: sustain (Frenzied Regeneration-style) tolera un cast en una
+ * ventana de gracia INMEDIATAMENTE DESPUÉS del daño (§30 del plan);
+ * mitigation/absorption/immunity/avoidance exigen que el cast caiga dentro
+ * del propio tramo del episodio.
+ *
+ * §cargas real (Paso C-1, iris-defensive-canonicalization-v1-plan.md §2.4):
+ * `chargeAvailabilityAt()` (defensive-cooldowns.ts) reconstruye disponibilidad
+ * real por cargas cuando `rechargeMs` es un dato fiable (`defensive_spec_profiles.recharge_ms`,
+ * con fallback a `cooldownMs` cuando el perfil no cura una recarga aparte —
+ * ya resuelto por `resolveEffectiveDefensiveKit()`). Sin `rechargeMs` fiable
+ * (perfil todavía sin curar para esa ability) sigue fail-closed a `unknown`
+ * — nunca puede producir `missed_ready` ni entrar en la reconstrucción
+ * causal como si supiéramos que estaba realmente indisponible. Con
+ * `charges<=1` (el 100% del catálogo salvo Survival Instincts/Shield Block,
+ * verificado 2026-09-04) el comportamiento es idéntico al de siempre.
  */
 export function summarizeCandidateForEpisode(
   cd: DefensiveCooldown,
   mechanisms: DefensiveMechanism[],
   castsForSpellMs: number[],
   episode: EpisodeWindow,
+  charges = 1,
   sustainGraceMs = DEFAULT_SUSTAIN_GRACE_MS,
+  rechargeMs: number | null = null,
 ): { usedDuringEpisode: boolean; statusAtPeak: DefensiveCooldownStatus } {
   const isSustainOnly = mechanisms.length > 0 && mechanisms.every((m) => m === 'sustain');
   const windowEnd = isSustainOnly ? episode.endMs + sustainGraceMs : episode.endMs;
   const usedDuringEpisode = castsForSpellMs.some((t) => t >= episode.startMs && t <= windowEnd);
-  const statusAtPeak = defensiveStatusAt(cd, castsForSpellMs, episode.peakMs).status;
+  const statusAtPeak = chargeAvailabilityAt(cd, charges, rechargeMs, castsForSpellMs, episode.peakMs).status;
   return { usedDuringEpisode, statusAtPeak };
 }
 
 /**
- * Veredicto canónico de un episodio dado el resumen ya resuelto de sus
- * candidatos. No conoce casts/cooldowns directamente — eso ya está en
- * `usedDuringEpisode`/`statusAtPeak` (ver summarizeCandidateForEpisode).
+ * Veredicto de UN episodio a partir del resumen ya resuelto de sus
+ * candidatos (ver summarizeCandidateForEpisode). No conoce la cadena
+ * causal de episodios anteriores — cuando el resultado es 'uncertain'
+ * porque todo lo aplicable está en cooldown, resolveEpisodeVerdictWithCausalAvailability()
+ * puede refinarlo más abajo.
  *
  * `excluded` no lo produce esta función — lo decide el caller ANTES de
- * llamar (wipe call, episodio posterior a evaluationCutoffMs, etc.) y
- * simplemente no evalúa el episodio en absoluto.
+ * llamar (wipe call, episodio posterior a evaluationCutoffMs) sin evaluar
+ * el episodio en absoluto.
  */
 export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): EpisodeVerdictResult {
-  // 1) ¿Alguno cubrió de verdad? applicability!=='no' incluye 'unknown' a
-  // propósito (ver cabecera del fichero) — un cast real se asume correcto
-  // hasta que podamos demostrar lo contrario.
-  const covering = candidates.find(
-    (c) => c.isDefensiveKitMember && c.usedDuringEpisode && c.applicability !== 'no',
-  );
-  if (covering) {
+  const usedCandidates = candidates.filter((c) => c.isDefensiveKitMember && c.usedDuringEpisode);
+  const usageEngaged = usedCandidates.length > 0;
+  const usedSpellIds = usedCandidates.map((c) => c.spellId);
+
+  // 1) Cast real + aplicabilidad DEMOSTRADA → cobertura certificada.
+  const verifiedCovering = usedCandidates.find((c) => c.applicability === 'yes');
+  if (verifiedCovering) {
     return {
-      verdict: 'covered_verified',
-      reason:
-        covering.applicability === 'yes'
-          ? `spellId ${covering.spellId} se usó durante el episodio y su aplicabilidad está demostrada.`
-          : `spellId ${covering.spellId} se usó durante el episodio; aplicabilidad no demostrada todavía (asumida correcta — DamageDescriptor pendiente, ver defensive-applicability.ts).`,
-      coveredBySpellId: covering.spellId,
+      usageEngaged: true,
+      usedSpellIds,
+      responseVerdict: 'covered_verified',
+      reason: `spellId ${verifiedCovering.spellId} se usó durante el episodio y su aplicabilidad está demostrada.`,
+      coveredBySpellId: verifiedCovering.spellId,
     };
   }
 
-  // 2) Nadie cubrió. ¿Hay algo ESTRATÉGICO cuya aplicabilidad no lo
-  // descarte ya (applicability==='no' real, no 'unknown')?
-  const missable = candidates.filter((c) => c.createsMissableOpportunity && c.applicability !== 'no');
-  if (!missable.length) {
-    const hadAnyMissableAtAll = candidates.some((c) => c.createsMissableOpportunity);
+  // 2) Cast real + aplicabilidad NO demostrada todavía (DamageDescriptor
+  // pendiente) → Uso ya queda acreditado (arriba), pero Response no
+  // certifica una cobertura que no puede demostrar. No es una penalización
+  // — es la ausencia de evidencia suficiente para lo contrario.
+  const unknownCovering = usedCandidates.find((c) => c.applicability === 'unknown');
+  if (unknownCovering) {
     return {
-      verdict: 'no_applicable_resource',
-      reason: hadAnyMissableAtAll
-        ? 'El build tenía recursos estratégicos, pero ninguno es aplicable a este episodio (aplicabilidad real descartada).'
-        : 'El build de este jugador no tiene ningún recurso personal estratégico disponible.',
+      usageEngaged: true,
+      usedSpellIds,
+      responseVerdict: 'uncertain',
+      reason: `spellId ${unknownCovering.spellId} se usó durante el episodio, pero su aplicabilidad todavía no está demostrada (DamageDescriptor pendiente) — Uso queda acreditado; Response no certifica cobertura sin evidencia.`,
       coveredBySpellId: null,
     };
   }
 
-  // 3) ¿Alguno de los aplicables estaba realmente listo (no en cooldown)?
+  // A partir de aquí nada de lo usado (si hubo algo) sirvió con evidencia
+  // real ('no' para todo lo usado) — Uso puede seguir acreditado por
+  // usageEngaged de arriba; Response sigue evaluando como si no hubiera
+  // cobertura.
+
+  // 3) ¿Hay algo estratégico con aplicabilidad DEMOSTRADA (yes) que no se usó?
+  const missable = candidates.filter((c) => c.createsMissableOpportunity && c.applicability === 'yes');
+  if (!missable.length) {
+    const hadStrategicKit = candidates.some((c) => c.createsMissableOpportunity);
+    return {
+      usageEngaged,
+      usedSpellIds,
+      responseVerdict: 'no_applicable_resource',
+      reason: hadStrategicKit
+        ? 'El build tenía recursos estratégicos, pero ninguno tiene aplicabilidad demostrada para este episodio.'
+        : 'El build de este jugador no tiene ningún recurso personal estratégico.',
+      coveredBySpellId: null,
+    };
+  }
+
+  // 4) ¿Alguno de los aplicables-demostrados estaba realmente listo?
   const ready = missable.find((c) => c.statusAtPeak === 'available_unused');
   if (ready) {
     return {
-      verdict: 'missed_ready',
-      reason: `spellId ${ready.spellId} estaba disponible y era aplicable en el pico del episodio; no se usó.`,
+      usageEngaged,
+      usedSpellIds,
+      responseVerdict: 'missed_ready',
+      reason: `spellId ${ready.spellId} estaba disponible y su aplicabilidad está demostrada; no se usó.`,
       coveredBySpellId: null,
     };
   }
 
-  // 4) Todo lo aplicable está en cooldown o en estado desconocido. La causa
-  // exacta (unavailable_legitimate vs missed_due_to_mistime) exige
-  // reconstruir la cadena causal de episodios anteriores — todavía no
-  // implementado (ver cabecera). No se acusa sin poder demostrarlo.
-  if (missable.every((c) => c.statusAtPeak === 'on_cooldown')) {
-    return {
-      verdict: 'uncertain',
-      reason:
-        'Todo lo aplicable estaba en cooldown en el pico del episodio; la causa (uso legítimo previo vs desincronización) todavía no se reconstruye — pendiente, no penaliza.',
-      coveredBySpellId: null,
-    };
-  }
-
+  // 5) Todo lo aplicable-demostrado está en cooldown o en un estado no
+  // determinado (incluye el fail-closed de cargas de arriba). La causa
+  // exacta exige la cadena de episodios anteriores — ver
+  // resolveEpisodeVerdictWithCausalAvailability(). Sin ella, uncertain: no
+  // se acusa sin poder demostrarlo.
   return {
-    verdict: 'uncertain',
-    reason: 'No se pudo demostrar con evidencia suficiente si había un recurso realmente listo en este episodio.',
+    usageEngaged,
+    usedSpellIds,
+    responseVerdict: 'uncertain',
+    reason: 'Todo lo estratégico y aplicable estaba en cooldown o en un estado no determinado en el pico del episodio — la causa (uso legítimo previo vs. sin explicación) todavía no se ha reconstruido en este veredicto base.',
     coveredBySpellId: null,
   };
+}
+
+export interface CausalAvailabilityResult {
+  /** missed_due_to_mistime NO es alcanzable desde esta función todavía — ver cabecera del fichero. */
+  classification: 'unavailable_legitimate' | 'uncertain';
+  reason: string;
+  justifyingEpisodeIndex?: number;
+}
+
+/**
+ * Por qué UNA habilidad concreta no estaba lista en el pico de
+ * episodes[episodeIndex]: busca el cast que la puso en cooldown y comprueba,
+ * retrocediendo por los episodios ANTERIORES, si ese cast cubrió alguno de
+ * verdad (misma regla de timing que summarizeCandidateForEpisode, aplicada
+ * hacia atrás con un único cast).
+ *
+ * Busca desde el episodio más cercano hacia atrás — el primer match es la
+ * explicación más probable, no cualquier coincidencia lejana.
+ */
+export function reconstructCausalAvailability(
+  cd: DefensiveCooldown,
+  mechanisms: DefensiveMechanism[],
+  castsForSpellMs: number[],
+  episodes: EpisodeWindow[],
+  episodeIndex: number,
+): CausalAvailabilityResult {
+  const atMs = episodes[episodeIndex].peakMs;
+  let lastCastBefore: number | undefined;
+  for (const t of castsForSpellMs) {
+    if (t <= atMs) lastCastBefore = t;
+    else break;
+  }
+  if (lastCastBefore === undefined) {
+    return { classification: 'uncertain', reason: 'No hay cast previo que explique el cooldown en este pico — inconsistencia de datos, no se acusa.' };
+  }
+
+  for (let i = episodeIndex - 1; i >= 0; i--) {
+    const { usedDuringEpisode } = summarizeCandidateForEpisode(cd, mechanisms, [lastCastBefore], episodes[i]);
+    if (usedDuringEpisode) {
+      return {
+        classification: 'unavailable_legitimate',
+        reason: `El cast anterior (${lastCastBefore}ms) cubrió el episodio #${i}; el cooldown es consecuencia de un uso correcto.`,
+        justifyingEpisodeIndex: i,
+      };
+    }
+  }
+
+  // Sin evidencia positiva de mal uso (eso vive en el evaluator de Plan —
+  // reserva rota, asignación incumplida — o en una fuente futura de "gasto
+  // demostrablemente injustificado"). La AUSENCIA de un episodio anterior
+  // que lo explique no es esa evidencia: puede haber protegido contra daño
+  // sostenido o una mecánica que el detector de candidatos no convirtió en
+  // episodio (caso real señalado: contenido Mythic con presión continua).
+  return {
+    classification: 'uncertain',
+    reason: `El cast anterior (${lastCastBefore}ms) no coincide con ningún episodio anterior conocido — puede ser uso legítimo contra una amenaza que el detector no capturó. Sin evidencia positiva de mal uso, no se demuestra mistime.`,
+  };
+}
+
+export interface CausallyAwareCandidate extends EpisodeVerdictCandidate {
+  cd: DefensiveCooldown;
+  mechanisms: DefensiveMechanism[];
+  castsForSpellMs: number[];
+}
+
+/**
+ * Envoltorio de resolveEpisodeVerdict(): cuando el veredicto base es
+ * 'uncertain' PORQUE todo lo estratégico-aplicable estaba en cooldown,
+ * reconstruye la causa de cada uno y decide el veredicto FINAL del
+ * episodio (pertenece al episodio, no a un spell suelto — un Barkskin
+ * legítimamente gastado no basta para excusar el episodio si Frenzied
+ * Regeneration seguía listo; eso ya lo captura resolveEpisodeVerdict() en
+ * el paso 4 antes de llegar aquí, porque "ready" gana sobre "on_cooldown"
+ * para cualquier candidato del kit).
+ *
+ * Precedencia cuando SÍ hace falta reconstrucción causal:
+ *  - todos los on_cooldown resultan unavailable_legitimate → el episodio
+ *    es unavailable_legitimate.
+ *  - cualquier otra combinación (alguno uncertain) → el episodio se queda
+ *    uncertain — no se acusa sin que TODOS estén demostrados.
+ */
+export function resolveEpisodeVerdictWithCausalAvailability(
+  candidates: CausallyAwareCandidate[],
+  episodes: EpisodeWindow[],
+  episodeIndex: number,
+): EpisodeVerdictResult {
+  const base = resolveEpisodeVerdict(candidates);
+  if (base.responseVerdict !== 'uncertain') return base;
+
+  const onCooldownMissable = candidates.filter(
+    (c) => c.createsMissableOpportunity && c.applicability === 'yes' && c.statusAtPeak === 'on_cooldown',
+  );
+  if (!onCooldownMissable.length) return base; // el uncertain venía de otro motivo (unknown/applicability unknown) — nada que reconstruir
+
+  const causalResults = onCooldownMissable.map((c) => ({
+    spellId: c.spellId,
+    ...reconstructCausalAvailability(c.cd, c.mechanisms, c.castsForSpellMs, episodes, episodeIndex),
+  }));
+
+  if (causalResults.every((r) => r.classification === 'unavailable_legitimate')) {
+    return {
+      ...base,
+      responseVerdict: 'unavailable_legitimate',
+      reason: `Todo lo estratégico y aplicable estaba en cooldown por un uso previo demostrablemente legítimo (${causalResults.map((r) => r.spellId).join(', ')}).`,
+    };
+  }
+
+  return base; // al menos uno sin evidencia positiva — se queda uncertain
 }

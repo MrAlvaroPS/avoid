@@ -26,6 +26,27 @@ Aplica a **todos** los raiders/clases/specs — los siete jugadores citados en
 la propuesta original (Gusmï, Magzil, Pitpally, Rivax, Wargreymon, Txerokee,
 Linkedara) son solo el corpus de validación empírica y de fixtures (§7).
 
+**Filosofía de entrega (fijada 2026-09-04, tras revisión completa):** no se
+persigue un MVP. El objetivo es una primera baseline canónica
+suficientemente completa para que, al hacer el cutover, la infografía del
+raider, Night Report, Roster y Fiabilidad sean **utilizables, reales,
+auditables, normalizadas entre clases/specs y sin ningún fallback legacy**
+— no una versión provisional llena de `uncertain` que se arregle después
+de publicar. Se termina bien la fuente única de verdad y se publica solo
+cuando puede sustituir por completo al sistema antiguo. Después se
+enriquece; no se vuelve a crear una generación V2/V3/V4 paralela.
+
+**Criterio final de éxito** — no se considera terminado este documento
+porque el pipeline nuevo funcione técnicamente. Se considera terminado
+cuando se pueden apagar las fuentes defensivas legacy y seguir produciendo
+una infografía/Night Report/Roster/Fiabilidad que sean veraces,
+reproducibles, auditables, normalizadas entre clases/specs, build-aware,
+causalmente coherentes, sin penalizaciones basadas en incertidumbre y sin
+fallbacks entre algoritmos. Ante cualquier porcentaje mostrado a un raider
+debe poder responderse: qué eventos forman su numerador, qué eventos
+forman su denominador, por qué cada episodio entró o quedó fuera, y qué
+evidencia respalda cada fallo.
+
 ## 1. Modelo semántico: qué es un defensivo personal
 
 > Un defensivo personal es una habilidad activada deliberadamente por el
@@ -169,56 +190,379 @@ Nivel 3 cast + duración teórica. Se tolera más inferencia para dar crédito
 que para penalizar.
 
 Disponibilidad reconstruida causalmente: si un recurso estaba en CD, hay
-que enlazar con el cast anterior — si cubrió una amenaza real,
-`unavailable_legitimate`; si no tenía justificación y dejó vendido al
-jugador después, `missed_due_to_mistime`; si no se puede demostrar,
-`uncertain`.
+que enlazar con el cast anterior — si cubrió una amenaza real (otro
+episodio anterior demostrable), `unavailable_legitimate`. **`missed_due_to_mistime`
+exige evidencia POSITIVA de mal uso** (reserva rota, asignación de plan
+incumplida, gasto demostrable sin amenaza) — la mera ausencia de un
+episodio anterior que lo explique NO es esa evidencia (caso real: daño
+sostenido o mecánicas, sobre todo en Mythic, que el detector de candidatos
+nunca llega a convertir en `DefensiveEpisode`); sin esa fuente, degrada a
+`uncertain`. `missed_due_to_mistime` queda definido en el contrato pero
+solo lo puede producir un evaluator con acceso a esa evidencia positiva
+(el de Plan, o una fuente futura) — la reconstrucción causal puramente
+temporal nunca lo emite por su cuenta.
 
-### 2.5. Métrica principal: Respuesta defensiva
+El veredicto pertenece al **episodio completo**, no a un spell aislado: si
+Barkskin estaba legítimamente en CD pero Frenzied Regeneration seguía
+listo, el episodio es `missed_ready` (había alternativa), no
+`unavailable_legitimate` — la comprobación de "¿hay algo ready?" se hace
+sobre todo el kit antes de intentar explicar por qué lo que sí está en CD
+lo está.
+
+**Fail-closed de cargas** (`charges > 1`): el modelo de disponibilidad
+actual (`defensiveStatusAt`, reutilizado tal cual) no reconstruye cuántas
+cargas quedan, solo el último cast — con más de una carga, un
+"on_cooldown" puede ser falso (podría quedar una carga libre). En vez de
+arreglar un sistema de cargas completo ahora, `charges > 1` +
+"aparentemente on_cooldown" degrada explícitamente a `unknown`: nunca
+puede producir `missed_ready` ni entrar en la reconstrucción causal como si
+supiéramos que estaba indisponible. Esto satisface el gate de READY sobre
+cargas (§2.7) por construcción — no es deuda oculta, es la resolución
+correcta mientras no exista reconstrucción real de cargas.
+
+#### 2.4.1. `DamageDescriptor` real — requisito de cutover, no deuda estructural
+
+`canDefensiveCover()` (`defensive-applicability.ts`) ya está construido y
+testeado, pero sin una fuente real de `DamageDescriptor` degrada casi todo
+a `unknown` — lo cual es seguro (nunca fabrica un `missed_ready` falso)
+pero **no basta para el cutover**: no se busca una enciclopedia perfecta
+de todas las mecánicas de WoW, pero sí lo suficiente para que la
+aplicabilidad deje de ser sistemáticamente `unknown` en los mecanismos que
+el catálogo semántico ya reconoce.
+
+**Facts mínimos a extraer/derivar de WCL antes del cutover** (prioridad:
+datos reales WCL + mechanic policies/metadata ya verificadas; nunca
+inferir un `no` por simple ausencia de observación — eso sería fabricar
+certeza donde no la hay):
+
+- ability/spell ID causante del daño;
+- school (physical vs magic, y la school concreta cuando el mecanismo lo
+  exija — ver AMS);
+- alcance AoE/single cuando pueda demostrarse;
+- direct/periodic;
+- source actor, cuando el mecanismo lo requiera (ver Fiery Brand-style,
+  `requiresSourceAffectedBySpell`);
+- dodge/parry/block, para los mecanismos de `avoidance` (ver Evasion);
+- compatibilidad con inmunidad, cuando sea necesaria para decidir una
+  penalización.
+
+**Criterios de aceptación concretos** (los mismos casos que ya sirven de
+fixture en §7, ahora con datos reales en vez de asumidos):
+
+- AMS nunca genera un miss contra daño físico demostrado.
+- Evasion nunca genera un miss si la dodgeability no está demostrada.
+- Feint solo se valora donde su efecto sea realmente aplicable.
+
+**Gate explícito**: si al terminar esta pieza una clase/spec del corpus
+real queda sistemáticamente `uncertain` porque falta un descriptor
+CONOCIDO que se podría implementar (no porque el caso sea genuinamente
+ambiguo), el plan no está terminado — ver el gate 5/informe de coverage
+en §2.7. `uncertain` es para incertidumbre real, no para trabajo pendiente
+disfrazado de incertidumbre.
+
+### 2.5. Los tres KPI defensivos (revisión 2026-09-04)
+
+**Corrección de fondo respecto a una decisión anterior de este documento**:
+Uso defensivo dejó de ser "solo información descriptiva" — pasa a ser un
+KPI real, independiente, calculado sobre el mismo `DefensiveEpisode` que
+Respuesta. Los dos preguntan cosas distintas y un raider necesita ver
+ambas por separado:
+
+| KPI | Pregunta | Importancia |
+|---|---|---|
+| **Uso defensivo** | ¿Está utilizando sus herramientas cuando tiene una oportunidad real? | Secundario |
+| **Respuesta defensiva** | ¿Lo que usó (o no usó) resolvió la presión evaluable? | **Principal** |
+| **Gestión defensiva** | ¿Cumple sus asignaciones y preserva las reservas del plan? | Secundario / N/D sin plan |
+
+Los tres se derivan del **mismo** `DefensiveEpisode`/ledger — nunca de tres
+evaluators independientes que puedan divergir entre sí (exactamente el
+problema que abrió este documento, §1).
+
+Ejemplos que demuestran por qué Uso y Respuesta deben ser independientes:
+
+- Barkskin correcto → Uso ✅ · Respuesta ✅.
+- Barkskin demasiado pronto, no cubre → Uso ✅ · Respuesta ❌.
+- Tenía Barkskin listo y no pulsa nada → Uso ❌ · Respuesta ❌.
+- Usa un defensivo pero es el equivocado (aplicabilidad confirmada `no`) →
+  Uso ✅ · Respuesta ❌.
+- No tenía ninguna herramienta aplicable → no entra en ninguno de los dos.
+- Todo estaba legítimamente gastado antes → no entra.
+- Evidencia insuficiente → no entra.
+
+Con esto, un raider puede leer **"Uso 92% · Respuesta 61%"** y entender de
+inmediato: *sí estoy pulsando defensivos; mi problema es elegir/temporizar
+el correcto* — un diagnóstico que un único número nunca podría dar.
+
+#### 2.5.1. Uso defensivo
+
+$$
+Uso = \frac{episodios\ con\ engagement\ defensivo\ (usageEngaged)}{episodios\ donde\ realmente\ podía\ actuar}
+$$
+
+`usageEngaged` es una propiedad del episodio, **no** se infiere del
+veredicto de Respuesta: es simplemente "¿usó algún miembro de su kit
+(`isDefensiveKitMember`) durante la ventana relevante del episodio?",
+verdadero incluso si esa herramienta resultó ser la equivocada
+(`applicability` confirmada `no`) o si no se puede demostrar que sirviera
+(`unknown`).
+
+#### 2.5.2. Respuesta defensiva (principal)
 
 $$
 Respuesta = \frac{covered\_verified}{covered\_verified + missed\_ready + missed\_due\_to\_mistime}
 $$
 
-Sin pesos ocultos. Sustituye a "Gestión defensiva" como KPI. "Uso
-defensivo" (casts por habilidad) queda como información descriptiva, nunca
-como KPI en sí — no hay denominador universal justo entre clases con CDs de
-15s y otras de 2min.
+Sin pesos ocultos. La asimetría correcta entre crédito y penalización:
 
-### 2.6. Plan, solo cuando hay plan
+| Situación | `usageEngaged` | `responseVerdict` |
+|---|---:|---|
+| Cast real + aplicabilidad demostrada (`yes`) | ✅ | `covered_verified` |
+| Cast real + aplicabilidad **no demostrada** (`unknown`) | ✅ | `uncertain` — nunca certifica cobertura sin evidencia, pero Uso ya lo acredita |
+| Cast real + aplicabilidad confirmada `no` | ✅ | evalúa el resto del kit como si no hubiera cobertura |
+| Sin cast, algo aplicable (`yes`) y disponible | ❌ | `missed_ready` |
+| Sin cast, solo aplicabilidad `unknown` | — | `uncertain` — **nunca** `missed_ready` |
+
+**Bug real corregido en `defensive-episode-verdict.ts` (2026-09-04)**: la
+primera versión dejaba que `applicability==='unknown'` + disponible + sin
+cast produjera `missed_ready` (el filtro usaba `!== 'no'`, que incluye
+`unknown`) — contradecía la propia invariante 5 del documento. `missed_ready`
+exige ahora `applicability === 'yes'` estrictamente.
+
+#### 2.5.3. Gestión defensiva (antes "Plan"; solo cuando hay plan)
 
 $$
-Plan = \frac{asignaciones\ cubiertas}{asignaciones\ evaluables}
+Gestión = \frac{asignaciones\ cumplidas}{asignaciones\ evaluables}
 $$
 
 Si `plan_required_count = 0`: **"Sin plan defensivo asignado"**, nunca 0%.
-Response y Plan son dos evaluators distintos que nunca comparten
-porcentaje (pueden vivir en el mismo edge function).
+Gestión es un evaluator distinto de Respuesta que nunca comparte
+porcentaje con ella (pueden vivir en el mismo edge function). Dos reglas
+de no-doble-conteo: `reservation_broken` no suma una segunda penalización
+además del fallo de la asignación que rompe; `safe_extra_use` puede
+mostrarse como señal positiva de coaching pero nunca sube Gestión por
+encima de 100% (4/4 asignaciones cumplidas es 100%, no 120%).
 
-### 2.7. Execution Ledger como destino único
+#### 2.5.4. Forma objetivo del contrato de front (Paso F, no se construye todavía)
+
+Única proyección que consume la generación **publicada** — el front no
+hace scoring, toda cifra visible se deriva de aquí:
+
+```ts
+interface CanonicalDefensiveSummary {
+  usage: {
+    status: 'available' | 'insufficient_evidence';
+    score: number | null;
+    engaged: number;
+    evaluable: number;
+    totalObservedUses: number;
+    abilities: DefensiveUsageAbility[];
+  };
+  response: {
+    status: 'available' | 'insufficient_evidence';
+    score: number | null;
+    covered: number;
+    evaluable: number;
+    missedReady: number;
+    missedMistimed: number;
+  };
+  management: {
+    status: 'available' | 'no_plan' | 'insufficient_evidence';
+    score: number | null;
+    fulfilled: number;
+    evaluable: number;
+    reservationBroken: number;
+  };
+  episodes: DefensiveEpisodeSummary[];
+  deaths: DefensiveDeathContext[];
+  evidence: { confidence: EvaluationConfidence; notes?: string };
+  generation: {
+    id: string;
+    publishedAt: string | null;
+    semanticVersion: string;
+    resolverVersion: string;
+    episodeEvaluatorVersion: string;
+  };
+}
+```
+
+**Jerarquía visual del hero defensivo** (mantiene la identidad visual
+actual, no se rediseña desde cero):
+
+- Ejecución de la noche (ya existe).
+- ANÁLISIS DEFENSIVO con tres círculos parcialmente solapados: Uso
+  (pequeño) — Respuesta (grande/central, siempre el KPI principal) —
+  Gestión (pequeño; `N/D · Sin plan` cuando no aplica).
+- "Ventanas de presión" (nombre y concepto legacy) se sustituye
+  visualmente por episodios/fallos de Respuesta.
+- Página de detalle: usos personales reales, respuestas correctas/
+  evaluables, fallos `missed_ready`/`missed_due_to_mistime`, plan (cuando
+  exista), muertes con oportunidad defensiva verificada.
+- Las cards de mecánicas muestran solo episodios canónicos y defensivos
+  realmente aplicables/utilizados — nunca el catálogo completo de la clase.
+
+No se implementa nada de esto hasta Paso F.
+
+### 2.6. Execution Ledger como destino único
 
 Nuevos `eventType` sobre los `domain`/`causalGroupId`/`verdict`/
-`reasonCode`/`creditEligible`/`penaltyEligible` ya existentes:
+`reasonCode`/`creditEligible`/`penaltyEligible` ya existentes en
+`player_execution_events` (`domain='defensive'` ya existe en el contrato
+real, con 0 filas materializadas hoy — confirmado, el momento correcto para
+diseñarlo bien antes de poblarlo):
 
-- `domain=defensive`: `personal_defensive_cast` (uso).
-- `defensive_episode_covered` / `_missed_ready` / `_mistimed`... (Response).
-- `defensive_plan_covered` / `_missed`... (Plan).
+- `defensive_episode_<responseVerdict>` (7 estados → 7 `eventType`,
+  incluido `excluded` para trazabilidad — no se descarta sin dejar rastro).
+  `evidence` incluye `usageEngaged`/`usedSpellIds` para que Uso se pueda
+  reconstruir desde el mismo evento, sin una tabla aparte.
+- `defensive_plan_covered` / `_missed`... (Gestión).
 - `domain=active_mitigation` (tank, fase posterior, no bloquea esta migración).
 
-El front no vuelve a leer pressure windows/evaluation JSONs/reliability
-legacy por separado: lee una proyección del ledger publicado.
+**Reason codes nuevos** (aditivo sobre `EXECUTION_REASON_CODES` en
+`combat-evaluation-contract.ts`, hoy 27): `DEFENSIVE_EPISODE_COVERED`,
+`DEFENSIVE_READY_NOT_USED`, `DEFENSIVE_MISTIMED`,
+`DEFENSIVE_UNAVAILABLE_LEGITIMATE`, `DEFENSIVE_NO_APPLICABLE_RESOURCE`,
+`DEFENSIVE_EPISODE_UNCERTAIN`, `DEFENSIVE_EPISODE_EXCLUDED` — nunca se
+reutilizan `PLAN_COVERED`/`REMINDER_MISSED`/`SAFE_EXTRA_USE` (son del
+evaluator de Gestión/Plan legacy) para Respuesta: mezclarían otra vez dos
+conceptos distintos bajo el mismo código, exactamente el problema que abrió
+este documento.
 
-### 2.8. Generación publicada (cutover atómico)
+**Mapeo a `ExecutionVerdict`** (el enum genérico ya compartido por todos
+los dominios — no se inventa uno nuevo):
+
+| `responseVerdict` | `ExecutionVerdict` | `creditEligible` | `penaltyEligible` |
+|---|---|---:|---:|
+| `covered_verified` | `success` | ✓ | |
+| `missed_ready` | `missed` | | ✓ |
+| `missed_due_to_mistime` | `missed` | | ✓ |
+| `unavailable_legitimate` | `correct_hold` | | |
+| `no_applicable_resource` | `not_applicable` | | |
+| `uncertain` | `uncertain` | | |
+| `excluded` | `context` | | |
+
+**Correcciones de infraestructura, obligatorias ANTES de materializar la
+primera fila** (encontradas en revisión, verificadas contra Supabase real):
+
+1. **`player_execution_events` no tiene ninguna columna de generación
+   hoy** (confirmado). Añadir `defensive_generation_id uuid null
+   references defensive_generations(id)` — `null` en los eventos legacy
+   existentes, poblado en los nuevos. Sin esto, `defensive_generation_pointer`
+   no puede seleccionar qué eventos están realmente publicados: sería una
+   relación conceptual, no real.
+2. **La idempotencia real hoy es `pull_id + ledger_evaluator_version +
+   deduplication_key`, y `deduplication_key` incluye un hash de `evidence`**
+   (confirmado en `materialize-execution-ledger/index.ts`). Eso significa
+   que si la evidencia cambia (nueva generación, mismo episodio) se
+   inserta una fila nueva en vez de actualizar la existente. Para el
+   pipeline de episodios, la identidad debe ser estable y NO depender del
+   veredicto/evidencia: `<generationId>:<episodeId>:<playerName>:response`
+   — así una reevaluación dentro de la misma generación actualiza la
+   misma fila en vez de duplicarla. `episodeId` en sí prioriza
+   `occurrenceId` cuando existe; si es heurístico,
+   `hash(pullId + player + índices de ventana ordenados + dominantAbility + start/end)`
+   — identifica QUÉ episodio es, no solo cuándo ocurrió (dos mecánicas
+   distintas pueden compartir milisegundo).
+3. **Las views agregadas actuales no son namespace-aware.**
+   `player_pull_execution_summary_v3` cuenta
+   `domain IN ('defensive','external') AND penalty_eligible` sin
+   distinguir `defensive_plan_broken` (legacy V2) de
+   `defensive_episode_missed_ready` (nuevo) — mientras coexistan ambos
+   `eventType` bajo el mismo `domain`, una view genérica los sumaría dos
+   veces para "el mismo fallo". Hay que revisar `player_pull_execution_summary_v3`/
+   `night_player_execution_summary_v3` para que filtren por generación
+   publicada (o por prefijo de `eventType`) antes de que exista una sola
+   fila real que contar.
+
+**Tabla de staging** (patrón evaluate→persist→materialize ya usado por V2 —
+se reutiliza, no se inventa uno nuevo): `player_pull_defensive_episode_evaluations`,
+aditiva, al lado de `player_pull_defensive_evaluations` (V2, sin tocar).
+
+```text
+UNIQUE (defensive_generation_id, pull_id, player_name)  -- NO (pull_id, player_name) solo:
+                                                          -- una corrida shadow nueva no debe
+                                                          -- pisar la anterior dentro de otra generación
+defensive_generation_id, pull_id, player_name
+episode_evaluator_version, semantic_version, semantic_resolver_version,
+resolver_version, build_fingerprint
+data_confidence
+episodes jsonb   -- [{ episodeId, causalGroupId, startMs, peakMs, endMs,
+                 --    usageEngaged, usedSpellIds[], applicableCandidates[],
+                 --    responseVerdict, responseReason,
+                 --    planAssignmentId?, planVerdict?, evidence, confidence }]
+evaluated_at
+```
+
+Con esto los tres KPI se reconstruyen desde la misma fila — Uso y
+Respuesta desde `episodes[]` directamente, Gestión desde
+`planAssignmentId`/`planVerdict` cuando existan.
+
+### 2.7. Generación publicada (cutover atómico)
 
 ```text
 BUILDING → READY → PUBLISHED
 ```
 
 Cada derivado lleva `generation_id`/`semantic_version`/`resolver_version`/
-`episode_version`/`evaluator_version`. El report apunta a
-`published_generation_id`. La reanalización tarda lo que tarda; el front
-sigue viendo la generación anterior hasta que se hace un único
-`UPDATE ... SET published_defensive_generation_id = new_generation`.
+`episode_version`/`evaluator_version`. El puntero singleton
+`defensive_generation_pointer` (Paso A-2) apunta a la generación publicada;
+la reanalización tarda lo que tarda, el front sigue viendo la generación
+anterior (o `N/D` si todavía no existe ninguna) hasta un único
+`UPDATE defensive_generation_pointer SET published_generation_id = new_generation`.
+
+**Condición real de `READY`** (no "la función terminó" — ampliado
+2026-09-04 tras revisión completa). Todos estos gates deben cumplirse
+antes de que una generación pueda pasar a `ready`:
+
+1. Cobertura completa de `canonical_scored_pulls` del alcance esperado —
+   nunca un report suelto (ver ejemplo del 31 de agosto más abajo).
+2. Todos los jugadores evaluables de ese alcance procesados, sin huecos.
+3. Versiones homogéneas: misma `semantic_version`/`episode_evaluator_version`/
+   `resolver_version`/`build_fingerprint` en cada fila de la generación.
+4. Cero jobs pendientes o fallidos en la cola de reanálisis de esta
+   generación.
+5. Catálogo semántico suficiente para TODAS las clases/specs presentes en
+   el corpus — no basta con que las 7 fixtures pasen si otra clase del
+   roster real sigue mayoritariamente `pending`.
+6. Ningún `missed_ready` sin membership + build + applicability +
+   availability + confidence demostrados — no se acepta un `missed_ready`
+   apoyado en un eslabón `unknown` en cualquier punto de esa cadena.
+7. Ningún `missed_due_to_mistime` sin causalidad positiva demostrada (ver
+   invariante 14 — sigue siendo, hoy, un estado inalcanzable desde
+   `reconstructCausalAvailability`; si en algún momento se activa una
+   fuente de evidencia positiva, este gate se vuelve real y no solo
+   estructural).
+8. Cargas (`charges > 1`) correctamente reconstruidas cuando afecten a una
+   penalización — hoy se cumple por diseño fail-closed
+   (`summarizeCandidateForEpisode`: `charges>1` + `on_cooldown` degrada a
+   `unknown`, nunca contribuye a `missed_ready`), así que este gate está
+   satisfecho por construcción mientras esa regla exista; si se
+   implementa reconstrucción real de cargas en el futuro, este gate pasa
+   a validar esa reconstrucción en vez de la degradación.
+9. Sin doble contabilización entre eventos legacy V2 (`defensive_${state}`)
+   y eventos canónicos (`defensive_episode_${verdict}`) en las views
+   agregadas del ledger (ver §2.6, corrección 3).
+10. El `CanonicalDefensiveSummary` de cada jugador/pull es reconstruible
+    100% desde el ledger — sin datos "de más" que no vengan de una fila
+    real.
+
+El puntero es singleton/global (§A-2): **no se puede publicar una
+generación que solo contenga, por ejemplo, el report del 31 de agosto** —
+ese report es perfecto como fixture/shadow de validación, pero publicarlo
+dejaría huecos reales en dosier/night report/roster/Fiabilidad 60d que
+tentarían a reintroducir un fallback legacy, exactamente lo que esta
+migración existe para eliminar.
+
+**Informe de coverage previo al cutover** (nuevo requisito, no solo los 7
+fixtures): antes de proponer una generación como `ready`, generar un
+desglose `class × spec × defensive role × boss` con recuentos de
+`evaluable / covered / missed / unavailable_legitimate / no_applicable /
+uncertain / excluded`. No se fija de antemano un porcentaje máximo
+arbitrario de `uncertain` — se analiza empíricamente. Pero **si una
+clase/spec queda sistemáticamente no evaluable por una pieza conocida que
+todavía no está implementada** (el caso típico: `DamageDescriptor` real
+ausente para esa clase, ver §2.4.1), la generación NO se considera `ready`
+— `uncertain` es para casos genuinamente ambiguos, no para funcionalidad
+pendiente conocida.
 
 ## 3. Fiabilidad: proyector longitudinal, no un evaluator más
 
@@ -319,6 +663,14 @@ sobre `Reliability` ya canónica — nunca se compara una generación semántica
 antigua contra una nueva (agosto legacy vs. septiembre canonical): tras
 reanalizar, todo queda en `semantic_version@1` antes de calcular tendencia.
 
+**Confirmado explícitamente (revisión 2026-09-04): Fiabilidad NUNCA
+incorpora Uso ni Gestión, solo Response.** Reliability no recalcula
+defensivos — solo cambia el scope temporal de la misma Response canónica
+(`report` → noche, `60d` → 60 días, `boss`/`week` → análogos). Meter Uso o
+Gestión ahí contaría dos veces conceptos correlacionados con Response, y
+Gestión puede ser `N/D` sin plan — no es una dimensión que Fiabilidad
+pueda promediar de forma consistente entre raiders.
+
 ## 4. Correcciones aplicadas durante la revisión (antes de escribir código)
 
 1. **`activationScope`/`allySelectable` redundantes.** La propuesta
@@ -358,6 +710,70 @@ reanalizar, todo queda en `semantic_version@1` antes de calcular tendencia.
 
 ## 5. Plan de ejecución por pasos
 
+### 5.0. Reconciliación (2026-09-04): qué sigue válido, qué cambia, qué falta
+
+Pedido explícito tras la revisión completa — antes de seguir
+implementando, el estado real de todo lo construido hasta hoy:
+
+**Sigue válido tal cual, no se toca:**
+
+- La arquitectura completa
+  `cooldown_catalog → defensive_ability_semantics → defensive_semantic_rules
+  → resolveEffectiveDefensiveKit() → pressure candidates → DefensiveEpisode
+  → applicability → causal availability → canonical verdict → execution
+  ledger → CanonicalDefensiveSummary → front/Fiabilidad` (§1-§3).
+- `resolveEffectiveDefensiveKit()` ampliado: build-aware, contempla
+  mitigation/absorption/sustain/immunity/avoidance/effective_health/
+  lethal_prevention, `primaryBeneficiary` por encima de `activationScope`
+  (AMS, Death Strike), propagación automática sin invalidar membership,
+  reglas augment/replace/suppress/convert_to_passive por talento
+  seleccionado (Mirror Image + Refractive Images, Ice Cold). 36 tests.
+- Los 10 `usageRole` separados (`personal_survival`, `survival_state`,
+  `hybrid_survival`, `active_mitigation`, `rotational_survival`,
+  `healer_throughput`, `external`, `raid_defensive`, `passive_survival`,
+  `utility`) con `active_mitigation`/`rotational_survival` fuera del KPI
+  general y `survival_state`/`hybrid_survival` como `credit_only`.
+- `canonical_scored_pulls`, `defensive_generations`,
+  `defensive_generation_pointer` (Paso A-2).
+- `groupDamageWindowsIntoEpisodes()` (9 tests), `canDefensiveCover()`
+  (11 tests) — construidos y correctos, solo les falta una fuente real de
+  `DamageDescriptor` (ver Paso C-1 más abajo).
+- `resolveEpisodeVerdict()`/`reconstructCausalAvailability()`/
+  `resolveEpisodeVerdictWithCausalAvailability()` (22 tests): 3 KPI
+  (`usageEngaged` independiente de `responseVerdict`), `missed_ready`
+  exige `applicability==='yes'` estricto (bug verificado como YA
+  corregido, no localizado de nuevo en el código actual — ver respuesta
+  de esta misma conversación), `missed_due_to_mistime` inalcanzable sin
+  evidencia positiva, fail-closed de cargas, precedencia de kit completo.
+- El diseño de la tabla de staging, la extensión del ledger (columna de
+  generación, dedupe por identidad, 7 reason codes, views
+  namespace-aware) — diseñado en §2.6, coincide con lo pedido, no
+  implementado todavía.
+
+**Cambia/se amplía respecto a lo escrito hasta ayer:**
+
+- Uso defensivo deja de ser "solo descriptivo" — ya era así desde la
+  revisión anterior (§2.5), esta ronda lo confirma como definitivo.
+- La condición de `READY` pasa de un párrafo a 10 gates explícitos +
+  informe de coverage obligatorio (§2.7).
+- `DamageDescriptor` deja de ser "trabajo aparte, fuera de este corte" y
+  pasa a ser un requisito de cutover con criterios de aceptación
+  concretos (§2.4.1) — el cambio de alcance más grande de esta revisión.
+- `CanonicalDefensiveSummary` gana `deaths`/`evidence`/metadata de
+  versión completa (§2.5.4).
+
+**Sigue pendiente, sin cambios de diseño desde la última ronda:**
+
+- Terminar la clasificación IA del catálogo (Paso B, clase por clase).
+- Tabla de staging + extensión del materializer (Paso C, siguiente pieza
+  real de código).
+- `DamageDescriptor` real (Paso C-1, nuevo, ver abajo).
+- Reanálisis masivo con el pipeline nuevo (Paso D).
+- Fixtures + matriz cross-class (Paso E, §7.1).
+- Cutover (Paso F), Fiabilidad (Paso G), de-legacy.
+
+### 5.1. Pasos
+
 1. **Paso A-1 — Migración SQL aditiva del catálogo** (`defensive_ability_semantics`,
    `defensive_semantic_rules`, vista `defensive_ability_semantic_catalog`,
    trigger de pendiente automático, retirada del default peligroso de
@@ -371,22 +787,35 @@ reanalizar, todo queda en `semantic_version@1` antes de calcular tendencia.
    desplegado.** Falta que un officer termine la investigación IA
    clase por clase (JWT real, no ejecutable desde aquí — ver §8). Ambiguos
    siguen `pending` — nunca penalizan.
-4. **Paso C** — Backend en shadow. **Primera pieza hecha:
-   `resolveEffectiveDefensiveKit()` ampliado con usageRole/mechanisms/
-   membership derivado, retrocompatible, 36/36 tests (ver §8).** Falta
-   `DefensiveEpisode`/aplicabilidad/disponibilidad causal/ledger
-   materializer. `semantic-version@1`/`effective-defensive-semantics@1.0.0`
-   ya versionados por separado del resolver de timing; `episode-evaluator@1`
-   pendiente.
-5. **Paso D** — Reanálisis masivo (cola ya existente) de los pulls a
-   conservar.
-6. **Paso E** — Fixtures de aceptación obligatorios (§7).
-7. **Paso F** — Cutover atómico: `published_generation` + ViewModel/front
-   nuevo (§2.8), sin pantalla mixta V2/V3.
-8. **Paso G — Fiabilidad**: sustitución del eje `defensiva`, penalización
+4. **Paso C** — Backend en shadow. Piezas de construcción hechas y
+   testeadas (funciones puras, sin consumer todavía — ver §8):
+   `resolveEffectiveDefensiveKit()` ampliado (usageRole/mechanisms/
+   membership), `groupDamageWindowsIntoEpisodes()`, `canDefensiveCover()`,
+   `resolveEpisodeVerdict()`/`reconstructCausalAvailability()` (3 KPI,
+   corregido tras revisión — ver §2.5/§2.6/registro 2026-09-04). **Falta**:
+   tabla de staging `player_pull_defensive_episode_evaluations` (§2.6),
+   extensión de `materialize-execution-ledger` (columna `defensive_generation_id`
+   en `player_execution_events`, dedupe por identidad de episodio,
+   generation-aware en las views agregadas — todo ya diseñado en §2.6, no
+   implementado). `effective-defensive-semantics@1.0.0` ya versionado por
+   separado del resolver de timing; `episode-evaluator@1` pendiente de
+   asignar cuando se construya el materializer.
+5. **Paso C-1 — `DamageDescriptor` real** (§2.4.1, requisito de cutover,
+   no deuda estructural): investigar e implementar la fuente real desde
+   WCL para los facts mínimos (school, AoE/single, direct/periodic,
+   source actor, dodge/parry/block, source-affected-by-spell, compatibilidad
+   de inmunidad). Sin esto, Paso E/F no pueden pasar el gate de coverage.
+6. **Paso D** — Reanálisis masivo con el pipeline NUEVO (tabla de staging +
+   materializer de Paso C — distinto de la cola de WCL/`reanalyze-defensive-pressure`
+   actual, que sigue siendo el pipeline legacy) de los pulls a conservar.
+7. **Paso E** — Fixtures de aceptación obligatorios (§7) + matriz
+   cross-class (§7.1) + informe de coverage (§2.7).
+8. **Paso F** — Cutover atómico: `published_generation` + ViewModel/front
+   nuevo (§2.5.4/§2.7), sin pantalla mixta V2/V3.
+9. **Paso G — Fiabilidad**: sustitución del eje `defensiva`, penalización
    de preparación, cap de mecánica en el composite, cierre de
    `reliabilityExecutionV3`, Roster/Night Report.
-9. **De-legacy** (después del cutover, no antes): dejar de escribir
+10. **De-legacy** (después del cutover, no antes): dejar de escribir
    derivados legacy → retirar flags → retirar fallbacks del front →
    retirar queries legacy → grep de referencias → eliminar
    columnas/vistas/tablas cuando no quede ningún consumer.
@@ -410,6 +839,13 @@ reanalizar, todo queda en `semantic_version@1` antes de calcular tendencia.
 11. Una sincronización externa no puede modificar una semántica IRIS
     `verified`.
 12. El front no hace scoring.
+13. Uso, Respuesta y Gestión son KPI independientes derivados del mismo
+    episodio/ledger — ninguno se infiere de otro ni comparten porcentaje
+    (un cast real acredita Uso aunque Respuesta no pueda certificarlo).
+14. `missed_due_to_mistime` exige evidencia POSITIVA de mal uso (reserva
+    rota, gasto demostrable sin amenaza) — la ausencia de un episodio
+    anterior que justifique un cast nunca es esa evidencia por sí sola;
+    degrada a `uncertain`.
 
 ## 7. Fixtures de aceptación (7 raiders)
 
@@ -425,6 +861,25 @@ reanalizar, todo queda en `semantic_version@1` antes de calcular tendencia.
 
 Aplica igual a cualquier otro raider/clase/spec — estos siete son el corpus
 de validación, no una lista cerrada de excepciones.
+
+### 7.1. Matriz de normalización cross-class (después de los 7 fixtures)
+
+Los 7 fixtures verifican invariantes concretos. Una vez pasan, la
+aceptación se amplía a una **matriz de todas las class/spec presentes en
+el corpus real** (no solo las de los 7 raiders) — mismo informe de
+coverage que exige el gate de READY (§2.7).
+
+"Normalizado entre clases/specs" **no significa** que todos tengan el
+mismo número de oportunidades — un CD de 15s genera más episodios que uno
+de 2 minutos, y eso es correcto, no un defecto a corregir. Significa que
+**todos responden a la misma pregunta**:
+
+> De los episodios en los que este build tenía realmente una respuesta
+> personal aplicable y evaluable, ¿cuántos resolvió correctamente?
+
+Esa es la comparación justa entre clases — no el recuento crudo de casts,
+que es exactamente el problema que este documento existe para eliminar
+(ver §1, Pitpally 1.719→102).
 
 ## 8. Registro de avance
 
@@ -909,3 +1364,451 @@ materializer que une resolver + agrupación + aplicabilidad + veredicto y
 escribe en `defensive_generations`/execution ledger. Ahí es donde por fin
 se puede materializar una generación real y probar los 7 fixtures del
 plan (§7) de principio a fin.
+
+### 2026-09-04 (continuación) — Revisión completa del plan: mini-paso "C-0"
+
+El usuario hizo una revisión de fondo de todo lo construido hasta ahora
+(no solo de la pieza más reciente) y encontró un bug real de invariante
+más varias correcciones de diseño necesarias ANTES de seguir con la
+reconstrucción causal — exactamente en el punto en que este documento
+proponía pararse a revisar. Tres afirmaciones concretas verificadas contra
+Supabase/código real antes de aceptarlas: 0 filas `domain='defensive'`
+materializadas hoy (confirmado), idempotencia real del materializer =
+`pull_id + ledger_evaluator_version + deduplication_key` con hash de
+`evidence` dentro (confirmado en `materialize-execution-ledger/index.ts`),
+`player_execution_events` sin ninguna columna de generación (confirmado).
+Las tres, correctas.
+
+**Bug real corregido**: `resolveEpisodeVerdict()` (versión de esta misma
+tarde) dejaba que `applicability==='unknown'` + disponible + sin cast
+produjera `missed_ready` — el filtro usaba `!== 'no'` (incluye `'unknown'`)
+en vez de exigir `=== 'yes'`. El propio comentario del fichero decía que
+`unknown` "nunca" podía generar `missed_ready`; el código no lo cumplía.
+Corregido y con test explícito de regresión (`BUG FIX (2026-09-04):
+applicability unknown + available + not used must NEVER produce
+missed_ready`).
+
+**Modelo de 3 KPI formalizado** (§2.5 de este documento, reescrito):
+Uso defensivo deja de ser "información descriptiva" y pasa a ser un KPI
+independiente (`usageEngaged`, propiedad del episodio, no inferida del
+veredicto de Respuesta). `defensive-episode-verdict.ts` reescrito para
+devolver `{ usageEngaged, usedSpellIds, responseVerdict, ... }` en vez de
+un único `verdict` plano — un cast real con aplicabilidad `unknown` ahora
+acredita Uso sin certificar Respuesta (antes no existía ese estado
+intermedio; o certificaba de más, o no acreditaba nada).
+
+**Reconstrucción causal corregida antes de escribirse mal**: la primera
+versión de `reconstructCausalAvailability` (construida en esta misma
+sesión, todavía sin desplegar) habría convertido "cast anterior sin
+episodio que lo explique" directamente en `missed_due_to_mistime`. Se
+corrigió antes de que llegara a usarse: `missed_due_to_mistime` exige
+evidencia POSITIVA (reserva rota, plan incumplido) que este módulo
+plan-agnóstico no tiene — sin ella, degrada a `uncertain`. La función
+ahora solo puede producir `unavailable_legitimate` o `uncertain`;
+`missed_due_to_mistime` queda definido en el contrato pero inalcanzable
+desde aquí hasta que exista esa fuente de evidencia (evaluator de Gestión
+u otra). Nuevo wrapper `resolveEpisodeVerdictWithCausalAvailability()` que
+solo promueve el `uncertain` base a `unavailable_legitimate` cuando TODOS
+los candidatos en cooldown tienen esa causa demostrada — cualquier mezcla
+se queda `uncertain`.
+
+**Fail-closed de cargas**: `summarizeCandidateForEpisode()` gana un
+parámetro `charges` — con `charges > 1` y un `on_cooldown` calculado por
+el modelo actual (que no reconstruye cuántas cargas quedan), degrada
+explícitamente a `unknown` en vez de arriesgar una indisponibilidad falsa.
+
+**Precedencia de kit completo confirmada, no corregida**: el punto de la
+revisión sobre "el veredicto pertenece al episodio, no a un spell suelto"
+(Barkskin en CD legítimo + Frenzied Regeneration listo → `missed_ready`,
+no `unavailable_legitimate`) ya estaba satisfecho por la estructura
+existente de `resolveEpisodeVerdict()` (evalúa "¿algo del kit está ready?"
+sobre TODOS los candidatos antes de intentar explicar por qué lo que está
+en CD lo está) — verificado con un test explícito nuevo, no hizo falta
+cambiar la estructura.
+
+Correcciones de infraestructura para cuando se construya la capa de
+persistencia/ledger (documentadas en §2.6, no implementadas todavía —
+"después" del resto, tal como se acordó): `defensive_generation_id` en
+`player_execution_events`, identidad de deduplicación estable
+(`generationId:episodeId:player:response`, no un hash de evidence),
+7 `reason_code` nuevos sin reutilizar los del evaluator V2 legacy, tabla
+de staging con `UNIQUE(generation_id, pull_id, player_name)`, condición
+real de `READY` (cobertura completa de `canonical_scored_pulls`, no un
+report suelto), y revisión de las views agregadas del ledger para que
+sean namespace/generation-aware antes de que exista una sola fila real
+que puedan contar dos veces.
+
+Validación: `vitest` 99/99 (los cinco ficheros de Paso B/C juntos, con el
+fichero de veredicto reescrito). `verify:defensive-contract`/
+`verify:causal-schema`: PASS. Nada desplegado — siguen siendo módulos sin
+consumer.
+
+**Siguiente paso real** (acordado, no ejecutado todavía): construir la
+tabla de staging + la extensión del materializer con este diseño ya
+corregido, y correr el pipeline completo contra el report del 31 de
+agosto para obtener la Respuesta/Uso reales de los 7 raiders — cerrando
+el círculo que abrió este documento el primer día.
+
+### 2026-09-04 (continuación) — Revisión de gobierno completa: filosofía de entrega + reconciliación
+
+El usuario fijó explícitamente la filosofía de entrega del documento
+completo (§0): no MVP, baseline canónica completa antes de cutover, cero
+fallback legacy al publicar. Pidió actualizar el plan con esa filosofía y
+con un conjunto extenso de decisiones ya cerradas, comparar contra lo
+implementado y enumerar qué sigue válido/qué cambia/qué falta ANTES de
+seguir escribiendo código — hecho en §5.0.
+
+Verificación puntual solicitada: si `defensive-episode-verdict.ts`
+todavía dejaba que `applicability='unknown'` entrara en el conjunto
+`missable`. Comprobado línea por línea contra el fichero real:
+**ya no** — `missable` exige `applicability === 'yes'` estricto (línea
+159) desde la corrección del turno anterior; `unknown + cast` ya
+resuelve a `usageEngaged:true, responseVerdict:'uncertain'` (línea 142),
+no a `covered_verified`. La revisión del usuario probablemente se redactó
+contra la versión anterior a ese fix — confirmado explícitamente en la
+respuesta para no dejar la duda abierta.
+
+Cambios reales de alcance incorporados al documento (no solo
+confirmaciones):
+
+1. **§0**: filosofía de entrega + criterio final de éxito como texto
+   explícito, no implícito en la suma de invariantes.
+2. **§2.4.1 (nuevo)**: `DamageDescriptor` pasa de "trabajo aparte, fuera
+   de este corte" a requisito de cutover con facts mínimos y criterios de
+   aceptación concretos (AMS/Evasion/Feint). Cambio de alcance más grande
+   de esta ronda — antes era deuda aceptada, ahora es un Paso C-1 propio
+   en §5.1.
+3. **§2.5.4**: `CanonicalDefensiveSummary` gana `deaths`/`evidence`/
+   metadata de versión completa; se documenta la jerarquía visual de tres
+   círculos solapados (Uso/Respuesta/Gestión) para Paso F.
+4. **§2.7**: la condición de `READY` pasa de un párrafo a 10 gates
+   explícitos (cobertura completa, versiones homogéneas, cero jobs
+   pendientes, catálogo suficiente para todas las clases/specs, cadena de
+   evidencia completa para `missed_ready`, causalidad positiva para
+   `missed_due_to_mistime`, cargas, sin doble contabilización, summary
+   reconstruible) + informe de coverage `class×spec×role×boss` obligatorio
+   antes de proponer cutover.
+5. **§3.4**: confirmación explícita de que Fiabilidad nunca incorpora Uso
+   ni Gestión, solo Response con distinto scope temporal.
+6. **§7.1 (nuevo)**: matriz de normalización cross-class tras los 7
+   fixtures, con la definición exacta de "normalizado" (misma pregunta,
+   no mismo número de oportunidades).
+
+No se tocó ni se reescribió nada de la arquitectura ya construida — el
+propio usuario pidió explícitamente no reiniciarla, y la revisión de §5.0
+confirma que todo lo hecho hasta hoy encaja sin cambios en el modelo
+ampliado.
+
+Validación: solo cambios de documentación en este corte — no se tocó
+código. `vitest`/`verify:*` no aplica (sin cambios de código); se dejan
+para la siguiente pieza real (Paso C-1 `DamageDescriptor` o la tabla de
+staging, a decidir).
+
+**Pendiente de decisión del usuario**: por cuál de las dos piezas grandes
+seguir — Paso C-1 (`DamageDescriptor` real, ahora bloqueante de cutover)
+o la tabla de staging + extensión del ledger (arquitectura ya diseñada al
+detalle en §2.6, sin incógnitas de datos). Son independientes entre sí.
+
+### 2026-09-04 (continuación) — §2.6 completo: tabla de staging + ledger generation-aware
+
+Decisión del usuario: la tabla de staging + extensión del ledger primero,
+`DamageDescriptor` (Paso C-1) inmediatamente después. Implementado tal
+cual se diseñó en §2.6, shadow puro — no se tocó `defensive_generation_pointer`,
+ninguna generación pasa a `ready`, ningún número visible del front cambia
+(confirmado: `player_execution_events` seguía en 0 filas antes de empezar).
+
+**Migraciones** (`20260904110000_defensive_episode_staging_and_ledger.sql`,
+`20260904120000_defensive_episode_ledger_namespace_fix.sql`, ambas
+aplicadas y verificadas contra Supabase real):
+
+- `player_pull_defensive_episode_evaluations` — staging v3, esquema
+  exacto de §2.6 (`defensive_generation_id, pull_id, player_name,
+  episode_evaluator_version, semantic_version, semantic_resolver_version,
+  resolver_version, build_fingerprint, data_confidence, episodes jsonb,
+  evaluated_at`), `PRIMARY KEY (defensive_generation_id, pull_id,
+  player_name)` — no `(pull_id, player_name)` solo, tal como pedía el plan.
+  Mismo patrón RLS/grants que `player_pull_defensive_evaluations` V2
+  (officers-only vía `is_officer()`).
+- `player_execution_events.defensive_generation_id uuid references
+  defensive_generations(id)` — `NULL` en todo evento legacy, poblado solo
+  en los canónicos nuevos.
+- 7 reason codes nuevos añadidos al `CHECK` de `reason_code`
+  (`DEFENSIVE_EPISODE_COVERED`, `DEFENSIVE_READY_NOT_USED`,
+  `DEFENSIVE_MISTIMED`, `DEFENSIVE_UNAVAILABLE_LEGITIMATE`,
+  `DEFENSIVE_NO_APPLICABLE_RESOURCE`, `DEFENSIVE_EPISODE_UNCERTAIN`,
+  `DEFENSIVE_EPISODE_EXCLUDED`) — verificado en vivo que el nombre real del
+  constraint es `player_execution_events_reason_code_check` antes de
+  tocarlo.
+- `player_pull_execution_summary_v3`/`night_player_execution_summary_v3`
+  recreadas: `defensive_generation_id` añadido al `GROUP BY`/`SELECT`
+  (separa físicamente cualquier fila canónica de la legacy, que siempre
+  tiene `generation_id NULL`) + 7 columnas nuevas namespace-scoped
+  (`defensive_episode_event_count`/`_success_count`/`_failure_count`/
+  `_uncertain_count`, `defensive_plan_event_count`/`_success_count`/
+  `_failure_count`). `CREATE OR REPLACE VIEW` no admite reordenar columnas
+  ya existentes (error real encontrado: "cannot change name of view column
+  event_count") — las columnas nuevas van todas al final, orden original
+  intacto.
+- **Bug real encontrado y corregido en la propia verificación en vivo**
+  (de ahí la segunda migración): el legacy V2 YA produce eventType
+  `defensive_plan_broken`/`defensive_plan_covered` (`defensive_${state}`
+  con `state='plan_broken'|'plan_covered'`) — coincide por accidente de
+  string con el filtro `event_type like 'defensive_plan_%'` pensado solo
+  para la Gestión canónica nueva. Corregido exigiendo además
+  `defensive_generation_id is not null` en esas 7 columnas — nunca pueden
+  contar una fila legacy, sin importar el nombre de su `event_type`.
+
+**Materializer** (`materialize-execution-ledger/index.ts`): nuevo
+`Body.defensiveGenerationId` opcional. Sin él, comportamiento idéntico al
+de antes (confirmado). Con él, además de todo lo que ya hacía, lee
+`player_pull_defensive_episode_evaluations` para `(pullId,
+defensiveGenerationId)` y materializa los eventos canónicos vía las
+funciones puras nuevas — mismo endpoint único ("Execution Ledger como
+destino único"), sin bifurcar el pipeline.
+
+**Módulos puros nuevos** (`_shared/`, mismo estilo sin Deno/Supabase que el
+resto de Paso B/C, testeados desde `src/app/shared/*.spec.ts`):
+
+- `defensive-episode-identity.ts` — `resolveDefensiveEpisodeId()`
+  (prioriza `occurrenceId`; si no, `heuristic:` + hash estable de
+  `pullId+player+índices ordenados+dominantAbility+start/end`) y
+  `deriveEpisodeCausalGroupId()` (proyección UUID-shaped determinista para
+  la columna `causal_group_id`).
+- `defensive-episode-persistence.ts` — `PersistedDefensiveEpisode` (forma
+  completa: episodio + candidatos + veredicto + plan linkage + evidence +
+  confidence) y `deriveUsageEvaluable()` (denominador de Uso: no
+  `excluded` + al menos un `isDefensiveKitMember`).
+- `defensive-episode-staging.ts` — forma de la fila de staging,
+  `rollupDataConfidence()` (el más débil entre episodios) y conversión
+  ↔ snake_case (`episodeEvaluationRowToDbRecord`/`dbRecordToEpisodeEvaluationRow`).
+- `defensive-episode-ledger-events.ts` — `DEFENSIVE_EPISODE_EVALUATOR_VERSION
+  = 'episode-evaluator@1'`, mapeo íntegro de la tabla de §2.6
+  (`RESPONSE_VERDICT_TO_EXECUTION_VERDICT`/`_TO_REASON_CODE`),
+  `buildDefensiveEpisodeResponseLedgerEvent()` (namespace
+  `defensive_episode_*`) y `buildDefensiveEpisodePlanLedgerEvent()`
+  (namespace `defensive_plan_*`, solo cuando el episodio trae
+  `planAssignmentId`/`planVerdict` — ningún evaluator de Gestión los puebla
+  todavía, queda listo y testeado para cuando exista).
+
+**Identidad/idempotencia** (tal cual §2.6, corrección de infraestructura
+#2): `deduplicationKey = \`${generationId}:${episodeId}:${playerName}:response\`` —
+nunca depende de evidence/reason/confidence. Reevaluar el mismo episodio
+dentro de la misma generación siempre pisa la misma fila vía `UPSERT`
+(`onConflict: pull_id,ledger_evaluator_version,deduplication_key`, sin
+tocar esa constraint). Verificado en vivo: insertar el mismo evento dos
+veces con evidencia distinta deja 1 fila, no 2, y la evidencia queda la
+del último `UPSERT`.
+
+**Tests**: 6 ficheros nuevos, 53 tests (`defensive-episode-identity.spec.ts`,
+`defensive-episode-persistence.spec.ts`, `defensive-episode-staging.spec.ts`,
+`defensive-episode-ledger-events.spec.ts`, `defensive-episode-ledger-round-trip.spec.ts`),
+cubriendo idempotencia, aislamiento entre generaciones, coexistencia
+V2/canonical (formas de key estructuralmente incompatibles) y
+reconstrucción staging→ledger de ida y vuelta. `vitest run`: 152/152 en los
+ficheros de Paso B/C (99 previos + 53 nuevos), 0 regresiones en el resto de
+la suite (los 15 ficheros que ya fallaban antes de esta sesión —
+`TestBed.initTestEnvironment()`/`localStorage` en specs de componentes
+Angular, entorno cruzado macOS→Windows — siguen fallando exactamente
+igual, confirmado comparando contra HEAD limpio antes de tocar nada).
+`ng build`: limpio (mismos warnings de presupuesto SCSS preexistentes).
+
+**Verificación en vivo, con limpieza posterior** (más allá de vitest —
+contra el esquema real ya migrado, no solo contra el razonamiento sobre el
+SQL): generación shadow `building` + fila de staging con 2 episodios reales
+(uno `covered_verified`, uno `missed_ready`, JSON tomado literalmente de
+las funciones puras) + evento legacy V2 real (`defensive_plan_broken`,
+`generation_id NULL`) para el mismo pull+jugador, todo insertado, verificado
+y borrado en la misma sesión. Confirmado: (a) el `UPSERT` idempotente pisa
+la fila en vez de duplicarla; (b) las views separan la fila legacy de la(s)
+canónica(s) sin sumar nunca sus contadores entre sí; (c) dos generaciones
+distintas del mismo episodio producen filas aisladas; (d) la DB rechaza de
+verdad `penalty_eligible=true` con `confidence='uncertain'`
+(`player_execution_events_check2`, constraint preexistente, no tocada).
+Cero filas quedaron en la base al terminar.
+
+**Desplegado**: `materialize-execution-ledger` (bundle 719 kB), smoke test
+401 sin JWT de officer.
+
+**Lo que queda exactamente para Paso C-1** (`DamageDescriptor` real, §2.4.1
+— siguiente pieza, bloqueante de cutover): hoy `canDefensiveCover()` sigue
+recibiendo un `DamageDescriptor` todo-`null` (ninguna fuente real de WCL lo
+rellena), así que la aplicabilidad degrada sistemáticamente a `unknown` en
+cuanto un defensivo tiene alguna restricción real (school/AoE/dodgeable/
+parryable/blockable/sourceAffectedBySpell). Falta: decidir qué pedir a WCL
+y dónde persistirlo (school del evento de daño, alcance AoE/single,
+direct/periodic, source actor, dodge/parry/block, compatibilidad de
+inmunidad — lista exacta en §2.4.1), implementar esa extracción, conectar
+`canDefensiveCover()` a datos reales, y solo entonces correr el informe de
+coverage `class×spec×role×boss` (§2.7) para confirmar que ninguna clase/spec
+del corpus real queda `uncertain` por una pieza conocida sin implementar.
+Nada de esto se ha empezado todavía — es la pieza siguiente, no un ajuste
+sobre lo de hoy.
+
+### 2026-09-04 (continuación) — Paso C-1: `DamageDescriptor` real, verificado empíricamente contra WCL
+
+Investigación empírica en vivo (OAuth client credentials, GraphQL directo
+contra `www.warcraftlogs.com/api/v2/client`, report real de la guild
+`7GbANtw1J2pjZzH9`, ~28500 eventos DamageTaken/DamageDone + 15037
+Debuffs(Enemies) + 2220 abilities de masterData, cruzados contra 300 filas
+reales ya clasificadas por `classify-defensives` v10) **antes** de escribir
+ningún contrato — nada de lo siguiente se asumió de documentación, todo se
+verificó contra payloads reales.
+
+**Hechos WCL confirmados (con evidencia, no memoria de la IA):**
+
+- **School**: `masterData.abilities[].type` (ya se pedía, sin interpretar)
+  es un bitmask de 7 bits — verificado contra 2220 abilities reales
+  (1=Physical 2=Holy 4=Fire 8=Nature 16=Frost 32=Shadow 64=Arcane; combos
+  reales confirmados: "Wake of Ashes"→6=Holy+Fire, "Eye Beam"/
+  "Metamorphosis"→124=Fire+Nature+Frost+Shadow+Arcane). **Cero ingesta
+  nueva** — el campo ya se pedía, solo faltaba decodificarlo.
+- **AoE/single, direct/periodic**: campos `isAoE`/`tick`, ya presentes en
+  cada evento crudo.
+- **Block**: campo `blocked` (numérico, inequívoco).
+- **hitType**: decodificado con certeza cruzando el `filterExpression` real
+  de WCL (`missType = "dodge"/"parry"/"miss"/"immune"`, vocabulario propio
+  del motor de queries de WCL, confirmado con introspección del argumento
+  `filterExpression` de `events()`) contra el `hitType` numérico de eventos
+  reales en 5 fights distintos del mismo report — **0=Miss 1=Hit 2=Crit
+  4=Block 7=Dodge 8=Parry 10=Immune**. Cualquier otro valor no visto se
+  deja sin interpretar.
+- **Método de entrega (melee/ranged/spell/environmental)**: **carencia
+  estructural real, no resuelta** — WCL no expone ningún campo (ni en
+  `events` ni en `Casts`) que distinga ranged/spell/environmental; el único
+  hecho demostrable es `abilityGameID===1`, sentinel reservado de WCL para
+  "Melee" (autoataque básico, verificado). Cuantificado contra las 300
+  filas reales: 251 (86%) no restringen esta dimensión (`deliveryScopes`
+  incluye `'all'`), 20 no listan tags de este grupo, y **21 filas (~7%)**
+  sí restringen a un subconjunto real (ej. `[melee,direct]`) — esas 21 se
+  quedan `unknown` en este grupo salvo que el hit sea el sentinel Melee.
+- **sourceAffectedBySpell** (Fiery Brand-style): `Debuffs(hostilityType:
+  Enemies)` da eventos reales `applydebuff`/`removedebuff` sobre el boss —
+  reconstruido con el mismo patrón de intervalos que `defensiveStatusAt`.
+  Volumen real ~15000 eventos/6min (comparable a DamageTaken) — fetch
+  condicional, decidido por el caller según si el kit efectivo del jugador
+  tiene algún candidato con `requiresSourceAffectedBySpell=true` (18/300
+  filas reales lo exigen).
+
+**Decisiones del usuario tras revisar el hallazgo inicial** (2026-09-04):
+
+1. Dodge y Parry **nunca se fusionan** — dimensiones independientes. Antes
+   de dejarlas en `unknown` por imposibilidad de mapping, se probó
+   empíricamente si WCL exponía el vocabulario textual `missType` — **sí lo
+   expone** (confirmado con `filterExpression`), así que ambas quedaron
+   **resueltas con evidencia real**, no en `unknown` permanente.
+2. Cache cross-pull de facts por ability: **sí**, justificado (dodge/parry/
+   block son propiedades estáticas de la ability; block solo aparece en
+   ~0.4% de los hits reales, un solo pull rara vez lo demuestra). Tabla
+   `ability_combat_table_facts`, versionada por `ability_game_id +
+   game_build`, contadores aditivos + provenance (primer/último pull y
+   boss), nunca tres booleanos eternos. Solo alimenta `DamageDescriptor` —
+   `canDefensiveCover()` sigue siendo la única puerta de applicability.
+3. `deliveryScopes` **no** se trata como un array plano con OR global —
+   son tres dimensiones ortogonales (target scope: aoe/single_target ·
+   delivery method: melee/ranged/spell/environmental · timing: direct/
+   periodic), OR dentro del grupo, **AND entre grupos presentes**.
+4. `school` **nunca se reduce a un solo valor** — `schools: WowSchool[]` +
+   `schoolMask` crudo. Trichotomía yes/no/unknown por solape (total/cero/
+   parcial) contra lo que cubre el defensivo — un hit híbrido
+   Physical+Shadow contra un AMS (solo magia) degrada a `unknown`, no se
+   inventa cuál school "gana".
+5. `sourceAffectedBySpell` con fetch lazy/condicional (ver arriba).
+
+**Contrato final** (`defensive-applicability.ts`, reescrito):
+`DamageDescriptor { schools: WowSchool[] | null; schoolMask: number | null;
+deliveryScopes: string[] | null; dodgeable/parryable/blockable: boolean |
+null; sourceAffectedBySpell: boolean | null; rawHitType: number | null }`.
+`canDefensiveCover()` reescrito con la trichotomía de schools y el
+matching agrupado de deliveryScopes descritos arriba — **conectado
+directamente**, no se crea un evaluator paralelo.
+
+**Módulos nuevos** (`_shared/`, puros, sin Deno/Supabase):
+`damage-descriptor-wcl.ts` (`decodeSchoolMask`, `describeHitType`/
+`WCL_HIT_TYPE_MEANING`, `tallyAbilityCombatTableObservations`/
+`mergeAbilityCombatTableObservations`/`combatTableVerdictFor`,
+`deliveryTagsForHit`, `buildDebuffIntervals`/`isSourceAffectedBySpellAt`
+— nunca devuelve `false`, solo `true`/`null`, `buildDamageDescriptor`);
+`ability-combat-table-cache.ts` (forma de fila + `mergeObservationIntoCacheRow`,
+puramente aditivo).
+
+**Migración** (`20260904130000_ability_combat_table_facts.sql`): tabla
+`ability_combat_table_facts` (PK `ability_game_id + game_build`,
+contadores `dodge_count`/`parry_count`/`block_count`, provenance
+`first/last_observed_at/pull_id/boss_id`), RLS officers-only, aplicada y
+verificada en Supabase real.
+
+**Tests**: 67 nuevos (`damage-descriptor-wcl.spec.ts` 26,
+`ability-combat-table-cache.spec.ts` 8, `defensive-applicability.spec.ts`
+reescrito 11→22 con la nueva trichotomía/agrupación) — todos con valores de
+referencia reales verificados (school combos, hitType), no inventados.
+`vitest run`: 321 tests pasan (15 ficheros fallan por infraestructura
+Angular preexistente/no relacionada, mismos exactos que en HEAD antes de
+esta sesión — confirmado por comparación). `ng build`: limpio.
+
+**Informe de cobertura empírico** (300 defensivos reales × 399 "shapes" de
+daño únicos reales del report, 119700 combinaciones — sin
+`sourceAffectedBySpell` en este pase para aislar el resto de dimensiones):
+
+| | % |
+|---|---:|
+| `yes` | 79.0% |
+| `no` | 12.1% |
+| `unknown` | 8.9% |
+
+Desglose del 8.9% `unknown` — **ninguno es "funcionalidad pendiente
+disfrazada de incertidumbre"**, los tres motivos son incertidumbre real:
+
+1. **~55% de los unknown**: grupo "método de entrega" no demostrable (la
+   carencia estructural ya documentada arriba — 21/300 defensivos reales
+   afectados, cero relación con clase/spec, es un límite de datos de WCL).
+2. **~7% de los unknown**: schools combinadas con solape parcial (ej. un
+   hit "Chaos"-like de 5-7 schools a la vez contra un defensivo de school
+   específica) — ambigüedad real, exactamente el caso que la trichotomía
+   está diseñada para no fingir resuelto.
+3. Resto: `requiresDodgeable`/`requiresParryable` sin evidencia todavía en
+   este fight concreto (el propio fight 34 tuvo 0 dodges reales — sí los
+   tuvo el fight 39 del mismo report, ver validación cruzada abajo).
+
+**Validación cruzada de los 3 fixtures de interacción + Fiery-Brand-style,
+con datos 100% reales:**
+
+- AMS vs hit físico real → `no` (school mismatch, correcto).
+- Feint vs hit AoE real → `yes`; Feint vs hit single-target real → `no`.
+- Evasion vs un hit real sin evidencia de dodge en su fight → `unknown`
+  (fail-closed correcto). Fusionando evidencia de OTRO fight del mismo
+  report (fight 39, que sí tuvo dodges reales) — **exactamente el
+  escenario que justifica el cache cross-pull** — `dodgeable` pasa a
+  `true` con evidencia real; el veredicto final da `no` por una dimensión
+  distinta (el hit es `periodic`, Evasion solo cubre `direct`) — la
+  demostración de que el matching agrupado AND-entre-grupos funciona de
+  extremo a extremo con datos reales, no solo en el test unitario.
+- `sourceAffectedBySpell` con intervalos reales de `Debuffs(Enemies)`:
+  dentro de un intervalo real observado → `yes`; en un instante
+  genuinamente anterior a cualquier aplicación del debuff (1h antes del
+  fight) → `unknown` (nunca `false` fabricado). Primer intento de este
+  check tenía un bug real (probar "+60s tras el remove" caía dentro de
+  OTRA reaplicación posterior del mismo debuff en el mismo fight,
+  produciendo un falso `yes`) — corregido antes de reportarlo.
+
+**Cambios de ingesta/reanálisis**: **ninguno todavía**, deliberado — mismo
+patrón que el resto de Paso C (funciones puras sin consumer). El hecho
+clave de la investigación de ingesta: ni `analyze-report` ni ningún otro
+consumer persiste eventos WCL crudos hoy; el patrón ya establecido
+(`reanalyze-defensive-pressure`) es volver a pedirlos a WCL en cada
+reanálisis — el futuro evaluator de episodios (Paso D) debe seguir ese
+mismo patrón, no crear una tabla de eventos crudos nueva. `masterData.abilities`
+(con `type`) ya se pide hoy sin cambios; `Debuffs(Enemies)` sería la única
+llamada genuinamente nueva, y solo condicional.
+
+**Carencia estructural que queda documentada, no oculta**: método de
+entrega (melee/ranged/spell/environmental) más allá del sentinel Melee.
+Afecta a ~7% de los defensivos reales ya clasificados. No es un `uncertain`
+que sustituya trabajo pendiente — es un límite real de qué expone la API
+de WCL hoy; si en el futuro aparece una fuente (ej. cruce con SimC/talent
+data, o un campo nuevo de WCL), este es el punto exacto a revisar.
+
+**Pendiente de decisión del usuario**: con esta distribución real
+(79/12/9, causas ya desglosadas), decidir si `applicability` tiene
+cobertura suficiente para seguir con disponibilidad causal/charges y
+generar la primera generación shadow completa, o si conviene cerrar antes
+la carencia de método de entrega.

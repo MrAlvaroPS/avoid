@@ -8,10 +8,22 @@ import type {
   ExecutionVerdict,
   ExecutionReasonCode,
 } from '../_shared/combat-evaluation-contract.ts';
+import { buildDefensiveEpisodeLedgerEvents } from '../_shared/defensive-episode-ledger-events.ts';
+import { dbRecordToEpisodeEvaluationRow, type DefensiveEpisodeEvaluationDbRecord } from '../_shared/defensive-episode-staging.ts';
 
 interface Body {
   pullId?: unknown;
   ledgerEvaluatorVersion?: unknown;
+  /**
+   * §Paso C (iris-defensive-canonicalization-v1-plan.md §2.6) — opcional.
+   * Cuando se pasa, ADEMÁS de lo que este endpoint ya hacía (sin cambiar
+   * nada de eso), lee player_pull_defensive_episode_evaluations para
+   * (pullId, defensiveGenerationId) y materializa los eventos canónicos
+   * defensive_episode_… / defensive_plan_…, namespaced y generation-aware
+   * (nunca se suman a defensive_${state} V2 — ver corrección #3 de §2.6).
+   * Omitido: comportamiento IDÉNTICO al de antes de esta pieza.
+   */
+  defensiveGenerationId?: unknown;
 }
 
 const LEDGER_EVALUATOR_VERSION = 'execution-ledger@1.0.0';
@@ -39,6 +51,8 @@ interface GeneratedEvent {
   occurrenceResolverVersion: string | null;
   policyVersion: number | null;
   deduplicationKey: string;
+  /** §2.6: null en todo evento legacy generado por las funciones de este fichero; poblado solo por los eventos canónicos defensive_episode_…/defensive_plan_…. */
+  defensiveGenerationId?: string | null;
 }
 
 interface DefensiveEvaluationRow {
@@ -660,6 +674,8 @@ Deno.serve(async (req: Request) => {
   if (typeof body.pullId !== 'string' || !body.pullId) {
     return jsonResponse({ ok: false, error: 'pullId es obligatorio.' }, 400);
   }
+  const defensiveGenerationId =
+    typeof body.defensiveGenerationId === 'string' && body.defensiveGenerationId ? body.defensiveGenerationId : null;
 
   try {
     const client = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
@@ -833,6 +849,33 @@ Deno.serve(async (req: Request) => {
       (dispelData ?? []) as DispelRecordRow[],
     );
 
+    // §Paso C (iris-defensive-canonicalization-v1-plan.md §2.6) — ADITIVO,
+    // shadow puro: solo se ejecuta cuando el caller pasa defensiveGenerationId
+    // explícitamente. Todo lo de arriba (legacy V2 + mechanic + death + …)
+    // sigue corriendo exactamente igual, con o sin este parámetro — omitirlo
+    // reproduce el comportamiento previo byte a byte.
+    let episodeLedgerEvents: GeneratedEvent[] = [];
+    if (defensiveGenerationId) {
+      const { data: episodeStagingData, error: episodeStagingErr } = await client
+        .from('player_pull_defensive_episode_evaluations')
+        .select(
+          'defensive_generation_id, pull_id, player_name, episode_evaluator_version, semantic_version, semantic_resolver_version, resolver_version, build_fingerprint, data_confidence, episodes, evaluated_at',
+        )
+        .eq('pull_id', body.pullId)
+        .eq('defensive_generation_id', defensiveGenerationId);
+      if (episodeStagingErr) throw episodeStagingErr;
+      const episodeRows = ((episodeStagingData ?? []) as DefensiveEpisodeEvaluationDbRecord[]).map((record) =>
+        dbRecordToEpisodeEvaluationRow(record),
+      );
+      episodeLedgerEvents = episodeRows.flatMap((row) =>
+        buildDefensiveEpisodeLedgerEvents({
+          pull: { id: pull.id, bossId: pull.boss_id, difficulty: pull.difficulty },
+          row,
+          contextResolverVersion: pullContext.resolver_version,
+        }),
+      );
+    }
+
     // Generar eventos
     const mechanicEvents = await generateMechanicEvents(pull, occurrences, edges);
     const generatedEvents = [
@@ -843,6 +886,7 @@ Deno.serve(async (req: Request) => {
       ...interruptEvents,
       ...externalEvents,
       ...dispelEvents,
+      ...episodeLedgerEvents,
     ];
 
     // Construir rows para UPSERT
@@ -870,6 +914,7 @@ Deno.serve(async (req: Request) => {
       context_resolver_version: event.contextResolverVersion,
       occurrence_resolver_version: event.occurrenceResolverVersion,
       ledger_evaluator_version: LEDGER_EVALUATOR_VERSION,
+      defensive_generation_id: event.defensiveGenerationId ?? null,
       deduplication_key: event.deduplicationKey,
       created_at: now,
       evaluated_at: now,
@@ -906,6 +951,8 @@ Deno.serve(async (req: Request) => {
       interruptEventsProcessed: interruptEvents.length,
       externalEventsProcessed: externalEvents.length,
       dispelEventsProcessed: dispelEvents.length,
+      defensiveGenerationId,
+      episodeEventsProcessed: episodeLedgerEvents.length,
       eventsCreated: result.length,
       ledgerEvaluatorVersion: LEDGER_EVALUATOR_VERSION,
       events: result,

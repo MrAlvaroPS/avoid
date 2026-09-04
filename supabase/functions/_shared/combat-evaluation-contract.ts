@@ -88,6 +88,19 @@ export const EXECUTION_REASON_CODES = [
   'HEALTHSTONE_VIABLE_NOT_USED',
   'HEALTH_POTION_REACTIVE',
   'AVAILABILITY_UNKNOWN',
+  // §Paso C — iris-defensive-canonicalization-v1-plan.md §2.6: reason codes
+  // del episodio defensivo canónico (Respuesta). Aditivos, uno por
+  // responseVerdict — nunca se reutilizan PLAN_COVERED/REMINDER_MISSED/
+  // SAFE_EXTRA_USE (son del evaluator de Gestión/Plan legacy) para
+  // Respuesta: mezclarían otra vez dos conceptos distintos bajo el mismo
+  // código, exactamente el problema que abrió ese documento.
+  'DEFENSIVE_EPISODE_COVERED',
+  'DEFENSIVE_READY_NOT_USED',
+  'DEFENSIVE_MISTIMED',
+  'DEFENSIVE_UNAVAILABLE_LEGITIMATE',
+  'DEFENSIVE_NO_APPLICABLE_RESOURCE',
+  'DEFENSIVE_EPISODE_UNCERTAIN',
+  'DEFENSIVE_EPISODE_EXCLUDED',
 ] as const;
 export type ExecutionReasonCode = (typeof EXECUTION_REASON_CODES)[number];
 
@@ -192,6 +205,8 @@ export interface PlayerExecutionEventContract {
   contextResolverVersion: string;
   occurrenceResolverVersion: string | null;
   ledgerEvaluatorVersion: string;
+  /** §2.6: null en todo evento legacy; poblado únicamente en defensive_episode_… / defensive_plan_… canónicos. */
+  defensiveGenerationId: string | null;
 }
 
 export interface MechanicResponsibilityEdgeContract {
@@ -251,6 +266,8 @@ export interface PlayerExecutionEventRow {
   contextResolverVersion: string;
   occurrenceResolverVersion: string | null;
   ledgerEvaluatorVersion: string;
+  /** §2.6: null en todo evento legacy; poblado únicamente en defensive_episode_… / defensive_plan_… canónicos. */
+  defensiveGenerationId: string | null;
   deduplicationKey: string;
   createdAt: string;
   evaluatedAt: string;
