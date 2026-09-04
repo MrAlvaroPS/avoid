@@ -397,6 +397,15 @@ export class NightPlayerDossierComponent {
       let done = 0;
       this.recalculateProgress.set({ done, total: pullIds.length });
       for (const pullId of pullIds) {
+        // pull_mechanic_events es fuente directa del dosier. Si esta parte
+        // falla NO seguimos fingiendo un recálculo correcto leyendo las filas
+        // antiguas: el error queda visible al usuario y el reemplazo atómico
+        // garantiza que el pull conserva su materializado anterior.
+        try {
+          await this.edgeFunctions.reanalyzeMechanicEvents(pullId);
+        } catch (err) {
+          throw new Error(`No se pudieron reconstruir las mecánicas del pull ${pullId}: ${errorMessage(err)}`);
+        }
         try {
           await this.edgeFunctions.reanalyzeDefensivePressure(pullId);
         } catch (err) {

@@ -641,6 +641,22 @@ export class EdgeFunctionsService {
     return this.invoke('reanalyze-defensive-pressure', { pullId, ...(jobId ? { jobId } : {}) });
   }
 
+  /**
+   * Reconstruye pull_mechanic_events de UN pull histórico volviendo a WCL.
+   * DELETE+INSERT es atómico en PostgreSQL y usa el mismo materializador que
+   * analyze-report; si falla, las filas antiguas permanecen intactas.
+   */
+  async reanalyzeMechanicEvents(pullId: string): Promise<{
+    ok: true;
+    pullId: string;
+    reportCode: string;
+    fightId: number;
+    before: number;
+    after: number;
+  }> {
+    return this.invoke('reanalyze-mechanic-events', { pullId });
+  }
+
   async pendingDefensiveReanalysisJobs(
     batchId?: string,
     limit = 100,
