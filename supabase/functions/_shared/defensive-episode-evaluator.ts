@@ -141,15 +141,23 @@ const PERSONAL_SURVIVAL_USAGE_ROLES = new Set(['personal_survival', 'survival_st
  * en `PERSONAL_SURVIVAL_USAGE_ROLES` y por tanto NUNCA bloqueaba
  * `no_applicable_resource` — exactamente el caso que este predicado existe
  * para bloquear (podría resultar ser personal_survival tras clasificarse).
+ *
+ * §Pre-E6 runtime-materiality closure: una regla runtime diferida cuyo
+ * payload VERIFICADO podría cambiar el usageRole efectivo a uno de los
+ * roles de supervivencia personal también bloquea una conclusión negativa
+ * definitiva, AUNQUE el role base de la habilidad sea utility. El resolver
+ * calcula esa propiedad desde el payload ya validado y la conserva en
+ * `UnresolvedRuntimeRule.couldAffectPersonalMembership`; este evaluator no
+ * reinterpreta reglas ni nombres de hechizo. Reglas runtime no materiales
+ * de utility/healer_throughput/external siguen sin contaminar episodios.
+ *
  * El resto de motivos (buildPresence unknown/resolutionStatus conflict o
- * unresolved/unresolvedRuntimeRules) siguen exigiendo el gate de usageRole
- * — no hay razón para que un unresolvedRuntimeRule de una utility/
- * healer_throughput/external etc. genere incertidumbre en un episodio que
- * no tiene nada que ver con ella.
+ * unresolved/unresolvedRuntimeRules) siguen exigiendo el gate de usageRole.
  */
 function isMateriallyUnresolved(r: ResolvedDefensive): boolean {
   if (r.isDefensiveKitMember) return false;
   if (r.semanticStatus === 'pending') return true;
+  if (r.unresolvedRuntimeRules.some((rule) => rule.couldAffectPersonalMembership)) return true;
   if (!PERSONAL_SURVIVAL_USAGE_ROLES.has(r.usageRole)) return false;
   return (
     r.buildPresence === 'unknown' ||
