@@ -4,16 +4,21 @@ import {
   deriveUsageEvaluable,
 } from '../../../supabase/functions/_shared/defensive-episode-persistence';
 import { deriveEpisodeCausalGroupId, resolveDefensiveEpisodeId } from '../../../supabase/functions/_shared/defensive-episode-identity';
-import type { EpisodeVerdictCandidate, EpisodeVerdictResult } from '../../../supabase/functions/_shared/defensive-episode-verdict';
+import type { EpisodeVerdictCandidate, EpisodeVerdictResult, ResponseVerdict } from '../../../supabase/functions/_shared/defensive-episode-verdict';
 
 function candidate(overrides: Partial<EpisodeVerdictCandidate> = {}): EpisodeVerdictCandidate {
   return {
     spellId: 22812,
     isDefensiveKitMember: true,
     createsMissableOpportunity: true,
-    applicability: 'yes',
-    usedDuringEpisode: false,
+    materiallyUnresolved: false,
+    damageApplicability: 'yes',
+    temporalOpportunity: 'yes',
+    temporalCastCoverage: 'yes',
+    engagement: false,
     statusAtPeak: 'available_unused',
+    confidence: 'verified',
+    evidence: {},
     ...overrides,
   };
 }
@@ -22,24 +27,29 @@ const missedReadyVerdict: EpisodeVerdictResult = {
   usageEngaged: false,
   usedSpellIds: [],
   responseVerdict: 'missed_ready',
-  reason: 'spellId 22812 estaba disponible y su aplicabilidad está demostrada; no se usó.',
+  reason: 'spellId 22812 estaba disponible y su aplicabilidad de daño y su oportunidad temporal están demostradas; no se usó.',
   coveredBySpellId: null,
+  confidence: 'verified',
+  decisiveSpellIds: [22812],
+  uncertaintyBlockers: [],
 };
 
-describe('deriveUsageEvaluable', () => {
-  it('true cuando hay al menos un miembro del kit, sin importar el responseVerdict', () => {
-    expect(deriveUsageEvaluable('uncertain', [{ isDefensiveKitMember: true }])).toBe(true);
-    expect(deriveUsageEvaluable('no_applicable_resource', [{ isDefensiveKitMember: true }])).toBe(true);
-  });
+describe('deriveUsageEvaluable — canonical truth table (§E5/§13.1, test 35)', () => {
+  const table: Array<[ResponseVerdict, boolean]> = [
+    ['covered_verified', true],
+    ['missed_ready', true],
+    ['missed_due_to_mistime', true],
+    ['unavailable_legitimate', false],
+    ['no_applicable_resource', false],
+    ['uncertain', false],
+    ['excluded', false],
+  ];
 
-  it('false cuando ningún candidato es miembro del kit (nada con lo que actuar)', () => {
-    expect(deriveUsageEvaluable('no_applicable_resource', [{ isDefensiveKitMember: false }])).toBe(false);
-    expect(deriveUsageEvaluable('missed_ready', [])).toBe(false);
-  });
-
-  it('false cuando el episodio está excluded, incluso si el kit tenía miembros (nunca cuenta para ningún KPI)', () => {
-    expect(deriveUsageEvaluable('excluded', [{ isDefensiveKitMember: true }])).toBe(false);
-  });
+  for (const [verdict, expected] of table) {
+    it(`${verdict} → usageEvaluable=${expected}`, () => {
+      expect(deriveUsageEvaluable(verdict)).toBe(expected);
+    });
+  }
 });
 
 describe('buildPersistedDefensiveEpisode', () => {
@@ -82,7 +92,7 @@ describe('buildPersistedDefensiveEpisode', () => {
     expect(result.coveredBySpellId).toBeNull();
   });
 
-  it('usageEvaluable se deriva del mismo predicado que deriveUsageEvaluable (no una copia divergente)', () => {
+  it('usageEvaluable se deriva del mismo predicado canónico que defensive-episode-kpis (no una copia divergente)', () => {
     const result = buildPersistedDefensiveEpisode({
       pullId: 'pull-1',
       playerName: 'Gusmï',
@@ -92,6 +102,7 @@ describe('buildPersistedDefensiveEpisode', () => {
       confidence: 'verified',
     });
     expect(result.usageEvaluable).toBe(true);
+    expect(result.usageEvaluable).toBe(deriveUsageEvaluable(missedReadyVerdict.responseVerdict));
   });
 
   it('planAssignmentId/planVerdict quedan null cuando no se pasan (Gestión todavía no tiene evaluator real)', () => {
@@ -122,7 +133,7 @@ describe('buildPersistedDefensiveEpisode', () => {
     expect(result.planVerdict).toBe('missed');
   });
 
-  it('la evidencia fusiona el contexto de ventana (occurrenceId/dominantAbility/memberIndexes) con evidencia extra del caller', () => {
+  it('la evidencia fusiona el contexto de ventana (occurrenceId/dominantAbility/memberIndexes) + provenance de decisión con evidencia extra del caller', () => {
     const result = buildPersistedDefensiveEpisode({
       pullId: 'pull-1',
       playerName: 'Gusmï',
@@ -134,6 +145,8 @@ describe('buildPersistedDefensiveEpisode', () => {
     });
     expect(result.evidence['dominantAbilityGameId']).toBe(22812);
     expect(result.evidence['groupingBasis']).toBe('heuristic');
+    expect(result.evidence['decisiveSpellIds']).toEqual([22812]);
+    expect(result.evidence['uncertaintyBlockers']).toEqual([]);
   });
 
   it('conserva la ventana temporal completa (start/peak/end) sin alterarla', () => {

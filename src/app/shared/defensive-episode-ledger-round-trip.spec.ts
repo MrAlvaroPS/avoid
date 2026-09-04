@@ -1,9 +1,10 @@
-// Test de circuito completo §2.6: evaluate (resolveEpisodeVerdict, ya
+// Test de circuito completo §2.6/§16: evaluate (resolveEpisodeVerdict, ya
 // testeado en defensive-episode-verdict.spec.ts) → persist (staging row) →
 // materialize (ledger events), y la reconstrucción inversa
-// staging→ledger que pide la tarea — "demostrar que podemos coger
-// cualquier DefensiveEpisode, persistir exactamente su verdad/evidencia y
-// materializarla de forma reproducible e independiente de legacy".
+// staging→ledger→KPI que pide la tarea E4/E5 — "demostrar que podemos coger
+// cualquier DefensiveEpisode, persistir exactamente su verdad/evidencia,
+// materializarla, y reconstruir el agregado de KPI desde el evento del
+// ledger sin volver a leer staging ni raw WCL".
 //
 // También cubre, a nivel de identidad (sin necesitar Postgres), la
 // coexistencia V2/canonical: la forma de deduplication_key de los eventos
@@ -21,6 +22,7 @@ import {
   episodeEvaluationRowToDbRecord,
 } from '../../../supabase/functions/_shared/defensive-episode-staging';
 import { buildDefensiveEpisodeLedgerEvents, DEFENSIVE_EPISODE_EVALUATOR_VERSION } from '../../../supabase/functions/_shared/defensive-episode-ledger-events';
+import { aggregateDefensiveEpisodeKpis } from '../../../supabase/functions/_shared/defensive-episode-kpis';
 
 const PULL = { id: 'pull-1', bossId: 'boss-1', difficulty: 'mythic' };
 
@@ -29,9 +31,14 @@ function candidate(overrides: Partial<EpisodeVerdictCandidate> = {}): EpisodeVer
     spellId: 22812,
     isDefensiveKitMember: true,
     createsMissableOpportunity: true,
-    applicability: 'yes',
-    usedDuringEpisode: false,
+    materiallyUnresolved: false,
+    damageApplicability: 'yes',
+    temporalOpportunity: 'yes',
+    temporalCastCoverage: 'yes',
+    engagement: false,
     statusAtPeak: 'available_unused',
+    confidence: 'verified',
+    evidence: {},
     ...overrides,
   };
 }
@@ -51,7 +58,7 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
       window,
       candidates,
       verdict,
-      confidence: 'verified',
+      confidence: verdict.confidence,
       evidence: { groupingBasis: 'heuristic' },
     });
 
@@ -61,7 +68,7 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
       playerName: 'Gusmï',
       episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION,
       semanticVersion: 'defensive-semantics@10',
-      semanticResolverVersion: 'effective-defensive-semantics@1.0.0',
+      semanticResolverVersion: 'effective-defensive-semantics@1.3.1',
       resolverVersion: 'effective-defensives@2.1.0',
       buildFingerprint: 'fp-gusmi',
       episodes: [persisted],
@@ -93,6 +100,29 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
     // Evidencia de grouping también sobrevive el round-trip completo.
     expect(event.evidence['groupingBasis']).toBe('heuristic');
     expect(event.defensiveGenerationId).toBe('gen-shadow-1');
+
+    // 4) KPI (§16, test 40) — el agregado reconstruido desde los episodios
+    // persistidos originales y desde la evidencia del evento del ledger
+    // deben coincidir EXACTAMENTE.
+    const aggregateFromPersisted = aggregateDefensiveEpisodeKpis(reloadedRow.episodes);
+    // Reconstruido SOLO desde lo que el evento del ledger expone — eventType
+    // (namespace `defensive_episode_${responseVerdict}`, nunca se parsea
+    // responseReason) + evidence.usage_engaged/episode_id.
+    const reconstructedResponseVerdict = event.eventType.replace(
+      'defensive_episode_',
+      '',
+    ) as typeof persisted.responseVerdict;
+    const aggregateFromLedgerEvidence = aggregateDefensiveEpisodeKpis([
+      {
+        episodeId: event.evidence['episode_id'] as string,
+        usageEngaged: event.evidence['usage_engaged'] as boolean,
+        responseVerdict: reconstructedResponseVerdict,
+      },
+    ]);
+    expect(aggregateFromLedgerEvidence).toEqual(aggregateFromPersisted);
+    expect(aggregateFromPersisted.response.missedReady).toBe(1);
+    expect(aggregateFromPersisted.usage.evaluable).toBe(1);
+    expect(aggregateFromPersisted.usage.engaged).toBe(0);
   });
 
   it('reevaluar el MISMO episodio (misma generación) con un veredicto distinto produce la MISMA deduplicationKey — upsert idempotente de extremo a extremo', () => {
@@ -106,7 +136,7 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
         window,
         candidates,
         verdict,
-        confidence: 'verified',
+        confidence: verdict.confidence,
       });
       const row = buildDefensiveEpisodeEvaluationRow({
         defensiveGenerationId: 'gen-shadow-1',
@@ -114,7 +144,7 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
         playerName: 'Gusmï',
         episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION,
         semanticVersion: 'defensive-semantics@10',
-        semanticResolverVersion: 'effective-defensive-semantics@1.0.0',
+        semanticResolverVersion: 'effective-defensive-semantics@1.3.1',
         resolverVersion: 'effective-defensives@2.1.0',
         episodes: [persisted],
       });
@@ -122,9 +152,9 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
     }
 
     // Primera pasada: no usado, listo → missed_ready.
-    const first = materializeOnce([candidate({ statusAtPeak: 'available_unused', usedDuringEpisode: false })]);
+    const first = materializeOnce([candidate({ statusAtPeak: 'available_unused', engagement: false })]);
     // Segunda pasada (reevaluación, p. ej. tras corregir un dato upstream): SÍ usado y aplicable → covered_verified.
-    const second = materializeOnce([candidate({ statusAtPeak: 'active', usedDuringEpisode: true, applicability: 'yes' })]);
+    const second = materializeOnce([candidate({ statusAtPeak: 'active', engagement: true, damageApplicability: 'yes', temporalCastCoverage: 'yes' })]);
 
     expect(first.verdict).not.toBe(second.verdict); // veredictos genuinamente distintos (missed vs success)...
     expect(first.eventType).not.toBe(second.eventType);
@@ -141,7 +171,7 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
       window,
       candidates,
       verdict,
-      confidence: 'verified',
+      confidence: verdict.confidence,
     });
     const row = buildDefensiveEpisodeEvaluationRow({
       defensiveGenerationId: 'gen-shadow-1',
@@ -149,7 +179,7 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
       playerName: 'Gusmï',
       episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION,
       semanticVersion: 'defensive-semantics@10',
-      semanticResolverVersion: 'effective-defensive-semantics@1.0.0',
+      semanticResolverVersion: 'effective-defensive-semantics@1.3.1',
       resolverVersion: 'effective-defensives@2.1.0',
       episodes: [persisted],
     });
@@ -170,5 +200,36 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
     // `defensive_${state}` legacy (p. ej. defensive_plan_broken, defensive_correct_hold).
     expect(canonicalEvent.eventType.startsWith('defensive_episode_')).toBe(true);
     expect(canonicalEvent.eventType).not.toMatch(/^defensive_(plan_broken|reminder_missed|correct_hold|safe_extra_use)$/);
+  });
+
+  it('§42 — el dedupe canónico se mantiene estable aunque cambien verdict/evidence entre reevaluaciones distintas de generación aislada', () => {
+    const window = { occurrenceId: null, dominantAbilityGameId: 22812, memberIndexes: [0], startMs: 10_000, peakMs: 11_000, endMs: 12_000 };
+    function buildEvent(responseCandidates: EpisodeVerdictCandidate[], generationId: string) {
+      const verdict = resolveEpisodeVerdict(responseCandidates);
+      const persisted = buildPersistedDefensiveEpisode({
+        pullId: PULL.id,
+        playerName: 'Gusmï',
+        window,
+        candidates: responseCandidates,
+        verdict,
+        confidence: verdict.confidence,
+      });
+      const row = buildDefensiveEpisodeEvaluationRow({
+        defensiveGenerationId: generationId,
+        pullId: PULL.id,
+        playerName: 'Gusmï',
+        episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION,
+        semanticVersion: 'defensive-semantics@10',
+        semanticResolverVersion: 'effective-defensive-semantics@1.3.1',
+        resolverVersion: 'effective-defensives@2.1.0',
+        episodes: [persisted],
+      });
+      return buildDefensiveEpisodeLedgerEvents({ pull: PULL, row, contextResolverVersion: 'ctx@1' })[0];
+    }
+    const a = buildEvent([candidate({ statusAtPeak: 'available_unused' })], 'gen-1');
+    const b = buildEvent([candidate({ statusAtPeak: 'on_cooldown' })], 'gen-1');
+    expect(a.deduplicationKey).toBe(b.deduplicationKey);
+    const c = buildEvent([candidate({ statusAtPeak: 'available_unused' })], 'gen-2');
+    expect(a.deduplicationKey).not.toBe(c.deduplicationKey);
   });
 });

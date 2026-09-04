@@ -69,7 +69,21 @@ export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0'
 // activa demonstratedPersistentCastSpellIds como prueba positiva de
 // presencia. Cambio de comportamiento observable real en buildPresence/
 // membership para cualquier caller que ya pasara allTalentSpellIds.
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.3.0';
+// §E2.6 "Acquisition Safety Closure — false-negative eligible-restoration"
+// (2026-09-04): bump 1.3.0→1.3.1. Corrige el bug real encontrado en el
+// cierre de E2.5: un cast validado (§E2.5, demonstratedPersistentCastSpellIds)
+// que sube buildPresence de 'unknown'/'absent' a 'present' NO restauraba
+// `eligible` — isDefensiveKitMember/createsMissableOpportunity exigen
+// `eligible && buildPresence==='present'`, así que el defensivo seguía
+// desaparecido del kit real pese a la prueba positiva de presencia
+// (fixture real: Wargreymon / Anti-Magic Shell, spellId 48707). Ahora
+// `eligible` se restaura al valor que tenía justo antes de la puerta legacy
+// de adquisición directa no probada — nunca se fuerza a true a ciegas (ver
+// `eligibleBeforeUnprovenDirectAcquisitionGate` más abajo). Cambio de
+// comportamiento observable real en isDefensiveKitMember/
+// createsMissableOpportunity para cualquier caller que ya pasara
+// demonstratedPersistentCastSpellIds junto con allTalentSpellIds.
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.3.1';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 // §E1 — presencia real en ESTE build, independiente de "elegible ahora mismo"

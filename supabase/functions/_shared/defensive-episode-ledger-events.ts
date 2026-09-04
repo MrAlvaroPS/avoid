@@ -18,8 +18,19 @@ import type { PersistedDefensiveEpisode } from './defensive-episode-persistence.
 import type { ResponseVerdict } from './defensive-episode-verdict.ts';
 import type { DefensiveEpisodeEvaluationRow } from './defensive-episode-staging.ts';
 
-/** episode-evaluator@1 — asignado aquí per §8 del plan ("pendiente de asignar cuando se construya el materializer"). */
-export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@1';
+// episode-evaluator@1 — asignado en §8 del plan original ("pendiente de
+// asignar cuando se construya el materializer"). §E4 (continuación del plan,
+// 2026-09-04) cambia MATERIALMENTE el comportamiento del Episode Evaluator:
+// el candidato deja de tener un `applicability` ambiguo y pasa a distinguir
+// damageApplicability/temporalOpportunity/temporalCastCoverage/engagement
+// explícitos (§6), la disponibilidad ya no depende de un heurístico de
+// mechanisms (§5, ventana reactiva ahora es política explícita
+// afterDamageResponseWindowMs), un episodio de presión ya no desaparece
+// cuando el kit conocido está vacío (§2), y la confidence del veredicto es
+// decision-scoped en vez de la más débil de todo el kit (§11) — bump
+// episode-evaluator@1 → episode-evaluator@2. Único constante autoritativa;
+// no se introduce una segunda versión duplicada en ningún otro fichero.
+export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@2';
 
 /** Mapeo §2.6 — tabla "Mapeo a ExecutionVerdict", literal. */
 export const RESPONSE_VERDICT_TO_EXECUTION_VERDICT: Record<ResponseVerdict, ExecutionVerdict> = {

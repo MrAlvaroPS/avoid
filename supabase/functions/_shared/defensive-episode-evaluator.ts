@@ -7,49 +7,57 @@
 // construido y testeado en los módulos que importa; solo los conecta en el
 // orden correcto: RAW WCL FACTS → CANDIDATOS → EPISODIOS → APPLICABILITY →
 // DISPONIBILIDAD CAUSAL/CARGAS → PersistedDefensiveEpisode[].
+//
+// §E4 (continuación del plan, 2026-09-04) REESCRIBE este orquestador:
+//
+// 1) Input único canónico: `ResolvedDefensive[]` (de
+//    resolveEffectiveDefensiveKit()) en vez del `EligibleDefensiveInput[]`
+//    paralelo que este fichero definía por su cuenta — ver §1 del plan de
+//    continuación. Nunca se reconstruye membership/applicability/semántica
+//    aquí; solo se leen los campos finales ya resueltos.
+//
+// 2) Un episodio de presión real YA NO desaparece cuando el kit conocido
+//    está vacío (§2) — el daño crea el episodio, no la existencia de un
+//    defensivo. resolveEpisodeVerdict() ya produce `no_applicable_resource`
+//    con candidates=[].
+//
+// 3) La aplicabilidad de daño combina TODOS los hits relevantes del
+//    episodio (§4), no un único "hit representativo" arbitrario.
+//
+// 4) El timing ya no usa el heurístico de `mechanisms` — usa
+//    ResolvedDefensive.applicability.timingRelation vía el evaluador
+//    temporal puro de defensive-temporal-coverage.ts (§5).
+//
+// 5) La confidence de cada episodio es decision-scoped (§11): el veredicto
+//    ya trae su propia confidence desde la evidencia decisiva; aquí solo se
+//    aplica el techo de `dataConfidence` de la fila.
 
 import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
-import type { DefensiveCooldown } from './defensive-cooldowns.ts';
 import { attributeWindowAbility, detectDamageWindows, type DominantAbility } from './damage-pressure-windows.ts';
 import { groupDamageWindowsIntoEpisodes, type DefensiveEpisodeCandidate } from './defensive-episode-grouping.ts';
 import {
   buildDamageDescriptor,
   isSourceAffectedBySpellAt,
   type AbilityCombatTableCounts,
+  type DamageDescriptorContext,
   type DebuffInterval,
   type DecodedSchoolMask,
 } from './damage-descriptor-wcl.ts';
-import { canDefensiveCover, type DamageApplicability } from './defensive-applicability.ts';
+import { canDefensiveCover, combineHitApplicability, type ApplicabilityVerdict } from './defensive-applicability.ts';
 import {
   resolveEpisodeVerdictWithCausalAvailability,
-  summarizeCandidateForEpisode,
+  weakestConfidence,
   type CausallyAwareCandidate,
-  type EpisodeWindow,
   type EpisodeVerdictResult,
+  type EpisodeWindow,
 } from './defensive-episode-verdict.ts';
-import type { DefensiveMechanism } from './defensive-classification-semantics.ts';
+import { chargeAvailabilityAt, type DefensiveCooldown } from './defensive-cooldowns.ts';
+import { evaluateTemporalCoverage, normalizeCastTimestamps } from './defensive-temporal-coverage.ts';
 import { buildPersistedDefensiveEpisode, type PersistedDefensiveEpisode } from './defensive-episode-persistence.ts';
+import type { ResolvedDefensive } from './effective-defensives.ts';
 
-const CONFIDENCE_RANK: Record<EvaluationConfidence, number> = { verified: 0, inferred: 1, fallback: 2, uncertain: 3 };
-function weakestConfidence(...values: EvaluationConfidence[]): EvaluationConfidence {
-  return values.reduce((weakest, value) => (CONFIDENCE_RANK[value] > CONFIDENCE_RANK[weakest] ? value : weakest), 'verified' as EvaluationConfidence);
-}
-
-/** UN defensivo del kit efectivo de este jugador, ya resuelto (kit + applicability) — el edge function los ensambla desde resolveEffectiveDefensiveKit() + defensive_ability_semantics.applicability. */
-export interface EligibleDefensiveInput {
-  spellId: number;
-  isDefensiveKitMember: boolean;
-  createsMissableOpportunity: boolean;
-  mechanisms: DefensiveMechanism[];
-  charges: number;
-  rechargeMs: number | null;
-  durationMs: number | null;
-  cooldownMs: number | null;
-  /** Confidence de la resolución de kit/timing para ESTE spell (ResolvedDefensive.confidence). */
-  confidence: EvaluationConfidence;
-  applicability: DamageApplicability | null;
-  applicabilityConfidence: 'high' | 'medium' | 'low' | null;
-}
+/** §5.2 — política explícita del Episode Evaluator, persistida como evidencia; nunca seleccionada por inspeccionar `mechanisms`. */
+export const DEFAULT_AFTER_DAMAGE_RESPONSE_WINDOW_MS = 3000;
 
 export interface RawDamageHit {
   timestamp?: number;
@@ -66,15 +74,21 @@ export interface DefensiveEpisodeEvaluatorInput {
   playerName: string;
   /** actorID del boss/enemigo cuyos debuffs importan para requiresSourceAffectedBySpell — null si no se resolvió. */
   bossActorId: number | null;
-  /** Episodios que empiezan después de este instante se marcan `excluded` (wipe call/cutoff de evaluación) — null = sin cutoff conocido, nada se excluye por esto. */
+  /** Episodios cuyo pico está en/después de este instante se marcan `excluded` (wipe call/cutoff de evaluación) — null = sin cutoff conocido, nada se excluye por esto. */
   evaluationEndMs: number | null;
-  eligibleDefensives: EligibleDefensiveInput[];
+  /**
+   * §E4 §1 — ÚNICO input semántico/de kit admitido: la salida completa de
+   * resolveEffectiveDefensiveKit() para este jugador/build. El evaluator
+   * nunca reconstruye ni reinterpreta buildPresence/semanticStatus/
+   * applicability/membership — solo lee los campos finales.
+   */
+  resolvedDefensives: ResolvedDefensive[];
   damageTakenGraphPoints: number[];
   graphPointStartMs: number;
   graphPointIntervalMs: number;
   /** DamageTaken crudo de ESTE jugador, todo el pull — mismo array para detectar ventanas (vía attributeWindowAbility) y construir el DamageDescriptor de cada episodio. */
   rawDamageHits: RawDamageHit[];
-  /** Casts de ESTE jugador, por spellId — solo hace falta para los spellId del kit efectivo. */
+  /** Casts de ESTE jugador, por spellId — solo hace falta para los spellId del kit resuelto. */
   castsBySpellId: ReadonlyMap<number, number[]>;
   schoolByAbilityId: ReadonlyMap<number, DecodedSchoolMask>;
   combatTableObservations: ReadonlyMap<number, AbilityCombatTableCounts>;
@@ -84,35 +98,176 @@ export interface DefensiveEpisodeEvaluatorInput {
   dataConfidence: EvaluationConfidence;
   continuityGapMs?: number;
   windowDetectionFactor?: number;
+  /** §5.2 — override de test/política; por defecto DEFAULT_AFTER_DAMAGE_RESPONSE_WINDOW_MS. */
+  afterDamageResponseWindowMs?: number;
 }
 
-function toDefensiveCooldownAdapter(defensive: EligibleDefensiveInput): DefensiveCooldown {
+/**
+ * Adaptador MECÁNICO puro hacia el shape que exige chargeAvailabilityAt()/
+ * defensiveStatusAt() (defensive-cooldowns.ts) — esas funciones solo leen
+ * `durationMs`/`baseCooldownMs`, nunca `class`/`spec`/`category`/
+ * `survivalType`; esos cuatro campos se rellenan con valores neutros
+ * únicamente para satisfacer el shape, nunca como fuente de verdad de
+ * scoring (§1: prohibido usar cooldown_catalog.category/survivalType como
+ * fallback).
+ */
+function toChargeAvailabilityAdapter(r: ResolvedDefensive): DefensiveCooldown {
   return {
-    spellId: defensive.spellId,
-    name: `spell:${defensive.spellId}`,
+    spellId: r.spellId,
+    name: `spell:${r.spellId}`,
     class: '',
     spec: null,
     specOverride: null,
     category: 'personal_defensive',
-    baseCooldownMs: defensive.cooldownMs,
-    durationMs: defensive.durationMs,
+    baseCooldownMs: r.effectiveCooldownMs,
+    durationMs: r.effectiveDurationMs,
     survivalType: null,
   };
 }
 
+const PERSONAL_SURVIVAL_USAGE_ROLES = new Set(['personal_survival', 'survival_state', 'hybrid_survival']);
+
+/**
+ * §3 del plan de continuación (B: "potentially relevant unresolved
+ * resource") — usageRole ya es uno de los campos finales permitidos (§1), a
+ * diferencia de category/targetingMode. Nunca marca materiallyUnresolved a
+ * un candidato que YA es isDefensiveKitMember (evita solapar los dos
+ * conjuntos — un miembro del kit resuelto nunca necesita este bloqueo).
+ */
+function isMateriallyUnresolved(r: ResolvedDefensive): boolean {
+  if (r.isDefensiveKitMember) return false;
+  if (!PERSONAL_SURVIVAL_USAGE_ROLES.has(r.usageRole)) return false;
+  return (
+    r.semanticStatus === 'pending' ||
+    r.buildPresence === 'unknown' ||
+    r.resolutionStatus === 'conflict' ||
+    r.resolutionStatus === 'unresolved' ||
+    r.unresolvedRuntimeRules.length > 0
+  );
+}
+
+/** §11 — mapeo conservador de applicabilityConfidence a la escala de EvaluationConfidence: high→verified, medium→inferred, low/null→uncertain. */
+function mapApplicabilityConfidence(confidence: 'high' | 'medium' | 'low' | null): EvaluationConfidence {
+  if (confidence === 'high') return 'verified';
+  if (confidence === 'medium') return 'inferred';
+  return 'uncertain';
+}
+
 function excludedVerdict(reason: string): EpisodeVerdictResult {
-  return { usageEngaged: false, usedSpellIds: [], responseVerdict: 'excluded', reason, coveredBySpellId: null };
+  return {
+    usageEngaged: false,
+    usedSpellIds: [],
+    responseVerdict: 'excluded',
+    reason,
+    coveredBySpellId: null,
+    confidence: 'verified',
+    decisiveSpellIds: [],
+    uncertaintyBlockers: [],
+  };
+}
+
+/** Todos los hits crudos relevantes de un episodio (§4): si se conoce la ability dominante, sus hits dentro de la ventana; si no, TODOS los hits dentro de la ventana (conservador). */
+function relevantHitsForEpisode(
+  window: EpisodeWindow,
+  dominantAbilityGameId: number | null,
+  hitsByAbility: ReadonlyMap<number, RawDamageHit[]>,
+  allHits: readonly RawDamageHit[],
+): RawDamageHit[] {
+  const inWindow = (hit: RawDamageHit): boolean =>
+    typeof hit.timestamp === 'number' && hit.timestamp >= window.startMs && hit.timestamp <= window.endMs;
+  const pool = dominantAbilityGameId != null ? hitsByAbility.get(dominantAbilityGameId) ?? [] : allHits;
+  return pool.filter(inWindow);
+}
+
+/** §4 — combina canDefensiveCover() sobre TODOS los hits relevantes, nunca un único "hit representativo". */
+function computeDamageApplicability(
+  r: ResolvedDefensive,
+  hits: readonly RawDamageHit[],
+  ctx: DamageDescriptorContext,
+  bossActorId: number | null,
+  bossDebuffIntervals: readonly DebuffInterval[],
+): { verdict: ApplicabilityVerdict; evidence: Record<string, unknown> } {
+  if (!hits.length) {
+    return { verdict: 'unknown', evidence: { hitCount: 0, reason: 'Cero hits de daño evaluables en este episodio.' } };
+  }
+  const perHit = hits.map((hit) => {
+    const sourceAffectedBySpell =
+      r.applicability?.requiresSourceAffectedBySpell === true && bossActorId != null && typeof hit.timestamp === 'number'
+        ? isSourceAffectedBySpellAt(bossDebuffIntervals, bossActorId, r.spellId, hit.timestamp)
+        : null;
+    const descriptor = { ...buildDamageDescriptor(hit, ctx), sourceAffectedBySpell };
+    const result = canDefensiveCover(r.applicability, r.applicabilityConfidence, descriptor);
+    return { verdict: result.verdict, reason: result.reason, timestamp: hit.timestamp ?? null };
+  });
+  return { verdict: combineHitApplicability(perHit.map((p) => p.verdict)), evidence: { hitCount: hits.length, perHit } };
+}
+
+function buildCandidate(
+  r: ResolvedDefensive,
+  window: EpisodeWindow,
+  hits: readonly RawDamageHit[],
+  rawCastsForSpellMs: readonly number[],
+  ctx: DamageDescriptorContext,
+  bossActorId: number | null,
+  bossDebuffIntervals: readonly DebuffInterval[],
+  afterDamageResponseWindowMs: number,
+  evaluationEndMs: number | null,
+): CausallyAwareCandidate {
+  const castsForSpellMs = normalizeCastTimestamps(rawCastsForSpellMs);
+  const timingRelation = r.applicability?.timingRelation ?? null;
+  const damage = computeDamageApplicability(r, hits, ctx, bossActorId, bossDebuffIntervals);
+  const temporal = evaluateTemporalCoverage({
+    timingRelation,
+    effectiveDurationMs: r.effectiveDurationMs,
+    castsForSpellMs,
+    episode: window,
+    afterDamageResponseWindowMs,
+    evaluationEndMs,
+  });
+  const statusAtPeak = chargeAvailabilityAt(
+    toChargeAvailabilityAdapter(r),
+    r.charges,
+    r.rechargeMs,
+    castsForSpellMs,
+    window.peakMs,
+  ).status;
+  const confidence = weakestConfidence(
+    r.confidence,
+    r.semanticConfidence,
+    r.buildPresenceConfidence,
+    mapApplicabilityConfidence(r.applicabilityConfidence),
+  );
+
+  return {
+    spellId: r.spellId,
+    isDefensiveKitMember: r.isDefensiveKitMember,
+    createsMissableOpportunity: r.createsMissableOpportunity,
+    materiallyUnresolved: isMateriallyUnresolved(r),
+    damageApplicability: damage.verdict,
+    temporalOpportunity: temporal.opportunity,
+    temporalCastCoverage: temporal.castCoverage,
+    engagement: temporal.engagement,
+    statusAtPeak,
+    confidence,
+    evidence: { damage: damage.evidence, temporal: temporal.evidence },
+    castsForSpellMs,
+    timing: { timingRelation, effectiveDurationMs: r.effectiveDurationMs, afterDamageResponseWindowMs, evaluationEndMs },
+  };
 }
 
 /**
  * Todo el pipeline puro para UN jugador/pull: candidatos de daño →
- * episodios → aplicabilidad+disponibilidad+cargas por candidato →
+ * episodios → aplicabilidad+timing+disponibilidad+cargas por candidato →
  * veredicto con reconstrucción causal → episodios persistibles completos.
+ *
+ * §E4 §2 — el daño crea el episodio, no la existencia de un defensivo: un
+ * `resolvedDefensives` vacío (o sin ningún candidato relevante) NUNCA hace
+ * desaparecer un episodio de presión real; produce `no_applicable_resource`
+ * (o `uncertain`, si algo sin resolver podría cambiar la respuesta) con
+ * `candidates: []`/sin candidatos decisivos, nunca `[]` en el array de
+ * episodios devuelto.
  */
 export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvaluatorInput): PersistedDefensiveEpisode[] {
-  const kitMembers = input.eligibleDefensives.filter((d) => d.isDefensiveKitMember);
-  if (!kitMembers.length) return [];
-
   const detection = detectDamageWindows(
     input.damageTakenGraphPoints,
     input.graphPointStartMs,
@@ -136,27 +291,32 @@ export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvalua
     (hitsByAbility.get(hit.abilityGameID) ?? hitsByAbility.set(hit.abilityGameID, []).get(hit.abilityGameID)!).push(hit);
   }
 
+  const afterDamageResponseWindowMs = input.afterDamageResponseWindowMs ?? DEFAULT_AFTER_DAMAGE_RESPONSE_WINDOW_MS;
+  const ctx: DamageDescriptorContext = { schoolByAbilityId: input.schoolByAbilityId, combatTableObservations: input.combatTableObservations };
+
   const results: PersistedDefensiveEpisode[] = [];
 
   for (let i = 0; i < episodes.length; i++) {
     const episode = episodes[i];
     const window = episodeWindows[i];
+    const windowIdentity = {
+      occurrenceId: episode.occurrenceId,
+      dominantAbilityGameId: episode.dominantAbilityGameId,
+      memberIndexes: episode.memberIndexes,
+      startMs: episode.startMs,
+      endMs: episode.endMs,
+      peakMs: episode.peakMs,
+    };
 
-    if (input.evaluationEndMs != null && window.startMs > input.evaluationEndMs) {
+    // §10 — cutoff/wipe safety: un pico EN o después del cutoff nunca se evalúa (conservador: >= , no solo >).
+    if (input.evaluationEndMs != null && window.peakMs >= input.evaluationEndMs) {
       results.push(
         buildPersistedDefensiveEpisode({
           pullId: input.pullId,
           playerName: input.playerName,
-          window: {
-            occurrenceId: episode.occurrenceId,
-            dominantAbilityGameId: episode.dominantAbilityGameId,
-            memberIndexes: episode.memberIndexes,
-            startMs: episode.startMs,
-            endMs: episode.endMs,
-            peakMs: episode.peakMs,
-          },
+          window: windowIdentity,
           candidates: [],
-          verdict: excludedVerdict('Episodio posterior al cutoff de evaluación (wipe call) — no se evalúa.'),
+          verdict: excludedVerdict('Episodio con pico en o después del cutoff de evaluación (wipe call) — no se evalúa.'),
           confidence: input.dataConfidence,
           evidence: { groupingBasis: episode.groupingBasis },
         }),
@@ -164,76 +324,36 @@ export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvalua
       continue;
     }
 
-    // El hit representativo del episodio para el DamageDescriptor: el más
-    // cercano al pico entre los que comparten la abilityGameID dominante
-    // (mismo criterio de "evidencia real más próxima al momento evaluado"
-    // que ya usa attributeWindowAbility para atribuir la ventana).
-    const candidateHits = episode.dominantAbilityGameId != null ? hitsByAbility.get(episode.dominantAbilityGameId) ?? [] : [];
-    const representativeHit =
-      candidateHits
-        .filter((h) => typeof h.timestamp === 'number')
-        .sort((a, b) => Math.abs((a.timestamp as number) - episode.peakMs) - Math.abs((b.timestamp as number) - episode.peakMs))[0] ??
-      { abilityGameID: episode.dominantAbilityGameId ?? undefined };
+    const hits = relevantHitsForEpisode(window, episode.dominantAbilityGameId, hitsByAbility, input.rawDamageHits);
 
-    const baseDescriptor = buildDamageDescriptor(representativeHit, {
-      schoolByAbilityId: input.schoolByAbilityId,
-      combatTableObservations: input.combatTableObservations,
-    });
-
-    const causalCandidates: CausallyAwareCandidate[] = [];
-    const confidences: EvaluationConfidence[] = [input.dataConfidence];
-
-    for (const defensive of kitMembers) {
-      const sourceAffectedBySpell =
-        defensive.applicability?.requiresSourceAffectedBySpell === true && input.bossActorId != null
-          ? isSourceAffectedBySpellAt(input.bossDebuffIntervals, input.bossActorId, defensive.spellId, episode.peakMs)
-          : null;
-      const descriptor = { ...baseDescriptor, sourceAffectedBySpell };
-      const applicabilityResult = canDefensiveCover(defensive.applicability, defensive.applicabilityConfidence, descriptor);
-
-      const cd = toDefensiveCooldownAdapter(defensive);
-      const castsForSpellMs = input.castsBySpellId.get(defensive.spellId) ?? [];
-      const { usedDuringEpisode, statusAtPeak } = summarizeCandidateForEpisode(
-        cd,
-        defensive.mechanisms,
-        castsForSpellMs,
-        window,
-        defensive.charges,
-        undefined,
-        defensive.rechargeMs,
-      );
-
-      causalCandidates.push({
-        spellId: defensive.spellId,
-        isDefensiveKitMember: defensive.isDefensiveKitMember,
-        createsMissableOpportunity: defensive.createsMissableOpportunity,
-        applicability: applicabilityResult.verdict,
-        usedDuringEpisode,
-        statusAtPeak,
-        cd,
-        mechanisms: defensive.mechanisms,
-        castsForSpellMs,
-      });
-      confidences.push(defensive.confidence);
-    }
+    const causalCandidates: CausallyAwareCandidate[] = input.resolvedDefensives
+      .map((r) =>
+        buildCandidate(
+          r,
+          window,
+          hits,
+          input.castsBySpellId.get(r.spellId) ?? [],
+          ctx,
+          input.bossActorId,
+          input.bossDebuffIntervals,
+          afterDamageResponseWindowMs,
+          input.evaluationEndMs,
+        ),
+      )
+      .sort((a, b) => a.spellId - b.spellId);
 
     const verdict = resolveEpisodeVerdictWithCausalAvailability(causalCandidates, episodeWindows, i);
+    // §11 — techo de dataConfidence sobre la confidence decision-scoped del veredicto; nunca la más débil de TODO el kit.
+    const confidence = weakestConfidence(input.dataConfidence, verdict.confidence);
 
     results.push(
       buildPersistedDefensiveEpisode({
         pullId: input.pullId,
         playerName: input.playerName,
-        window: {
-          occurrenceId: episode.occurrenceId,
-          dominantAbilityGameId: episode.dominantAbilityGameId,
-          memberIndexes: episode.memberIndexes,
-          startMs: episode.startMs,
-          endMs: episode.endMs,
-          peakMs: episode.peakMs,
-        },
+        window: windowIdentity,
         candidates: causalCandidates,
         verdict,
-        confidence: weakestConfidence(...confidences),
+        confidence,
         evidence: { groupingBasis: episode.groupingBasis, dominantAbilityGameId: episode.dominantAbilityGameId },
       }),
     );

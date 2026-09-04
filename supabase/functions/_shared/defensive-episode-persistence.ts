@@ -12,6 +12,7 @@
 import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
 import type { EpisodeVerdictCandidate, EpisodeVerdictResult, ResponseVerdict } from './defensive-episode-verdict.ts';
 import { deriveEpisodeCausalGroupId, resolveDefensiveEpisodeId, type EpisodeIdentitySource } from './defensive-episode-identity.ts';
+import { deriveUsageEvaluable as deriveUsageEvaluableFromKpis } from './defensive-episode-kpis.ts';
 
 export type PlanVerdict = 'covered' | 'missed';
 
@@ -24,12 +25,12 @@ export interface PersistedDefensiveEpisode {
   /** KPI Uso — independiente de responseVerdict, ver §2.5.1 del plan. */
   usageEngaged: boolean;
   /**
-   * Denominador del KPI Uso: "episodios donde realmente podía actuar"
-   * (§2.5.1). Derivado aquí, no lo produce resolveEpisodeVerdict() todavía
-   * (esa función solo conoce Response) — un episodio cuenta si NO está
-   * `excluded` y el kit tenía al menos un candidato is_defensive_kit_member
-   * (aunque acabara siendo `unknown`/`no` para Response: Uso pregunta "¿tenía
-   * algo con lo que actuar?", no "¿era la herramienta correcta?").
+   * Denominador del KPI Uso (§E5/§13.1, iris-defensive-canonicalization-v1-plan.md):
+   * true exactamente cuando responseVerdict es covered_verified/missed_ready/
+   * missed_due_to_mistime — ver defensive-episode-kpis.ts, fuente única.
+   * Nunca "no excluded + algún kit member" (regla vieja, incorrecta: eso
+   * contaba unavailable_legitimate/no_applicable_resource/uncertain como si
+   * el jugador pudiera haber actuado).
    */
   usageEvaluable: boolean;
   usedSpellIds: number[];
@@ -46,18 +47,14 @@ export interface PersistedDefensiveEpisode {
 }
 
 /**
- * "¿Podía actuar?" — ver el comentario de `usageEvaluable` arriba.
- * `excluded` nunca es evaluable para ningún KPI (wipe call / fuera de
- * ventana de evaluación); el resto exige al menos un miembro del kit
- * presente en el episodio, sin importar si acabó `unknown`/`no`.
+ * §E5 (iris-defensive-canonicalization-v1-plan.md §13.1) — "¿Podía actuar?"
+ * ya NO es "no excluded + algún kit member" (regla vieja, incorrecta: eso
+ * contaba unavailable_legitimate/no_applicable_resource/uncertain como si
+ * el jugador pudiera haber actuado). El denominador canónico de Uso es
+ * puramente por responseVerdict — ver defensive-episode-kpis.ts, fuente
+ * única, reexportada aquí para no duplicar la regla en persistencia.
  */
-export function deriveUsageEvaluable(
-  responseVerdict: ResponseVerdict,
-  candidates: readonly Pick<EpisodeVerdictCandidate, 'isDefensiveKitMember'>[],
-): boolean {
-  if (responseVerdict === 'excluded') return false;
-  return candidates.some((candidate) => candidate.isDefensiveKitMember);
-}
+export const deriveUsageEvaluable = deriveUsageEvaluableFromKpis;
 
 export interface BuildPersistedDefensiveEpisodeParams {
   pullId: string;
@@ -82,7 +79,7 @@ export function buildPersistedDefensiveEpisode(
   params: BuildPersistedDefensiveEpisodeParams,
 ): PersistedDefensiveEpisode {
   const episodeId = resolveDefensiveEpisodeId(params.pullId, params.playerName, params.window);
-  const usageEvaluable = deriveUsageEvaluable(params.verdict.responseVerdict, params.candidates);
+  const usageEvaluable = deriveUsageEvaluable(params.verdict.responseVerdict);
   return {
     episodeId,
     causalGroupId: deriveEpisodeCausalGroupId(episodeId),
@@ -102,6 +99,11 @@ export function buildPersistedDefensiveEpisode(
       occurrenceId: params.window.occurrenceId,
       dominantAbilityGameId: params.window.dominantAbilityGameId,
       memberIndexes: params.window.memberIndexes,
+      // §11/§16 — provenance de decisión estructurada, para que downstream
+      // nunca necesite parsear responseReason: qué spellIds decidieron el
+      // veredicto y cuáles, sin resolver, bloquearon una conclusión positiva.
+      decisiveSpellIds: [...params.verdict.decisiveSpellIds].sort((a, b) => a - b),
+      uncertaintyBlockers: [...params.verdict.uncertaintyBlockers].sort((a, b) => a - b),
       ...params.evidence,
     },
     confidence: params.confidence,

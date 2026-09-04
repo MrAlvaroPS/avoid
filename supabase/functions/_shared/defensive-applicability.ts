@@ -279,3 +279,22 @@ export function canDefensiveCover(
 
   return { verdict: 'yes', reason: 'Aplicabilidad demostrada: ninguna restricción conocida excluye este episodio.' };
 }
+
+/**
+ * §E4 (Episode Evaluator, "damage applicability must be episode-safe"):
+ * combina el veredicto de canDefensiveCover() de VARIOS hits reales del
+ * mismo episodio (en vez de un único "hit representativo" arbitrario) de
+ * forma deliberadamente conservadora — nunca convierte evidencia
+ * parcial/mixta en 'yes'. Incertidumbre falsa es aceptable en shadow; un
+ * `missed_ready` falso no lo es.
+ *
+ *  - todos 'yes' → 'yes' (cobertura demostrada para cada hit relevante).
+ *  - todos 'no' → 'no' (ninguno cubierto).
+ *  - cualquier mezcla, o cero hits evaluables → 'unknown'.
+ */
+export function combineHitApplicability(verdicts: readonly ApplicabilityVerdict[]): ApplicabilityVerdict {
+  if (!verdicts.length) return 'unknown';
+  if (verdicts.every((v) => v === 'yes')) return 'yes';
+  if (verdicts.every((v) => v === 'no')) return 'no';
+  return 'unknown';
+}

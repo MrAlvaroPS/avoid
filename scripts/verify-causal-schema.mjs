@@ -164,13 +164,42 @@ assert(policyClassifier.includes('policyIdentities: list.map'), 'El prompt causa
 const policyBatcher = readFileSync(join(root, 'src', 'app', 'shared', 'mechanic-policy-batches.ts'), 'utf8');
 assert(policyBatcher.includes('expectedByKey') && policyBatcher.includes('byDifficulty') && policyBatcher.includes('group.slice(offset, offset + maxBatchSize)'), 'El cliente no valida y fragmenta la respuesta global por dificultad y tamaño.');
 
+// §17 (E4/E5 continuación) — el CHECK real de reason_code ya no vive solo en
+// M14 (20260901220000_player_execution_ledger.sql): migraciones aditivas
+// posteriores (p. ej. 20260904110000_defensive_episode_staging_and_ledger.sql)
+// hacen DROP CONSTRAINT + ADD CONSTRAINT para ampliarlo con reason codes
+// nuevos, sin tocar la definición CREATE TABLE original. Comparar solo
+// contra M14 hace que el verificador rechace codes reales que la DB ya
+// acepta. Fix genérico: escanea TODAS las migraciones en orden cronológico
+// (el nombre de fichero ya es el timestamp) y se queda con la ÚLTIMA
+// definición efectiva de player_execution_events_reason_code_check, sea la
+// forma inline de CREATE TABLE (M14) o una forma aditiva de
+// ALTER TABLE ... ADD CONSTRAINT posterior.
+function latestReasonCodeCheckDefinition() {
+  const inlinePattern = /reason_code text[\s\S]*?check \(reason_code in \(([\s\S]*?)\)\),/;
+  const additivePattern = /add constraint player_execution_events_reason_code_check\s+check \(reason_code in \(([\s\S]*?)\)\)\s*;/g;
+  let latest = null;
+  for (const name of [...allMigrationNames].sort()) {
+    const body = name === migrations[3] ? ledgerSql : readFileSync(join(migrationDir, name), 'utf8');
+    const inlineMatch = body.match(inlinePattern);
+    if (inlineMatch) latest = { migration: name, values: inlineMatch[1] };
+    for (const additiveMatch of body.matchAll(additivePattern)) {
+      latest = { migration: name, values: additiveMatch[1] };
+    }
+  }
+  return latest;
+}
+
 const contract = readFileSync(join(root, 'supabase', 'functions', '_shared', 'combat-evaluation-contract.ts'), 'utf8');
 const contractReasonBlock = contract.match(/EXECUTION_REASON_CODES\s*=\s*\[([\s\S]*?)\]\s*as const/);
-const sqlReasonBlock = ledgerSql.match(/reason_code text[\s\S]*?check \(reason_code in \(([\s\S]*?)\)\),/);
-assert(contractReasonBlock && sqlReasonBlock, 'No se pudo leer el contrato de reason codes.');
+const latestReasonCodeCheck = latestReasonCodeCheckDefinition();
+assert(contractReasonBlock && latestReasonCodeCheck, 'No se pudo leer el contrato de reason codes o ninguna migración define el CHECK.');
 const contractReasons = quotedValues(contractReasonBlock[1]);
-const sqlReasons = quotedValues(sqlReasonBlock[1]);
-assert(JSON.stringify(contractReasons) === JSON.stringify(sqlReasons), 'Los reason codes TypeScript y SQL no coinciden exactamente.');
+const sqlReasons = quotedValues(latestReasonCodeCheck.values);
+assert(
+  JSON.stringify(contractReasons) === JSON.stringify(sqlReasons),
+  `Los reason codes TypeScript y la última definición SQL efectiva del CHECK (${latestReasonCodeCheck.migration}) no coinciden exactamente.`,
+);
 assert(new Set(contractReasons).size === contractReasons.length, 'Hay reason codes duplicados.');
 const edgeBuilder = readFileSync(join(root, 'supabase', 'functions', '_shared', 'responsibility-edge-builder.ts'), 'utf8');
 const edgeReasonCodes = [...edgeBuilder.matchAll(/'([A-Z][A-Z_]+)'/g)].map((match) => match[1]);
