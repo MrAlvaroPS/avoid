@@ -10,7 +10,7 @@ on:
 jobs:
   run-shadow:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - name: Resolve generation
         id: start
@@ -23,17 +23,26 @@ jobs:
           GEN="$(echo "$OUT" | jq -r '.generation.id // empty')"
           test -n "$GEN"
           echo "generation_id=$GEN" >> "$GITHUB_OUTPUT"
-      - name: Process exactly one normalized pull
+      - name: Process remaining canonical current-build corpus
         shell: bash
         env:
           GEN: ${{ steps.start.outputs.generation_id }}
         run: |
           set -euo pipefail
           BASE='https://qiniulkhivpvbjoquvon.supabase.co/functions/v1/e6-shadow-28abf632c7d8d2d4'
-          OUT="$(curl --fail --silent --show-error "$BASE?action=process&generation_id=$GEN")"
-          echo "$OUT" | jq .
-          ERR="$(echo "$OUT" | jq -r '.error // empty')"
-          if [ -n "$ERR" ]; then
-            echo "STOP: resumable E6 error: $ERR" >&2
-            exit 2
-          fi
+          for i in $(seq 1 120); do
+            echo "=== iteration $i ==="
+            OUT="$(curl --fail --silent --show-error "$BASE?action=process&generation_id=$GEN")"
+            echo "$OUT" | jq .
+            if [ "$(echo "$OUT" | jq -r '.done // false')" = 'true' ]; then
+              echo 'Shadow corpus complete.'
+              exit 0
+            fi
+            ERR="$(echo "$OUT" | jq -r '.error // empty')"
+            if [ -n "$ERR" ]; then
+              echo "STOP: resumable E6 error: $ERR" >&2
+              exit 2
+            fi
+          done
+          echo 'STOP: iteration ceiling reached before completion.' >&2
+          exit 3
