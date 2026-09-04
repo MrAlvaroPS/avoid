@@ -145,13 +145,12 @@ const PERSONAL_SURVIVAL_USAGE_ROLES = new Set(['personal_survival', 'survival_st
  * §Pre-E6 runtime-materiality closure: las reglas runtime diferidas de una
  * habilidad cuya semántica FINAL base ya declara `usageRole='utility'` y
  * `defensiveIntent='hybrid'` se consideran materialmente no resueltas. Es
- * precisamente el contrato de una utilidad que NO es defensivo personal de
- * forma permanente, pero cuya rama runtime verificada puede aportar valor
- * defensivo (E3: Heart of the Wild/Bear y Shadow Bulwark/Grimoire). No se
- * inspeccionan nombres, spellIds, category ni survivalType, y no se aplican
- * las reglas runtime: solo se preserva incertidumbre. Una utility con
- * defensiveIntent='none', o una regla runtime de healer_throughput/external,
- * no empieza a bloquear por este guard.
+ * el contrato de una utilidad que NO es defensivo personal de forma
+ * permanente, pero cuya rama runtime verificada puede aportar valor
+ * defensivo. No se inspeccionan nombres, spellIds, category ni survivalType,
+ * y no se aplican las reglas runtime: solo se preserva incertidumbre. Una
+ * utility con defensiveIntent='none', o una regla runtime de
+ * healer_throughput/external, no empieza a bloquear por este guard.
  *
  * El resto de motivos (buildPresence unknown/resolutionStatus conflict o
  * unresolved/unresolvedRuntimeRules) siguen exigiendo el gate de usageRole.
@@ -186,6 +185,46 @@ function excludedVerdict(reason: string): EpisodeVerdictResult {
     confidence: 'verified',
     decisiveSpellIds: [],
     uncertaintyBlockers: [],
+  };
+}
+
+/**
+ * Una acción runtime materialmente no resuelta y realmente usada puede ser
+ * cobertura válida que aún no sabemos demostrar. El veredicto canónico base
+ * sigue mandando: `covered_verified` nunca se degrada. Para cualquier otro
+ * resultado, la acción runtime usada bloquea una acusación/afirmación
+ * definitiva y deja Response en `uncertain`.
+ *
+ * Usage NO se recalcula aquí: conserva exactamente los facts del resolver
+ * base (`usageEngaged`/`usedSpellIds` solo acreditan miembros canónicos del
+ * kit). Así un runtime non-member puede proteger Response frente a un falso
+ * negativo sin recibir crédito de Uso hasta que exista evidencia runtime.
+ */
+function applyUsedMaterialRuntimeSafety(
+  verdict: EpisodeVerdictResult,
+  candidates: readonly CausallyAwareCandidate[],
+): EpisodeVerdictResult {
+  if (verdict.responseVerdict === 'covered_verified') return verdict;
+
+  const blockers = candidates.filter(
+    (candidate) =>
+      candidate.materiallyUnresolved &&
+      candidate.engagement &&
+      candidate.damageApplicability !== 'no' &&
+      candidate.temporalCastCoverage !== 'no',
+  );
+  if (!blockers.length) return verdict;
+
+  const blockerIds = [...new Set(blockers.map((candidate) => candidate.spellId))].sort((a, b) => a - b);
+  return {
+    ...verdict,
+    responseVerdict: 'uncertain',
+    reason: `spellId ${blockerIds.join(', ')} se usó durante el episodio y su rama runtime potencialmente defensiva todavía no puede resolverse; Response no acusa mientras esa acción pudiera haber sido cobertura válida. Usage solo se acredita para miembros canónicos del kit.`,
+    coveredBySpellId: null,
+    confidence: 'uncertain',
+    decisiveSpellIds: [],
+    uncertaintyBlockers: blockerIds,
+    causalUpgradeEligible: false,
   };
 }
 
@@ -365,7 +404,8 @@ export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvalua
       )
       .sort((a, b) => a.spellId - b.spellId);
 
-    const verdict = resolveEpisodeVerdictWithCausalAvailability(causalCandidates, episodeWindows, i);
+    const baseVerdict = resolveEpisodeVerdictWithCausalAvailability(causalCandidates, episodeWindows, i);
+    const verdict = applyUsedMaterialRuntimeSafety(baseVerdict, causalCandidates);
     // §11 — techo de dataConfidence sobre la confidence decision-scoped del veredicto; nunca la más débil de TODO el kit.
     const confidence = weakestConfidence(input.dataConfidence, verdict.confidence);
 
