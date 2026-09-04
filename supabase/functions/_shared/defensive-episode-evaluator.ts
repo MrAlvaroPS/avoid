@@ -142,14 +142,16 @@ const PERSONAL_SURVIVAL_USAGE_ROLES = new Set(['personal_survival', 'survival_st
  * `no_applicable_resource` — exactamente el caso que este predicado existe
  * para bloquear (podría resultar ser personal_survival tras clasificarse).
  *
- * §Pre-E6 runtime-materiality closure: una regla runtime diferida cuyo
- * payload VERIFICADO podría cambiar el usageRole efectivo a uno de los
- * roles de supervivencia personal también bloquea una conclusión negativa
- * definitiva, AUNQUE el role base de la habilidad sea utility. El resolver
- * calcula esa propiedad desde el payload ya validado y la conserva en
- * `UnresolvedRuntimeRule.couldAffectPersonalMembership`; este evaluator no
- * reinterpreta reglas ni nombres de hechizo. Reglas runtime no materiales
- * de utility/healer_throughput/external siguen sin contaminar episodios.
+ * §Pre-E6 runtime-materiality closure: las reglas runtime diferidas de una
+ * habilidad cuya semántica FINAL base ya declara `usageRole='utility'` y
+ * `defensiveIntent='hybrid'` se consideran materialmente no resueltas. Es
+ * precisamente el contrato de una utilidad que NO es defensivo personal de
+ * forma permanente, pero cuya rama runtime verificada puede aportar valor
+ * defensivo (E3: Heart of the Wild/Bear y Shadow Bulwark/Grimoire). No se
+ * inspeccionan nombres, spellIds, category ni survivalType, y no se aplican
+ * las reglas runtime: solo se preserva incertidumbre. Una utility con
+ * defensiveIntent='none', o una regla runtime de healer_throughput/external,
+ * no empieza a bloquear por este guard.
  *
  * El resto de motivos (buildPresence unknown/resolutionStatus conflict o
  * unresolved/unresolvedRuntimeRules) siguen exigiendo el gate de usageRole.
@@ -157,7 +159,7 @@ const PERSONAL_SURVIVAL_USAGE_ROLES = new Set(['personal_survival', 'survival_st
 function isMateriallyUnresolved(r: ResolvedDefensive): boolean {
   if (r.isDefensiveKitMember) return false;
   if (r.semanticStatus === 'pending') return true;
-  if (r.unresolvedRuntimeRules.some((rule) => rule.couldAffectPersonalMembership)) return true;
+  if (r.usageRole === 'utility' && r.defensiveIntent === 'hybrid' && r.unresolvedRuntimeRules.length > 0) return true;
   if (!PERSONAL_SURVIVAL_USAGE_ROLES.has(r.usageRole)) return false;
   return (
     r.buildPresence === 'unknown' ||
