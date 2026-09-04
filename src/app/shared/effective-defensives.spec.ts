@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+  EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION,
   effectiveDefensiveDataFromDatabaseRows,
   fingerprintTalentBuild,
   inferCurrentGameBuildObservation,
@@ -8,6 +9,8 @@ import {
   type EffectiveDefensiveCatalogEntry,
   type EffectiveDefensiveData,
   type EffectiveDefensiveModifierRule,
+  type EffectiveDefensiveSemanticEntry,
+  type EffectiveDefensiveSemanticRule,
   type ResolveDefensiveKitInput,
 } from '../../../supabase/functions/_shared/effective-defensives';
 
@@ -469,5 +472,177 @@ describe('database row adapter and game-build observation', () => {
 
     expect(recent).toMatchObject({ gameBuild: GAME_BUILD, confidence: 'inferred' });
     expect(historical).toEqual({ gameBuild: null, source: null, confidence: 'uncertain' });
+  });
+});
+
+// §Paso C (iris-defensive-canonicalization-v1-plan.md §5): resolución
+// semántica del resolver — ortogonal al timing de arriba. Fixtures tomadas
+// de los casos de aceptación del plan (§7): Bear Form, AMS, Death Strike,
+// Mirror Image + Refractive Images.
+describe('resolveEffectiveDefensiveKit — Paso C semantic resolution', () => {
+  function semanticEntry(overrides: Partial<EffectiveDefensiveSemanticEntry> = {}): EffectiveDefensiveSemanticEntry {
+    return {
+      spellId: fade.spellId,
+      className: 'Priest',
+      usageRole: 'personal_survival',
+      activationScope: 'self',
+      primaryBeneficiary: 'self',
+      secondaryPropagation: 'none',
+      mechanisms: ['mitigation'],
+      opportunityMode: 'normal',
+      defensiveIntent: 'primary',
+      semanticStatus: 'verified',
+      semanticVersion: 'defensive-semantics@1.0.0',
+      semanticConfidence: 'inferred',
+      locked: false,
+      ...overrides,
+    };
+  }
+
+  function semanticRule(overrides: Partial<EffectiveDefensiveSemanticRule> = {}): EffectiveDefensiveSemanticRule {
+    return {
+      id: 'rule-1',
+      modifierSpellId: MODIFIER_SPELL_ID,
+      targetSpellId: fade.spellId,
+      specNames: null,
+      gameBuild: GAME_BUILD,
+      ruleType: 'augment',
+      payload: {},
+      source: 'test',
+      verified: true,
+      ...overrides,
+    };
+  }
+
+  it('leaves every semantic field at its neutral default when the caller does not pass data.semantics (legacy timing-only callers stay unaffected)', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(input(), data());
+    expect(resolved.semanticResolved).toBe(false);
+    expect(resolved.usageRole).toBe('unknown');
+    expect(resolved.semanticStatus).toBe('pending');
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+    expect(resolved.semanticResolverVersion).toBe(EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION);
+  });
+
+  it('resolves pending (never counts) when semantics were requested but no row matches this spellId/class', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(input(), data({ semantics: [] }));
+    expect(resolved.semanticResolved).toBe(true);
+    expect(resolved.semanticStatus).toBe('pending');
+    expect(resolved.isDefensiveKitMember).toBe(false);
+  });
+
+  it('a verified personal_survival counts as kit member and can miss (Barkskin-style)', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(input(), data({ semantics: [semanticEntry()] }));
+    expect(resolved.isDefensiveKitMember).toBe(true);
+    expect(resolved.createsMissableOpportunity).toBe(true);
+  });
+
+  it('survival_state (Bear Form) counts as kit member but never misses, even verified+active', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input(),
+      data({ semantics: [semanticEntry({ usageRole: 'survival_state', opportunityMode: 'credit_only' })] }),
+    );
+    expect(resolved.isDefensiveKitMember).toBe(true);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+  });
+
+  it('AMS-style automatic ally propagation still counts as personal kit (propagation never changes primaryBeneficiary)', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input(),
+      data({ semantics: [semanticEntry({ mechanisms: ['absorption'], secondaryPropagation: 'automatic_ally' })] }),
+    );
+    expect(resolved.isDefensiveKitMember).toBe(true);
+    expect(resolved.createsMissableOpportunity).toBe(true);
+  });
+
+  it('Death Strike-style rotational_survival (self-beneficiary, cast at an enemy) never counts as personal kit', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input(),
+      data({
+        semantics: [
+          semanticEntry({ usageRole: 'rotational_survival', activationScope: 'enemy', mechanisms: ['sustain'], opportunityMode: 'none' }),
+        ],
+      }),
+    );
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+  });
+
+  it('perfect semantics never count if the ability is not eligible in this build (talent not selected) — invariant 1', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [], allTalentSpellIds: new Set([fade.spellId]), talentLookupComplete: true }),
+      data({ semantics: [semanticEntry()] }),
+    );
+    expect(resolved.eligible).toBe(false); // no seleccionado en un build resuelto
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.createsMissableOpportunity).toBe(false);
+  });
+
+  it('an unverified semantic rule never applies automatically, even if the talent is selected', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({
+        semantics: [semanticEntry({ usageRole: 'utility', mechanisms: [] })],
+        semanticRules: [semanticRule({ verified: false, payload: { setUsageRole: 'personal_survival', addMechanisms: ['mitigation'] } })],
+      }),
+    );
+    expect(resolved.usageRole).toBe('utility');
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.semanticProvenance.some((step) => step.kind === 'semantic_rule_unverified')).toBe(true);
+  });
+
+  it('Mirror Image + Refractive Images: a verified augment rule turns a base utility row into personal_survival when the talent is selected', () => {
+    const [withTalent] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({
+        semantics: [semanticEntry({ usageRole: 'utility', mechanisms: [], opportunityMode: 'none' })],
+        semanticRules: [
+          semanticRule({
+            payload: { modifierName: 'Refractive Images', setUsageRole: 'personal_survival', setOpportunityMode: 'normal', addMechanisms: ['mitigation'] },
+          }),
+        ],
+      }),
+    );
+    expect(withTalent.usageRole).toBe('personal_survival');
+    expect(withTalent.mechanisms).toEqual(['mitigation']);
+    expect(withTalent.isDefensiveKitMember).toBe(true);
+    expect(withTalent.createsMissableOpportunity).toBe(true);
+
+    // Sin el talento seleccionado, la fila base (utility) no sobreclasifica.
+    const [withoutTalent] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [] }),
+      data({
+        semantics: [semanticEntry({ usageRole: 'utility', mechanisms: [], opportunityMode: 'none' })],
+        semanticRules: [semanticRule({ payload: { setUsageRole: 'personal_survival', addMechanisms: ['mitigation'] } })],
+      }),
+    );
+    expect(withoutTalent.usageRole).toBe('utility');
+    expect(withoutTalent.isDefensiveKitMember).toBe(false);
+  });
+
+  it('Ice Cold-style suppress rule makes the suppressed ability ineligible when the talent is selected', () => {
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({
+        semantics: [semanticEntry()],
+        semanticRules: [semanticRule({ ruleType: 'suppress' })],
+      }),
+    );
+    expect(resolved.eligible).toBe(false);
+    expect(resolved.isDefensiveKitMember).toBe(false);
+    expect(resolved.semanticProvenance.some((step) => step.kind === 'semantic_rule_suppress')).toBe(true);
+  });
+
+  it('a replace rule marks the original spell ineligible and records the replacement spellId in the provenance', () => {
+    const replacementSpellId = 555555;
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({ talentBuild: [{ id: 90, nodeID: 91, rank: 1, spellId: MODIFIER_SPELL_ID }] }),
+      data({
+        semantics: [semanticEntry()],
+        semanticRules: [semanticRule({ ruleType: 'replace', payload: { replacementSpellId } })],
+      }),
+    );
+    expect(resolved.eligible).toBe(false);
+    expect(resolved.semanticProvenance.some((step) => step.kind === 'semantic_rule_replace' && step.description.includes(String(replacementSpellId)))).toBe(true);
   });
 });

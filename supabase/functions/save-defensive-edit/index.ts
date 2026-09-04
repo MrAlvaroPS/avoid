@@ -98,11 +98,24 @@ Deno.serve(async (req: Request) => {
   const { data: before } = await supabase.from('cooldown_catalog').select('survival_type, category, targeting_mode, spec_override, excluded').eq('class', body.class).eq('spell_id', body.spellId).maybeSingle();
   if (!before) return jsonResponse({ ok: false, error: 'Defensivo no encontrado.' }, 404);
 
-  const nextCategory = body.category ?? before.category;
-  const nextTargetingMode = body.targetingMode ?? before.targeting_mode;
-  if (nextCategory != null && nextTargetingMode != null) {
-    const targetingError = defensiveTargetingError(nextCategory, nextTargetingMode);
-    if (targetingError) return jsonResponse({ ok: false, error: targetingError }, 400);
+  // §bug real (2026-09-04, "confirmar exclusión" de Rage of the Sleeper
+  // bloqueado por "personal_defensive requiere target self."): esta
+  // validación se ejecutaba SIEMPRE que category/targetingMode YA
+  // guardados en la fila fueran inconsistentes entre sí, aunque la edición
+  // actual no tocara ninguno de los dos — bloqueando ediciones totalmente
+  // ajenas (excluded, reviewed, survivalType, cooldown) sobre filas con
+  // datos legacy ya inconsistentes de antes (cada vez más comunes desde
+  // que activationScope/primaryBeneficiary conviven con targetingMode).
+  // Solo debe impedir que ESTA edición introduzca una pareja nueva
+  // inválida, no exigir que arregles a ciegas un dato viejo que no
+  // estás tocando.
+  if ('category' in body || 'targetingMode' in body) {
+    const nextCategory = body.category ?? before.category;
+    const nextTargetingMode = body.targetingMode ?? before.targeting_mode;
+    if (nextCategory != null && nextTargetingMode != null) {
+      const targetingError = defensiveTargetingError(nextCategory, nextTargetingMode);
+      if (targetingError) return jsonResponse({ ok: false, error: targetingError }, 400);
+    }
   }
 
   // §"editarlo para que sea en segundos" (feedback real, 2026-08-29): el

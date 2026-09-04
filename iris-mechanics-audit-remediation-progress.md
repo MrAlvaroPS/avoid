@@ -786,3 +786,24 @@ oficial real, no se pudo disparar desde aquí. Tras reanalizar: confirmar que
 Gusmï ya no marca 0% y que las cards de "Qué pasó y cómo corregirlo" traen
 DEFENSIVOS/PREVENCIÓN CLAVE reales; repetir para Pitpally y de paso localizar
 su noche exacta para el chequeo de wipe calls pendiente.
+
+### 2026-09-03 — Defensivos: plan v3 (sustituye a "plan v2" de arriba)
+
+El toggle "automático / recuento directo" (línea de arriba, sesión
+2026-09-02/03) y el fallback `v2?.managementScore ?? nightReliability
+?.breakdown.defensiva` que fuerza quedan **superados**: el catálogo de
+defensivos tenía varias definiciones de "defensivo" coexistiendo (casts
+observados, pressure windows, management V2, reliability legacy) que un
+mismo raider podía cruzar con números completamente distintos sin cambiar
+un solo cast — casos reales medidos: Pitpally 1.719→102 usos limpios,
+Txerokee 836→22, Linkedara 1.734→150 tras aplicar solo la definición
+correcta de "defensivo personal".
+
+Plan integral (catálogo/semántica + Fiabilidad) consolidado en
+[iris-defensive-canonicalization-v1-plan.md](iris-defensive-canonicalization-v1-plan.md).
+El toggle y el fallback de arriba se retiran en el Paso F de ese plan
+(cutover atómico) — no antes, para no dejar la infografía sin fallback
+mientras la nueva generación todavía no está `PUBLISHED`.
+
+Arrancado el Paso A-1 (migración SQL aditiva del catálogo) — ver el
+registro de avance en el propio documento de plan, §8.

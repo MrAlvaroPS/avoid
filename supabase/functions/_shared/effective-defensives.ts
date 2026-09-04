@@ -7,7 +7,34 @@
  * modo que su contrato se puede probar también desde la suite de Angular.
  */
 
+import {
+  isDefensiveKitMember,
+  createsMissableOpportunity,
+  type DefensiveSemanticInput,
+  type DefensiveUsageRole,
+  type DefensiveActivationScope,
+  type DefensivePrimaryBeneficiary,
+  type DefensiveSecondaryPropagation,
+  type DefensiveMechanism,
+  type DefensiveOpportunityMode,
+  type DefensiveIntent,
+  type DefensiveSemanticStatus,
+} from './defensive-classification-semantics.ts';
+
 export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
+// §Paso C (iris-defensive-canonicalization-v1-plan.md §5): resolución
+// SEMÁNTICA (usageRole/mechanisms/membership) versionada por separado del
+// resolver de TIMING de arriba, a propósito. Bump del resolver de timing ya
+// dispara reanálisis en analyze-report/reanalyze-defensive-pressure/
+// defensive-v2-readiness/generate-defensive-plan (gate de homogeneidad de
+// gran radio de impacto, ver DV2-09/specApplies() en el registro de
+// auditoría — pendiente de decisión explícita del usuario, no se toca aquí).
+// La resolución semántica es puramente aditiva sobre esa salida y todavía no
+// la consume ningún scoring público, así que lleva su propio version marker
+// — cuando el evaluator de episodios (Paso C, siguiente pieza) empiece a
+// depender de ella, su propio gate de homogeneidad se construye sobre ESTA
+// versión, no sobre EFFECTIVE_DEFENSIVE_RESOLVER_VERSION.
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.0.0';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 export type DefensiveCategory = 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
@@ -73,6 +100,49 @@ export interface EffectiveDefensiveModifierRule {
   active: boolean;
 }
 
+/**
+ * Fila de defensive_ability_semantic_catalog (la vista, no la tabla base —
+ * ya trae el join con cooldown_catalog resuelto). Una fila `pending`/sin
+ * match nunca puede llegar a `eligible + isDefensiveKitMember`; ver §21 del
+ * plan y defensiveSemanticError/isDefensiveKitMember.
+ */
+export interface EffectiveDefensiveSemanticEntry {
+  spellId: number;
+  className: string;
+  usageRole: DefensiveUsageRole;
+  activationScope: DefensiveActivationScope;
+  primaryBeneficiary: DefensivePrimaryBeneficiary;
+  secondaryPropagation: DefensiveSecondaryPropagation;
+  mechanisms: DefensiveMechanism[];
+  opportunityMode: DefensiveOpportunityMode;
+  defensiveIntent: DefensiveIntent;
+  semanticStatus: DefensiveSemanticStatus;
+  semanticVersion: string;
+  semanticConfidence: DefensiveResolutionConfidence;
+  locked: boolean;
+}
+
+/** Fila de defensive_semantic_rules (semanticModifiers/replacementRules del prompt v10, ver classify-defensives). */
+export interface EffectiveDefensiveSemanticRule {
+  id: string;
+  modifierSpellId: number;
+  targetSpellId: number;
+  specNames: string[] | null;
+  gameBuild: string;
+  ruleType: 'augment' | 'replace' | 'suppress' | 'convert_to_passive';
+  payload: Record<string, unknown>;
+  source: string | null;
+  verified: boolean;
+}
+
+/** Traza de la resolución semántica — deliberadamente más simple que ResolutionStep (before/after no encaja bien con mechanisms[], que es un set, no un escalar). Suficiente para auditar/explicar, no para reconstruir el valor anterior campo a campo. */
+export interface SemanticResolutionStep {
+  kind: 'catalog_base' | 'no_match' | 'semantic_rule_augment' | 'semantic_rule_replace' | 'semantic_rule_suppress' | 'semantic_rule_convert_to_passive' | 'semantic_rule_unverified' | 'ineligible';
+  description: string;
+  source?: string | null;
+  ruleId?: string;
+}
+
 export interface PlayerDefensiveOverride {
   id: string;
   characterId: number | null;
@@ -111,6 +181,9 @@ export interface EffectiveDefensiveData {
   specProfiles: EffectiveDefensiveSpecProfile[];
   modifierRules: EffectiveDefensiveModifierRule[];
   overrides?: PlayerDefensiveOverride[];
+  /** Paso C. Ausente/undefined (no [] vacío) = "el consumer todavía no cargó semántica" — el resolver debe distinguir eso de "cargó semántica y no hay match" (ver semanticResolved en ResolvedDefensive). */
+  semantics?: EffectiveDefensiveSemanticEntry[];
+  semanticRules?: EffectiveDefensiveSemanticRule[];
 }
 
 export interface EffectiveDefensiveDatabaseRows {
@@ -118,6 +191,9 @@ export interface EffectiveDefensiveDatabaseRows {
   specProfileRows?: Record<string, unknown>[];
   modifierRuleRows?: Record<string, unknown>[];
   overrideRows?: Record<string, unknown>[];
+  /** Filas de la VISTA defensive_ability_semantic_catalog (no de la tabla base) — ya trae class/spell_id resueltos. */
+  semanticRows?: Record<string, unknown>[];
+  semanticRuleRows?: Record<string, unknown>[];
 }
 
 export interface ObservedGameBuild {
@@ -158,6 +234,31 @@ export interface ResolvedDefensive {
   confidence: DefensiveResolutionConfidence;
   provenance: ResolutionStep[];
   conditionalModifiers: ResolutionStep[];
+
+  // ---- Paso C: resolución semántica (independiente del timing de arriba) ----
+  /** false = el consumer no pasó `data.semantics` (llamada legacy, timing-only); true = sí se intentó resolver semántica, aunque no hubiera match (usageRole queda 'unknown'/semanticStatus 'pending' en ese caso, nunca se inventa). */
+  semanticResolved: boolean;
+  usageRole: DefensiveUsageRole;
+  activationScope: DefensiveActivationScope;
+  primaryBeneficiary: DefensivePrimaryBeneficiary;
+  secondaryPropagation: DefensiveSecondaryPropagation;
+  mechanisms: DefensiveMechanism[];
+  opportunityMode: DefensiveOpportunityMode;
+  defensiveIntent: DefensiveIntent;
+  semanticStatus: DefensiveSemanticStatus;
+  semanticVersion: string | null;
+  semanticConfidence: DefensiveResolutionConfidence;
+  semanticResolverVersion: string;
+  semanticProvenance: SemanticResolutionStep[];
+  /**
+   * Predicados derivados (isDefensiveKitMember/createsMissableOpportunity de
+   * defensive-classification-semantics.ts) YA cruzados con `eligible` de
+   * este build concreto — invariante 1 del plan: un consumer nunca debe
+   * recalcularlos ni ignorar `eligible` (un personal_survival semánticamente
+   * perfecto pero no seleccionado en este build no es parte del kit real).
+   */
+  isDefensiveKitMember: boolean;
+  createsMissableOpportunity: boolean;
 }
 
 const CONFIDENCE_RANK: Record<DefensiveResolutionConfidence, number> = {
@@ -273,6 +374,43 @@ export function effectiveDefensiveDataFromDatabaseRows(rows: EffectiveDefensiveD
       active: row['active'] !== false,
       updatedAt: nullableString(row['updated_at']),
     })),
+    // undefined (no []) cuando el consumer no pasó la fuente — distinto de
+    // "se consultó y no había filas". Ver comentario en EffectiveDefensiveData.
+    semantics: rows.semanticRows
+      ? rows.semanticRows.map((row) => ({
+          spellId: Number(row['spell_id']),
+          className: String(row['class'] ?? ''),
+          usageRole: (nullableString(row['usage_role']) ?? 'unknown') as DefensiveUsageRole,
+          activationScope: (nullableString(row['activation_scope']) ?? 'unknown') as DefensiveActivationScope,
+          primaryBeneficiary: (nullableString(row['primary_beneficiary']) ?? 'unknown') as DefensivePrimaryBeneficiary,
+          secondaryPropagation: (nullableString(row['secondary_propagation']) ?? 'none') as DefensiveSecondaryPropagation,
+          mechanisms: Array.isArray(row['mechanisms']) ? (row['mechanisms'].map(String) as DefensiveMechanism[]) : [],
+          opportunityMode: (nullableString(row['opportunity_mode']) ?? 'none') as DefensiveOpportunityMode,
+          defensiveIntent: (nullableString(row['defensive_intent']) ?? 'unknown') as DefensiveIntent,
+          semanticStatus: (nullableString(row['semantic_status']) ?? 'pending') as DefensiveSemanticStatus,
+          semanticVersion: nullableString(row['semantic_version']),
+          semanticConfidence: (nullableString(row['confidence']) ?? 'uncertain') as DefensiveResolutionConfidence,
+          locked: row['locked'] === true,
+        }))
+      : undefined,
+    semanticRules: rows.semanticRuleRows
+      ? rows.semanticRuleRows.map((row) => ({
+          id: String(row['id'] ?? ''),
+          modifierSpellId: Number(row['modifier_spell_id']),
+          targetSpellId: Number(row['target_spell_id']),
+          // specs es NOT NULL default '{}' en defensive_semantic_rules (a
+          // diferencia de defensive_modifier_rules.specs, que sí admite
+          // NULL) — [] en esta tabla significa "sin restricción de spec",
+          // no "no aplica a ninguna". classify-defensives ya escribe [] con
+          // ese sentido (ver collectSemanticRuleWrites).
+          specNames: Array.isArray(row['specs']) && row['specs'].length ? row['specs'].map(String) : null,
+          gameBuild: nullableString(row['game_build']) ?? LEGACY_GAME_BUILD,
+          ruleType: row['rule_type'] as EffectiveDefensiveSemanticRule['ruleType'],
+          payload: row['payload'] && typeof row['payload'] === 'object' ? (row['payload'] as Record<string, unknown>) : {},
+          source: nullableString(row['source']),
+          verified: row['verified'] === true,
+        }))
+      : undefined,
   };
 }
 
@@ -837,6 +975,128 @@ export function resolveEffectiveDefensiveKit(
       if (!positiveInteger(charges)) confidence = weakerConfidence(confidence, 'uncertain');
       if (!nonNegativeInteger(rechargeMs) && rechargeMs != null) confidence = weakerConfidence(confidence, 'uncertain');
 
+      // ---- Paso C: resolución semántica ----
+      // Ortogonal a la resolución de timing de arriba (§2.2 del plan): decide
+      // qué SIGNIFICA este defensivo para el KPI, no cuánto dura/cuándo está
+      // disponible. Solo se ejecuta si el consumer cargó `data.semantics`
+      // (analyze/reanalyze antiguos, que no pasan esa fuente, siguen
+      // recibiendo exactamente el mismo ResolvedDefensive de siempre más
+      // estos campos en sus valores neutros — nunca rompe una llamada
+      // existente).
+      const semanticResolved = data.semantics != null;
+      const semanticBase = data.semantics?.find(
+        (row) => row.spellId === entry.spellId && row.className === input.className,
+      ) ?? null;
+      let usageRole: DefensiveUsageRole = semanticBase?.usageRole ?? 'unknown';
+      let activationScope: DefensiveActivationScope = semanticBase?.activationScope ?? 'unknown';
+      let primaryBeneficiary: DefensivePrimaryBeneficiary = semanticBase?.primaryBeneficiary ?? 'unknown';
+      let secondaryPropagation: DefensiveSecondaryPropagation = semanticBase?.secondaryPropagation ?? 'none';
+      let mechanisms: DefensiveMechanism[] = semanticBase?.mechanisms ?? [];
+      let opportunityMode: DefensiveOpportunityMode = semanticBase?.opportunityMode ?? 'none';
+      let defensiveIntent: DefensiveIntent = semanticBase?.defensiveIntent ?? 'unknown';
+      const semanticStatus: DefensiveSemanticStatus = semanticBase?.semanticStatus ?? 'pending';
+      const semanticConfidence: DefensiveResolutionConfidence = semanticBase?.semanticConfidence ?? 'uncertain';
+      const semanticProvenance: SemanticResolutionStep[] = [];
+      if (semanticBase) {
+        semanticProvenance.push({
+          kind: 'catalog_base',
+          description: `usageRole=${usageRole} (semantic_status=${semanticStatus}) desde defensive_ability_semantics.`,
+        });
+      } else if (semanticResolved) {
+        semanticProvenance.push({
+          kind: 'no_match',
+          description: 'Sin fila en defensive_ability_semantics para este spellId/clase — nunca clasificado; queda pending, no penaliza.',
+        });
+      }
+
+      if (semanticResolved) {
+        const applicableSemanticRules = (data.semanticRules ?? []).filter(
+          (rule) =>
+            rule.targetSpellId === entry.spellId &&
+            (rule.specNames == null || (input.specName != null && rule.specNames.includes(input.specName))) &&
+            ranks.has(rule.modifierSpellId),
+        );
+        for (const rule of applicableSemanticRules) {
+          if (rule.ruleType === 'suppress') {
+            eligible = false;
+            semanticProvenance.push({
+              kind: 'semantic_rule_suppress',
+              description: `Suprimido por talento seleccionado (spellId ${rule.modifierSpellId}).`,
+              source: rule.source,
+              ruleId: rule.id,
+            });
+            continue;
+          }
+          if (rule.ruleType === 'convert_to_passive') {
+            activationMode = 'passive';
+            eligible = false;
+            semanticProvenance.push({
+              kind: 'semantic_rule_convert_to_passive',
+              description: `Convertido en pasivo por talento seleccionado (spellId ${rule.modifierSpellId}).`,
+              source: rule.source,
+              ruleId: rule.id,
+            });
+            continue;
+          }
+          if (rule.ruleType === 'replace') {
+            // El efectivo real pasa a ser replacementSpellId (otra fila del
+            // catálogo, si existe) — esta fila deja de ser la verdad, pero no
+            // se sintetiza aquí la fila sustituta: el caller decide si la
+            // busca por su propio spellId en el resto del kit resuelto.
+            eligible = false;
+            semanticProvenance.push({
+              kind: 'semantic_rule_replace',
+              description: `Reemplazado por talento seleccionado (spellId ${rule.modifierSpellId})${typeof rule.payload['replacementSpellId'] === 'number' ? `; sustituto spellId ${rule.payload['replacementSpellId']}` : ''}.`,
+              source: rule.source,
+              ruleId: rule.id,
+            });
+            continue;
+          }
+          // augment
+          if (!rule.verified) {
+            semanticProvenance.push({
+              kind: 'semantic_rule_unverified',
+              description: `Regla semántica sin verificar (spellId ${rule.modifierSpellId}) — no se aplica automáticamente, queda como evidencia.`,
+              source: rule.source,
+              ruleId: rule.id,
+            });
+            continue;
+          }
+          const payload = rule.payload;
+          if (typeof payload['setUsageRole'] === 'string') usageRole = payload['setUsageRole'] as DefensiveUsageRole;
+          if (typeof payload['setDefensiveIntent'] === 'string') defensiveIntent = payload['setDefensiveIntent'] as DefensiveIntent;
+          if (typeof payload['setOpportunityMode'] === 'string') opportunityMode = payload['setOpportunityMode'] as DefensiveOpportunityMode;
+          if (typeof payload['setPrimaryBeneficiary'] === 'string') primaryBeneficiary = payload['setPrimaryBeneficiary'] as DefensivePrimaryBeneficiary;
+          if (typeof payload['setSecondaryPropagation'] === 'string') secondaryPropagation = payload['setSecondaryPropagation'] as DefensiveSecondaryPropagation;
+          const addMechanisms = Array.isArray(payload['addMechanisms']) ? (payload['addMechanisms'] as string[]) : [];
+          const removeMechanisms = Array.isArray(payload['removeMechanisms']) ? (payload['removeMechanisms'] as string[]) : [];
+          if (addMechanisms.length || removeMechanisms.length) {
+            mechanisms = [...new Set([...mechanisms.filter((m) => !removeMechanisms.includes(m)), ...addMechanisms])] as DefensiveMechanism[];
+          }
+          semanticProvenance.push({
+            kind: 'semantic_rule_augment',
+            description: `Semántica modificada por talento seleccionado (spellId ${rule.modifierSpellId}): ${rule.payload['modifierName'] ?? 'talento'}.`,
+            source: rule.source,
+            ruleId: rule.id,
+          });
+        }
+      }
+
+      const semanticInput: DefensiveSemanticInput = {
+        usageRole,
+        activationScope,
+        primaryBeneficiary,
+        secondaryPropagation,
+        mechanisms,
+        opportunityMode,
+      };
+      // eligible cruzado explícitamente (invariante 1 del plan): un
+      // personal_survival perfecto que no está seleccionado en ESTE build no
+      // es parte del kit real de este pull, sin importar lo que diga el
+      // catálogo en abstracto.
+      const isKitMember = semanticResolved && eligible && isDefensiveKitMember(semanticStatus, activationMode, semanticInput);
+      const createsMissable = semanticResolved && eligible && createsMissableOpportunity(semanticStatus, activationMode, semanticInput);
+
       return {
         spellId: entry.spellId,
         name: entry.name,
@@ -857,6 +1117,21 @@ export function resolveEffectiveDefensiveKit(
         confidence,
         provenance,
         conditionalModifiers,
+        semanticResolved,
+        usageRole,
+        activationScope,
+        primaryBeneficiary,
+        secondaryPropagation,
+        mechanisms,
+        opportunityMode,
+        defensiveIntent,
+        semanticStatus,
+        semanticVersion: semanticBase?.semanticVersion ?? null,
+        semanticConfidence,
+        semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION,
+        semanticProvenance,
+        isDefensiveKitMember: isKitMember,
+        createsMissableOpportunity: createsMissable,
       };
     })
     .sort((a, b) => a.spellId - b.spellId);

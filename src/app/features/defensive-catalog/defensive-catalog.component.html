@@ -62,6 +62,23 @@
             {{ queueRetrying() ? 'Reintentando…' : (queueHealth() === 'unreachable' ? 'Volver a comprobar' : 'Reintentar') }}
           </button>
         }
+        @if (queueHealth() !== 'healthy' && queueHealth() !== 'checking') {
+          <!-- §"la cola está, hay que limpiarla... botón de cancelar cola
+               que efectivamente cancele toda la cola" (feedback real,
+               2026-09-04): descarta TERMINALMENTE (nunca se reencola) todo
+               lo no terminal — a diferencia de Reintentar, que solo
+               reencola errores. Doble clic en 5s: es destructivo y afecta a
+               TODA la cola, no a un batch. -->
+          <button
+            type="button"
+            class="queue-retry queue-cancel"
+            [disabled]="queueCancelling()"
+            (click)="requestCancelReanalysisQueue()"
+            [title]="queueCancelArmed() ? 'Pulsa otra vez para confirmar' : 'Cancela TODA la cola (todas las clases/batches)'"
+          >
+            {{ queueCancelling() ? 'Cancelando…' : (queueCancelArmed() ? '¿Seguro? Pulsa otra vez' : 'Cancelar cola') }}
+          </button>
+        }
       </div>
     </div>
 
@@ -196,7 +213,20 @@
               </div>
             }
             @if (r.invalid.length) {
-              <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada.</p>
+              <!-- §"me clasifica algunos y otros me da inválido... es normal?"
+                   (feedback real, 2026-09-03): antes solo se enseñaba el
+                   número, sin motivo — con el contrato v10 (muchos más
+                   campos, mucha más superficie para que la IA se despiste en
+                   uno) hacía falta ver spellId + reason exactos para poder
+                   diagnosticar, no solo saber que "algo" falló. -->
+              <div class="suggested-exclusions">
+                <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada — no se aplicó nada de estas filas (ni siquiera los datos legacy):</p>
+                @for (inv of r.invalid; track $index) {
+                  <div class="suggested-exclusion-row">
+                    <span><strong>spellId {{ inv.spellId }}</strong> — {{ inv.reason }}</span>
+                  </div>
+                }
+              </div>
             }
           </div>
         }

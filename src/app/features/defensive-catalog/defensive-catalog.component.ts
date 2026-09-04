@@ -71,6 +71,9 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
   queueHealthError = signal<string | null>(null);
   queueDetailsOpen = signal(false);
   queueRetrying = signal(false);
+  queueCancelling = signal(false);
+  /** Doble clic en 5s antes de cancelar TODA la cola, mismo patrón que confirmingResetClassId. */
+  queueCancelArmed = signal(false);
   queueActionMessage = signal<string | null>(null);
 
   /** Serializa también operaciones iniciadas mientras otra cola sigue viva. */
@@ -372,6 +375,53 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
       this.queueActionMessage.set(null);
     } finally {
       this.queueRetrying.set(false);
+    }
+  }
+
+  /**
+   * §"la cola está, hay que limpiarla... un botón de cancelar cola al lado
+   * de ocultar detalle/reintentar que efectivamente cancele toda la cola de
+   * forma real y eficiente" (feedback real, 2026-09-04): a diferencia de
+   * "Reintentar" (reencola errores), esto descarta TERMINALMENTE todo lo no
+   * terminal — pensado para el backlog viejo (pre-refactor v10, rate limit
+   * de WCL ya expirado, catálogo ya reemplazado) que no tiene sentido seguir
+   * arrastrando. Doble clic en 5s porque es destructivo y afecta a TODA la
+   * cola, no solo al batch visible.
+   */
+  requestCancelReanalysisQueue(): void {
+    if (this.queueCancelling()) return;
+    if (this.queueCancelArmed()) {
+      void this.confirmCancelReanalysisQueue();
+      return;
+    }
+    this.queueCancelArmed.set(true);
+    setTimeout(() => this.queueCancelArmed.set(false), 5000);
+  }
+
+  private async confirmCancelReanalysisQueue(): Promise<void> {
+    this.queueCancelArmed.set(false);
+    this.queueCancelling.set(true);
+    this.queueActionMessage.set(null);
+    try {
+      const result = await this.edgeFunctions.cancelDefensiveReanalysisQueue();
+      this.queueActionMessage.set(
+        result.cancelledJobs
+          ? `${result.cancelledJobs} job${result.cancelledJobs === 1 ? '' : 's'} y ${result.cancelledBatches} batch${result.cancelledBatches === 1 ? '' : 'es'} cancelados.`
+          : 'No había nada pendiente que cancelar.',
+      );
+      // Cancelar detiene la reanudación local en curso — evita que
+      // resumePendingReanalysisQueue() vuelva a traer jobs que ya se
+      // acaban de descartar en el servidor.
+      this.pendingReanalysisResumeStarted = true;
+      this.scheduledReanalysisJobIds.clear();
+      await this.refreshQueueHealth();
+    } catch (err) {
+      const detail = errorMessage(err);
+      this.queueHealth.set('unreachable');
+      this.queueHealthError.set(detail);
+      this.queueActionMessage.set(null);
+    } finally {
+      this.queueCancelling.set(false);
     }
   }
 

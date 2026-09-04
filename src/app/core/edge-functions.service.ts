@@ -659,6 +659,13 @@ export class EdgeFunctionsService {
     return this.invoke('defensive-reanalysis-queue', { action: 'retry', batchId: batchId ?? null });
   }
 
+  /** Descarta (terminal, nunca se reencola) todo lo no terminal — sin batchId, TODA la cola. */
+  async cancelDefensiveReanalysisQueue(
+    batchId?: string,
+  ): Promise<{ ok: true; cancelledJobs: number; cancelledBatches: number }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'cancel', batchId: batchId ?? null });
+  }
+
   async startControlledDefensiveBackfill(params: {
     bossId: string;
     difficulty: string;
