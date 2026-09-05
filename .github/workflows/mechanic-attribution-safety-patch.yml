@@ -17,6 +17,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Temporary exact-patch harness: it must disappear before the PR is opened.
       - name: Apply exact responsibility-aware patches
         shell: bash
         run: |
@@ -131,8 +132,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Focused specs import Vitest APIs explicitly so this check is independent
-      # of any global-test configuration used by the full repository suite.
       - name: Focused attribution tests
         run: npx vitest run src/app/shared/mechanic-attribution.spec.ts src/app/shared/pull-consistency.util.spec.ts
 
