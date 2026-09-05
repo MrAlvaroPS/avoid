@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import {
   buildAttemptComparison,
   summarizeExecutionIncidents,
@@ -29,6 +30,38 @@ describe('pull consistency', () => {
         summary.unclassifiedEvents +
         summary.uncoveredDeathEvents,
     ).toBe(summary.totalEvents);
+  });
+
+  it('responsibility explícita manda sobre category al separar personal de grupo', () => {
+    const summary = summarizeExecutionIncidents([
+      {
+        mechanic_name: 'Raid-owned ground damage',
+        outcome: 'fail',
+        category: 'avoidable-ground',
+        responsibility: 'raid',
+      },
+      {
+        mechanic_name: 'Personal hit',
+        outcome: 'fail',
+        category: 'personal-target',
+        responsibility: 'personal',
+      },
+      {
+        mechanic_name: 'Unknown ownership',
+        outcome: 'fail',
+        category: null,
+        responsibility: null,
+      },
+    ]);
+
+    expect(summary).toMatchObject({
+      totalEvents: 3,
+      personalEvents: 1,
+      groupEvents: 1,
+      unclassifiedEvents: 1,
+    });
+    expect(summary.personalBreakdown.map((row) => row.label)).toEqual(['Personal hit']);
+    expect(summary.groupBreakdown.map((row) => row.label)).toEqual(['Raid-owned ground damage']);
   });
 
   it('propaga ability_id y nota al desglose, para el tooltip de "Llamada colectiva"', () => {
