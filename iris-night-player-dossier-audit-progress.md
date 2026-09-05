@@ -249,10 +249,174 @@ The temporary Phase 2 workflow trigger and the extra CI-only test-list entries
 were removed after the successful run, so they are not part of the final Phase 2
 diff.
 
+## Phase 3 — canonical Defensive v7 audit
+
+Status: IMPLEMENTED AND VALIDATED ON CHILD BRANCH.
+
+Child branch: `feature/dossier-audit-p3-defensives`.
+Target integration branch: `feature/dossier-audit-p1-contracts`.
+Baseline: integration commit `12f5cf1dd1eba3f12daf89f2da6ead55fe569ef2`.
+
+### Gate verification against production
+
+Phase 3 was not started from the historical Shadow runner assumption. The live
+Supabase state was checked first.
+
+At validation time `defensive_generation_pointer.published_generation_id`
+resolved to:
+
+`aed9ea13-0c8a-4bf9-85bc-b8f69e86b9a2`
+
+That generation is `status=published` and declares:
+
+- semantic version `defensive-semantics@1.0.0`;
+- resolver `effective-defensives@2.3.0`;
+- semantic resolver `effective-defensive-semantics@1.5.0`;
+- episode/evaluator `episode-evaluator@7`;
+- game build `12.1.0.68914`.
+
+It contains 611 player-pull evaluation rows across 26 canonical pulls. Its audit
+notes record a completed two-report v7 validation, no failed pulls, no gate
+violations and zero global-integrity violations before the pointer was promoted.
+
+`shadow-defensive-v7` remains a temporary empirical runner and is **not** called
+by the dossier. The product path is exclusively:
+
+`defensive_generation_pointer -> published defensive_generations row -> canonical_scored_pulls -> player_pull_defensive_episode_evaluations -> CanonicalDefensiveSummaryService -> audit projection`.
+
+This distinction is deliberate: historical provenance may say the generation
+originated in a shadow run, but the dossier only trusts its later published
+identity selected through the canonical pointer.
+
+### Published coverage limitation
+
+The current published generation is complete for the two audited reports:
+
+- `7GbANtw1J2pjZzH9`: 13/13 canonical pulls;
+- `24nwKPpL8tr9Bcg1`: 13/13 canonical pulls.
+
+Other reports currently present in `canonical_scored_pulls` have no rows in this
+published generation. For those reports the Phase 3 surface remains fail-closed
+(partial/incompatible/N/D according to the canonical read-model); it never falls
+back to V2, pressure-window scoring or death-time defensive availability.
+
+### Audit projection implemented
+
+`NightPlayerDefensiveAuditService` composes the existing Pull Ledger with
+`CanonicalDefensiveSummaryService` and projects:
+
+- canonical Usage claim with the exact canonical numerator/denominator;
+- canonical Response claim with the exact canonical numerator/denominator;
+- Management from real published plan assignments only;
+- generation identity and all resolver/evaluator versions;
+- evaluated/expected pull coverage;
+- contextual counts for `unavailable_legitimate`, `no_applicable_resource`,
+  `uncertain` and `excluded`;
+- one auditable row per canonical `DefensiveEpisode`;
+- exact WCL fight deep-link plus `DefensiveEpisodeEvidence` containing the
+  generation id and episode id;
+- usage engagement/evaluability, Response verdict/reason, used/covering/decisive
+  spell IDs, confidence and plan assignment/verdict where present;
+- explicit unresolved-evidence/integrity states when an episode cannot be
+  joined to a boss-local Pull Ledger identity.
+
+The projection **does not calculate KPI values**. `value`, numerator and
+denominator are copied from `CanonicalDefensiveSummary`; the shared pure KPI
+contract is used only to identify which already-canonical episodes constitute
+the evidence set for those denominators.
+
+### KPI contracts exposed
+
+- Usage: episode-based engagement over the canonical usage-evaluable episode
+  population; a cast count is never used as the KPI unit.
+- Response: `covered_verified / (covered_verified + missed_ready +
+  missed_due_to_mistime)`.
+- Management: fulfilled published assignments / evaluable published
+  assignments. No published assignment population => N/D, never 0.
+- `uncertain`, `unavailable_legitimate`, `no_applicable_resource` and `excluded`
+  are visible context and never silently become punitive denominator rows.
+
+### Empirical readback
+
+The published production generation was queried directly for Dewerland in
+report `7GbANtw1J2pjZzH9`:
+
+- 17 total episodes;
+- Usage: 10/17;
+- Response: 4/15;
+- 11 `missed_ready`;
+- 0 `missed_due_to_mistime`;
+- 2 `uncertain` outside the Response denominator;
+- 0 published Management assignments => Management N/D.
+
+This matches the semantics exposed by the new audit projection and verifies that
+the UI is not deriving a second denominator.
+
+### Regression coverage
+
+`night-player-defensive-audit.service.spec.ts` includes the acceptance canary:
+
+- Response 12/20 must expose numerator 12, denominator 20, exactly 20 linked
+  denominator episodes, 12 `covered` and 8 misses;
+- Usage and Response denominators may legitimately differ;
+- Management with no plan is N/D, never 0;
+- a duplicated plan assignment remains one management unit;
+- incompatible generation data produces no fabricated KPI;
+- unresolved pull identity preserves the canonical KPI value but degrades the
+  audit claim/integrity to partial instead of inventing evidence.
+
+### UI surface
+
+The audit route now includes a dedicated Defensive v7 section showing:
+
+- generation/version/coverage state;
+- Usage, Response and Management claim cards;
+- exact numerators/denominators and formulas;
+- non-punitive context counts;
+- DefensiveEpisode ledger with WCL links and Wowhead spell links;
+- per-episode audit detail and technical evidence locator;
+- explicit blocked state instead of any legacy fallback.
+
+### Validation
+
+GitHub Actions run `33993501104` on application commit
+`3d828b0981dbf67379e3500b3989824e49526e6d`: PASS.
+
+Executed successfully:
+
+- Phase 3 defensive-audit regression suite;
+- canonical defensive-summary regression suite;
+- Phase 1/2 audit regression suites;
+- existing E7 defensive regression suites;
+- `npm run verify:defensive-contract`;
+- `npm run verify:causal-schema`;
+- `npm run verify:causal-runtime`;
+- `npm run build`, including the new service/component/templates;
+- Deno checks for the defensive evaluator/ledger/evidence/shadow modules in the
+  permanent E7 gate.
+
+The temporary Phase 3 branch trigger and extra CI-only test-list entries were
+removed after the successful run. The permanent workflow is restored exactly,
+so `.github/workflows/e7-ready-validation.yml` is not part of the final Phase 3
+diff.
+
+### Explicitly NOT included in Phase 3
+
+- no call to `shadow-defensive-v7` from product traffic;
+- no publication/pointer mutation from the dossier;
+- no Supabase schema or Edge Function change;
+- no V2/legacy defensive fallback;
+- no `pullScore`, `defensiveMissed` or pressure-window scoring;
+- no Mechanics/death cutover;
+- no Execution changes;
+- no Reliability changes;
+- no WCL performance/gear build phase;
+- no AI.
+
 ## Next gate
 
-Phase 3: full Defensive v7 audit. The dossier must not expose canonical
-Usage/Response/Management from a shadow-only runner. Phase 3 remains gated on a
-permanent, published canonical defensive generation/read-model that can be
-selected explicitly and fail closed when unavailable, without fallback to
-legacy defensive scoring.
+Phase 4: Mechanics + deaths. It must identify and consume the actual canonical
+mechanic/death ownership path before changing any player-facing claim. Legacy
+`NightPlayerSummary.mechanicFails`/`NightDeathRow` data must not be promoted to
+canonical truth merely because it is already easy to render. Any missing causal
+linkage must remain partial/N/D rather than inferred in the dossier.
