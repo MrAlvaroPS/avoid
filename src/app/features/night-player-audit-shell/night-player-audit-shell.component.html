@@ -30,11 +30,11 @@
     <div class="integrity-icon" aria-hidden="true">i</div>
     <div class="integrity-copy">
       <p class="integrity-kicker">Estado de datos</p>
-      <h2 id="integrity-title">Estructura auditable lista; claims runtime todavía no conectados</h2>
+      <h2 id="integrity-title">Pull Ledger conectado; dominios de evaluación todavía parciales</h2>
       <p>
-        Este shell no recalcula métricas ni reutiliza fórmulas del dosier legacy. La procedencia
-        contractual ya está fijada; cada dominio se conectará a su owner canónico en la fase que le
-        corresponde y fallará cerrado cuando no exista evidencia suficiente.
+        La población de pulls, identidad boss-local, resultado, duración y parse ya se proyectan con
+        evidencia directa y fail-closed. Defensivos, mecánicas, Execution, Reliability y build siguen
+        bloqueados hasta su fase correspondiente; este shell no reutiliza sus métricas legacy.
       </p>
     </div>
     <div class="integrity-count" title="Claims registrados en el catálogo de ownership">
@@ -44,8 +44,8 @@
   </section>
 
   <nav class="section-nav" aria-label="Secciones del dosier auditable">
-    <span class="section-tab section-tab--active">Visión general</span>
-    <span class="section-tab section-tab--locked">Pull Ledger · Fase 2</span>
+    <span class="section-tab">Visión general</span>
+    <a class="section-tab section-tab--active" href="#pull-ledger">Pull Ledger · Fase 2</a>
     <span class="section-tab section-tab--locked">Defensivos · Fase 3</span>
     <span class="section-tab section-tab--locked">Mecánicas · Fase 4</span>
   </nav>
@@ -65,8 +65,8 @@
           <span class="foundation-index">01</span>
           <h3>Claim explícito</h3>
           <p>
-            Cada valor deberá viajar con status, scope, evidencia, versión e integridad. El shell
-            solo presenta esos contratos.
+            Cada valor viaja con status, scope, evidencia, versión e integridad. El shell solo
+            presenta esos contratos.
           </p>
         </div>
         <div class="foundation-item">
@@ -81,8 +81,8 @@
           <span class="foundation-index">03</span>
           <h3>Evidencia trazable</h3>
           <p>
-            Los deep-links, pull refs y eventos canónicos se conectarán sin fabricar filtros ni
-            reinterpretar hechos en frontend.
+            Los deep-links y pull refs se conectan sin fabricar filtros ni reinterpretar hechos en
+            frontend.
           </p>
         </div>
       </div>
@@ -90,10 +90,10 @@
 
     <aside class="next-card">
       <p class="card-kicker">Siguiente gate</p>
-      <h2>Fase 2 · Pull Ledger</h2>
+      <h2>Fase 3 · Defensive v7</h2>
       <p>
-        La siguiente entrega añadirá una fila por pull real participado, usando identidad boss-local
-        y evidencia exacta. Hasta entonces este shell no muestra números de ejecución.
+        El siguiente bloque solo podrá exponer Usage, Response y Management cuando exista una
+        generación canónica publicada y seleccionable sin fallback legacy.
       </p>
       <div class="next-rule">
         <span>Regla activa</span>
@@ -101,6 +101,11 @@
       </div>
     </aside>
   </section>
+
+  <app-night-player-pull-ledger
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+  />
 </main>
 
 @if (provenanceOpen()) {
@@ -117,8 +122,8 @@
           <p class="card-kicker">Truth Catalog</p>
           <h2 id="provenance-title">Procedencia contractual</h2>
           <p>
-            Registro de ownership. No representa todavía evidencia runtime ni confirma que un claim
-            esté disponible para este report.
+            Registro de ownership. Un owner registrado no implica que el claim esté disponible para
+            este report; el estado runtime sigue viajando en cada AuditClaim.
           </p>
         </div>
         <button class="drawer-close" type="button" aria-label="Cerrar procedencia" (click)="closeProvenance()">

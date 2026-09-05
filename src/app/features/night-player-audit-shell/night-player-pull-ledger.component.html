@@ -1,0 +1,265 @@
+<section id="pull-ledger" class="ledger" aria-labelledby="pull-ledger-title">
+  <header class="ledger-header">
+    <div>
+      <p class="ledger-kicker">Fase 2 · Pull Ledger</p>
+      <h2 id="pull-ledger-title">Cada intento, con su evidencia</h2>
+      <p class="ledger-subtitle">
+        Solo aparecen intentos donde existe participación real del jugador. La numeración es boss-local
+        y los datos ausentes se muestran como N/D, nunca como cero.
+      </p>
+    </div>
+    @if (data(); as ledger) {
+      <div class="ledger-summary" [attr.data-integrity]="ledger.integrity">
+        <strong>{{ ledger.rows.length }}</strong>
+        <span>pulls auditables</span>
+      </div>
+    }
+  </header>
+
+  @if (loading()) {
+    <div class="ledger-state">Cargando hechos directos del Pull Ledger…</div>
+  } @else if (error()) {
+    <div class="ledger-state ledger-state--error">
+      <strong>No se pudo cargar el Pull Ledger.</strong>
+      <span>{{ error() }}</span>
+    </div>
+  } @else if (data(); as ledger) {
+    @if (ledger.integrityIssues.length) {
+      <div class="integrity-warning">
+        <strong>Integridad parcial</strong>
+        <ul>
+          @for (issue of ledger.integrityIssues; track issue) {
+            <li>{{ issue }}</li>
+          }
+        </ul>
+      </div>
+    }
+
+    @if (ledger.rows.length) {
+      <div class="ledger-table-wrap">
+        <table class="ledger-table">
+          <thead>
+            <tr>
+              <th>Pull</th>
+              <th>Resultado</th>
+              <th>Duración</th>
+              <th>Parse WCL</th>
+              <th>Integridad</th>
+              <th class="wcl-column">Evidencia</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of ledger.rows; track row.key) {
+              <tr class="ledger-row" [class.ledger-row--expanded]="expandedPullId() === row.pull.pullId">
+                <td>
+                  <button
+                    class="pull-expand"
+                    type="button"
+                    [attr.aria-expanded]="expandedPullId() === row.pull.pullId"
+                    (click)="toggleRow(row)"
+                  >
+                    <span class="expand-icon">{{ expandedPullId() === row.pull.pullId ? '−' : '+' }}</span>
+                    <span class="pull-copy">
+                      <strong>{{ row.label }}</strong>
+                      <small>{{ row.pull.difficulty }} · fight {{ row.pull.fightId }}</small>
+                    </span>
+                  </button>
+                </td>
+                <td>
+                  <span class="result-pill" [attr.data-result]="row.result.value ?? 'unknown'">
+                    {{ resultLabel(row) }}
+                  </span>
+                </td>
+                <td>
+                  <span [class.value-muted]="row.duration.value == null">
+                    {{ formatDuration(row.duration.value) }}
+                  </span>
+                </td>
+                <td>
+                  @if (row.parse.value != null) {
+                    <span class="parse-value" [attr.data-tier]="parseTier(row.parse.value)">
+                      {{ formatPct(row.parse.value) }}
+                    </span>
+                    @if (row.worldTotalParses != null) {
+                      <small class="sample-size">{{ row.worldTotalParses }} parses</small>
+                    }
+                  } @else {
+                    <span class="nd-value">N/D</span>
+                  }
+                </td>
+                <td>
+                  <span class="integrity-status" [attr.data-integrity]="row.integrity">
+                    {{ row.integrity === 'complete' ? 'Completo' : 'Parcial' }}
+                  </span>
+                </td>
+                <td class="wcl-column">
+                  <a class="wcl-link" [href]="row.wclUrl" target="_blank" rel="noopener noreferrer">
+                    Abrir fight ↗
+                  </a>
+                </td>
+              </tr>
+
+              @if (expandedPullId() === row.pull.pullId) {
+                <tr class="audit-row">
+                  <td colspan="6">
+                    <div class="audit-panel">
+                      <div class="audit-scope">
+                        <div>
+                          <span>Identidad interna</span>
+                          <code>{{ row.pull.pullId }}</code>
+                        </div>
+                        <div>
+                          <span>Scope</span>
+                          <strong>{{ row.pull.bossName }} · {{ row.pull.difficulty }}</strong>
+                        </div>
+                        <div>
+                          <span>Locator WCL</span>
+                          <strong>fight {{ row.pull.fightId }}</strong>
+                        </div>
+                      </div>
+
+                      <div class="claim-grid">
+                        <article class="claim-card">
+                          <div class="claim-title">
+                            <span>Participación</span>
+                            <b [attr.data-status]="row.participation.status">
+                              {{ claimStatusLabel(row.participation.status) }}
+                            </b>
+                          </div>
+                          <strong>{{ row.participation.value ? 'Participó' : 'N/D' }}</strong>
+                          <p>{{ row.participation.definition }}</p>
+                          <code>{{ row.participation.sourceVersion }}</code>
+                        </article>
+
+                        <article class="claim-card">
+                          <div class="claim-title">
+                            <span>Identidad</span>
+                            <b [attr.data-status]="row.identity.status">
+                              {{ claimStatusLabel(row.identity.status) }}
+                            </b>
+                          </div>
+                          <strong>{{ row.identity.value }}</strong>
+                          <p>{{ row.identity.definition }}</p>
+                          <code>{{ row.identity.formula }}</code>
+                        </article>
+
+                        <article class="claim-card">
+                          <div class="claim-title">
+                            <span>Resultado</span>
+                            <b [attr.data-status]="row.result.status">
+                              {{ claimStatusLabel(row.result.status) }}
+                            </b>
+                          </div>
+                          <strong>{{ resultLabel(row) }}</strong>
+                          <p>{{ row.result.definition }}</p>
+                          <code>{{ row.result.formula }}</code>
+                        </article>
+
+                        <article class="claim-card">
+                          <div class="claim-title">
+                            <span>Duración</span>
+                            <b [attr.data-status]="row.duration.status">
+                              {{ claimStatusLabel(row.duration.status) }}
+                            </b>
+                          </div>
+                          <strong>{{ formatDuration(row.duration.value) }}</strong>
+                          <p>{{ row.duration.definition }}</p>
+                          <code>{{ row.duration.sourceVersion }}</code>
+                        </article>
+
+                        <article class="claim-card">
+                          <div class="claim-title">
+                            <span>Parse WCL</span>
+                            <b [attr.data-status]="row.parse.status">
+                              {{ claimStatusLabel(row.parse.status) }}
+                            </b>
+                          </div>
+                          <strong>{{ row.parse.value == null ? 'N/D' : formatPct(row.parse.value) }}</strong>
+                          <p>{{ row.parse.definition }}</p>
+                          <code>{{ row.parse.sourceVersion }}</code>
+                        </article>
+                      </div>
+
+                      <div class="evidence-block">
+                        <div class="evidence-heading">
+                          <div>
+                            <span>Evidencia reconstruible</span>
+                            <strong>Fuentes usadas por los claims de esta fila</strong>
+                          </div>
+                          <a [href]="row.wclUrl" target="_blank" rel="noopener noreferrer">WCL exacto ↗</a>
+                        </div>
+
+                        <div class="evidence-list">
+                          @for (evidence of row.parse.evidence; track evidence.id) {
+                            <div class="evidence-item">
+                              <div>
+                                <strong>{{ evidenceLabel(evidence) }}</strong>
+                                <code>{{ evidence.locator }}</code>
+                              </div>
+                              @if (evidenceHref(evidence); as href) {
+                                <a [href]="href" target="_blank" rel="noopener noreferrer">Abrir ↗</a>
+                              } @else {
+                                <span class="internal-source">Fuente interna</span>
+                              }
+                            </div>
+                          }
+                        </div>
+                      </div>
+
+                      @if (row.integrityIssues.length) {
+                        <div class="row-issues">
+                          <strong>Datos no disponibles para esta fila</strong>
+                          <ul>
+                            @for (issue of row.integrityIssues; track issue) {
+                              <li>{{ issue }}</li>
+                            }
+                          </ul>
+                        </div>
+                      }
+
+                      <div class="future-domains">
+                        <span>Execution · Fase 6</span>
+                        <span>Defensivos · Fase 3</span>
+                        <span>Mecánicas/muertes · Fase 4</span>
+                        <span>Build · Fase 5</span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              }
+            }
+          </tbody>
+        </table>
+      </div>
+    } @else {
+      <div class="ledger-state">
+        No hay pulls válidos con una fila <code>player_pull_records</code> para este jugador en el report.
+      </div>
+    }
+
+    @if (ledger.excludedParticipatedPulls.length) {
+      <details class="excluded-pulls">
+        <summary>
+          {{ ledger.excludedParticipatedPulls.length }} pull{{ ledger.excludedParticipatedPulls.length === 1 ? '' : 's' }}
+          participado{{ ledger.excludedParticipatedPulls.length === 1 ? '' : 's' }} fuera del ledger evaluable
+        </summary>
+        <p>
+          Se conservan como contexto y con deep-link exacto, pero no reciben un ordinal boss-local inventado.
+        </p>
+        <div class="excluded-list">
+          @for (pull of ledger.excludedParticipatedPulls; track pull.pullId) {
+            <div class="excluded-item">
+              <div>
+                <strong>{{ pull.bossName }} · {{ pull.difficulty }}</strong>
+                <span>
+                  {{ pull.reason === 'ninja_pull' ? 'Ninja pull excluido' : 'Identidad no resoluble' }} · fight {{ pull.fightId }}
+                </span>
+              </div>
+              <a [href]="pull.wclUrl" target="_blank" rel="noopener noreferrer">WCL ↗</a>
+            </div>
+          }
+        </div>
+      </details>
+    }
+  }
+</section>

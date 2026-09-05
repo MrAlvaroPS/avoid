@@ -1,6 +1,10 @@
 import type { AuditSourceKind } from './models/night-player-audit';
 
 export type NightPlayerClaimId =
+  | 'pull.population'
+  | 'pull.identity'
+  | 'pull.result'
+  | 'pull.duration'
   | 'execution.night'
   | 'defensive.usage'
   | 'defensive.response'
@@ -33,6 +37,25 @@ export interface NightPlayerClaimOwner {
  * incompatible o not_evaluable.
  */
 export const NIGHT_PLAYER_CLAIM_REGISTRY = {
+  'pull.population': {
+    owner: 'pulls + player_pull_records',
+    source: 'iris_derived',
+    note: 'Participación = existe player_pull_records; los ninja pulls se preservan como exclusión contextual y no entran en el ledger evaluable.',
+  },
+  'pull.identity': {
+    owner: 'pull-consistency.validAttemptOrdinal',
+    source: 'iris_derived',
+    note: 'Ordinal boss+dificultad 1..N sobre todos los intentos válidos del report, no numeración global ni numeración solo de los pulls jugados por el raider.',
+  },
+  'pull.result': {
+    owner: 'pulls.wipe_pct',
+    source: 'wcl',
+    note: 'Si wipe_pct falta, el resultado es N/D; no se asume wipe por defecto.',
+  },
+  'pull.duration': {
+    owner: 'pulls.duration_ms',
+    source: 'wcl',
+  },
   'execution.night': {
     owner: 'night-player-summary.execution',
     source: 'iris_derived',
