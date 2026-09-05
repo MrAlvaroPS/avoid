@@ -49,6 +49,8 @@ export interface TemporalCoverageInput {
   /** Timestamps de cast de ESTE spell — no se asume ordenado ni deduplicado, ver normalizeCastTimestamps. */
   castsForSpellMs: readonly number[];
   episode: TemporalEpisodeWindow;
+  /** Timestamps de daño crudo que realmente pertenecen al episodio. after_damage se ancla a estos hits, no al borde agregado del episodio. */
+  damageTimestampsMs?: readonly number[];
   /** Política explícita del Episode Evaluator (§5.2) — persistida como evidencia, nunca un magic number oculto. */
   afterDamageResponseWindowMs: number;
   /** Cutoff de evaluación (wipe call) — la ventana de gracia reactiva nunca se extiende más allá de esto. null = sin cutoff conocido. */
@@ -116,9 +118,33 @@ function beforeOrDuring(input: TemporalCoverageInput): CoreResult {
 
 /** §5.2 — reactivo: ventana explícita y versionada tras el daño, nunca un heurístico por nombre de mechanism. */
 function afterDamage(input: TemporalCoverageInput): CoreResult {
+  const cutoff = input.evaluationEndMs ?? Number.POSITIVE_INFINITY;
+  const damageTimestamps = normalizeCastTimestamps(input.damageTimestampsMs ?? []);
+  if (damageTimestamps.length) {
+    const windows = damageTimestamps.map((hitMs) => ({
+      hitMs,
+      endMs: Math.min(hitMs + input.afterDamageResponseWindowMs, cutoff),
+    }));
+    const relevantCasts = input.castsForSpellMs.filter((castMs) =>
+      windows.some((window) => castMs >= window.hitMs && castMs <= window.endMs),
+    );
+    const engagement = relevantCasts.length > 0;
+    return {
+      engagement,
+      castCoverage: engagement ? 'yes' : 'no',
+      reason: engagement
+        ? `Cast reactivo dentro de ${input.afterDamageResponseWindowMs}ms de un hit real del episodio.`
+        : `Ningún cast dentro de ${input.afterDamageResponseWindowMs}ms de los hits reales del episodio.`,
+      evidence: { anchor: 'raw_damage_hits', windows, relevantCasts },
+    };
+  }
+
+  // Compatibility fallback for pure callers/tests that do not have raw hits.
+  // Canonical E6 callers pass damageTimestampsMs and therefore never depend on
+  // this aggregate-window approximation.
   const windowEndMs = Math.min(
     input.episode.endMs + input.afterDamageResponseWindowMs,
-    input.evaluationEndMs ?? Number.POSITIVE_INFINITY,
+    cutoff,
   );
   const relevantCasts = input.castsForSpellMs.filter((t) => t >= input.episode.startMs && t <= windowEndMs);
   const engagement = relevantCasts.length > 0;
@@ -126,9 +152,9 @@ function afterDamage(input: TemporalCoverageInput): CoreResult {
     engagement,
     castCoverage: engagement ? 'yes' : 'no',
     reason: engagement
-      ? `Cast reactivo dentro de la ventana de respuesta explícita (${input.afterDamageResponseWindowMs}ms tras el episodio).`
-      : `Ningún cast dentro de la ventana de respuesta reactiva (${input.afterDamageResponseWindowMs}ms tras el episodio).`,
-    evidence: { windowEndMs },
+      ? `Cast reactivo dentro de la ventana agregada de compatibilidad (${input.afterDamageResponseWindowMs}ms).`
+      : `Ningún cast dentro de la ventana reactiva agregada de compatibilidad (${input.afterDamageResponseWindowMs}ms).`,
+    evidence: { anchor: 'episode_fallback', windowEndMs },
   };
 }
 

@@ -26,7 +26,9 @@ export const KPI_EVALUABLE_RESPONSE_VERDICTS: ReadonlySet<ResponseVerdict> = new
 ]);
 
 /**
- * Denominador canónico de Uso (§13.1): NUNCA "no excluded + algún kit
+ * Compatibility helper for pre-v5 callers. Canonical v5 persistence receives usageEvaluable directly from the verdict because Usage can be evaluable while Response is uncertain.
+ *
+ * Denominador legacy de Uso (§13.1): NUNCA "no excluded + algún kit
  * member" (regla vieja, incorrecta — contaba unavailable_legitimate/
  * no_applicable_resource/uncertain como si el jugador "pudiera actuar").
  * Solo estos tres responseVerdict son evaluables para Uso.
@@ -58,9 +60,9 @@ export interface DefensiveEpisodeKpiContribution {
  * KPI (§13.1 "Do not count casts").
  */
 export function deriveDefensiveEpisodeKpiContribution(
-  episode: Pick<PersistedDefensiveEpisode, 'episodeId' | 'usageEngaged' | 'responseVerdict'>,
+  episode: Pick<PersistedDefensiveEpisode, 'episodeId' | 'usageEngaged' | 'usageEvaluable' | 'responseVerdict'>,
 ): DefensiveEpisodeKpiContribution {
-  const usageEvaluable = deriveUsageEvaluable(episode.responseVerdict);
+  const usageEvaluable = episode.usageEvaluable ?? deriveUsageEvaluable(episode.responseVerdict);
   const responseEvaluable = deriveResponseEvaluable(episode.responseVerdict);
   return {
     episodeId: episode.episodeId,
@@ -110,7 +112,7 @@ function round2(value: number): number {
  * episodio a episodio.
  */
 export function aggregateDefensiveEpisodeKpis(
-  episodes: readonly Pick<PersistedDefensiveEpisode, 'episodeId' | 'usageEngaged' | 'responseVerdict'>[],
+  episodes: readonly Pick<PersistedDefensiveEpisode, 'episodeId' | 'usageEngaged' | 'usageEvaluable' | 'responseVerdict'>[],
 ): DefensiveEpisodeKpiAggregate {
   const contributions = episodes.map((episode) => deriveDefensiveEpisodeKpiContribution(episode));
 

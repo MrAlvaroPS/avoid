@@ -92,6 +92,23 @@ describe('evaluateTemporalCoverage — after_damage (test 14-15)', () => {
   });
 });
 
+
+
+  it('anchors reactive coverage to the real damage hit even when cast occurs before the aggregated episode start', () => {
+    const result = evaluateTemporalCoverage(
+      input({
+        timingRelation: 'after_damage',
+        episode: { startMs: 10_000, endMs: 12_000, peakMs: 11_000 },
+        damageTimestampsMs: [9_500],
+        castsForSpellMs: [9_800],
+        afterDamageResponseWindowMs: 3000,
+      }),
+    );
+    expect(result.engagement).toBe(true);
+    expect(result.castCoverage).toBe('yes');
+    expect(result.evidence['anchor']).toBe('raw_damage_hits');
+  });
+
 describe('evaluateTemporalCoverage — either (test 16-17)', () => {
   it('16: proactive overlap alone satisfies either', () => {
     const result = evaluateTemporalCoverage(input({ timingRelation: 'either', castsForSpellMs: [8_000], effectiveDurationMs: 12_000 }));
