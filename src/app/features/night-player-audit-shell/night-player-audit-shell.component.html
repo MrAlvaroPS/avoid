@@ -127,9 +127,9 @@
       </header>
 
       <div class="source-legend" aria-label="Tipos de fuente">
-        @for (source of ['wcl', 'iris_canonical', 'iris_derived', 'catalog', 'ai_interpretation']; track source) {
-          <span class="source-chip" [attr.data-tone]="sourceMeta[$any(source)].tone">
-            {{ sourceMeta[$any(source)].label }}
+        @for (source of sourceKinds; track source) {
+          <span class="source-chip" [attr.data-tone]="sourceMeta[source].tone">
+            {{ sourceMeta[source].label }}
           </span>
         }
       </div>
