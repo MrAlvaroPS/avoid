@@ -39,13 +39,15 @@ jobs:
         run: |
           npm run verify:defensive-contract
           npm run verify:causal-schema
+          printf '{"nodeModulesDir":"auto"}\n' > deno.json
           npm run verify:causal-runtime
+          rm -f deno.json
 
       - name: Angular build
         run: npm run build
 
       - name: Remove temporary codemod workflow
-        run: rm -f .github/workflows/apply-defensive-evidence-v5.yml .github/scripts/apply-defensive-evidence-v5.py .github/scripts/patch-defensive-evidence-v5-tests.py
+        run: rm -f .github/workflows/apply-defensive-evidence-v5.yml .github/scripts/apply-defensive-evidence-v5.py .github/scripts/patch-defensive-evidence-v5-tests.py deno.json
 
       - name: Commit materialized changes
         run: |
