@@ -106,7 +106,7 @@ describe('mechanic attribution canonical shadow v1', () => {
     },
   );
 
-  it('verifies a single personal target only when the target is already a Safety-v1 candidate', () => {
+  it('keeps a single personal-target unresolved until its required response is evidenced', () => {
     const result = evaluate({
       category: 'personal-target',
       playersHitNames: ['A'],
@@ -116,9 +116,10 @@ describe('mechanic attribution canonical shadow v1', () => {
       }),
     });
 
-    expect(result.status).toBe('verified');
-    expect(result.reason).toBe('SINGLE_PERSONAL_TARGET');
-    expect(result.responsiblePlayers).toEqual(['A']);
+    expect(result.status).toBe('unresolved');
+    expect(result.reason).toBe('PERSONAL_TARGET_REQUIRES_RESPONSE_EVIDENCE');
+    expect(result.responsiblePlayers).toEqual([]);
+    expect(result.safetyV1Players).toEqual(['A']);
   });
 
   it('fails closed when event responsibility and canonical policy disagree', () => {
