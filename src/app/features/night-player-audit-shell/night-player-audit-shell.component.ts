@@ -60,6 +60,14 @@ export class NightPlayerAuditShellComponent {
 
   provenanceOpen = signal(false);
 
+  protected readonly sourceKinds: readonly AuditSourceKind[] = [
+    'wcl',
+    'iris_canonical',
+    'iris_derived',
+    'catalog',
+    'ai_interpretation',
+  ];
+
   protected readonly provenanceRows: readonly ProvenanceRow[] = (
     Object.entries(NIGHT_PLAYER_CLAIM_REGISTRY) as [
       NightPlayerClaimId,
