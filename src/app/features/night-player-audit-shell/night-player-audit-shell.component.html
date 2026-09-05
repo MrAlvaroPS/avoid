@@ -1,0 +1,156 @@
+<main class="audit-shell">
+  <a
+    class="back-link"
+    [routerLink]="['/report', reportCode(), 'player', playerName()]"
+  >
+    ← Volver al dosier actual
+  </a>
+
+  <header class="audit-hero">
+    <div class="hero-copy">
+      <p class="eyebrow">IRIS · DOSIER AUDITABLE</p>
+      <h1>{{ playerName() }}</h1>
+      <p class="hero-subtitle">
+        Consola de auditoría del pull · report <code>{{ reportCode() }}</code>
+      </p>
+    </div>
+
+    <div class="hero-actions">
+      <div class="integrity-pill" aria-label="Estado de datos parcial">
+        <span class="integrity-dot"></span>
+        Parcial
+      </div>
+      <button class="provenance-btn" type="button" (click)="openProvenance()">
+        Ver procedencia
+      </button>
+    </div>
+  </header>
+
+  <section class="integrity-banner" aria-labelledby="integrity-title">
+    <div class="integrity-icon" aria-hidden="true">i</div>
+    <div class="integrity-copy">
+      <p class="integrity-kicker">Estado de datos</p>
+      <h2 id="integrity-title">Estructura auditable lista; claims runtime todavía no conectados</h2>
+      <p>
+        Este shell no recalcula métricas ni reutiliza fórmulas del dosier legacy. La procedencia
+        contractual ya está fijada; cada dominio se conectará a su owner canónico en la fase que le
+        corresponde y fallará cerrado cuando no exista evidencia suficiente.
+      </p>
+    </div>
+    <div class="integrity-count" title="Claims registrados en el catálogo de ownership">
+      <strong>{{ provenanceRows.length }}</strong>
+      <span>claims con owner</span>
+    </div>
+  </section>
+
+  <nav class="section-nav" aria-label="Secciones del dosier auditable">
+    <span class="section-tab section-tab--active">Visión general</span>
+    <span class="section-tab section-tab--locked">Pull Ledger · Fase 2</span>
+    <span class="section-tab section-tab--locked">Defensivos · Fase 3</span>
+    <span class="section-tab section-tab--locked">Mecánicas · Fase 4</span>
+  </nav>
+
+  <section class="shell-grid">
+    <article class="foundation-card">
+      <div class="card-heading">
+        <div>
+          <p class="card-kicker">Fundación de auditoría</p>
+          <h2>Una sola verdad, visible y reconstruible</h2>
+        </div>
+        <span class="ready-badge">Fase 1</span>
+      </div>
+
+      <div class="foundation-grid">
+        <div class="foundation-item">
+          <span class="foundation-index">01</span>
+          <h3>Claim explícito</h3>
+          <p>
+            Cada valor deberá viajar con status, scope, evidencia, versión e integridad. El shell
+            solo presenta esos contratos.
+          </p>
+        </div>
+        <div class="foundation-item">
+          <span class="foundation-index">02</span>
+          <h3>Owner único</h3>
+          <p>
+            La pantalla no decide quién tiene razón. El registro de ownership indica qué read-model
+            es responsable de cada claim.
+          </p>
+        </div>
+        <div class="foundation-item">
+          <span class="foundation-index">03</span>
+          <h3>Evidencia trazable</h3>
+          <p>
+            Los deep-links, pull refs y eventos canónicos se conectarán sin fabricar filtros ni
+            reinterpretar hechos en frontend.
+          </p>
+        </div>
+      </div>
+    </article>
+
+    <aside class="next-card">
+      <p class="card-kicker">Siguiente gate</p>
+      <h2>Fase 2 · Pull Ledger</h2>
+      <p>
+        La siguiente entrega añadirá una fila por pull real participado, usando identidad boss-local
+        y evidencia exacta. Hasta entonces este shell no muestra números de ejecución.
+      </p>
+      <div class="next-rule">
+        <span>Regla activa</span>
+        <strong>N/D antes que falsa precisión</strong>
+      </div>
+    </aside>
+  </section>
+</main>
+
+@if (provenanceOpen()) {
+  <div class="drawer-backdrop" (click)="closeProvenance()">
+    <aside
+      class="provenance-drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provenance-title"
+      (click)="$event.stopPropagation()"
+    >
+      <header class="drawer-header">
+        <div>
+          <p class="card-kicker">Truth Catalog</p>
+          <h2 id="provenance-title">Procedencia contractual</h2>
+          <p>
+            Registro de ownership. No representa todavía evidencia runtime ni confirma que un claim
+            esté disponible para este report.
+          </p>
+        </div>
+        <button class="drawer-close" type="button" aria-label="Cerrar procedencia" (click)="closeProvenance()">
+          ×
+        </button>
+      </header>
+
+      <div class="source-legend" aria-label="Tipos de fuente">
+        @for (source of ['wcl', 'iris_canonical', 'iris_derived', 'catalog', 'ai_interpretation']; track source) {
+          <span class="source-chip" [attr.data-tone]="sourceMeta[$any(source)].tone">
+            {{ sourceMeta[$any(source)].label }}
+          </span>
+        }
+      </div>
+
+      <div class="provenance-list">
+        @for (row of provenanceRows; track row.id) {
+          <article class="provenance-row">
+            <div class="provenance-row-top">
+              <code>{{ row.id }}</code>
+              <span class="source-chip" [attr.data-tone]="sourceMeta[row.source].tone">
+                {{ sourceMeta[row.source].label }}
+              </span>
+            </div>
+            <strong>{{ row.owner }}</strong>
+            <p>{{ sourceMeta[row.source].description }}</p>
+            @if (row.note) {
+              <p class="owner-note">{{ row.note }}</p>
+            }
+          </article>
+        }
+      </div>
+    </aside>
+  </div>
+}
