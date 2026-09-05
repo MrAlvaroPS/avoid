@@ -30,12 +30,12 @@
     <div class="integrity-icon" aria-hidden="true">i</div>
     <div class="integrity-copy">
       <p class="integrity-kicker">Estado de datos</p>
-      <h2 id="integrity-title">Fase 4 conectada al pipeline causal; el cutover sigue condicionado al E2E</h2>
+      <h2 id="integrity-title">Fase 4 tiene operador y acceptance gate; el cutover sigue condicionado al E2E real</h2>
       <p>
-        Mecánicas y muertes consumen únicamente causal v3. Fase 4B añade una puerta officer para
-        encolar y procesar la cola causal existente sin conceder el RPC <code>service_role</code> al
-        navegador. Los totales siguen gobernados por el gate de Fase 4A: hasta cobertura fresca y
-        homogénea, N/D antes que un cero o una atribución legacy.
+        Mecánicas y muertes consumen únicamente causal v3. El operador de Fase 4B mueve la cola causal
+        existente y Fase 4C comprueba materialización, versiones, trust y ownership. Aun con todos los
+        checks automáticos verdes, el estado máximo es “listo para comparación manual”: Attribution
+        Safety v1 (#17) sigue siendo un gate humano obligatorio antes de aceptar el cutover.
       </p>
     </div>
     <div class="integrity-count" title="Claims registrados en el catálogo de ownership">
@@ -93,9 +93,9 @@
       <p class="card-kicker">Gate operativo actual</p>
       <h2>Aceptar materialización causal de Fase 4</h2>
       <p>
-        El código ya dispone de un operador explícito sobre la cola existente. El siguiente criterio
-        no es “que haya filas”, sino demostrar sobre corpus real occurrences → responsibility edges →
-        ledger, versiones homogéneas y atribuciones compatibles con el safety baseline.
+        El código ya puede operar la cola y evaluar automáticamente el resultado. El siguiente paso
+        real es desplegar esta rama de integración en un entorno officer, materializar un corpus y
+        ejecutar la comparación legacy → Attribution Safety v1 → causal v3.
       </p>
       <div class="next-rule">
         <span>Regla activa</span>
@@ -121,6 +121,12 @@
   />
 
   <app-night-player-mechanic-death-audit
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+    [refreshToken]="causalRefreshToken()"
+  />
+
+  <app-night-player-causal-acceptance
     [reportCode]="reportCode()"
     [playerName]="playerName()"
     [refreshToken]="causalRefreshToken()"

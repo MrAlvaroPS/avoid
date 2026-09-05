@@ -1,0 +1,62 @@
+<section class="acceptance" aria-labelledby="causal-acceptance-title">
+  <header class="acceptance-header">
+    <div>
+      <p class="acceptance-kicker">Fase 4C · Acceptance gate</p>
+      <h2 id="causal-acceptance-title">¿Está el causal v3 listo para auditar?</h2>
+      <p>
+        Checklist reproducible sobre materialización, versiones, trust y ownership. Ningún PASS de esta
+        tarjeta sustituye la comparación final con Attribution Safety v1 (#17).
+      </p>
+    </div>
+  </header>
+
+  @if (loading()) {
+    <div class="acceptance-state">Calculando gate causal…</div>
+  } @else if (data(); as report) {
+    <div class="acceptance-summary" [attr.data-state]="report.state">
+      <div>
+        <span>Estado automático</span>
+        <strong>{{ report.state === 'ready_for_manual_comparison' ? 'LISTO PARA COMPARACIÓN MANUAL' : 'BLOQUEADO' }}</strong>
+      </div>
+      <div class="summary-counts">
+        <span><b>{{ report.automaticPasses }}</b> pass</span>
+        <span><b>{{ report.automaticFailures }}</b> fail</span>
+        <span><b>{{ report.pendingManualChecks }}</b> gate manual</span>
+      </div>
+    </div>
+
+    <div class="acceptance-facts">
+      <span>{{ report.occurrenceCount }} occurrences</span>
+      <span>{{ report.responsibilityEdgeCount }} responsibility edges del jugador</span>
+      <span>{{ report.punitiveMechanicEventCount }} eventos mecánicos punitivos</span>
+    </div>
+
+    <div class="check-list">
+      @for (check of report.checks; track check.id) {
+        <article class="check-row" [attr.data-state]="check.state">
+          <span class="check-state">{{ stateLabel(check) }}</span>
+          <div>
+            <strong>{{ check.label }}</strong>
+            <p>{{ check.detail }}</p>
+          </div>
+          @if (check.evidenceCount != null) {
+            <code>{{ check.evidenceCount }}</code>
+          }
+        </article>
+      }
+    </div>
+
+    <div class="manual-gate">
+      <strong>Gate humano obligatorio</strong>
+      <p>
+        Antes del cutover: <code>legacy original → Attribution Safety v1 → causal v3</code>. Si causal v3
+        añade una penalización que v1 retiraba/no podía atribuir, esa diferencia debe demostrar un
+        responsibility edge explícito, trusted y consistente con la occurrence.
+      </p>
+    </div>
+  }
+
+  @if (error()) {
+    <div class="acceptance-error" role="alert">{{ error() }}</div>
+  }
+</section>
