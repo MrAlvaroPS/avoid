@@ -80,6 +80,14 @@ export const routes: Routes = [
         loadComponent: () => import('./features/player-detail/player-detail.component').then((m) => m.PlayerDetailComponent),
       },
       {
+        // Fase 1B del nuevo dosier auditable. Ruta paralela y deliberadamente
+        // no enlazada desde la navegación principal: permite construir y
+        // auditar el Truth Catalog sin reemplazar todavía la presentación
+        // legacy. El cutover de la ruta estable pertenece a la fase final.
+        path: 'report/:reportCode/player/:playerName/audit',
+        loadComponent: () => import('./features/night-player-audit-shell/night-player-audit-shell.component').then((m) => m.NightPlayerAuditShellComponent),
+      },
+      {
         // §"un dosier de personaje de una noche concreta": jugador × NOCHE
         // (report_code), la tercera combinación que le faltaba a la app junto a
         // boss+dificultad y jugador+histórico. Nombres de parámetro = nombres
