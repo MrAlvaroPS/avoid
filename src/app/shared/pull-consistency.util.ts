@@ -1,11 +1,8 @@
 import type { MechanicCategory } from './models/domain';
-
-export const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set<MechanicCategory>([
-  'avoidable-ground',
-  'spread',
-  'soak',
-  'personal-target',
-]);
+import {
+  classifyMechanicAttribution,
+  type MechanicResponsibility,
+} from '../../../supabase/functions/_shared/mechanic-attribution';
 
 export interface IncidentBreakdownItem {
   label: string;
@@ -36,6 +33,8 @@ type IncidentEvent = {
   mechanic_name: string;
   outcome: string;
   category: MechanicCategory | null;
+  /** Attribution Safety v1: si existe, manda sobre category para decidir responsabilidad. */
+  responsibility?: MechanicResponsibility | null;
   /** Opcional: los tests de este módulo pasan eventos sintéticos sin ability_id — pull_mechanic_events real siempre lo trae. */
   ability_id?: number;
 };
@@ -59,13 +58,16 @@ export function summarizeExecutionIncidents(
   notesByMechanicName?: Map<string, string>,
 ): ExecutionIncidentSummary {
   const failed = events.filter((event) => event.outcome !== 'clean');
-  const personal = failed.filter(
-    (event) => event.category != null && PERSONAL_RESPONSIBILITY_CATEGORIES.has(event.category),
-  );
-  const group = failed.filter(
-    (event) => event.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(event.category),
-  );
-  const unclassified = failed.filter((event) => event.category == null);
+  const personal: IncidentEvent[] = [];
+  const group: IncidentEvent[] = [];
+  const unclassified: IncidentEvent[] = [];
+
+  for (const event of failed) {
+    const attribution = classifyMechanicAttribution(event);
+    if (attribution.kind === 'personal') personal.push(event);
+    else if (attribution.kind === 'role_or_raid') group.push(event);
+    else unclassified.push(event);
+  }
 
   return {
     totalEvents: failed.length + uncoveredDeathEvents,
