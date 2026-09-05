@@ -17,7 +17,7 @@ jobs:
           deno-version: v2.x
       - run: npm ci
       - run: deno install --allow-scripts
-      - run: npx vitest run supabase/functions/_shared/defensive-episode-verdict.e7-low-confidence.spec.ts src/app/shared/defensive-evidence-v5.spec.ts src/app/shared/defensive-evidence-v6.spec.ts src/app/shared/defensive-temporal-coverage.spec.ts src/app/shared/defensive-version-identity.spec.ts src/app/shared/protection-divine-shield-final-stand.spec.ts src/app/shared/night-player-audit.spec.ts src/app/core/night-player-pull-ledger.service.spec.ts src/app/core/canonical-defensive-summary.service.spec.ts src/app/core/night-player-defensive-audit.service.spec.ts src/app/core/night-player-mechanic-death-audit.service.spec.ts
+      - run: npx vitest run supabase/functions/_shared/defensive-episode-verdict.e7-low-confidence.spec.ts src/app/shared/defensive-evidence-v5.spec.ts src/app/shared/defensive-evidence-v6.spec.ts src/app/shared/defensive-temporal-coverage.spec.ts src/app/shared/defensive-version-identity.spec.ts src/app/shared/protection-divine-shield-final-stand.spec.ts src/app/shared/night-player-audit.spec.ts src/app/shared/mechanic-attribution-causal-guard.spec.ts src/app/core/night-player-pull-ledger.service.spec.ts src/app/core/canonical-defensive-summary.service.spec.ts src/app/core/night-player-defensive-audit.service.spec.ts src/app/core/night-player-mechanic-death-audit.service.spec.ts
       - run: npm run verify:defensive-contract
       - run: npm run verify:causal-schema
       - run: npm run verify:causal-runtime
