@@ -1,0 +1,229 @@
+name: Temporary coaching semantics fix
+
+on:
+  push:
+    branches: [fix/canonical-defensive-coaching]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/canonical-defensive-coaching
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - run: npm ci
+      - run: deno install --allow-scripts
+
+      - name: Apply targeted coaching semantics fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          projection = Path('src/app/core/raider-evidence-projection.ts')
+          text = projection.read_text(encoding='utf-8')
+
+          marker = '''/** Copy humano para los dos únicos responseVerdict que generan coaching accionable (§76 — nunca mostrar
+           * covered_verified/missed_ready/uncertain/etc. en crudo al raider). El texto se limita a proyectar el verdict
+           * y sus decisiveSpellIds ya persistidos; no reinterpreta candidates ni crea una segunda decisión. */'''
+          helpers = '''/** Compacta copy revisado sin cambiar su significado: solo normaliza espacios y corta en un límite visual. */
+          function compactCoachingText(value: string, maxLength: number): string {
+            const normalized = value.replace(/\\s+/g, ' ').trim();
+            if (normalized.length <= maxLength) return normalized;
+            const candidate = normalized.slice(0, maxLength + 1);
+            const wordBoundary = candidate.lastIndexOf(' ');
+            const cutAt = wordBoundary >= Math.floor(maxLength * 0.65) ? wordBoundary : maxLength;
+            return `${candidate.slice(0, cutAt).replace(/[,:;\\s]+$/, '')}…`;
+          }
+
+          /**
+           * "Prevención clave" no inventa una táctica nueva: toma exclusivamente la primera instrucción ya revisada
+           * de `resolution` y la compacta para convertirla en recordatorio memorizable.
+           */
+          function preventionFromResolution(resolution: string): string {
+            const normalized = resolution.replace(/\\s+/g, ' ').trim();
+            const firstSentence = normalized.match(/^.*?[.!?](?:\\s|$)/)?.[0]?.trim() ?? normalized;
+            return compactCoachingText(firstSentence, 110);
+          }
+
+          ''' + marker
+          if text.count(marker) != 1:
+            raise SystemExit(f'Expected canonical coaching marker once, found {text.count(marker)}')
+          text = text.replace(marker, helpers, 1)
+
+          old = '''  // En una card defensiva, "Qué sabemos" debe explicar la mecánica cuando existe metadata revisada, no repetir
+          // por cuarta vez el estado del cooldown. Si no hay nota pero sí resolución, se publica como conocimiento
+          // revisado; la franja "Cómo resolver" pasa entonces a la acción defensiva personal para evitar duplicarla.
+          const whyItMatters = mechanicDescription
+            ? mechanicDescription
+            : mechanicResolution
+              ? `La resolución revisada de ${mechanic} es: ${mechanicResolution}`
+              : defensiveEvidence;
+          const resolutionText = mechanicDescription && mechanicResolution ? mechanicResolution : action;'''
+          new = '''  // Contrato visual estable: "Qué sabemos" aporta contexto; "Cómo resolver" SIEMPRE conserva la
+          // resolución táctica revisada cuando existe. La acción defensiva personal solo ocupa "Cómo resolver"
+          // cuando no tenemos una resolución de mecánica publicable.
+          const whyItMatters = mechanicDescription
+            ? mechanicDescription
+            : mechanicResolution
+              ? `${mechanic} tiene una resolución táctica revisada: ${compactCoachingText(mechanicResolution, 145)}`
+              : defensiveEvidence;
+          const resolutionText = mechanicResolution ?? action;'''
+          if text.count(old) != 1:
+            raise SystemExit(f'Expected defensive semantics block once, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''    const totalDamage = group.reduce((sum, row) => sum + Math.max(0, row.damageTaken), 0);
+            return {'''
+          new = '''    const totalDamage = group.reduce((sum, row) => sum + Math.max(0, row.damageTaken), 0);
+            const mechanicContext = aiNotes.length === 1 ? aiNotes[0].trim() : null;
+            const quantitativeEvidence =
+              totalDamage > 0
+                ? `${Math.round(totalDamage).toLocaleString('es-ES')} de daño registrado en ${group.length} exposición${
+                    group.length === 1 ? '' : 'es'
+                  }.`
+                : `${group.length} exposición${group.length === 1 ? '' : 'es'} verificable${
+                    group.length === 1 ? '' : 's'
+                  }.`;
+            return {'''
+          if text.count(old) != 1:
+            raise SystemExit(f'Expected mechanic totalDamage block once, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = '''      whyItMatters:
+                totalDamage > 0
+                  ? `${Math.round(totalDamage).toLocaleString('es-ES')} de daño registrado en ${group.length} exposición${
+                      group.length === 1 ? '' : 'es'
+                    }.`
+                  : `${group.length} exposición${group.length === 1 ? '' : 'es'} verificable${
+                      group.length === 1 ? '' : 's'
+                    }.` ,
+              action: resolutions.length === 1 ? resolutions[0] : null,
+              // Sin una segunda formulación independiente de la resolución de
+              // mecánica ya mostrada en "Corrección práctica"; repetirla no sería
+              // una síntesis nueva. La franja de la card muestra "—" aquí.
+              preventionKey: null,'''
+          new = '''      whyItMatters: mechanicContext
+                ? `${compactCoachingText(mechanicContext, 135)} · ${quantitativeEvidence}`
+                : quantitativeEvidence,
+              action: resolutions.length === 1 ? resolutions[0] : null,
+              // No inventa una segunda táctica: condensa la primera instrucción de la resolución revisada.
+              preventionKey: resolutions.length === 1 ? preventionFromResolution(resolutions[0]) : null,'''
+          if text.count(old) != 1:
+            raise SystemExit(f'Expected mechanic evidence/prevention block once, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          projection.write_text(text, encoding='utf-8')
+
+          template = Path('src/app/features/night-player-dossier/raider-infographic-v3-canvas.component.html')
+          html = template.read_text(encoding='utf-8')
+          old = '<p>No se publica una recomendación defensiva.</p>'
+          new = '<p>No aplica a este fallo: la corrección es de ejecución de mecánica.</p>'
+          if html.count(old) != 1:
+            raise SystemExit(f'Expected empty defensive copy once, found {html.count(old)}')
+          html = html.replace(old, new, 1)
+          template.write_text(html, encoding='utf-8')
+
+          spec = Path('src/app/core/raider-evidence-projection.canonical-coaching.spec.ts')
+          tests = spec.read_text(encoding='utf-8')
+          old = '''  it('si hay resolución revisada pero no nota, no repite Barkskin: usa la resolución como conocimiento y la acción personal en Cómo resolver', () => {'''
+          new = '''  it('si hay resolución revisada pero no nota, mantiene la táctica en Cómo resolver y no la sustituye por el defensivo', () => {'''
+          if tests.count(old) != 1:
+            raise SystemExit('Expected resolution-only test title once')
+          tests = tests.replace(old, new, 1)
+
+          old = '''    expect(item?.whyItMatters).toContain('La resolución revisada de Plague Froth');
+              expect(item?.whyItMatters).toContain('Los objetivos se separan');
+              expect(item?.resolutionText).toContain('Usa Barkskin como respuesta a Plague Froth');
+              expect(item?.preventionKey).toContain('Barkskin');'''
+          new = '''    expect(item?.whyItMatters).toContain('Plague Froth tiene una resolución táctica revisada');
+              expect(item?.whyItMatters).toContain('Los objetivos se separan');
+              expect(item?.resolutionText).toBe('Los objetivos se separan y orientan las líneas lejos de la raid.');
+              expect(item?.resolutionText).not.toContain('Barkskin');
+              expect(item?.preventionKey).toContain('Barkskin');'''
+          if tests.count(old) != 1:
+            raise SystemExit('Expected resolution-only assertions once')
+          tests = tests.replace(old, new, 1)
+
+          insert_before = '''  it('permite cuatro cards defensivas si realmente no existe otro coaching accionable', () => {'''
+          new_test = '''  it('en una card puramente mecánica combina contexto + impacto y genera prevención desde la resolución revisada', () => {
+            const projection = buildRaiderEvidenceProjection(
+              summary({
+                mechanicFails: [
+                  {
+                    pullId: 'pull-1',
+                    bossId: 'boss-1',
+                    bossName: 'The Coiled Altar',
+                    difficulty: 'Heroic',
+                    pullNumber: 1,
+                    mechanicName: 'Axegrinder',
+                    mechanicId: 900010,
+                    category: 'avoidable-ground',
+                    outcome: 'fail',
+                    timeMs: 69_000,
+                    damageTaken: 1_417_944,
+                    aiNote: 'Axegrinder lanza hachas que recorren la sala y se evitan por posicionamiento.',
+                    comparisonSource: 'fixed_threshold',
+                    comparisonPercentile: null,
+                    resolution: 'Esquiva los puntos de impacto y no cruces la trayectoria de las hachas que recorren la sala.',
+                  },
+                ],
+              }),
+              {
+                defensiveManagementV2: null,
+                canonicalDefensive: canonical([]),
+              },
+            );
+
+            const item = projection.items.find((row) => row.id === 'mechanic|boss-1|Heroic|900010');
+            expect(item?.defensives).toEqual([]);
+            expect(item?.whyItMatters).toContain('Axegrinder lanza hachas');
+            expect(item?.whyItMatters).toContain('1.417.944 de daño');
+            expect(item?.resolutionText).toContain('Esquiva los puntos de impacto');
+            expect(item?.preventionKey).toContain('Esquiva los puntos de impacto');
+            expect(item?.preventionKey).not.toBe('—');
+          });
+
+          ''' + insert_before
+          if tests.count(insert_before) != 1:
+            raise SystemExit('Expected final defensive-only test marker once')
+          tests = tests.replace(insert_before, new_test, 1)
+          spec.write_text(tests, encoding='utf-8')
+
+          if 'No se publica una recomendación defensiva.' in template.read_text(encoding='utf-8'):
+            raise SystemExit('Legacy empty defensive copy still present')
+
+      - name: Focused coaching tests
+        run: npx vitest run src/app/core/raider-evidence-projection.canonical-coaching.spec.ts
+
+      - name: Existing E7 regressions
+        run: npx vitest run supabase/functions/_shared/defensive-episode-verdict.e7-low-confidence.spec.ts src/app/shared/defensive-evidence-v5.spec.ts src/app/shared/defensive-evidence-v6.spec.ts src/app/shared/defensive-temporal-coverage.spec.ts src/app/shared/defensive-version-identity.spec.ts src/app/shared/protection-divine-shield-final-stand.spec.ts
+
+      - run: npm run verify:defensive-contract
+      - run: npm run verify:causal-schema
+      - run: npm run verify:causal-runtime
+      - run: npm run build
+
+      - name: Commit validated fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/app/core/raider-evidence-projection.ts \
+                  src/app/core/raider-evidence-projection.canonical-coaching.spec.ts \
+                  src/app/features/night-player-dossier/raider-infographic-v3-canvas.component.html
+          git commit -m "Fix coaching card semantics and mechanic guidance"
+          git push origin HEAD:fix/canonical-defensive-coaching
