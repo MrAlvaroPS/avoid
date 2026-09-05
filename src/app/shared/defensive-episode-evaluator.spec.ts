@@ -160,6 +160,32 @@ describe('evaluateDefensiveEpisodesForPlayer — pressure always creates the epi
   });
 });
 
+
+describe('evaluateDefensiveEpisodesForPlayer — E7 shared damage-window geometry', () => {
+  it('a hit inside the canonical +2s padding is both attributable and applicability-evaluable', () => {
+    const [episode] = evaluateDefensiveEpisodesForPlayer(
+      baseInput({
+        rawDamageHits: [{ timestamp: 12_500, abilityGameID: 999, amount: 5000, isAoE: false, tick: false }],
+      }),
+    );
+    expect(episode.evidence.dominantAbilityGameId).toBe(999);
+    expect(episode.applicableCandidates[0].damageApplicability).toBe('yes');
+    expect(episode.applicableCandidates[0].evidence.damage).toMatchObject({ hitCount: 1 });
+    expect(episode.responseVerdict).toBe('missed_ready');
+  });
+
+  it('a hit beyond the canonical +2s padding remains unavailable to both stages and fails closed', () => {
+    const [episode] = evaluateDefensiveEpisodesForPlayer(
+      baseInput({
+        rawDamageHits: [{ timestamp: 13_100, abilityGameID: 999, amount: 5000, isAoE: false, tick: false }],
+      }),
+    );
+    expect(episode.evidence.dominantAbilityGameId).toBeNull();
+    expect(episode.applicableCandidates[0].damageApplicability).toBe('unknown');
+    expect(episode.responseVerdict).toBe('uncertain');
+  });
+});
+
 describe('evaluateDefensiveEpisodesForPlayer — un episodio, un candidato', () => {
   it('listo y no usado → missed_ready', () => {
     const [episode] = evaluateDefensiveEpisodesForPlayer(baseInput());

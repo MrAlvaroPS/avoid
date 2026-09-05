@@ -33,7 +33,7 @@
 //    aplica el techo de `dataConfidence` de la fila.
 
 import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
-import { attributeWindowAbility, detectDamageWindows, type DominantAbility } from './damage-pressure-windows.ts';
+import { attributeWindowAbility, detectDamageWindows, isDamageEventWithinPressureWindow, type DominantAbility } from './damage-pressure-windows.ts';
 import { groupDamageWindowsIntoEpisodes, type DefensiveEpisodeCandidate } from './defensive-episode-grouping.ts';
 import {
   buildDamageDescriptor,
@@ -236,7 +236,7 @@ function relevantHitsForEpisode(
   allHits: readonly RawDamageHit[],
 ): RawDamageHit[] {
   const inWindow = (hit: RawDamageHit): boolean =>
-    typeof hit.timestamp === 'number' && hit.timestamp >= window.startMs && hit.timestamp <= window.endMs;
+    typeof hit.timestamp === 'number' && isDamageEventWithinPressureWindow(hit.timestamp, window.startMs, window.endMs);
   const pool = dominantAbilityGameId != null ? hitsByAbility.get(dominantAbilityGameId) ?? [] : allHits;
   return pool.filter(inWindow);
 }
