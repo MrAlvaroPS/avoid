@@ -22,7 +22,11 @@ describe('E7 low-confidence punitive safety', () => {
   it('fallback-only ready strategic candidate fails closed to uncertain', () => {
     const result = resolveEpisodeVerdict([candidate({ confidence: 'fallback' })]);
     expect(result.responseVerdict).toBe('uncertain');
-    expect(result.confidence).toBe('fallback');
+    // v6 is claim-scoped: when the only apparent ready resource lacks strong
+    // availability evidence, the decision itself is uncertain. We preserve
+    // the fallback source on the candidate evidence, not as permission to
+    // expose a pseudo-confident Response verdict.
+    expect(result.confidence).toBe('uncertain');
     expect(result.uncertaintyBlockers).toEqual([1]);
   });
 

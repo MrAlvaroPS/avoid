@@ -52,7 +52,7 @@ import {
   type EpisodeWindow,
 } from './defensive-episode-verdict.ts';
 import { chargeAvailabilityAt, type DefensiveCooldown } from './defensive-cooldowns.ts';
-import { evaluateTemporalCoverage, normalizeCastTimestamps } from './defensive-temporal-coverage.ts';
+import { evaluateTemporalCoverage, normalizeCastTimestamps, type ObservedEffectInterval } from './defensive-temporal-coverage.ts';
 import { buildPersistedDefensiveEpisode, type PersistedDefensiveEpisode } from './defensive-episode-persistence.ts';
 import type { ResolvedDefensive } from './effective-defensives.ts';
 
@@ -90,6 +90,8 @@ export interface DefensiveEpisodeEvaluatorInput {
   rawDamageHits: RawDamageHit[];
   /** Casts de ESTE jugador, por spellId — solo hace falta para los spellId del kit resuelto. */
   castsBySpellId: ReadonlyMap<number, number[]>;
+  /** Buff/aura intervals observed directly in WCL, keyed by defensive spellId. Optional for callers that cannot fetch Buffs yet. */
+  observedActiveIntervalsBySpellId?: ReadonlyMap<number, readonly ObservedEffectInterval[]>;
   schoolByAbilityId: ReadonlyMap<number, DecodedSchoolMask>;
   combatTableObservations: ReadonlyMap<number, AbilityCombatTableCounts>;
   /** Vacío si no se pidieron Debuffs(Enemies) para este pull (fetch condicional — ver damage-descriptor-wcl.ts). */
@@ -183,6 +185,8 @@ function excludedVerdict(reason: string): EpisodeVerdictResult {
     reason,
     coveredBySpellId: null,
     confidence: 'verified',
+    usageEvaluable: false,
+    bonusCreditSpellIds: [],
     decisiveSpellIds: [],
     uncertaintyBlockers: [],
   };
@@ -274,6 +278,7 @@ function buildCandidate(
   bossDebuffIntervals: readonly DebuffInterval[],
   afterDamageResponseWindowMs: number,
   evaluationEndMs: number | null,
+  observedActiveIntervals: readonly ObservedEffectInterval[],
 ): CausallyAwareCandidate {
   const castsForSpellMs = normalizeCastTimestamps(rawCastsForSpellMs);
   const timingRelation = r.applicability?.timingRelation ?? null;
@@ -283,8 +288,10 @@ function buildCandidate(
     effectiveDurationMs: r.effectiveDurationMs,
     castsForSpellMs,
     episode: window,
+    damageTimestampsMs: hits.flatMap((hit) => typeof hit.timestamp === 'number' ? [hit.timestamp] : []),
     afterDamageResponseWindowMs,
     evaluationEndMs,
+    observedActiveIntervals,
   });
   const statusAtPeak = chargeAvailabilityAt(
     toChargeAvailabilityAdapter(r),
@@ -293,12 +300,31 @@ function buildCandidate(
     castsForSpellMs,
     window.peakMs,
   ).status;
-  const confidence = weakestConfidence(
-    r.confidence,
-    r.semanticConfidence,
-    r.buildPresenceConfidence,
+  const membershipConfidence = weakestConfidence(r.semanticConfidence, r.buildPresenceConfidence);
+  const applicabilityClaimConfidence = weakestConfidence(
+    membershipConfidence,
     mapApplicabilityConfidence(r.applicabilityConfidence),
   );
+  const availabilityConfidence = weakestConfidence(
+    membershipConfidence,
+    r.cooldownConfidence ?? r.confidence,
+    r.chargesConfidence ?? r.confidence,
+    r.charges > 1 ? (r.rechargeConfidence ?? r.confidence) : 'verified',
+  );
+  const intervalCoversPeak = observedActiveIntervals.some(
+    (interval) => window.peakMs >= interval.startMs && (interval.endMs == null || window.peakMs <= interval.endMs),
+  );
+  let temporalCoverageConfidence: EvaluationConfidence = 'verified';
+  if (temporal.castCoverage === 'unknown') temporalCoverageConfidence = 'uncertain';
+  else if (temporal.castCoverage === 'yes' && !intervalCoversPeak) {
+    if (timingRelation === 'before_or_during') temporalCoverageConfidence = r.durationConfidence ?? r.confidence;
+    else if (timingRelation === 'either') {
+      const reactive = (temporal.evidence as any)?.reactive;
+      temporalCoverageConfidence = reactive?.castCoverage === 'yes' ? 'verified' : (r.durationConfidence ?? r.confidence);
+    }
+  }
+  const coverageConfidence = weakestConfidence(applicabilityClaimConfidence, temporalCoverageConfidence);
+  const confidence = weakestConfidence(membershipConfidence, applicabilityClaimConfidence, availabilityConfidence, coverageConfidence);
 
   return {
     spellId: r.spellId,
@@ -311,7 +337,15 @@ function buildCandidate(
     engagement: temporal.engagement,
     statusAtPeak,
     confidence,
-    evidence: { damage: damage.evidence, temporal: temporal.evidence },
+    membershipConfidence,
+    applicabilityClaimConfidence,
+    availabilityConfidence,
+    coverageConfidence,
+    evidence: {
+      damage: damage.evidence,
+      temporal: temporal.evidence,
+      claimConfidence: { membershipConfidence, applicabilityClaimConfidence, availabilityConfidence, coverageConfidence },
+    },
     castsForSpellMs,
     timing: { timingRelation, effectiveDurationMs: r.effectiveDurationMs, afterDamageResponseWindowMs, evaluationEndMs },
   };
@@ -400,6 +434,7 @@ export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvalua
           input.bossDebuffIntervals,
           afterDamageResponseWindowMs,
           input.evaluationEndMs,
+          input.observedActiveIntervalsBySpellId?.get(r.spellId) ?? [],
         ),
       )
       .sort((a, b) => a.spellId - b.spellId);

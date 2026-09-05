@@ -201,7 +201,7 @@ describe('evaluateDefensiveEpisodesForPlayer — un episodio, un candidato', () 
     expect(episode.usedSpellIds).toEqual([BARKSKIN_SPELL_ID]);
   });
 
-  it('used credit_only member with verified damage/timing coverage → covered_verified (test 9)', () => {
+  it('used credit_only member outside any core opportunity is preserved as bonus without fabricating Response (test 9)', () => {
     const bearForm = resolvedDefensive({
       spellId: 5487,
       usageRole: 'survival_state',
@@ -211,11 +211,13 @@ describe('evaluateDefensiveEpisodesForPlayer — un episodio, un candidato', () 
     });
     const input = baseInput({
       resolvedDefensives: [bearForm],
-      castsBySpellId: new Map([[5487, [11_500]]]), // reactivo, dentro de la ventana de 3000ms tras el episodio
+      castsBySpellId: new Map([[5487, [11_500]]]),
     });
     const [episode] = evaluateDefensiveEpisodesForPlayer(input);
-    expect(episode.responseVerdict).toBe('covered_verified');
+    expect(episode.responseVerdict).toBe('no_applicable_resource');
     expect(episode.usageEngaged).toBe(true);
+    expect(episode.usageEvaluable).toBe(false);
+    expect(episode.evidence['bonusCreditSpellIds']).toEqual([5487]);
   });
 
   it('a credit_only member without an observed active interval (continuous_state) never fabricates coverage from a mere cast', () => {

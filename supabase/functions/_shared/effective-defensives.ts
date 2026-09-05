@@ -33,7 +33,7 @@ import {
   type ValidatedSpecSemanticProfile,
 } from './defensive-semantic-payload-validation.ts';
 
-export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
+export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.3.0';
 // §Paso C (iris-defensive-canonicalization-v1-plan.md §5): resolución
 // SEMÁNTICA (usageRole/mechanisms/membership) versionada por separado del
 // resolver de TIMING de arriba, a propósito. Bump del resolver de timing ya
@@ -83,7 +83,7 @@ export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0'
 // comportamiento observable real en isDefensiveKitMember/
 // createsMissableOpportunity para cualquier caller que ya pasara
 // demonstratedPersistentCastSpellIds junto con allTalentSpellIds.
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.3.2';
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.5.0';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 // §E1 — presencia real en ESTE build, independiente de "elegible ahora mismo"
@@ -157,6 +157,8 @@ export interface EffectiveDefensiveCatalogEntry {
   activationGameBuild: string;
   baseCooldownMs: number | null;
   baseDurationMs: number | null;
+  /** Exact-current reviewed catalog rows are authoritative over legacy spec profiles for the same field. Undefined keeps unit-test/backward compatibility; DB adapter always sets it explicitly. */
+  reviewed?: boolean;
   excluded?: boolean;
 }
 
@@ -190,6 +192,8 @@ export interface EffectiveDefensiveModifierRule {
   description: string;
   source?: string | null;
   active: boolean;
+  /** How the modifier itself is present in the build. talent_selected requires a selected node; spec_baseline is auto-granted by the resolved spec. */
+  presenceMode?: 'talent_selected' | 'spec_baseline';
 }
 
 /**
@@ -395,6 +399,11 @@ export interface ResolvedDefensive {
   effectiveDurationMs: number | null;
   charges: number;
   rechargeMs: number | null;
+  /** Claim-scoped source confidence. These fields deliberately do not collapse unrelated uncertainty into one global confidence. */
+  cooldownConfidence?: DefensiveResolutionConfidence;
+  durationConfidence?: DefensiveResolutionConfidence;
+  chargesConfidence?: DefensiveResolutionConfidence;
+  rechargeConfidence?: DefensiveResolutionConfidence;
   eligible: boolean;
   buildFingerprint: string | null;
   gameBuild: string | null;
@@ -583,6 +592,7 @@ export function effectiveDefensiveDataFromDatabaseRows(rows: EffectiveDefensiveD
       activationGameBuild: nullableString(row['activation_game_build']) ?? LEGACY_GAME_BUILD,
       baseCooldownMs: nullableNumber(row['base_cooldown_ms']),
       baseDurationMs: nullableNumber(row['base_duration_ms']),
+      reviewed: row['reviewed'] === true,
       excluded: row['excluded'] === true,
     })),
     specProfiles: (rows.specProfileRows ?? []).map((row) => ({
@@ -614,6 +624,7 @@ export function effectiveDefensiveDataFromDatabaseRows(rows: EffectiveDefensiveD
       description: String(row['description'] ?? ''),
       source: nullableString(row['source']),
       active: row['active'] !== false,
+      presenceMode: row['presence_mode'] === 'spec_baseline' ? 'spec_baseline' : 'talent_selected',
     })),
     overrides: (rows.overrideRows ?? []).map((row) => ({
       id: String(row['id'] ?? ''),
@@ -908,6 +919,21 @@ export function resolveEffectiveDefensiveKit(
       let durationMs = entry.baseDurationMs;
       let charges = 1;
       let rechargeMs: number | null = null;
+      // §E8-v5: field-scoped authority. Exact-current + reviewed catalog facts are
+      // strong for cooldown/duration. A legacy spec profile may remain provenance,
+      // but it cannot downgrade or overwrite those stronger fields.
+      const catalogBuildConfidence: DefensiveResolutionConfidence =
+        input.gameBuild != null && entry.activationGameBuild === input.gameBuild
+          ? entry.reviewed === false
+            ? 'inferred'
+            : gameBuildConfidence
+          : 'fallback';
+      let cooldownConfidence: DefensiveResolutionConfidence = cooldownMs == null ? 'uncertain' : catalogBuildConfidence;
+      let durationConfidence: DefensiveResolutionConfidence = durationMs == null ? 'uncertain' : catalogBuildConfidence;
+      // cooldown_catalog does not carry a charge column. One charge is therefore
+      // an inferred baseline until an exact profile/modifier proves otherwise.
+      let chargesConfidence: DefensiveResolutionConfidence = input.gameBuild != null ? 'inferred' : 'fallback';
+      let rechargeConfidence: DefensiveResolutionConfidence = 'uncertain';
       let targetingMode = TARGETING_MODES.has(entry.targetingMode) ? entry.targetingMode : 'unknown';
       let activationMode: DefensiveActivationMode = entry.activationMode === 'passive' ? 'passive' : 'active';
       // §E1 — buildPresence por defecto: baseline de clase/spec no talent-gated
@@ -1289,41 +1315,81 @@ export function resolveEffectiveDefensiveKit(
       const selectedProfile = profileForBuild(profileCandidates, input.gameBuild);
       if (selectedProfile) {
         const { profile, buildConfidence } = selectedProfile;
-        confidence = weakerConfidence(confidence, buildConfidence === 'verified' ? gameBuildConfidence : buildConfidence);
-        if (profile.baseCooldownMs != null) {
+        const profileConfidence = buildConfidence === 'verified' ? gameBuildConfidence : buildConfidence;
+        const exactReviewedCatalog =
+          input.gameBuild != null && entry.activationGameBuild === input.gameBuild && entry.reviewed !== false;
+        const legacyBlockedByCatalog = buildConfidence === 'fallback' && exactReviewedCatalog;
+
+        const applyProfileTimingField = (
+          field: 'cooldown_ms' | 'duration_ms',
+          value: number | null,
+        ): void => {
+          if (value == null) return;
+          const before = field === 'cooldown_ms' ? cooldownMs : durationMs;
+          if (legacyBlockedByCatalog && before != null) {
+            provenance.push({
+              kind: 'validation',
+              field,
+              before,
+              after: before,
+              source: profile.source,
+              description:
+                value === before
+                  ? 'Perfil legacy redundante: coincide con el catálogo exact-current revisado y se conserva solo como provenance; no degrada confidence.'
+                  : `Perfil legacy ignorado por menor autoridad: propone ${value}, pero el catálogo exact-current revisado demuestra ${before}.`,
+              gameBuild: profile.gameBuild,
+            });
+            return;
+          }
           provenance.push({
             kind: 'spec_profile',
-            field: 'cooldown_ms',
-            before: cooldownMs,
-            after: profile.baseCooldownMs,
+            field,
+            before,
+            after: value,
             source: profile.source,
-            description: profile.sourceNote ?? 'El perfil de spec sustituye el cooldown base.',
+            description: profile.sourceNote ?? `El perfil de spec sustituye ${field}.`,
             gameBuild: profile.gameBuild,
           });
-          cooldownMs = profile.baseCooldownMs;
-        }
-        if (profile.baseDurationMs != null) {
+          if (field === 'cooldown_ms') {
+            cooldownMs = value;
+            cooldownConfidence = profileConfidence;
+          } else {
+            durationMs = value;
+            durationConfidence = profileConfidence;
+          }
+          confidence = weakerConfidence(confidence, profileConfidence);
+        };
+
+        applyProfileTimingField('cooldown_ms', profile.baseCooldownMs);
+        applyProfileTimingField('duration_ms', profile.baseDurationMs);
+
+        // Charges/recharge have no catalog-base columns. A legacy profile may
+        // still provide them, but the availability claim remains fallback until
+        // an exact profile or exact modifier proves the value.
+        if (!(legacyBlockedByCatalog && profile.charges === charges)) {
           provenance.push({
             kind: 'spec_profile',
-            field: 'duration_ms',
-            before: durationMs,
-            after: profile.baseDurationMs,
+            field: 'charges',
+            before: charges,
+            after: profile.charges,
             source: profile.source,
-            description: profile.sourceNote ?? 'El perfil de spec sustituye la duración base.',
+            description: profile.sourceNote ?? 'Cargas base del perfil de spec.',
             gameBuild: profile.gameBuild,
           });
-          durationMs = profile.baseDurationMs;
+          charges = profile.charges;
+          chargesConfidence = profileConfidence;
+          confidence = weakerConfidence(confidence, profileConfidence);
+        } else {
+          provenance.push({
+            kind: 'validation',
+            field: 'charges',
+            before: charges,
+            after: charges,
+            source: profile.source,
+            description: 'Perfil legacy redundante de una carga: no degrada la confidence de otros campos.',
+            gameBuild: profile.gameBuild,
+          });
         }
-        provenance.push({
-          kind: 'spec_profile',
-          field: 'charges',
-          before: charges,
-          after: profile.charges,
-          source: profile.source,
-          description: profile.sourceNote ?? 'Cargas base del perfil de spec.',
-          gameBuild: profile.gameBuild,
-        });
-        charges = profile.charges;
         if (profile.rechargeMs != null) {
           provenance.push({
             kind: 'spec_profile',
@@ -1335,6 +1401,8 @@ export function resolveEffectiveDefensiveKit(
             gameBuild: profile.gameBuild,
           });
           rechargeMs = profile.rechargeMs;
+          rechargeConfidence = profileConfidence;
+          confidence = weakerConfidence(confidence, profileConfidence);
         }
       }
 
@@ -1347,6 +1415,7 @@ export function resolveEffectiveDefensiveKit(
       const candidateRules = targetRules.filter(
         (rule) => rule.specNames == null || (input.specName != null && rule.specNames.includes(input.specName)),
       );
+      const talentSelectedCandidateRules = candidateRules.filter((rule) => (rule.presenceMode ?? 'talent_selected') === 'talent_selected');
       if (input.specName == null && targetRules.some((rule) => rule.specNames != null)) {
         confidence = weakerConfidence(confidence, 'uncertain');
         provenance.push({
@@ -1357,7 +1426,7 @@ export function resolveEffectiveDefensiveKit(
           description: 'Hay reglas limitadas por spec, pero la spec del jugador es desconocida; no se aplican.',
         });
       }
-      if (candidateRules.length && normalizedBuild == null) {
+      if (talentSelectedCandidateRules.length && normalizedBuild == null) {
         confidence = weakerConfidence(confidence, 'uncertain');
         provenance.push({
           kind: 'validation',
@@ -1366,7 +1435,7 @@ export function resolveEffectiveDefensiveKit(
           after: cooldownMs,
           description: 'Existen reglas de talento para este defensivo, pero falta el build; no se aplica ninguna.',
         });
-      } else if (candidateRules.length && unresolvedSelectedNodes) {
+      } else if (talentSelectedCandidateRules.length && unresolvedSelectedNodes) {
         confidence = weakerConfidence(confidence, 'uncertain');
         provenance.push({
           kind: 'validation',
@@ -1382,7 +1451,7 @@ export function resolveEffectiveDefensiveKit(
       // más permisiva; de lo contrario una patch nueva heredaría reglas viejas.
       const applicableRules = rulesForBuild(targetRules, input.gameBuild)
         .filter(({ rule }) => rule.specNames == null || (input.specName != null && rule.specNames.includes(input.specName)))
-        .filter(({ rule }) => ranks.has(rule.modifierSpellId))
+        .filter(({ rule }) => (rule.presenceMode ?? 'talent_selected') === 'spec_baseline' || ranks.has(rule.modifierSpellId))
         .sort(
           (a, b) =>
             a.rule.applicationOrder - b.rule.applicationOrder ||
@@ -1418,7 +1487,7 @@ export function resolveEffectiveDefensiveKit(
       };
 
       for (const { rule, buildConfidence } of applicableRules) {
-        const rank = ranks.get(rule.modifierSpellId) ?? 0;
+        const rank = (rule.presenceMode ?? 'talent_selected') === 'spec_baseline' ? 1 : (ranks.get(rule.modifierSpellId) ?? 0);
         const amount = ruleValue(rule, rank);
         const before = readField(rule.effectField);
         const stepBase: Omit<ResolutionStep, 'kind' | 'after'> = {
@@ -1466,6 +1535,13 @@ export function resolveEffectiveDefensiveKit(
           continue;
         }
         writeField(rule.effectField, after);
+        const modifierConfidence = buildConfidence === 'verified' ? gameBuildConfidence : buildConfidence;
+        const combineFieldConfidence = (current: DefensiveResolutionConfidence): DefensiveResolutionConfidence =>
+          rule.operation === 'set_ms' ? modifierConfidence : weakerConfidence(current, modifierConfidence);
+        if (rule.effectField === 'cooldown_ms') cooldownConfidence = combineFieldConfidence(cooldownConfidence);
+        else if (rule.effectField === 'duration_ms') durationConfidence = combineFieldConfidence(durationConfidence);
+        else if (rule.effectField === 'charges') chargesConfidence = combineFieldConfidence(chargesConfidence);
+        else rechargeConfidence = combineFieldConfidence(rechargeConfidence);
         provenance.push({ ...stepBase, kind: 'modifier', after });
       }
 
@@ -1476,6 +1552,11 @@ export function resolveEffectiveDefensiveKit(
           if (value == null) return;
           const before = readField(field);
           writeField(field, value);
+          const overrideConfidence: DefensiveResolutionConfidence = override.buildFingerprint == null ? 'inferred' : 'verified';
+          if (field === 'cooldown_ms') cooldownConfidence = overrideConfidence;
+          else if (field === 'duration_ms') durationConfidence = overrideConfidence;
+          else if (field === 'charges') chargesConfidence = overrideConfidence;
+          else rechargeConfidence = overrideConfidence;
           provenance.push({
             kind: 'player_override',
             field,
@@ -1506,6 +1587,7 @@ export function resolveEffectiveDefensiveKit(
 
       if (charges > 1 && rechargeMs == null && cooldownMs != null) {
         rechargeMs = cooldownMs;
+        rechargeConfidence = weakerConfidence(cooldownConfidence, chargesConfidence);
         provenance.push({
           kind: 'validation',
           field: 'recharge_ms',
@@ -1926,6 +2008,10 @@ export function resolveEffectiveDefensiveKit(
         effectiveDurationMs: durationMs,
         charges,
         rechargeMs,
+        cooldownConfidence,
+        durationConfidence,
+        chargesConfidence,
+        rechargeConfidence,
         eligible,
         buildFingerprint: input.buildFingerprint,
         gameBuild: input.gameBuild,

@@ -67,12 +67,21 @@ export interface EpisodeVerdictCandidate {
   engagement: boolean;
   statusAtPeak: DefensiveCooldownStatus;
   confidence: EvaluationConfidence;
+  /** Claim-scoped confidence. Optional for backward-compatible fixtures; when absent, confidence is used. */
+  membershipConfidence?: EvaluationConfidence;
+  applicabilityClaimConfidence?: EvaluationConfidence;
+  availabilityConfidence?: EvaluationConfidence;
+  coverageConfidence?: EvaluationConfidence;
   evidence: Record<string, unknown>;
 }
 
 export interface EpisodeVerdictResult {
   usageEngaged: boolean;
+  /** True when a real core opportunity was actionable, even if Response itself must remain uncertain. */
+  usageEvaluable: boolean;
   usedSpellIds: number[];
+  /** Positive non-core defensive actions are preserved without inflating either KPI. */
+  bonusCreditSpellIds: number[];
   responseVerdict: ResponseVerdict;
   reason: string;
   coveredBySpellId: number | null;
@@ -98,24 +107,99 @@ function isPunitiveConfidence(confidence: EvaluationConfidence): boolean {
 
 export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): EpisodeVerdictResult {
   const sorted = [...candidates].sort(bySpellId);
+  const claim = (c: EpisodeVerdictCandidate, key: 'membershipConfidence' | 'applicabilityClaimConfidence' | 'availabilityConfidence' | 'coverageConfidence') =>
+    c[key] ?? c.confidence;
+  const strong = (c: EpisodeVerdictCandidate, key: 'membershipConfidence' | 'applicabilityClaimConfidence' | 'availabilityConfidence' | 'coverageConfidence') =>
+    isPunitiveConfidence(claim(c, key));
+
   const engagedKitMembers = sorted.filter((c) => c.isDefensiveKitMember && c.engagement);
   const usageEngaged = engagedKitMembers.length > 0;
   const usedSpellIds = [...new Set(engagedKitMembers.map((c) => c.spellId))].sort((a, b) => a - b);
 
-  const verifiedCovers = sorted.filter(
-    (c) => c.isDefensiveKitMember && c.engagement && c.damageApplicability === 'yes' && c.temporalCastCoverage === 'yes',
+  // A core opportunity can ONLY be created by normal/missable personal resources
+  // with strong membership+applicability evidence. credit_only may resolve this
+  // opportunity but can never manufacture its denominator.
+  const coreApplicable = sorted.filter(
+    (c) =>
+      c.createsMissableOpportunity &&
+      c.damageApplicability === 'yes' &&
+      c.temporalOpportunity === 'yes' &&
+      strong(c, 'membershipConfidence') &&
+      strong(c, 'applicabilityClaimConfidence'),
   );
-  if (verifiedCovers.length) {
-    const winner = verifiedCovers[0];
+  const strongReadyCore = coreApplicable.filter(
+    (c) => c.statusAtPeak === 'available_unused' && strong(c, 'availabilityConfidence'),
+  );
+  const strongActiveCore = coreApplicable.filter(
+    (c) => c.statusAtPeak === 'active' && strong(c, 'availabilityConfidence'),
+  );
+  const usageEvaluableNow = strongReadyCore.length > 0 || strongActiveCore.length > 0;
+
+  const strongCovers = sorted.filter(
+    (c) =>
+      c.isDefensiveKitMember &&
+      c.engagement &&
+      c.damageApplicability === 'yes' &&
+      c.temporalCastCoverage === 'yes' &&
+      strong(c, 'membershipConfidence') &&
+      strong(c, 'applicabilityClaimConfidence') &&
+      strong(c, 'coverageConfidence'),
+  );
+  const bonusOnlyCovers = strongCovers.filter((c) => !c.createsMissableOpportunity).map((c) => c.spellId);
+
+  if (coreApplicable.length && strongCovers.length) {
+    const winner = strongCovers[0];
     return {
       usageEngaged: true,
+      usageEvaluable: true,
       usedSpellIds,
+      bonusCreditSpellIds: [],
       responseVerdict: 'covered_verified',
-      reason: `spellId ${winner.spellId} se usó durante el episodio y su cobertura de daño y de timing está demostrada.`,
+      reason: `Había una oportunidad defensiva core y spellId ${winner.spellId} la cubrió con evidencia suficiente de membership, aplicabilidad y cobertura.`,
       coveredBySpellId: winner.spellId,
-      confidence: winner.confidence,
+      confidence: claim(winner, 'coverageConfidence'),
       decisiveSpellIds: [winner.spellId],
       uncertaintyBlockers: [],
+    };
+  }
+
+  // A valid credit_only action outside any core opportunity is useful evidence,
+  // but it is bonus context, never a synthetic 100% denominator.
+  if (!coreApplicable.length && strongCovers.length) {
+    return {
+      usageEngaged,
+      usageEvaluable: false,
+      usedSpellIds,
+      bonusCreditSpellIds: [...new Set(bonusOnlyCovers)].sort((a, b) => a - b),
+      responseVerdict: 'no_applicable_resource',
+      reason: 'Se observó una acción defensiva válida, pero no existía una oportunidad core normal que pudiera crear denominador; se conserva como crédito adicional.',
+      coveredBySpellId: null,
+      confidence: weakestConfidence(...strongCovers.map((c) => claim(c, 'coverageConfidence'))),
+      decisiveSpellIds: [],
+      uncertaintyBlockers: [],
+    };
+  }
+
+  const lowConfidenceCovers = sorted.filter(
+    (c) =>
+      c.isDefensiveKitMember &&
+      c.engagement &&
+      c.damageApplicability === 'yes' &&
+      c.temporalCastCoverage === 'yes' &&
+      (!strong(c, 'membershipConfidence') || !strong(c, 'applicabilityClaimConfidence') || !strong(c, 'coverageConfidence')),
+  );
+  if (coreApplicable.length && lowConfidenceCovers.length) {
+    return {
+      usageEngaged,
+      usageEvaluable: usageEvaluableNow,
+      usedSpellIds,
+      bonusCreditSpellIds: [],
+      responseVerdict: 'uncertain',
+      reason: 'Hubo una respuesta defensiva candidata, pero la evidencia de cobertura no alcanza el umbral simétrico para dar éxito ni para acusar fallo.',
+      coveredBySpellId: null,
+      confidence: 'uncertain',
+      decisiveSpellIds: [],
+      uncertaintyBlockers: lowConfidenceCovers.map((c) => c.spellId).sort((a, b) => a - b),
     };
   }
 
@@ -127,12 +211,14 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
       c.temporalCastCoverage !== 'no' &&
       (c.damageApplicability === 'unknown' || c.temporalCastCoverage === 'unknown'),
   );
-  if (usedUnknown.length) {
+  if (coreApplicable.length && usedUnknown.length) {
     return {
       usageEngaged,
+      usageEvaluable: usageEvaluableNow,
       usedSpellIds,
+      bonusCreditSpellIds: [],
       responseVerdict: 'uncertain',
-      reason: `spellId ${usedUnknown.map((c) => c.spellId).join(', ')} se usó durante el episodio, pero su cobertura de daño/timing todavía no está demostrada ni descartada — Uso queda acreditado; Response no acusa mientras ese cast pudiera haber sido válido.`,
+      reason: `spellId ${usedUnknown.map((c) => c.spellId).join(', ')} se usó durante una oportunidad core, pero su cobertura de daño/timing no puede demostrarse; Uso puede quedar acreditado sin convertir Response en culpa ni éxito.`,
       coveredBySpellId: null,
       confidence: 'uncertain',
       decisiveSpellIds: [],
@@ -140,36 +226,41 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
     };
   }
 
-  const missable = sorted.filter(
-    (c) => c.createsMissableOpportunity && c.damageApplicability === 'yes' && c.temporalOpportunity === 'yes',
-  );
-  const otherwiseReady = missable.filter((c) => c.statusAtPeak === 'available_unused');
-  const ready = otherwiseReady.filter((c) => isPunitiveConfidence(c.confidence));
-  if (ready.length) {
-    const winner = ready[0];
+  if (strongReadyCore.length) {
+    const winner = strongReadyCore[0];
     return {
       usageEngaged,
+      usageEvaluable: true,
       usedSpellIds,
+      bonusCreditSpellIds: [],
       responseVerdict: 'missed_ready',
-      reason: `spellId ${winner.spellId} estaba disponible y su aplicabilidad de daño, oportunidad temporal y confianza punitiva están demostradas; no se usó.`,
+      reason: usageEngaged
+        ? `Había al menos una respuesta core disponible (spellId ${winner.spellId}); hubo uso defensivo, pero ninguna acción cubrió esta ventana.`
+        : `spellId ${winner.spellId} estaba disponible con evidencia suficiente de membership, aplicabilidad y disponibilidad; no hubo respuesta defensiva.`,
       coveredBySpellId: null,
-      confidence: winner.confidence,
+      confidence: weakestConfidence(
+        claim(winner, 'membershipConfidence'),
+        claim(winner, 'applicabilityClaimConfidence'),
+        claim(winner, 'availabilityConfidence'),
+      ),
       decisiveSpellIds: [winner.spellId],
       uncertaintyBlockers: [],
     };
   }
 
-  const lowConfidenceReady = otherwiseReady.filter((c) => !isPunitiveConfidence(c.confidence));
-  if (lowConfidenceReady.length) {
+  const apparentlyReady = coreApplicable.filter((c) => c.statusAtPeak === 'available_unused');
+  if (apparentlyReady.length) {
     return {
       usageEngaged,
+      usageEvaluable: false,
       usedSpellIds,
+      bonusCreditSpellIds: [],
       responseVerdict: 'uncertain',
-      reason: 'Hay defensivos estratégicos aparentemente disponibles, pero la confianza de la evidencia no permite convertirlos en missed_ready.',
+      reason: 'Hay recursos core aparentemente disponibles, pero la evidencia específica de disponibilidad no permite convertirlos en missed_ready.',
       coveredBySpellId: null,
-      confidence: weakestConfidence(...lowConfidenceReady.map((c) => c.confidence)),
-      decisiveSpellIds: lowConfidenceReady.map((c) => c.spellId).sort((a, b) => a - b),
-      uncertaintyBlockers: lowConfidenceReady.map((c) => c.spellId).sort((a, b) => a - b),
+      confidence: 'uncertain',
+      decisiveSpellIds: apparentlyReady.map((c) => c.spellId).sort((a, b) => a - b),
+      uncertaintyBlockers: apparentlyReady.map((c) => c.spellId).sort((a, b) => a - b),
       causalUpgradeEligible: false,
     };
   }
@@ -178,9 +269,11 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
   if (!strategic.length) {
     return {
       usageEngaged,
+      usageEvaluable: false,
       usedSpellIds,
+      bonusCreditSpellIds: [],
       responseVerdict: 'no_applicable_resource',
-      reason: 'El build de este jugador no tiene ningún recurso personal estratégico, resuelto o pendiente de resolver.',
+      reason: 'El build no tiene ningún recurso personal estratégico normal, resuelto o pendiente de resolver, aplicable a este episodio.',
       coveredBySpellId: null,
       confidence: 'verified',
       decisiveSpellIds: [],
@@ -192,9 +285,11 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
   if (!relevantStrategic.length) {
     return {
       usageEngaged,
+      usageEvaluable: false,
       usedSpellIds,
+      bonusCreditSpellIds: [],
       responseVerdict: 'no_applicable_resource',
-      reason: 'El build tenía recursos estratégicos, pero ninguno demuestra aplicabilidad (de daño o de timing) a este episodio.',
+      reason: 'El build tenía recursos estratégicos, pero ninguno demuestra aplicabilidad de daño/timing a este episodio.',
       coveredBySpellId: null,
       confidence: weakestConfidence(...strategic.map((c) => c.confidence)),
       decisiveSpellIds: strategic.map((c) => c.spellId).sort((a, b) => a - b),
@@ -207,14 +302,18 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
       c.materiallyUnresolved ||
       c.damageApplicability === 'unknown' ||
       c.temporalOpportunity === 'unknown' ||
-      c.statusAtPeak === 'unknown',
+      c.statusAtPeak === 'unknown' ||
+      !strong(c, 'membershipConfidence') ||
+      !strong(c, 'applicabilityClaimConfidence'),
   );
   if (unresolvedBlockers.length) {
     return {
       usageEngaged,
+      usageEvaluable: usageEvaluableNow,
       usedSpellIds,
+      bonusCreditSpellIds: [],
       responseVerdict: 'uncertain',
-      reason: `spellId ${unresolvedBlockers.map((c) => c.spellId).join(', ')} podría ser la respuesta correcta, pero su relevancia o aplicabilidad todavía no está resuelta — no se afirma no_applicable_resource sin poder demostrarlo.`,
+      reason: `spellId ${unresolvedBlockers.map((c) => c.spellId).join(', ')} podría cambiar la evaluación, pero alguna afirmación necesaria todavía no está suficientemente resuelta.`,
       coveredBySpellId: null,
       confidence: 'uncertain',
       decisiveSpellIds: [],
@@ -225,9 +324,11 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
 
   return {
     usageEngaged,
+    usageEvaluable: false,
     usedSpellIds,
+    bonusCreditSpellIds: [],
     responseVerdict: 'uncertain',
-    reason: 'Todo lo estratégico y aplicable estaba en cooldown o activo en el pico del episodio — la causa (uso legítimo previo vs. sin explicación) todavía no se ha reconstruido en este veredicto base.',
+    reason: 'Todo lo estratégico y aplicable estaba en cooldown o activo en el pico; se necesita reconstrucción causal para distinguir indisponibilidad legítima.',
     coveredBySpellId: null,
     confidence: 'uncertain',
     decisiveSpellIds: relevantStrategic.map((c) => c.spellId).sort((a, b) => a - b),
@@ -310,7 +411,7 @@ export function resolveEpisodeVerdictWithCausalAvailability(
 
   const causalResults = onCooldownMissable.map((c) => ({
     spellId: c.spellId,
-    confidence: c.confidence,
+    confidence: c.availabilityConfidence ?? c.confidence,
     ...reconstructCausalAvailability(c.timing, c.castsForSpellMs, episodes, episodeIndex),
   }));
 

@@ -12,7 +12,6 @@
 import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
 import type { EpisodeVerdictCandidate, EpisodeVerdictResult, ResponseVerdict } from './defensive-episode-verdict.ts';
 import { deriveEpisodeCausalGroupId, resolveDefensiveEpisodeId, type EpisodeIdentitySource } from './defensive-episode-identity.ts';
-import { deriveUsageEvaluable as deriveUsageEvaluableFromKpis } from './defensive-episode-kpis.ts';
 
 export type PlanVerdict = 'covered' | 'missed';
 
@@ -46,15 +45,6 @@ export interface PersistedDefensiveEpisode {
   confidence: EvaluationConfidence;
 }
 
-/**
- * §E5 (iris-defensive-canonicalization-v1-plan.md §13.1) — "¿Podía actuar?"
- * ya NO es "no excluded + algún kit member" (regla vieja, incorrecta: eso
- * contaba unavailable_legitimate/no_applicable_resource/uncertain como si
- * el jugador pudiera haber actuado). El denominador canónico de Uso es
- * puramente por responseVerdict — ver defensive-episode-kpis.ts, fuente
- * única, reexportada aquí para no duplicar la regla en persistencia.
- */
-export const deriveUsageEvaluable = deriveUsageEvaluableFromKpis;
 
 export interface BuildPersistedDefensiveEpisodeParams {
   pullId: string;
@@ -79,7 +69,7 @@ export function buildPersistedDefensiveEpisode(
   params: BuildPersistedDefensiveEpisodeParams,
 ): PersistedDefensiveEpisode {
   const episodeId = resolveDefensiveEpisodeId(params.pullId, params.playerName, params.window);
-  const usageEvaluable = deriveUsageEvaluable(params.verdict.responseVerdict);
+  const usageEvaluable = params.verdict.usageEvaluable;
   return {
     episodeId,
     causalGroupId: deriveEpisodeCausalGroupId(episodeId),
@@ -104,6 +94,7 @@ export function buildPersistedDefensiveEpisode(
       // veredicto y cuáles, sin resolver, bloquearon una conclusión positiva.
       decisiveSpellIds: [...params.verdict.decisiveSpellIds].sort((a, b) => a - b),
       uncertaintyBlockers: [...params.verdict.uncertaintyBlockers].sort((a, b) => a - b),
+      bonusCreditSpellIds: [...params.verdict.bonusCreditSpellIds].sort((a, b) => a - b),
       ...params.evidence,
     },
     confidence: params.confidence,

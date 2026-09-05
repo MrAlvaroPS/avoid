@@ -10,10 +10,11 @@ import type { PersistedDefensiveEpisode } from './defensive-episode-persistence.
 import type { ResponseVerdict } from './defensive-episode-verdict.ts';
 import type { DefensiveEpisodeEvaluationRow } from './defensive-episode-staging.ts';
 
+// @5: core-opportunity scoring + claim-scoped confidence + raw-hit reactive timing/observed-state support.
 // @4: `missed_ready` exige además confidence punitiva (verified/inferred).
 // fallback/uncertain apparent-ready degrada a uncertain y queda fuera del
 // denominador de Response. Esta versión es la constante autoritativa.
-export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@4';
+export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@5';
 
 export const RESPONSE_VERDICT_TO_EXECUTION_VERDICT: Record<ResponseVerdict, ExecutionVerdict> = {
   covered_verified: 'success',
