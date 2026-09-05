@@ -1,7 +1,7 @@
 name: E7 READY validation
 on:
   push:
-    branches: [feature/mechanics, fix/defensive-evidence-claims-shadow-v5]
+    branches: [feature/mechanics, fix/defensive-evidence-claims-shadow-v5, feature/dossier-audit-p1b-shell]
   workflow_dispatch:
 jobs:
   validate:
