@@ -1,0 +1,153 @@
+<div class="editor-container">
+  <button 
+    class="open-editor-btn"
+    (click)="openEditor()"
+    [disabled]="isSaving()">
+    ⚙️ Editor de contexto
+  </button>
+
+  <div class="modal" [class.open]="isOpen()">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Editor de Contexto de Evaluación</h3>
+        <button class="close-btn" (click)="closeEditor()" [disabled]="isSaving()">×</button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Error display -->
+        <div class="error-message" *ngIf="error()">
+          ⚠️ {{ error() }}
+        </div>
+
+        <!-- Current status -->
+        <div class="status-section">
+          <h4>Estado actual</h4>
+          <div class="status-info">
+            <p><strong>Elegibilidad:</strong> {{ evaluationEligibilityLabel() }}</p>
+            <p>
+              <strong>Intervalo evaluable:</strong>
+              {{ formatSeconds(evaluableIntervalMs().startMs / 1000) }} →
+              {{ formatSeconds(evaluableIntervalMs().endMs / 1000) }}
+              ({{ formatSeconds(evaluableIntervalMs().durationMs / 1000) }} duración)
+            </p>
+            <p *ngIf="context().wipeCallAtMs">
+              <strong>Wipe en:</strong> {{ formatSeconds(context().wipeCallAtMs! / 1000) }}
+              <span *ngIf="context().wipeCallVerified" class="verified-badge">✓ Verificado</span>
+            </p>
+            <p *ngIf="!context().wipeCallAtMs && context().wipeCallSource !== 'none'">
+              <strong>Candidato de wipe:</strong> {{ formatSeconds(getWipeCallCandidateBoundaryMs() / 1000) }}
+            </p>
+          </div>
+        </div>
+
+        <!-- Editor form -->
+        <div class="editor-section">
+          <h4>Ajustes</h4>
+
+          <!-- Interval controls -->
+          <div class="form-group">
+            <label>
+              Inicio del intervalo evaluable (segundos)
+              <input 
+                type="number" 
+                [value]="evaluationStartSec()" 
+                (input)="evaluationStartSec.set($any($event.target).valueAsNumber)"
+                min="0"
+                [max]="evaluationEndSec()"
+                [disabled]="isSaving()">
+            </label>
+            <small>{{ formatSeconds(evaluationStartSec()) }}</small>
+          </div>
+
+          <div class="form-group">
+            <label>
+              Fin del intervalo evaluable (segundos)
+              <input 
+                type="number" 
+                [value]="evaluationEndSec()" 
+                (input)="evaluationEndSec.set($any($event.target).valueAsNumber)"
+                min="0"
+                [max]="durationMs() / 1000"
+                [disabled]="isSaving()">
+            </label>
+            <small>{{ formatSeconds(evaluationEndSec()) }}</small>
+          </div>
+
+          <!-- Wipe boundary -->
+          <div class="form-group">
+            <label>
+              Límite de wipe (segundos, opcional)
+              <input 
+                type="number" 
+                [value]="wipeCallAtSec() ?? ''" 
+                (input)="wipeCallAtSec.set($any($event.target).value ? $any($event.target).valueAsNumber : null)"
+                min="0"
+                [max]="evaluationEndSec()"
+                placeholder="Dejar en blanco para sin wipe"
+                [disabled]="isSaving()">
+            </label>
+            <small *ngIf="wipeCallAtSec() != null">{{ formatSeconds(wipeCallAtSec()!) }}</small>
+          </div>
+
+          <div class="form-group checkbox">
+            <label>
+              <input 
+                type="checkbox" 
+                [checked]="wipeBoundaryVerified()" 
+                (change)="wipeBoundaryVerified.set($any($event.target).checked)"
+                [disabled]="isSaving()">
+              Wipe verificado/manual
+            </label>
+          </div>
+
+          <!-- Ninja status -->
+          <div class="form-group checkbox">
+            <label>
+              <input 
+                type="checkbox" 
+                [checked]="ninjaConfirmed()" 
+                (change)="ninjaConfirmed.set($any($event.target).checked)"
+                [disabled]="isSaving()">
+              Confirmar como ninja pull
+            </label>
+          </div>
+
+          <!-- Override reason -->
+          <div class="form-group">
+            <label>
+              Razón del cambio (requerida)
+              <textarea 
+                [value]="overrideReason()" 
+                (input)="onOverrideReasonInput($event)"
+                placeholder="Explicación para la auditoría"
+                [disabled]="isSaving()"
+                rows="3"></textarea>
+            </label>
+          </div>
+
+          <!-- Change summary -->
+          <div class="change-summary">
+            <strong>Resumen:</strong> {{ formatContextChange() }}
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button 
+          class="cancel-btn"
+          (click)="closeEditor()"
+          [disabled]="isSaving()">
+          Cancelar
+        </button>
+        <button 
+          class="save-btn"
+          (click)="saveOverride()"
+          [disabled]="isSaving() || !overrideReason().trim()">
+          {{ isSaving() ? 'Guardando...' : 'Guardar cambios' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" *ngIf="isOpen()" (click)="closeEditor()" [class.open]="isOpen()"></div>
+</div>

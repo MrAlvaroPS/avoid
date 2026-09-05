@@ -1,32 +1,55 @@
-<section class="wipe-banner" [class.is-restored]="!excluded()" aria-live="polite">
+<section class="wipe-banner" [class.is-restored]="activeBoundaryMs() == null" aria-live="polite">
   <div class="row">
     <span class="icon" aria-hidden="true">🏳️</span>
     <span class="headline">
-      @if (excluded()) {
-        Posible wipe call detectado ({{ confidence() }}% de confianza) — excluido de fiabilidad, métricas y racha.
+      @if (activeBoundaryMs() != null) {
+        Wipe call activo en {{ boundaryLabel() }} · {{ sourceLabel() }} · confianza {{ context()?.wipeCallConfidence ?? confidence() }}%.
+      } @else if (candidateBoundaryMs() != null) {
+        Candidato de wipe call en {{ boundaryLabel() }} ({{ confidence() }}%) · no excluye nada hasta que un officer lo acepte.
       } @else {
-        Wipe call detectado pero restaurado a mano — vuelve a contar en todas las estadísticas.
+        Sin wipe call activo · el pull completo es evaluable. Puedes crear uno manualmente.
       }
     </span>
     <button type="button" class="link-btn" (click)="detailsOpen.set(!detailsOpen())">{{ detailsOpen() ? 'ocultar evidencia' : 'ver evidencia' }}</button>
-    <button type="button" class="link-btn" [disabled]="reanalyzing()" (click)="reanalyze()" title="Vuelve a pedir este pull a WCL y recalcula el wipe call con el algoritmo actual">
-      {{ reanalyzing() ? 'Recalculando…' : 'Reanalizar ↻' }}
-    </button>
-    <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="toggle()">
-      {{ toggling() ? 'Guardando…' : excluded() ? 'No fue un wipe call →' : 'Marcar como wipe call →' }}
-    </button>
+    <button type="button" class="link-btn" [disabled]="reanalyzing()" (click)="reanalyze()">{{ reanalyzing() ? 'Recalculando…' : 'Reanalizar ↻' }}</button>
+    @if (!context()) {
+      <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="toggle()">{{ toggling() ? 'Guardando…' : excluded() ? 'No fue wipe call →' : 'Aceptar candidato →' }}</button>
+    }
   </div>
-  @if (detailsOpen()) {
-    <ul class="signal-list">
-      @for (line of signalLines(); track line) {
-        <li>{{ line }}</li>
+
+  @if (context()) {
+    <div class="mini-timeline" aria-label="Cronología para elegir el límite evaluable">
+      @for (chip of timeline(); track $index) {
+        @if (chip.timeMs != null) {
+          <span class="event-dot" [class.is-death]="chip.description.toLowerCase().includes('muerte')" [style.left.%]="markerPct(chip.timeMs)" [title]="chip.timeLabel + ' · ' + chip.description"></span>
+        }
       }
-    </ul>
+      @if ((activeBoundaryMs() ?? candidateBoundaryMs()) !== null) {
+        <span class="wipe-line" [style.left.%]="markerPct(activeBoundaryMs() ?? candidateBoundaryMs())"><span>WIPE CALL</span></span>
+      }
+    </div>
+    <div class="context-meta">
+      <span>Boss HP: {{ context()?.wipeCallBossHpPct == null ? 'sin dato fiable' : (context()?.wipeCallBossHpPct + '%') }}</span>
+      <span>Muertes pre/post: {{ deaths('pre') }} / {{ deaths('post') }}</span>
+    </div>
+    <div class="editor-row">
+      <label>Segundo <input type="number" min="0" [max]="durationMs() / 1000" step="0.1" [value]="boundarySeconds() ?? ((activeBoundaryMs() ?? candidateBoundaryMs() ?? durationMs()) / 1000)" (input)="boundarySeconds.set(+$any($event.target).value)" /></label>
+      <label class="reason-field">Motivo <input type="text" maxlength="240" [value]="reason()" (input)="reason.set($any($event.target).value)" placeholder="Opcional; queda auditado" /></label>
+      @if (activeBoundaryMs() != null) {
+        <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="apply('move_wipe_boundary')">Cambiar hora</button>
+        <button type="button" class="link-btn" [disabled]="toggling()" (click)="apply('clear_wipe')">No fue wipe</button>
+      } @else {
+        <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="apply('confirm_wipe')">Confirmar manual</button>
+        @if (candidateBoundaryMs() != null) {
+          <button type="button" class="link-btn" [disabled]="toggling()" (click)="apply('accept_inferred_wipe')">Aceptar inferido</button>
+        }
+      }
+    </div>
   }
-  @if (reanalyzeMessage(); as m) {
-    <p class="banner-note">{{ m }}</p>
+
+  @if (detailsOpen()) {
+    <ul class="signal-list">@for (line of signalLines(); track line) { <li>{{ line }}</li> }</ul>
   }
-  @if (error(); as e) {
-    <p class="banner-error" role="alert">{{ e }}</p>
-  }
+  @if (reanalyzeMessage(); as message) { <p class="banner-note">{{ message }}</p> }
+  @if (error(); as message) { <p class="banner-error" role="alert">{{ message }}</p> }
 </section>

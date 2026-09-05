@@ -79,7 +79,17 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // desde antes de este cambio, exactamente el mismo síntoma que v4/v5/v6/v7
 // ya arreglaron cada vez que se añadía un campo al shape cacheado sin mover
 // la versión.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v9:';
+// v10 (2026-09-01): añade defensiveManagementV2. Sin bump, una entrada v9
+// ocultaría la sección 04 nueva aunque el backfill de evaluations ya exista.
+// v11 (2026-09-02): separa adherencia/cobertura, admite modo mixed y usa el
+// score nocturno central. El fingerprint delegado ya incluye evaluated_at.
+// v12 (2026-09-05): campo nuevo canonicalDefensive (cutover frontend hacia la
+// generación defensiva v7 publicada — ver canonical-defensive-summary.service.ts).
+// Un caché v11 no tiene este campo; sin el bump, el hero/estrip/mecánicas
+// defensivas de la infografía v3 leerían `undefined` en vez de la generación
+// canónica hasta que algo más invalidara el fingerprint — mismo motivo que
+// todos los bumps anteriores.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v12:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;

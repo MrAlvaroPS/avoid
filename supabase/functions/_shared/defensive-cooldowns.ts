@@ -142,3 +142,99 @@ export function defensiveStatusAt(
   if (elapsed >= cd.baseCooldownMs) return { status: 'available_unused' };
   return { status: 'on_cooldown', cooldownRemainingMs: cd.baseCooldownMs - elapsed };
 }
+
+// §Paso C-1 (iris-defensive-canonicalization-v1-plan.md §2.4 "fail-closed
+// de cargas") — reconstrucción REAL de disponibilidad por cargas, ya no un
+// simple fail-closed a 'unknown'. Datos reales confirmados en Supabase
+// (`defensive_spec_profiles.charges`/`recharge_ms`, 2026-09-04): Survival
+// Instincts (Druid Guardian, 2 cargas/180s) y Shield Block (Warrior
+// Protection, 2 cargas/16s) ya tienen `charges` curado; `resolveEffectiveDefensiveKit()`
+// (effective-defensives.ts) ya expone `ResolvedDefensive.charges`/`rechargeMs`
+// (con el fallback `rechargeMs = cooldownMs` cuando no hay recarga curada
+// aparte) — lo que faltaba era el MODELO de disponibilidad, no el dato.
+//
+// Mecánica real de WoW (cargas recargan de una en una, no en paralelo): la
+// recurrencia es exactamente la de una cola de un solo servidor — la carga
+// consumida en el cast k-ésimo termina de recargar en
+// `finish[k] = max(cast[k], finish[k-1]) + rechargeMs`. Si en algún
+// instante hay MÁS cargas "recargando" que `maxCharges` (dato físicamente
+// imposible con un cast log real, o señal de que rechargeMs no es fiable —
+// ej. haste cambió a mitad de pull), se degrada a 'unknown' en vez de
+// confiar en un cálculo que ya sabemos que no puede ser correcto.
+export interface ChargeAvailabilityResult {
+  status: DefensiveCooldownStatus;
+  /** Cargas libres en `atMs` — null cuando status='unknown' (no se pudo reconstruir con confianza). */
+  chargesAvailable: number | null;
+  cooldownRemainingMs?: number;
+}
+
+export function chargeAvailabilityAt(
+  cd: DefensiveCooldown,
+  maxCharges: number,
+  rechargeMs: number | null,
+  castsForSpellMs: number[],
+  atMs: number,
+  buffActiveOverride = false,
+): ChargeAvailabilityResult {
+  // Camino de siempre — mismo comportamiento exacto para el 100% del
+  // catálogo real hoy (32/34 perfiles curados son de 1 carga).
+  if (!Number.isInteger(maxCharges) || maxCharges <= 1) {
+    const base = defensiveStatusAt(cd, castsForSpellMs, atMs, buffActiveOverride);
+    return { ...base, chargesAvailable: base.status === 'unknown' ? null : base.status === 'on_cooldown' ? 0 : 1 };
+  }
+
+  const relevantCasts = castsForSpellMs.filter((t) => t <= atMs).sort((a, b) => a - b);
+
+  // Sin ningún cast previo, la disponibilidad es trivial (todas las cargas
+  // libres) — no hace falta reconstruir nada, así que NO se fail-closea por
+  // falta de rechargeMs aquí: eso solo importa cuando de verdad hay que
+  // hacer el cálculo de recarga.
+  if (relevantCasts.length === 0) {
+    if (buffActiveOverride) return { status: 'active', chargesAvailable: null };
+    return { status: 'available_unused', chargesAvailable: maxCharges };
+  }
+
+  // 'active' — el efecto de la ÚLTIMA carga usada sigue vivo (independiente
+  // de cuántas cargas más queden libres; mismo criterio que defensiveStatusAt).
+  const lastCast = relevantCasts[relevantCasts.length - 1];
+  if (cd.durationMs != null && atMs - lastCast <= cd.durationMs) {
+    return { status: 'active', chargesAvailable: null };
+  }
+
+  // A partir de aquí SÍ hace falta reconstruir cuántas cargas siguen
+  // recargando — fail-closed real: sin una recarga fiable no se inventa
+  // disponibilidad (exactamente el caso que antes degradaba siempre a
+  // 'unknown', ahora acotado a cuando de verdad haría falta el dato).
+  if (rechargeMs == null || !Number.isInteger(rechargeMs) || rechargeMs <= 0) {
+    return { status: 'unknown', chargesAvailable: null };
+  }
+
+  // Cola de un solo servidor: cada cast termina de recargar cuando le toca
+  // el turno (max(propio cast, fin del anterior)) + rechargeMs. finishTimes
+  // es estrictamente creciente por construcción (finish[i] >= finish[i-1] +
+  // rechargeMs), así que "cuántos siguen recargando en atMs" es simplemente
+  // cuántos de los últimos finishTimes superan atMs — un único pase, sin
+  // recomputar nada.
+  let finish = -Infinity;
+  const finishTimes: number[] = [];
+  for (const cast of relevantCasts) {
+    finish = Math.max(cast, finish) + rechargeMs;
+    finishTimes.push(finish);
+  }
+  const stillRecharging = finishTimes.filter((f) => f > atMs).length;
+
+  if (stillRecharging > maxCharges) {
+    // Físicamente imposible con un cast log real (no se puede castear sin
+    // carga libre) — la reconstrucción no es de fiar aquí, no se afirma nada.
+    return { status: 'unknown', chargesAvailable: null };
+  }
+
+  const chargesAvailable = maxCharges - stillRecharging;
+  if (chargesAvailable > 0) return { status: 'available_unused', chargesAvailable };
+
+  // Todas las cargas recargando — el tiempo hasta la PRÓXIMA carga libre es
+  // el finish más antiguo entre los que aún superan atMs (el primero de la
+  // cola, gracias a que finishTimes es monótono creciente).
+  const nextFreeAt = finishTimes.find((f) => f > atMs)!;
+  return { status: 'on_cooldown', chargesAvailable: 0, cooldownRemainingMs: nextFreeAt - atMs };
+}

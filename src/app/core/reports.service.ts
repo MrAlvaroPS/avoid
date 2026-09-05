@@ -20,6 +20,15 @@ export interface KnownBoss {
   hasRealPulls: boolean;
   /** Orden real de la instancia (Blizzard) — null para bosses vistos solo en report_encounters sin catálogo de season sincronizado todavía. */
   orderIndex: number | null;
+  /** §"las notas del MRT no saltan... he pasado a 4-5 raiders y ninguna
+   * salta donde debe" (feedback real, 2026-09-03): encounterId es el ID de
+   * Warcraft Logs — el cliente del juego (y por tanto MRT/BigWigs) nunca lo
+   * ha oído nombrar. journalEncounterId es el ID real de Blizzard
+   * (EJ_GetEncounterInfo) que MRT espera en su campo bossID. null si
+   * known_raid_bosses todavía no tiene sincronizado este boss. */
+  journalEncounterId: number | null;
+  /** ID de instancia de Blizzard (known_raid_bosses.blizzard_zone_id) — el que usa MRT como zoneID, distinto del zone_id de WCL. null si no está sembrado todavía para esta raid. */
+  blizzardZoneId: number | null;
 }
 
 export interface NightPlayerListItem {
@@ -106,20 +115,45 @@ export class ReportsService {
   // limpiamente a la lista de antes (solo lo visto en vuestros reports).
   async listKnownBosses(): Promise<KnownBoss[]> {
     const [catalogRes, encountersRes] = await Promise.all([
-      this.supabase.client.from('known_raid_bosses').select('encounter_id,boss_name,order_index').order('order_index', { ascending: true }),
+      this.supabase.client
+        .from('known_raid_bosses')
+        .select('encounter_id,boss_name,order_index,journal_encounter_id,blizzard_zone_id')
+        .order('order_index', { ascending: true }),
       this.supabase.client.from('report_encounters').select('encounter_id,boss_name,wcl_difficulty_id'),
     ]);
     if (catalogRes.error) throw catalogRes.error;
     if (encountersRes.error) throw encountersRes.error;
 
     const byEncounter = new Map<number, KnownBoss>();
-    for (const row of (catalogRes.data ?? []) as { encounter_id: number; boss_name: string; order_index: number | null }[]) {
-      byEncounter.set(row.encounter_id, { encounterId: row.encounter_id, bossName: row.boss_name, difficulties: [], hasRealPulls: false, orderIndex: row.order_index });
+    for (const row of (catalogRes.data ?? []) as {
+      encounter_id: number;
+      boss_name: string;
+      order_index: number | null;
+      journal_encounter_id: number | null;
+      blizzard_zone_id: number | null;
+    }[]) {
+      byEncounter.set(row.encounter_id, {
+        encounterId: row.encounter_id,
+        bossName: row.boss_name,
+        difficulties: [],
+        hasRealPulls: false,
+        orderIndex: row.order_index,
+        journalEncounterId: row.journal_encounter_id,
+        blizzardZoneId: row.blizzard_zone_id,
+      });
     }
     for (const row of (encountersRes.data ?? []) as Pick<ReportEncounterRow, 'encounter_id' | 'boss_name' | 'wcl_difficulty_id'>[]) {
       let entry = byEncounter.get(row.encounter_id);
       if (!entry) {
-        entry = { encounterId: row.encounter_id, bossName: row.boss_name, difficulties: [], hasRealPulls: true, orderIndex: null };
+        entry = {
+          encounterId: row.encounter_id,
+          bossName: row.boss_name,
+          difficulties: [],
+          hasRealPulls: true,
+          orderIndex: null,
+          journalEncounterId: null,
+          blizzardZoneId: null,
+        };
         byEncounter.set(row.encounter_id, entry);
       }
       entry.hasRealPulls = true;

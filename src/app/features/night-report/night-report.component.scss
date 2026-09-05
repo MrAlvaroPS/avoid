@@ -383,6 +383,14 @@ h4 {
   color: var(--warning);
 }
 
+// Jugó esa noche pero sin fila en wowaudit_roster — informativo, no una
+// advertencia de datos incorrectos, así que usa un tono neutro en vez del
+// ámbar de Trial.
+.unlisted-badge {
+  background: var(--surface-2);
+  color: var(--text-faint);
+}
+
 // §tabla de asistencia con rendimiento — ver el comentario junto al markup
 // en el .html. Ancha por sus 7 columnas + nombres largos: overflow-x propio
 // en vez de que la página entera se desborde en pantallas estrechas.

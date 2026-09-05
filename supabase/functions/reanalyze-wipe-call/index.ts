@@ -1,7 +1,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { getFightEvents, getReportActors, getReportFights, type WclActor } from '../_shared/wcl-client.ts';
 import { computeDamageProfile } from '../_shared/damage-profile.ts';
-import { detectWipeCall, WIPE_CALL_CONFIDENCE_THRESHOLD, type WipeCallThroughputEvent } from '../_shared/wipe-call-detection.ts';
+import { detectWipeCall, type WipeCallThroughputEvent } from '../_shared/wipe-call-detection.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 
@@ -85,7 +85,7 @@ Deno.serve(async (req: Request) => {
   try {
     const { data: pull, error: pullFetchError } = await supabase
       .from('pulls')
-      .select('id, report_code, fight_id, wipe_call_confidence, wipe_call_excluded')
+      .select('id, report_code, fight_id, duration_ms, wipe_call_confidence, wipe_call_excluded')
       .eq('id', body.pullId)
       .maybeSingle();
     if (pullFetchError) return jsonResponse({ ok: false, error: pullFetchError.message }, 500);
@@ -139,7 +139,6 @@ Deno.serve(async (req: Request) => {
     });
 
     const newConfidence = wipeCallDetection?.confidence ?? null;
-    const confidenceChanged = newConfidence !== pull.wipe_call_confidence;
     const pullPatch: Record<string, unknown> = {
       wipe_call_confidence: newConfidence,
       wipe_call_signals: wipeCallDetection?.signals ?? null,
@@ -155,11 +154,46 @@ Deno.serve(async (req: Request) => {
     // Solo se toca la decisión editable a mano cuando la detección en sí
     // cambió — así una edición manual previa del RL (set-wipe-call-status)
     // sobre una confianza que sigue siendo la misma no se pisa en silencio.
-    if (confidenceChanged) {
-      pullPatch.wipe_call_excluded = newConfidence != null && newConfidence >= WIPE_CALL_CONFIDENCE_THRESHOLD;
-    }
     const { error: pullUpdateError } = await supabase.from('pulls').update(pullPatch).eq('id', pull.id);
     if (pullUpdateError) return jsonResponse({ ok: false, error: pullUpdateError.message }, 500);
+
+    const { data: context, error: contextFetchError } = await supabase
+      .from('pull_evaluation_context')
+      .select('*')
+      .eq('pull_id', pull.id)
+      .maybeSingle();
+    if (contextFetchError) return jsonResponse({ ok: false, error: contextFetchError.message }, 500);
+    if (!context) return jsonResponse({ ok: false, error: 'El pull no tiene PullEvaluationContext; ejecuta el backfill M11.' }, 409);
+    const evidence: Record<string, unknown> = context.evidence && typeof context.evidence === 'object' ? { ...context.evidence } : {};
+    if (wipeCallDetection) {
+      evidence['wipeCallCandidate'] = {
+        boundaryMs: wipeCallDetection.signals.wipeCallStartMs,
+        confidence: wipeCallDetection.confidence,
+        evidence: wipeCallDetection.signals,
+      };
+    } else {
+      delete evidence['wipeCallCandidate'];
+    }
+    const { error: contextUpdateError } = await supabase.rpc('set_pull_evaluation_context_v2', {
+      p_pull_id: pull.id,
+      p_evaluation_eligible: context.evaluation_eligible,
+      p_evaluation_start_ms: context.evaluation_start_ms,
+      p_evaluation_end_ms: context.evaluation_end_ms,
+      p_cutoff_reason: context.cutoff_reason,
+      p_wipe_call_at_ms: context.wipe_call_at_ms,
+      p_wipe_call_boss_hp_pct: context.wipe_call_boss_hp_pct,
+      p_wipe_call_source: context.wipe_call_source,
+      p_wipe_call_confidence: context.wipe_call_confidence,
+      p_wipe_call_verified: context.wipe_call_verified,
+      p_ninja_status: context.ninja_status,
+      p_ninja_source: context.ninja_source,
+      p_ninja_confidence: context.ninja_confidence,
+      p_evidence: evidence,
+      p_resolver_version: context.resolver_version,
+      p_reason: 'Candidato de wipe call recalculado; decisión autoritativa preservada.',
+      p_changed_by: guard.userId,
+    });
+    if (contextUpdateError) return jsonResponse({ ok: false, error: contextUpdateError.message }, 500);
 
     const { data: existingRecords, error: recordsFetchError } = await supabase
       .from('player_pull_records')
@@ -188,8 +222,8 @@ Deno.serve(async (req: Request) => {
       ok: true,
       pullId: pull.id,
       before: { confidence: pull.wipe_call_confidence, excluded: pull.wipe_call_excluded },
-      after: { confidence: newConfidence, excluded: pullPatch.wipe_call_excluded ?? pull.wipe_call_excluded, signals: wipeCallDetection?.signals ?? null },
-      excludedDecisionPreserved: !confidenceChanged,
+      after: { confidence: newConfidence, excluded: pull.wipe_call_excluded, signals: wipeCallDetection?.signals ?? null },
+      excludedDecisionPreserved: true,
       clusterChanges,
     });
   } catch (err) {

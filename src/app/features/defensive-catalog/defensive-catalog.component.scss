@@ -24,6 +24,148 @@
   color: var(--danger);
 }
 
+.queue-health {
+  margin: 0 0 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--card-border);
+  border-left: 3px solid var(--text-faint);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 12px;
+
+  &.queue-healthy {
+    border-left-color: var(--success);
+  }
+
+  &.queue-running {
+    border-left-color: var(--accent);
+  }
+
+  &.queue-failed,
+  &.queue-unreachable {
+    border-left-color: var(--warning);
+  }
+}
+
+.queue-health-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.queue-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-faint);
+
+  .queue-healthy & {
+    background: var(--success);
+  }
+
+  .queue-running & {
+    background: var(--accent);
+  }
+
+  .queue-failed &,
+  .queue-unreachable & {
+    background: var(--warning);
+  }
+}
+
+.queue-health-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+
+  span {
+    color: var(--text-muted);
+  }
+}
+
+.queue-health-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.queue-link,
+.queue-retry {
+  border: 0;
+  border-radius: 7px;
+  padding: 6px 9px;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+
+.queue-link {
+  color: var(--accent);
+  background: transparent;
+}
+
+.queue-retry {
+  color: var(--text);
+  background: var(--surface-hover);
+
+  &:disabled {
+    cursor: wait;
+    opacity: 0.6;
+  }
+}
+
+/* Descarta terminalmente TODA la cola — mismo tono de peligro que .delete-btn, no el gris neutro de Reintentar. */
+.queue-cancel {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  background: transparent;
+
+  &:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+  }
+}
+
+.queue-health-detail {
+  margin: 9px 0 0 18px;
+  padding-top: 9px;
+  border-top: 1px solid var(--card-border);
+  color: var(--text-muted);
+
+  p {
+    margin: 0 0 5px;
+  }
+}
+
+.queue-batches {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+
+  li {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 5px;
+    border-top: 1px solid var(--card-border);
+  }
+}
+
+@media (max-width: 720px) {
+  .queue-health-main,
+  .queue-batches li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .queue-health-dot {
+    display: none;
+  }
+}
+
 .muted {
   color: var(--text-muted);
   font-size: 13px;
@@ -344,6 +486,62 @@
   background: var(--surface-2);
   border-radius: 6px;
   font-size: 12px;
+}
+
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spell-icon {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.spell-icon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.spell-icon svg {
+  width: 65%;
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 1.8;
+}
+
+// §"las cosas que son pasivas... las ponemos en gris, no son evaluables en
+// ningún lado" (feedback real, 2026-09-03): ya nunca se penalizan (el
+// resolver las marca eligible=false y el evaluator devuelve status
+// 'unknown') — esto solo hace visible esa realidad en vez de que parezcan
+// un defensivo normal con un dato pendiente.
+tr.passive {
+  opacity: 0.55;
+}
+
+.passive-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .name {

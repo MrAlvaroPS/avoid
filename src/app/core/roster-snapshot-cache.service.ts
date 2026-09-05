@@ -9,7 +9,14 @@ import type { RepeatOffenderRow } from './offenders.service';
 // real — ver effectiveAxisWeights en reliability.service.ts). Mismo motivo
 // que los bumps de night-player-summary-cache.service.ts: sin esto, el
 // roster ya cacheado sigue enseñando el overall de la fórmula vieja.
-const STORAGE_KEY = 'avoid:roster-snapshot:v4';
+// v5 (2026-09-02): el fingerprint incluye evaluaciones defensivas y ledger.
+// Un backfill/replay puede cambiar el score sin tocar pulls.updated_at.
+// v6 (2026-09-05): el fingerprint incluye defensive_generation_pointer
+// (§51 del cutover frontend hacia v7) — cambiar la generación PUBLICADA no
+// mueve necesariamente ningún pull/report/roster, así que sin esta señal un
+// cutover de generación podía servir indefinidamente el NightPlayerSummary
+// (y por tanto la infografía v3) de la generación anterior desde caché.
+const STORAGE_KEY = 'avoid:roster-snapshot:v6';
 
 export interface RosterSnapshot {
   fingerprint: string;
@@ -73,7 +80,15 @@ export class RosterSnapshotCacheService {
    */
   async fingerprint(): Promise<string> {
     const client = this.supabase.client;
-    const [pullResponse, correctedPullResponse, reportResponse, rosterResponse] = await Promise.all([
+    const [
+      pullResponse,
+      correctedPullResponse,
+      reportResponse,
+      rosterResponse,
+      defensiveEvaluationResponse,
+      ledgerEvaluationResponse,
+      defensiveGenerationPointerResponse,
+    ] = await Promise.all([
       client
         .from('pulls')
         .select('id, closed_at')
@@ -93,11 +108,37 @@ export class RosterSnapshotCacheService {
         .limit(1)
         .maybeSingle(),
       client.from('wowaudit_roster').select('character_id, name, role, rank'),
+      client
+        .from('player_pull_defensive_evaluations')
+        .select('pull_id, player_name, evaluator_version, resolver_version, evaluated_at')
+        .order('evaluated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      client
+        .from('player_execution_events')
+        .select('pull_id, ledger_evaluator_version, evaluated_at')
+        .order('evaluated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      // §51 (cutover frontend hacia la generación defensiva v7 publicada): cambiar
+      // published_generation_id es "una operación" (un único UPDATE de esta fila
+      // singleton, ver migración 20260904100000) que no necesariamente mueve
+      // ningún pull/report/roster — sin esta señal en el fingerprint, un cutover
+      // de generación no invalidaría ni este snapshot ni el NightPlayerSummary
+      // cacheado que delega en él.
+      client
+        .from('defensive_generation_pointer')
+        .select('published_generation_id, updated_at')
+        .eq('id', true)
+        .maybeSingle(),
     ]);
     if (pullResponse.error) throw pullResponse.error;
     if (correctedPullResponse.error) throw correctedPullResponse.error;
     if (reportResponse.error) throw reportResponse.error;
     if (rosterResponse.error) throw rosterResponse.error;
+    if (defensiveEvaluationResponse.error) throw defensiveEvaluationResponse.error;
+    if (ledgerEvaluationResponse.error) throw ledgerEvaluationResponse.error;
+    if (defensiveGenerationPointerResponse.error) throw defensiveGenerationPointerResponse.error;
 
     const roster = [...(rosterResponse.data ?? [])].sort((a, b) =>
       String(a.name).localeCompare(String(b.name), 'es'),
@@ -108,6 +149,9 @@ export class RosterSnapshotCacheService {
         correctedPull: correctedPullResponse.data ?? null,
         report: reportResponse.data ?? null,
         roster,
+        defensiveEvaluation: defensiveEvaluationResponse.data ?? null,
+        ledgerEvaluation: ledgerEvaluationResponse.data ?? null,
+        defensiveGenerationPointer: defensiveGenerationPointerResponse.data ?? null,
       }),
     );
   }

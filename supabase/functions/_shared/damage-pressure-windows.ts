@@ -109,7 +109,7 @@ export interface DamageWindowOption {
 
 export interface DamageWindowCoverage {
   covered: boolean;
-  /** Solo tiene sentido cuando !covered — había algo que pulsar (fuera de 'emergency') y no se pulsó. */
+  /** @deprecated Compatibilidad v1; el evaluator v2 decide oportunidades. */
   coverable: boolean;
   options: DamageWindowOption[];
 }
@@ -125,7 +125,18 @@ export interface DominantAbility {
 // más contribución de una sola abilityGameID en el rango es la respuesta
 // real a "qué le pegó" (Hollowing Strikes/Possession Barrage/Melee salieron
 // todos coherentes con la mecánica real del boss en ese momento).
-const ATTRIBUTION_PAD_MS = 2000; // una ventana de 1 solo bucket (startMs===endMs) puede no dejar ningún evento exacto dentro del rango sin este margen
+export const DAMAGE_WINDOW_EVENT_PADDING_MS = 2000; // una ventana de 1 solo bucket (startMs===endMs) puede no dejar ningún evento exacto dentro del rango sin este margen
+
+/** Geometría canónica compartida por attribution y Episode Evaluator. */
+export function isDamageEventWithinPressureWindow(
+  timestamp: number,
+  windowStartMs: number,
+  windowEndMs: number,
+): boolean {
+  const from = Math.min(windowStartMs, windowEndMs) - DAMAGE_WINDOW_EVENT_PADDING_MS;
+  const to = Math.max(windowStartMs, windowEndMs) + DAMAGE_WINDOW_EVENT_PADDING_MS;
+  return timestamp >= from && timestamp <= to;
+}
 
 /**
  * `events` = eventos crudos DamageTaken (mismos que ya trae analyze-report
@@ -137,13 +148,11 @@ export function attributeWindowAbility(
   windowStartMs: number,
   windowEndMs: number,
 ): DominantAbility | null {
-  const from = windowStartMs - ATTRIBUTION_PAD_MS;
-  const to = windowEndMs + ATTRIBUTION_PAD_MS;
   const byAbility = new Map<number, number>();
   for (const e of events) {
     if (!(typeof e.amount === 'number' && e.amount > 0)) continue;
     if (typeof e.abilityGameID !== 'number') continue;
-    if (typeof e.timestamp !== 'number' || e.timestamp < from || e.timestamp > to) continue;
+    if (typeof e.timestamp !== 'number' || !isDamageEventWithinPressureWindow(e.timestamp, windowStartMs, windowEndMs)) continue;
     byAbility.set(e.abilityGameID, (byAbility.get(e.abilityGameID) ?? 0) + e.amount);
   }
   let best: DominantAbility | null = null;

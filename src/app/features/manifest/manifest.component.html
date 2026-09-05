@@ -107,7 +107,7 @@
             @if (!boss.hasRealPulls) {
               Todavía no tenéis ningún pull de este boss — elige la dificultad a mano para poder sincronizar igual desde Blizzard + logs públicos.
             } @else if (boss.difficulties.length < standardDifficultyIds.length) {
-              Solo tenéis pulls propios en {{ boss.difficulties.length }} de las 4 dificultades — puedes elegir cualquiera de las otras para sincronizarla igual desde Blizzard + logs públicos.
+              Solo tenéis pulls propios en {{ boss.difficulties.length }} de las 3 dificultades de raid — puedes elegir cualquiera de las otras para sincronizarla igual desde Blizzard + logs públicos.
             }
           </p>
 
@@ -115,10 +115,10 @@
             <!-- §"faltan las dificultades en los bosses que ya tienen pulls": antes
                  solo se ofrecían boss.difficulties (las vistas de verdad), así que
                  un boss con pulls SOLO en Normal no dejaba elegir Heroic/Mythic ni
-                 para consultar ni para sincronizar — las 4 siempre están aquí, con
+                 para consultar ni para sincronizar — las 3 siempre están aquí, con
                  las vistas de verdad marcadas aparte. Esto sigue controlando solo
                  qué dificultad se está CONSULTANDO/clasificando — sincronizar ya
-                 no depende de cuál esté seleccionada aquí (ver sync-actions). -->
+                 no depende de cuál esté seleccionada aquí. -->
             <div class="difficulty-tabs">
               @for (diffId of standardDifficultyIds; track diffId) {
                 <button type="button" [class.selected]="diffId === selectedDifficultyId()" (click)="selectDifficulty(diffId)">
@@ -130,56 +130,119 @@
               }
             </div>
 
-            <!-- §"hay que hacer esto por cada dificultad en lugar de
-                 traernos todo de todas las dificultades" + "no sé para qué
-                 sirve el sync profundo, si aporta algo" (feedback real): un
-                 único botón sincroniza siempre las 4 dificultades del boss a
-                 la vez (ya no hace falta elegir dificultad antes), con sync
-                 profundo (20 logs de referencia por dificultad en vez de 3)
-                 como comportamiento por defecto — es lo que de verdad
-                 alimenta el contraste entre dificultades que decide qué
-                 mecánica excluir de cada una, así que aporta más cuantas más
-                 dificultades y logs cubra. El rápido queda como enlace
-                 secundario para cuando solo hace falta un refresco.
-            -->
-            <div class="sync-actions">
-              <!-- §bug real reportado y reproducido (2026-08-27, "Edge
-                   Function returned a non-2xx status code"): las 4
-                   dificultades ya no se piden en una sola llamada al
-                   servidor (reventaba por límite de recursos) — el frontend
-                   las pide una a una, secuencial, ver onSync en el .ts. Por
-                   eso tarda más en total (~4x) y el botón muestra en qué
-                   dificultad va en vez de un tiempo fijo. -->
-              <button type="button" class="sync-btn" [disabled]="syncing() || deepSyncing()" (click)="onSync(true)" title="Journal + DB2 + hasta 20 logs públicos de referencia por dificultad, para las 4 dificultades del boss una a una. Tarda ~2-3 min en total.">
-                {{ syncProgress() && deepSyncing() ? syncProgress() : '🔄 Sincronizar boss (3 dificultades)' }}
-              </button>
-              <button type="button" class="sync-btn-quick" [disabled]="syncing() || deepSyncing()" (click)="onSync(false)" title="Igual, pero con solo 3 logs de referencia por dificultad en vez de 20 — más rápido, con menos muestra para contrastar entre dificultades.">
-                {{ syncProgress() && syncing() ? syncProgress() : 'sync rápido' }}
-              </button>
-            </div>
           </div>
         </div>
+
+        <section class="catalog-workflow" aria-labelledby="catalog-workflow-title">
+          <header>
+            <strong id="catalog-workflow-title">Preparar mecánicas</strong>
+            <span>Completa los pasos en orden. El catálogo y la semántica causal se generan en workers separados; las policies se publican por dificultad en lotes de hasta 20.</span>
+          </header>
+          <ol>
+            <li [class.complete]="catalogSyncState() && !catalogSyncState()?.referenceFetchError && !catalogSyncState()?.snapshotFetchError">
+              <span class="workflow-number">1</span>
+              <div class="workflow-copy">
+                <strong>Sincronizar catálogo</strong>
+                @if (catalogSyncState(); as syncState) {
+                  <span>Última sync de {{ selectedDifficultyName() }}: {{ formatStatusDate(syncState.lastSyncedAt) }} · {{ syncState.syncMode === 'deep' ? 'profunda' : 'rápida' }} · {{ syncState.candidateCount }} filas · {{ syncState.referenceBundleCount }} referencias.</span>
+                  @if (syncState.referenceFetchError || syncState.snapshotFetchError) {
+                    <span class="workflow-warning">Sync parcial: {{ syncState.snapshotFetchError ? 'falló Wago/DB2' : '' }}{{ syncState.snapshotFetchError && syncState.referenceFetchError ? ' y ' : '' }}{{ syncState.referenceFetchError ? 'fallaron referencias WCL' : '' }}.</span>
+                  }
+                } @else if (catalogSyncStateError()) {
+                  <span class="workflow-warning">No se pudo leer el estado de sync. Revisa migración M17/RLS.</span>
+                } @else {
+                  <span>Esta dificultad aún no tiene una sincronización registrada.</span>
+                }
+              </div>
+              <button type="button" class="workflow-action" [disabled]="syncing() || deepSyncing()" (click)="onSync(true)" title="Journal + DB2 + hasta 20 logs públicos de referencia por dificultad.">
+                {{ syncProgress() && deepSyncing() ? syncProgress() : 'Sincronizar 3 dificultades' }}
+              </button>
+              <details class="workflow-options">
+                <summary>Opciones</summary>
+                <button type="button" class="text-action" [disabled]="syncing() || deepSyncing()" (click)="onSync(false)">
+                  {{ syncProgress() && syncing() ? syncProgress() : 'Sync rápido, menos muestra' }}
+                </button>
+              </details>
+            </li>
+            <li [class.complete]="candidates().length > 0 && classifiedCandidateCount() === candidates().length">
+              <span class="workflow-number">2</span>
+              <div class="workflow-copy">
+                <strong>Clasificar catálogo</strong>
+                <span>{{ classifiedCandidateCount() }}/{{ candidates().length }} autoaplicadas en {{ selectedDifficultyName() }}. “Evitable: sin decidir” puede ser una decisión válida para daño mixto.</span>
+              </div>
+              <button type="button" class="workflow-action" [disabled]="!candidates().length || syncing() || deepSyncing()" (click)="openClassifyPanel('all')">Clasificar mecánicas con IA</button>
+              @if (selectedDifficultyName(); as diff) {
+                <button type="button" class="text-action" [disabled]="!candidates().length" (click)="openClassifyPanel(diff)">Solo {{ diff }}</button>
+              }
+            </li>
+            @if (combatFlags.enabled('mechanicPolicyV2')) {
+              <li [class.complete]="policyCoverage()?.missingPolicies === 0">
+                <span class="workflow-number">3</span>
+                <div class="workflow-copy">
+                  <strong>Crear identities y policies base</strong>
+                  @if (policyCoverage(); as coverage) {
+                    <span>{{ coverage.matchedPolicies }}/{{ coverage.totalCandidates }} enlazadas · {{ coverage.missingPolicies }} pendientes.</span>
+                  } @else {
+                    <span>Esperando a comprobar cobertura.</span>
+                  }
+                </div>
+                @if ((policyCoverage()?.missingPolicies ?? 0) > 0) {
+                  @if (confirmPolicyBackfill()) {
+                    <button type="button" class="workflow-action" (click)="runPolicyBackfill()" [disabled]="backfillingPolicies()">{{ backfillingPolicies() ? 'Creando...' : 'Confirmar creación' }}</button>
+                    <button type="button" class="text-action" (click)="confirmPolicyBackfill.set(false)" [disabled]="backfillingPolicies()">Cancelar</button>
+                  } @else {
+                    <button type="button" class="workflow-action" [disabled]="!candidates().length" (click)="confirmPolicyBackfill.set(true)">Crear las que faltan</button>
+                  }
+                } @else {
+                  <span class="workflow-done">Identidades listas</span>
+                }
+              </li>
+              <li [class.complete]="pendingPolicyGenerationCount() === 0 && (policyCoverage()?.matchedPolicies ?? 0) > 0">
+                <span class="workflow-number">4</span>
+                <div class="workflow-copy">
+                  <strong>Generar semántica causal</strong>
+                  @if (policyCoverage(); as coverage) {
+                    <span>{{ coverage.basePolicies }} base pendientes en {{ selectedDifficultyName() }} · {{ coverage.reviewedPolicies }} generadas. El prompt incluye cada dificultad completa y avisa de las que aún no tienen todas sus identities.</span>
+                  } @else {
+                    <span>Primero deben existir las identities y policies base.</span>
+                  }
+                </div>
+                <button
+                  type="button"
+                  class="workflow-action"
+                  [disabled]="selectedEncounterId() == null || loadingPolicyClassifyPrompt()"
+                  (click)="openPolicyClassifyPanel()"
+                >Generar policies con IA</button>
+              </li>
+              <li [class.complete]="pendingPolicyReviewCount() === 0 && (policyCoverage()?.matchedPolicies ?? 0) > 0">
+                <span class="workflow-number">5</span>
+                <div class="workflow-copy">
+                  <strong>Revisar excepciones causales</strong>
+                  @if (policyCoverage(); as coverage) {
+                    <span>{{ coverage.basePolicies }} sin automatizar · {{ coverage.uncertainPolicies }} inciertas · {{ coverage.reviewedPolicies }} generadas por IA · {{ coverage.verifiedPolicies }} verificadas. Último cambio: {{ formatStatusDate(coverage.latestPolicyUpdatedAt) }}.</span>
+                  } @else {
+                    <span>Abre una policy desde la tabla cuando termine el paso 3.</span>
+                  }
+                </div>
+                <button type="button" class="workflow-action" [disabled]="pendingPolicyReviewCount() === 0" (click)="openFirstPendingPolicy()">Revisar primera excepción</button>
+              </li>
+            }
+          </ol>
+          @if (policyBackfillResult(); as result) {
+            <p class="workflow-result">{{ result }}</p>
+          }
+          @if (policyCoverageError(); as coverageError) {
+            <p class="policy-status-error" role="alert">No se pudo comprobar la cobertura de policies: {{ coverageError }}</p>
+          }
+        </section>
 
         @if (lastSyncSummary(); as s) {
           <p class="sync-summary">{{ s }}</p>
         }
 
-        <!-- §"el prompt de mecánicas de bosses no puede consultar las 4
-             dificultades a la vez... asegurando la calidad de datos
-             obviamente" (feedback real, 2026-08-27): vive a nivel de boss
-             ahora, no dentro de una dificultad concreta — "todas las
-             dificultades" es la acción principal, ya no depende de qué
-             pestaña esté abierta ni de si esa pestaña en concreto tiene
-             candidatas cargadas. -->
-        <div class="classify-bar">
-          @if (!classifyPanelOpen()) {
-            <button type="button" class="classify-toggle all" (click)="openClassifyPanel('all')">🔎 Clasificar TODAS las dificultades de este boss con una sola IA →</button>
-            @if (selectedDifficultyName(); as diff) {
-              <button type="button" class="classify-toggle" (click)="openClassifyPanel(diff)">…o clasificar solo {{ diff }} →</button>
-            }
-          }
-        </div>
-
+        <!-- Ambos prompts abarcan todo el boss. Al publicar policies, el
+             frontend divide el único JSON por dificultad y en bloques de 20,
+             de modo que ningún worker procese el conjunto completo. -->
         @if (classifyPanelOpen()) {
           <div class="classify-panel">
             @if (loadingClassifyPrompt()) {
@@ -189,7 +252,7 @@
             } @else {
               <div class="classify-step">
                 <span class="step-label"
-                  >1. Prompt v{{ classifyPromptVersion() ?? '—' }} · Alcance: {{ classifyScope() === 'all' ? 'todas las dificultades' : classifyScope() }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyMechanicCount() }} filas — una habilidad puede aparecer varias veces, una por dificultad). Clasificará cada habilidad EN CADA dificultad, decidirá si es evitable, quién debe resolverla y cómo hacerlo, contrastándolo en dos fuentes por cada una.</span
+                  >1. Prompt de catálogo v{{ classifyPromptVersion() ?? '—' }} · Alcance: {{ classifyScope() === 'all' ? 'todas las dificultades' : classifyScope() }} · Cópialo y pégalo en un chat de IA con acceso a internet ({{ classifyMechanicCount() }} filas). Solo rellenará categoría, resolución, responsable y evitable; las policies se investigan después.</span
                 >
                 <pre class="prompt-box">{{ classifyFullPrompt }}</pre>
                 <button type="button" class="copy-btn" (click)="copyClassifyPrompt()">{{ classifyCopied() ? '✓ Copiado' : 'Copiar prompt' }}</button>
@@ -215,6 +278,11 @@
               </div>
               @if (classifyResult(); as r) {
                 <div class="classify-result">
+                  @if (r.fullyAppliedCount === r.submittedCount) {
+                    <p class="result-line result-ok">✓ Automatización completa: {{ r.fullyAppliedCount }}/{{ r.submittedCount }} filas recibieron conjuntamente categoría, resolución, responsable y decisión de evitable.</p>
+                  } @else {
+                    <p class="result-line result-warn">⚠ Automatización parcial: {{ r.fullyAppliedCount }}/{{ r.submittedCount }} filas quedaron completas; {{ r.submittedCount - r.fullyAppliedCount }} requieren revisar los avisos inferiores. Los éxitos de campos individuales no significan que toda la fila esté completa.</p>
+                  }
                   @if (r.applied.length) {
                     <p class="result-line result-ok">✓ {{ r.applied.length }} mecánica{{ r.applied.length === 1 ? '' : 's' }} clasificada{{ r.applied.length === 1 ? '' : 's' }}: {{ r.applied.map((a) => a.name + ' [' + a.difficulty + '] → ' + a.category).join(', ') }}</p>
                   }
@@ -256,6 +324,68 @@
                   }
                 </div>
               }
+            }
+          </div>
+        }
+
+        @if (policyClassifyPanelOpen()) {
+          <div class="classify-panel policy-classify-panel">
+            @if (loadingPolicyClassifyPrompt()) {
+              <p class="muted">Preparando el prompt causal de todas las dificultades…</p>
+            } @else if (policyClassifyPromptError(); as promptError) {
+              <p class="error" role="alert">{{ promptError }}</p>
+              <button type="button" class="classify-toggle" (click)="closePolicyClassifyPanel()">Cerrar</button>
+            } @else if (policyClassifySystemPrompt()) {
+              @if (policyClassifySkippedDifficulties().length) {
+                <p class="result-line result-warn" role="status">
+                  ⚠ No se bloquearán las dificultades listas. Se omiten por ahora:
+                  {{ policyClassifySkippedDifficulties().map((entry) => entry.difficulty + ' (' + entry.missingIdentities + '/' + entry.totalCandidates + ' sin mechanic_key)').join(' · ') }}.
+                  Cuando aparezcan o se enlacen esas mecánicas, vuelve a generar el prompt para completar esas difficulties.
+                </p>
+              }
+              <div class="classify-step">
+                <span class="step-label">
+                  1. Prompt de policies v{{ policyClassifyPromptVersion() ?? '—' }} · Dificultades listas: {{ policyClassifyDifficulties().join(', ') }} ·
+                  {{ policyClassifyCount() }} mecánicas. Copia un único prompt; al aplicar, la app hará lotes internos de hasta {{ policyClassifyMaxBatchSize() }} por dificultad.
+                </span>
+                <pre class="prompt-box">{{ policyClassifyFullPrompt }}</pre>
+                <button type="button" class="copy-btn" (click)="copyPolicyClassifyPrompt()">{{ policyClassifyCopied() ? '✓ Copiado' : 'Copiar prompt causal' }}</button>
+              </div>
+              <div class="classify-step">
+                <span class="step-label">2. Pega el único JSON completo de todas las difficulties y mecánicas</span>
+                <textarea
+                  class="paste-box"
+                  rows="6"
+                  placeholder="Pega aquí el array JSON de policies…"
+                  [value]="policyClassifyPasteText()"
+                  (input)="policyClassifyPasteText.set($any($event.target).value)"
+                ></textarea>
+                @if (policyClassifySubmitError(); as submitError) {
+                  <p class="error" role="alert">{{ submitError }}</p>
+                }
+                @if (policyClassifyProgress(); as progress) {
+                  <p class="muted">{{ progress }}</p>
+                }
+                <div class="classify-actions">
+                  <button type="button" class="sync-btn" [disabled]="policyClassifySubmitting() || !policyClassifyPasteText().trim()" (click)="submitPolicyClassification()">
+                    {{ policyClassifySubmitting() ? 'Publicando por lotes…' : 'Aplicar todas las policies' }}
+                  </button>
+                  <button type="button" class="classify-toggle" (click)="closePolicyClassifyPanel()">Cancelar</button>
+                </div>
+              </div>
+            }
+            @if (policyClassifyResult(); as result) {
+              <div class="classify-result">
+                @if (result.applied.length) {
+                  <p class="result-line result-ok">✓ {{ result.applied.length }} policies publicadas con snapshot y auditoría: {{ result.applied.map((policy) => policy.name + ' v' + policy.policyVersion + (policy.confidence === 'uncertain' ? ' · incierta' : '')).join(', ') }}</p>
+                }
+                @if (result.invalid.length) {
+                  <p class="result-line result-warn">⚠ {{ result.invalid.length }} fila{{ result.invalid.length === 1 ? '' : 's' }} rechazada{{ result.invalid.length === 1 ? '' : 's' }}: {{ result.invalid.map((entry) => entry.mechanicKey + ' (' + entry.reason + ')').join(' · ') }}</p>
+                } @else {
+                  <p class="result-line result-ok">✓ Respuesta global procesada. Revisa únicamente las policies inciertas o excepciones.</p>
+                }
+                <button type="button" class="classify-toggle" (click)="closePolicyClassifyPanel()">Cerrar</button>
+              </div>
             }
           </div>
         }
@@ -414,8 +544,35 @@
                   </td>
                   <td>
                     <input type="checkbox" [checked]="c.reviewed" (change)="onEdit(c, { reviewed: $any($event.target).checked })" />
+                    @if (combatFlags.enabled('mechanicPolicyV2')) {
+                      <button
+                        type="button"
+                        class="policy-toggle"
+                        [class.base]="policyStatusFor(c) === 'base'"
+                        [class.reviewed]="policyStatusFor(c) === 'reviewed'"
+                        [class.verified]="policyStatusFor(c) === 'verified'"
+                        [class.missing]="policyStatusFor(c) === 'missing'"
+                        [class.uncertain]="policyStatusFor(c) === 'uncertain'"
+                        [attr.aria-expanded]="expandedPolicyAbilityId() === c.ability_id"
+                        (click)="togglePolicy(c)"
+                      >
+                        {{ expandedPolicyAbilityId() === c.ability_id ? 'Cerrar' : policyStatusLabel(c) }}
+                      </button>
+                    }
                   </td>
                 </tr>
+                @if (combatFlags.enabled('mechanicPolicyV2') && expandedPolicyAbilityId() === c.ability_id) {
+                  <tr class="policy-detail-row">
+                    <td colspan="9">
+                      <app-policy-manifest-editor
+                        [bossId]="bossIdForPolicy(boss.encounterId)"
+                        [difficulty]="selectedDifficultyName()!"
+                        [mechanicKey]="mechanicKeyFor(c)"
+                        [refreshVersion]="policyRefreshVersion()"
+                      />
+                    </td>
+                  </tr>
+                }
               }
             </tbody>
           </table>

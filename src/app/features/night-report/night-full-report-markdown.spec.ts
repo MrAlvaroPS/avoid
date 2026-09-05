@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import type { NightFullReport } from '../../shared/models/night-full-report';
 import { bilingualName, buildNightDiscordSummary, buildNightFullReportMarkdown } from './night-full-report-markdown';
 
@@ -146,6 +147,7 @@ describe('buildNightFullReportMarkdown', () => {
     const withAttendance = buildNightFullReportMarkdown(report, undefined, {
       attendingMain: ['Alvaro', 'Bea'],
       attendingTrial: ['Carla'],
+      attendingUnlisted: [],
       absentMain: ['Dani'],
     });
     expect(withAttendance).toContain('## Asistencia');

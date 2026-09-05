@@ -151,7 +151,7 @@ export interface DefensivePressureWindow {
   peakMs: number;
   peakValue: number;
   covered: boolean;
-  /** Solo tiene sentido cuando !covered — había algo disponible (excluyendo 'emergency' sin usar) y no se cubrió. */
+  /** @deprecated Sensor/fallback v1. Nunca usar como veredicto o scoring v2. */
   coverable: boolean;
   options: DefensivePressureWindowOption[];
   /** §"relacionar 'pico de daño recibido' con una habilidad del boss, de
@@ -167,6 +167,21 @@ export interface DefensivePressureWindows {
   /** Mediana de los buckets de daño>0 de este jugador en este pull — línea base propia usada para el umbral. */
   baselineValue: number;
   windows: DefensivePressureWindow[];
+}
+
+export interface EffectiveDefensiveStateOption extends DefensivePressureWindowOption {
+  confidence: DefensiveResolutionConfidence;
+  chargesAvailable: number | null;
+  nextChargeAtMs?: number;
+}
+
+export interface DefensivePressureWindowsV2 {
+  baselineValue: number;
+  windows: (Omit<DefensivePressureWindow, 'coverable' | 'options'> & {
+    /** Sensor v2 no punitivo; solo el evaluator puede convertirlo en decisión. */
+    availableOpportunity: boolean;
+    options: EffectiveDefensiveStateOption[];
+  })[];
 }
 
 export interface PlayerPullRecordRow {
@@ -188,6 +203,19 @@ export interface PlayerPullRecordRow {
   // faltar (nodo sin definición de hechizo directa, p.ej. algunos nodos de
   // elección) y entonces se pinta sin tooltip en vez de inventar un ID.
   talent_build: { id: number; rank: number; nodeID: number; spellId?: number }[] | null;
+  /** Identidad estable del build normalizado; null en histórico todavía no migrado. */
+  talent_build_fingerprint: string | null;
+  /** Build exacto X.Y.Z.build de las reglas defensivas; nunca el 1=Retail de WCL. */
+  game_build: string | null;
+  game_build_source: string | null;
+  game_build_confidence: DefensiveResolutionConfidence;
+  /** Null identifica materialización legacy. */
+  defensive_resolution_version: string | null;
+  /** Comparación diagnóstica v2 contra legacy; nunca es por sí sola scoring. */
+  defensive_resolution_shadow: DefensiveResolutionShadow | null;
+  defensive_resolution_evaluated_at: string | null;
+  death_defensive_options_v2: EffectiveDefensiveStateOption[] | null;
+  defensive_pressure_windows_v2: DefensivePressureWindowsV2 | null;
   equipped_items: WclGearItem[] | null;
   /** actor.subType de WCL: "Mage", "DeathKnight"... */
   class: string | null;
@@ -198,7 +226,13 @@ export interface PlayerPullRecordRow {
   /** Tamaño de la muestra sobre la que se calculó world_rank_percent. */
   world_total_parses: number | null;
   /** TODOS los casts de cada defensivo de su clase durante el pull completo (no solo el estado al morir). */
-  defensive_casts: { spellId: number; name: string; timestampsMs: number[] }[];
+  defensive_casts: {
+    spellId: number;
+    name: string;
+    timestampsMs: number[];
+    /** Eventos v2 target-aware; ausente en imports legacy hasta reanalizarlos. */
+    events?: { timestampMs: number; targetActorId: number | null; targetName: string | null }[];
+  }[];
   /** §"picos de daño... juntando ventanas de daño sufrido + defensivos" (feedback real, 2026-08-29): null solo en pulls procesados antes de este campo y aún sin backfill (ver reanalyze-defensive-pressure). */
   defensive_pressure_windows: DefensivePressureWindows | null;
   // Los dos campos internos son opcionales de verdad, no solo por si acaso:
@@ -265,6 +299,8 @@ export interface PlayerMechanicHitDetail {
   damage_hits: number;
   healing_received: number;
   used_defensive_spell_id: number | null;
+  /** Disponible en imports nuevos con includeResources; null/ausente en histórico legacy. */
+  max_hit_points?: number | null;
 }
 
 export interface BossReferenceStatsRow {
@@ -299,6 +335,9 @@ export interface BossMechanicCandidateRow {
   boss_id: string;
   difficulty: string;
   ability_id: number;
+  /** Identidad canónica M12. Null únicamente mientras una fila legacy no haya pasado por backfill. */
+  mechanic_key: string | null;
+  policy_version: number | null;
   name: string;
   /** Nombre en castellano (Blizzard Journal, locale=es_ES) — para localizar la habilidad en el juego/logs, no una traducción de la descripción. Null si Blizzard no lo tiene traducido todavía. */
   name_es: string | null;
@@ -342,6 +381,9 @@ export interface BossMechanicCandidateRow {
 
 /** §"pantalla nueva para clasificar defensivos... qué le hace al daño entrante durante una mecánica de raid" (feedback real): mitigation = lo reduce antes de que llegue, absorption = lo intercepta con un pool aparte, sustain = repara HP ya perdido, emergency = evita la muerte / dispara el margen de supervivencia. */
 export type DefensiveSurvivalType = 'mitigation' | 'absorption' | 'sustain' | 'emergency';
+export type DefensiveTargetingMode = 'self' | 'ally' | 'both' | 'raid' | 'unknown';
+export type DefensiveActivationMode = 'active' | 'passive';
+export type DefensiveResolutionConfidence = 'verified' | 'inferred' | 'fallback' | 'uncertain';
 
 /**
  * Fila de cooldown_catalog (§12.1) — catálogo de defensivos sincronizado
@@ -364,6 +406,11 @@ export interface CooldownCatalogRow {
   name: string;
   /** A quién protege: personal (uno mismo), semi (uno mismo con matices), external (se lanza sobre otro) o utility. Eje distinto de survival_type. */
   category: 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
+  /** El evaluator no puede atribuir ally/both/unknown al caster sin target o aura real. */
+  targeting_mode: DefensiveTargetingMode;
+  activation_mode: DefensiveActivationMode;
+  passive_conversion_spell_ids: number[];
+  activation_game_build: string;
   base_cooldown_ms: number | null;
   base_duration_ms: number | null;
   synced_from_commit: string | null;
@@ -379,6 +426,125 @@ export interface CooldownCatalogRow {
   reviewed: boolean;
   /** §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31): true = ya no cuenta como defensivo real (rediseñado en un parche posterior) — corrección manual, nunca la toca el extractor de WoWAnalyzer ni un resync. defensivesForSpec/DefensiveCatalogService.listAll() lo filtran. */
   excluded: boolean;
+}
+
+/** Override base por spec y build; el resolver, no Angular, aplica su precedencia. */
+export interface DefensiveSpecProfileRow {
+  class: string;
+  spec: string;
+  spell_id: number;
+  game_build: string;
+  base_cooldown_ms: number | null;
+  base_duration_ms: number | null;
+  charges: number;
+  recharge_ms: number | null;
+  source: string | null;
+  source_note: string | null;
+  synced_from_commit: string | null;
+  verified_at: string | null;
+  updated_at: string;
+}
+
+export interface DefensiveModifierRuleRow {
+  id: string;
+  class: string;
+  specs: string[] | null;
+  modifier_spell_id: number;
+  target_spell_id: number;
+  operation: 'subtract_ms' | 'add_ms' | 'multiply' | 'set_ms' | 'charges_add';
+  effect_field: 'cooldown_ms' | 'duration_ms' | 'charges' | 'recharge_ms';
+  value: number;
+  per_rank: boolean;
+  condition: 'always' | 'conditional';
+  game_build: string;
+  application_order: number;
+  description: string;
+  source: string | null;
+  verified_at: string | null;
+  active: boolean;
+  updated_at: string;
+}
+
+export interface PlayerLatestBuildRow {
+  player_name: string;
+  class: string;
+  spec: string;
+  talent_build: { id: number; rank: number; nodeID: number; spellId?: number }[] | null;
+  talent_build_fingerprint: string | null;
+  game_build: string | null;
+  game_build_source: string | null;
+  game_build_confidence: DefensiveResolutionConfidence;
+  observed_at: string;
+  report_code: string;
+  pull_id: string;
+}
+
+export interface DefensiveResolutionStep {
+  kind: 'catalog_base' | 'eligibility' | 'availability_rule' | 'spec_profile' | 'modifier' | 'conditional_modifier' | 'player_override' | 'validation';
+  field: 'cooldown_ms' | 'duration_ms' | 'charges' | 'recharge_ms' | 'eligible' | 'targeting_mode' | 'activation_mode';
+  before: number | string | boolean | null;
+  after: number | string | boolean | null;
+  operation?: 'set_ms' | 'multiply' | 'add_ms' | 'subtract_ms' | 'charges_add';
+  source?: string | null;
+  description: string;
+  gameBuild?: string | null;
+  ruleId?: string;
+}
+
+/** Contrato de lectura del resolver; ningún componente debe recalcular estos valores. */
+export interface ResolvedDefensiveRow {
+  spellId: number;
+  name: string;
+  className: string;
+  specName: string | null;
+  category: CooldownCatalogRow['category'];
+  survivalType: DefensiveSurvivalType | null;
+  targetingMode: DefensiveTargetingMode;
+  activationMode: DefensiveActivationMode;
+  effectiveCooldownMs: number | null;
+  effectiveDurationMs: number | null;
+  charges: number;
+  rechargeMs: number | null;
+  eligible: boolean;
+  buildFingerprint: string | null;
+  gameBuild: string | null;
+  resolverVersion: string;
+  confidence: DefensiveResolutionConfidence;
+  provenance: DefensiveResolutionStep[];
+  conditionalModifiers: DefensiveResolutionStep[];
+}
+
+export interface DefensiveResolutionShadow {
+  resolverVersion: string;
+  authoritative: false;
+  kit: ResolvedDefensiveRow[];
+  differencesFromLegacy: {
+    spellId: number;
+    legacyEligible: boolean;
+    resolvedEligible: boolean;
+    legacyCooldownMs: number | null;
+    resolvedCooldownMs: number | null;
+    legacyDurationMs: number | null;
+    resolvedDurationMs: number | null;
+    confidence: DefensiveResolutionConfidence;
+  }[];
+  warnings: string[];
+}
+
+export interface ResolvedPlayerDefensiveKitResult {
+  ok: true;
+  kit: ResolvedDefensiveRow[];
+  sourceBuild: {
+    fingerprint: string | null;
+    gameBuild: string | null;
+    source: string | null;
+    observedAt: string | null;
+    confidence: DefensiveResolutionConfidence;
+    reportCode: string | null;
+    pullId: string | null;
+  };
+  resolverVersion: string;
+  warnings: string[];
 }
 
 /**
@@ -416,6 +582,307 @@ export interface BossMechanicDefensiveProfileRow {
   updated_at: string;
 }
 
+/** Timing world de una ocurrencia concreta (#1..#N) de la mecánica. */
+export interface BossMechanicOccurrenceProfileRow {
+  boss_id: string;
+  difficulty: string;
+  ability_id: number;
+  occurrence_index: number;
+  median_offset_ms: number;
+  p10_offset_ms: number;
+  p90_offset_ms: number;
+  sample_offsets_ms: number[];
+  sample_fight_count: number;
+  phase_id: number | null;
+  world_overlap_score: number | null;
+  local_overlap_score: number | null;
+  updated_at: string;
+}
+
+export interface BossMechanicDefensiveLocalProfileRow {
+  boss_id: string;
+  difficulty: string;
+  ability_id: number;
+  local_damage_samples: number[];
+  local_unmitigated_estimate_samples: number[];
+  local_max_health_pct_samples: number[];
+  local_player_hit_count_samples: number[];
+  local_death_count: number;
+  local_near_death_count: number;
+  local_pressure_window_count: number;
+  local_sample_pull_count: number;
+  local_raid_impact_score: number | null;
+  local_individual_lethality_score: number | null;
+  local_priority: number | null;
+  local_last_observed_at: string | null;
+  sync_revision: string;
+  updated_at: string;
+}
+
+export interface BossMechanicDefensivePlanningProfileRow {
+  boss_id: string;
+  difficulty: string;
+  ability_id: number;
+  world_sample_fight_count: number | null;
+  world_priority: number | null;
+  world_requires_defensive: boolean | null;
+  world_requires_defensive_source: string | null;
+  world_median_unmitigated_damage: number | null;
+  local_sample_pull_count: number | null;
+  local_death_count: number | null;
+  local_near_death_count: number | null;
+  local_pressure_window_count: number | null;
+  local_raid_impact_score: number | null;
+  local_individual_lethality_score: number | null;
+  local_priority: number | null;
+  local_last_observed_at: string | null;
+  combined_planning_priority: number | null;
+  combined_priority_source: 'manual_override' | 'world+local' | 'local' | 'world' | 'none';
+  updated_at: string | null;
+}
+
+export type DefensivePlanMode = 'full' | 'partial' | 'no_plan';
+export type DefensivePlanCoverageStatus = 'covered' | 'partial' | 'uncovered' | 'excluded';
+
+export interface DefensivePlanVersionRow {
+  id: string;
+  boss_id: string;
+  difficulty: string;
+  name: string;
+  status: 'draft' | 'published';
+  plan_mode: DefensivePlanMode;
+  planning_quality: 'optimal' | 'fallback_greedy' | 'manual';
+  game_build: string | null;
+  solver_version: string;
+  resolver_version: string;
+  backend_resolved: boolean;
+  roster_fingerprint: string | null;
+  source_profile_revision: string | null;
+  source_catalog_revision: string | null;
+  supersedes_id: string | null;
+  uncertainty_margin_ms: number;
+  fallback_used: boolean;
+  roster_snapshot_at: string;
+  diagnostics: Record<string, unknown>;
+  content_fingerprint: string | null;
+  created_by: string | null;
+  created_at: string;
+  published_by: string | null;
+  published_at: string | null;
+  notes: string | null;
+}
+
+export interface DefensivePlanMemberRow {
+  plan_version_id: string;
+  player_key: string;
+  character_id: number | null;
+  player_name: string;
+  class: string;
+  spec: string | null;
+  role: 'tank' | 'healer' | 'dps' | null;
+  raid_group: number | null;
+  build_fingerprint: string | null;
+  game_build: string | null;
+  build_observed_at: string | null;
+  build_confidence: DefensiveResolutionConfidence;
+  included: boolean;
+  resolver_version: string;
+  effective_kit: ResolvedDefensiveRow[];
+  provenance: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface DefensivePlanSlotRow {
+  id: string;
+  plan_version_id: string;
+  ability_id: number;
+  occurrence_index: number;
+  slot_index: number;
+  occurrence_time_ms: number;
+  window_start_ms: number;
+  window_end_ms: number;
+  priority: number | null;
+  requirement_level: 'required' | 'recommended' | 'optional';
+  demand_type: 'raid' | 'personal' | 'tank' | 'external' | 'utility';
+  coverage_status: DefensivePlanCoverageStatus;
+  assigned_player_key: string | null;
+  target_player_key: string | null;
+  defensive_spell_id: number | null;
+  planned_cast_at_ms: number | null;
+  prewarn_ms: number;
+  source: 'automatic' | 'manual' | 'locked' | 'emergency' | 'fallback';
+  locked: boolean;
+  emergency_reserved: boolean;
+  confidence: DefensiveResolutionConfidence;
+  trigger_mode: 'time' | 'bossmod';
+  bossmod_spell_id: number | null;
+  bossmod_counter: string | null;
+  bossmod_counter_verified: boolean;
+  assigned_groups: number[] | null;
+  effective_cooldown_ms_snapshot: number | null;
+  effective_duration_ms_snapshot: number | null;
+  charges_snapshot: number | null;
+  build_fingerprint_snapshot: string | null;
+  notes: string | null;
+  rationale: Record<string, unknown>;
+  /** false = ya cubierto por la duración de un cast anterior del mismo jugador+defensivo; ver defensive-plan-solver.ts. */
+  needs_fresh_cast: boolean;
+  covered_by_prior_cast_at_ms: number | null;
+  created_at: string;
+}
+
+export interface PullDefensivePlanBindingRow {
+  pull_id: string;
+  plan_version_id: string | null;
+  mode_at_pull: DefensivePlanMode;
+  binding_reason: 'published_at_fight' | 'manual' | 'none_available';
+  plan_published_at: string | null;
+  manual_reason: string | null;
+  bound_by: string | null;
+  bound_at: string;
+}
+
+export type DefensiveExecutionState =
+  | 'plan_covered'
+  | 'covered_with_substitution'
+  | 'correct_hold'
+  | 'safe_extra_use'
+  | 'missed_extra_opportunity'
+  | 'plan_broken'
+  | 'reminder_missed'
+  | 'death_with_viable_cd'
+  | 'death_with_ready_cd'
+  | 'no_feasible_alternative'
+  | 'uncertain_data';
+
+export interface PlayerPullDefensiveEvaluationEvent {
+  state: DefensiveExecutionState;
+  reason: string;
+  atMs: number;
+  coverageOutcome: 'covered' | 'uncovered' | 'not_applicable' | 'uncertain';
+  adherenceOutcome: 'followed' | 'substituted' | 'held' | 'broken' | 'missed' | 'not_applicable' | 'uncertain';
+  managementOutcome: 'success' | 'failure' | 'neutral' | 'uncertain';
+  requirementLevel?: 'required' | 'recommended' | 'optional';
+  slotId?: string;
+  windowId?: string;
+  abilityId?: number;
+  occurrenceIndex?: number;
+  plannedSpellId?: number;
+  actualSpellId?: number;
+  actualCastAtMs?: number;
+  targetPlayerKey?: string | null;
+  relatedFutureSlotId?: string;
+  relatedFutureAtMs?: number;
+  cooldownRemainingMs?: number;
+  candidateSpellIds?: number[];
+  lethalWindowStartMs?: number;
+  /** Pico de daño real de la ventana que originó este evento — ver
+   * EvaluationPressureWindow.peakValue en defensive-execution-evaluator.ts. */
+  peakValue?: number;
+  causalGroupId?: string;
+  primaryPenalty?: boolean;
+}
+
+export interface PlayerPullDefensiveEvaluationRow {
+  pull_id: string;
+  player_name: string;
+  plan_version_id: string | null;
+  mode: DefensivePlanMode;
+  game_build: string | null;
+  build_fingerprint: string | null;
+  resolver_version: string;
+  solver_version: string;
+  evaluator_version: string;
+  plan_required_count: number;
+  plan_executed_count: number;
+  required_exact_adherence_count?: number;
+  required_coverage_success_count?: number;
+  critical_window_count: number;
+  critical_covered_count: number;
+  correct_hold_count: number;
+  broken_reservation_count: number;
+  reminder_missed_count: number;
+  viable_extra_count: number;
+  extra_used_count: number;
+  death_viable_cd_count: number;
+  management_score: number | null;
+  data_confidence: DefensiveResolutionConfidence;
+  events: PlayerPullDefensiveEvaluationEvent[];
+  evaluated_at: string;
+}
+
+export interface DefensivePlanDraftInput {
+  bossId: string;
+  difficulty: string;
+  name: string;
+  planMode: DefensivePlanMode;
+  planningQuality: 'optimal' | 'fallback_greedy' | 'manual';
+  gameBuild?: string | null;
+  solverVersion: string;
+  resolverVersion: string;
+  backendResolved?: boolean;
+  rosterFingerprint?: string | null;
+  sourceProfileRevision?: string | null;
+  sourceCatalogRevision?: string | null;
+  supersedesId?: string | null;
+  uncertaintyMarginMs?: number;
+  fallbackUsed?: boolean;
+  rosterSnapshotAt: string;
+  diagnostics?: Record<string, unknown>;
+  notes?: string | null;
+  members: {
+    playerKey: string;
+    characterId?: number | null;
+    playerName: string;
+    class: string;
+    spec?: string | null;
+    role?: 'tank' | 'healer' | 'dps' | null;
+    raidGroup?: number | null;
+    buildFingerprint?: string | null;
+    gameBuild?: string | null;
+    buildObservedAt?: string | null;
+    buildConfidence: DefensiveResolutionConfidence;
+    included?: boolean;
+    resolverVersion: string;
+    effectiveKit: ResolvedDefensiveRow[];
+    provenance?: Record<string, unknown>;
+  }[];
+  slots: {
+    abilityId: number;
+    occurrenceIndex: number;
+    slotIndex?: number;
+    occurrenceTimeMs: number;
+    windowStartMs: number;
+    windowEndMs: number;
+    priority?: number | null;
+    requirementLevel: 'required' | 'recommended' | 'optional';
+    demandType: DefensivePlanSlotRow['demand_type'];
+    coverageStatus: DefensivePlanCoverageStatus;
+    assignedPlayerKey?: string | null;
+    targetPlayerKey?: string | null;
+    defensiveSpellId?: number | null;
+    plannedCastAtMs?: number | null;
+    prewarnMs?: number;
+    source: DefensivePlanSlotRow['source'];
+    locked?: boolean;
+    emergencyReserved?: boolean;
+    confidence: DefensiveResolutionConfidence;
+    triggerMode?: 'time' | 'bossmod';
+    bossmodSpellId?: number | null;
+    bossmodCounter?: string | null;
+    bossmodCounterVerified?: boolean;
+    assignedGroups?: number[] | null;
+    effectiveCooldownMsSnapshot?: number | null;
+    effectiveDurationMsSnapshot?: number | null;
+    chargesSnapshot?: number | null;
+    buildFingerprintSnapshot?: string | null;
+    notes?: string | null;
+    rationale?: Record<string, unknown>;
+    needsFreshCast?: boolean;
+    coveredByPriorCastAtMs?: number | null;
+  }[];
+}
+
 /** Fila de mechanic_defensive_assignments — asignación curada a mano de qué defensivo de qué spec cubre qué mecánica, para el generador de reminders MRT. */
 export interface MechanicDefensiveAssignmentRow {
   id: string;
@@ -430,6 +897,9 @@ export interface MechanicDefensiveAssignmentRow {
   trigger_type: 'bossmod' | 'time';
   /** Normalmente = ability_id; distinto solo si el timer real de BigWigs/DBM usa otro spellID. */
   bossmod_spell_id: number | null;
+  /** Contador de la ocurrencia en el timer de BigWigs/DBM — solo se usa si bossmod_counter_verified es true. Ver migración 20260903110000. */
+  bossmod_counter: string | null;
+  bossmod_counter_verified: boolean;
   notes: string | null;
   /** Grupos de raid (1-6) a los que aplica — null = todos/sin restringir. Solo informativo (se refleja en el texto del reminder), MRT no filtra por esto — ver migración 20260831130000. */
   assigned_groups: number[] | null;

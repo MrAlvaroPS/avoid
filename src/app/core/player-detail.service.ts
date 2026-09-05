@@ -14,6 +14,7 @@ import { loadMechanicNotesByName } from './mechanic-notes';
 import { mechanicDisplayName } from '../shared/format.util';
 import type { DeathCause, MechanicCategory } from '../shared/models/domain';
 import type { RaidRole } from '../shared/role-icon.component';
+import { DefensiveFeatureFlagsService } from './defensive-feature-flags.service';
 
 const HISTORY_WEEKS = 10; // suficiente para ver una tendencia real sin diluirla en meses de ruido
 const RECENT_DEATHS_LIMIT = 15;
@@ -66,6 +67,7 @@ export class PlayerDetailService {
   private supabase = inject(SupabaseService);
   private wowauditRoster = inject(WowauditRosterService);
   private reliabilityService = inject(ReliabilityService);
+  private defensiveFlags = inject(DefensiveFeatureFlagsService);
 
   async load(playerName: string): Promise<PlayerDetail> {
     const client = this.supabase.client;
@@ -172,7 +174,9 @@ export class PlayerDetailService {
     for (let weekIndex = HISTORY_WEEKS - 1; weekIndex >= 0; weekIndex--) {
       const bucketRows = buckets[weekIndex];
       const weekStartMs = now - (weekIndex + 1) * 7 * 86_400_000;
-      const result = computeReliabilityBreakdown(bucketRows, now);
+      const result = computeReliabilityBreakdown(bucketRows, now, {
+        defensiveV2Enabled: this.defensiveFlags.enabled('defensiveReliabilityV2'),
+      });
       points.push({
         weekStartLabel: new Date(weekStartMs).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }),
         score: result?.overall ?? null,

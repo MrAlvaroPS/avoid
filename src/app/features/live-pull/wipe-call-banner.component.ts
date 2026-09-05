@@ -1,15 +1,8 @@
-// Colocar en: src/app/features/live-pull/wipe-call-banner.component.ts
-// §"cuándo se determina un wipe global... que autoexcluya pero que permita
-// también editarlo... para restaurar los valores" (feedback real): banner
-// visible solo cuando analyze-report detectó un cluster de muertes casi
-// simultáneas — muestra la confianza y la evidencia (mismo espíritu que
-// inferred_category_reasons del manifiesto: nunca una caja negra) y deja
-// confirmar/revertir con un clic. El toggle recarga el pull entero porque
-// el cambio afecta a demasiados cálculos derivados (deaths, mechFails,
-// racha, defensivos, fiabilidad) como para recomputarlos en el cliente.
-import { Component, inject, input, output, signal } from '@angular/core';
+import { Component, computed, inject, input, output, signal } from '@angular/core';
 import { PullAnalysisService } from '../../core/pull-analysis.service';
 import { errorMessage } from '../../shared/error-message.util';
+import type { TimelineChip } from '../../shared/models/ui';
+import type { PullEvaluationContextContract } from '../../../../supabase/functions/_shared/combat-evaluation-contract';
 
 @Component({
   selector: 'app-wipe-call-banner',
@@ -24,6 +17,9 @@ export class WipeCallBannerComponent {
   confidence = input.required<number>();
   excluded = input.required<boolean>();
   signals = input.required<Record<string, number | boolean | null>>();
+  context = input<PullEvaluationContextContract | null>(null);
+  durationMs = input.required<number>();
+  timeline = input<TimelineChip[]>([]);
   statusChanged = output<void>();
 
   detailsOpen = signal(false);
@@ -31,6 +27,11 @@ export class WipeCallBannerComponent {
   reanalyzing = signal(false);
   reanalyzeMessage = signal<string | null>(null);
   error = signal<string | null>(null);
+  boundarySeconds = signal<number | null>(null);
+  reason = signal('');
+
+  activeBoundaryMs = computed(() => this.context()?.wipeCallAtMs ?? (this.excluded() ? this.numberSignal('wipeCallStartMs') : null));
+  candidateBoundaryMs = computed(() => this.numberSignal('wipeCallStartMs'));
 
   async toggle(): Promise<void> {
     this.toggling.set(true);
@@ -45,13 +46,27 @@ export class WipeCallBannerComponent {
     }
   }
 
-  // §"Hay que ver la manera de centralizar esta información y, sobretodo,
-  // en hacerla fiable" (feedback real, 2026-08-28): vuelve a pedir a WCL
-  // este pull y recalcula el veredicto con el algoritmo actual — para
-  // cuando el algoritmo cambia después de que este pull ya se analizara
-  // (caso real: Pandokie quedó fuera del cluster por un fallo del
-  // algoritmo anterior). Si había una decisión manual (toggle() arriba) y
-  // la confianza recalculada es la misma, esa decisión se respeta.
+  async apply(action: 'confirm_wipe' | 'move_wipe_boundary' | 'clear_wipe' | 'accept_inferred_wipe'): Promise<void> {
+    this.toggling.set(true);
+    this.error.set(null);
+    try {
+      const needsBoundary = action === 'confirm_wipe' || action === 'move_wipe_boundary';
+      const fallbackMs = this.activeBoundaryMs() ?? this.candidateBoundaryMs() ?? this.durationMs();
+      const boundaryMs = Math.round((this.boundarySeconds() ?? fallbackMs / 1000) * 1000);
+      await this.pullAnalysis.setPullEvaluationContext({
+        pullId: this.pullId(),
+        action,
+        ...(needsBoundary ? { boundaryMs } : {}),
+        ...(this.reason().trim() ? { reason: this.reason().trim() } : {}),
+      });
+      this.statusChanged.emit();
+    } catch (err) {
+      this.error.set(errorMessage(err));
+    } finally {
+      this.toggling.set(false);
+    }
+  }
+
   async reanalyze(): Promise<void> {
     this.reanalyzing.set(true);
     this.error.set(null);
@@ -59,11 +74,7 @@ export class WipeCallBannerComponent {
     try {
       const result = await this.pullAnalysis.reanalyzeWipeCall(this.pullId());
       const changed = result.clusterChanges.length;
-      this.reanalyzeMessage.set(
-        changed
-          ? `Recalculado: ${changed} jugador${changed === 1 ? '' : 'es'} cambiaron de estado (confianza ${result.before.confidence ?? '—'}% → ${result.after.confidence ?? '—'}%).`
-          : 'Recalculado: sin cambios respecto al análisis anterior.',
-      );
+      this.reanalyzeMessage.set(changed ? `Candidato recalculado: ${changed} jugadores cambiaron de cluster.` : 'Candidato recalculado sin cambios de cluster.');
       this.statusChanged.emit();
     } catch (err) {
       this.error.set(errorMessage(err));
@@ -72,42 +83,48 @@ export class WipeCallBannerComponent {
     }
   }
 
-  // Traducción a lenguaje llano de las señales crudas — para que "revisar
-  // la evidencia" no exija leer nombres de campo en inglés.
+  markerPct(timeMs: number | null): number {
+    if (timeMs == null || this.durationMs() <= 0) return 0;
+    return Math.max(0, Math.min(100, (timeMs / this.durationMs()) * 100));
+  }
+
+  deaths(side: 'pre' | 'post'): number {
+    const boundary = this.activeBoundaryMs() ?? this.candidateBoundaryMs();
+    if (boundary == null) return 0;
+    return this.timeline().filter((chip) => {
+      if (chip.timeMs == null || !/muerte/i.test(chip.description)) return false;
+      return side === 'pre' ? chip.timeMs < boundary : chip.timeMs >= boundary;
+    }).length;
+  }
+
+  boundaryLabel(): string {
+    const value = this.activeBoundaryMs() ?? this.candidateBoundaryMs();
+    if (value == null) return 'sin límite';
+    const seconds = Math.round(value / 1000);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+
+  sourceLabel(): string {
+    const source = this.context()?.wipeCallSource;
+    if (source === 'manual_rl') return 'manual RL';
+    if (source === 'instrumented') return 'instrumentado';
+    if (source === 'inferred') return 'inferido';
+    return this.candidateBoundaryMs() != null ? 'candidato inferido' : 'sin candidato';
+  }
+
   signalLines(): string[] {
     const s = this.signals();
     const lines: string[] = [];
-    if (s['earlyMassDeath'] === true) lines.push('murió al menos el 60% de la party durante los primeros 10s: se trata como reset/wipe call temprano');
-    if (typeof s['simultaneityFraction'] === 'number') lines.push(`${Math.round(s['simultaneityFraction'] * 100)}% de los vivos murieron casi a la vez`);
-    if (typeof s['abilityDiversity'] === 'number') {
-      lines.push(
-        s['abilityDiversity'] > 0.5
-          ? 'cada uno murió a una causa distinta (no una única mecánica)'
-          : 'la mayoría murió a la misma habilidad (más típico de una mecánica real)',
-      );
-    }
-    if (typeof s['healingCollapseRatio'] === 'number') {
-      lines.push(
-        s['healingCollapseRatio'] < 0.3
-          ? 'la sanación de la raid casi desapareció después de las muertes desencadenantes'
-          : 'la raid siguió sanando después de las muertes desencadenantes',
-      );
-    }
-    if (typeof s['sustainedDeathFraction'] === 'number' && s['sustainedDeathFraction'] > 0.5) {
-      lines.push('la mayoría no murió a un golpe único, se fueron apagando');
-    }
-    // §"los primeros 2-3-4 que mueren no suelen ser parte de ese wipe
-    // call... es mecánica fallida seguramente" (feedback real): las
-    // primeras muertes del cluster NUNCA se excluyen (se asume que son la
-    // causa, no la consecuencia) — se deja explícito aquí para que no
-    // parezca que todo el cluster se perdonó por igual.
-    if (typeof s['triggerDeathsKept'] === 'number' && s['triggerDeathsKept'] > 0) {
-      lines.push(`las primeras ${s['triggerDeathsKept']} muertes del grupo siguen contando como fallo real — solo se excluye el resto (probablemente ya dado por perdido)`);
-    }
-    if (typeof s['wipeCallStartMs'] === 'number') {
-      const seconds = Math.round(s['wipeCallStartMs'] / 1000);
-      lines.push(`el límite estadístico empieza en ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}; todo lo anterior sigue contando`);
-    }
+    if (s['earlyMassDeath'] === true) lines.push('Muerte masiva durante los primeros 10 segundos.');
+    if (typeof s['simultaneityFraction'] === 'number') lines.push(`${Math.round(s['simultaneityFraction'] * 100)}% de los vivos murieron casi a la vez.`);
+    if (typeof s['abilityDiversity'] === 'number') lines.push(s['abilityDiversity'] > 0.5 ? 'Causas de muerte diversas.' : 'Predomina una misma habilidad.');
+    if (typeof s['healingCollapseRatio'] === 'number') lines.push(`Actividad de sanación posterior: ${Math.round(s['healingCollapseRatio'] * 100)}% del ritmo previo.`);
+    if (typeof s['triggerDeathsKept'] === 'number' && s['triggerDeathsKept'] > 0) lines.push(`Las primeras ${s['triggerDeathsKept']} muertes quedan antes del candidato.`);
     return lines;
+  }
+
+  private numberSignal(key: string): number | null {
+    const value = this.signals()[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
   }
 }

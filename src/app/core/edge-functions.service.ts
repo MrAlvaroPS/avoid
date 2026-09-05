@@ -4,7 +4,21 @@
 // lectura pública; las escrituras las hacen las funciones con service_role).
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
+import { errorMessage } from '../shared/error-message.util';
+import { describeFunctionError } from '../shared/function-error.util';
 import type { GenerateNightFullReportResult } from '../shared/models/night-full-report';
+import type {
+  DefensivePlanDraftInput,
+  DefensivePlanVersionRow,
+  DefensiveResolutionConfidence,
+  PlayerPullDefensiveEvaluationRow,
+  PullDefensivePlanBindingRow,
+  ResolvedPlayerDefensiveKitResult,
+} from '../shared/models/domain';
+import type {
+  MechanicAliasContract,
+  MechanicPolicyContract,
+} from '../../../supabase/functions/_shared/combat-evaluation-contract';
 
 export interface AnalyzeReportResult {
   ok: true;
@@ -13,6 +27,102 @@ export interface AnalyzeReportResult {
   newestPullId: string | null;
   /** §"la noche duplicada... dos personas subieron el mismo log" (bug real, arreglado a mano): report_code de otro report ya importado que parece la misma sesión (inicio a ±6h, ≥2 bosses en común) — null = sin sospecha. Solo se calcula al crear el report, se repite igual en cada respuesta mientras exista. */
   possibleDuplicateOf: string | null;
+}
+
+export interface DefensiveReanalysisJobRef {
+  id: string;
+  pullId: string;
+}
+
+export interface DefensiveReanalysisQueueFields {
+  pullIds: string[];
+  reanalysisBatchId: string | null;
+  reanalysisJobs: DefensiveReanalysisJobRef[];
+  reanalysisQueueError: string | null;
+}
+
+export interface PendingDefensiveReanalysisJob extends DefensiveReanalysisJobRef {
+  batchId: string;
+  status: 'queued' | 'error';
+  attempts: number;
+  lastError: string | null;
+  reason: string;
+  scope: Record<string, unknown>;
+}
+
+export type DefensiveReanalysisQueueHealth = 'healthy' | 'running' | 'failed';
+
+export interface DefensiveReanalysisQueueBatchStatus {
+  id: string;
+  reason: string;
+  scope: Record<string, unknown>;
+  status: 'queued' | 'running' | 'completed' | 'completed_with_errors';
+  totalJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface DefensiveReanalysisQueueStatusResult {
+  ok: true;
+  health: DefensiveReanalysisQueueHealth;
+  counts: {
+    queued: number;
+    running: number;
+    retryableErrors: number;
+    blockedErrors: number;
+  };
+  pendingCount: number;
+  maxAttempts: number;
+  lastError: {
+    jobId: string;
+    batchId: string;
+    pullId: string;
+    attempts: number;
+    message: string;
+    updatedAt: string;
+  } | null;
+  batches: DefensiveReanalysisQueueBatchStatus[];
+}
+
+export type DefensiveV2ReadinessState = 'ready' | 'partial' | 'missing';
+
+export interface DefensiveV2ReadinessCheck {
+  id: 'resolver_endpoint' | 'override_endpoint' | 'generator_endpoint' | 'resolver_schema' | 'override_audit' | 'plan_schema' | 'evaluator_schema' | 'reliability_v2' | 'backfill';
+  label: string;
+  state: DefensiveV2ReadinessState;
+  detail: string;
+  requiredMigration: string | null;
+  completed?: number;
+  total?: number;
+}
+
+export interface DefensiveV2ReadinessResult {
+  ok: true;
+  state: DefensiveV2ReadinessState;
+  checkedAt: string;
+  evaluatorVersion: string;
+  resolverVersion: string | null;
+  checks: DefensiveV2ReadinessCheck[];
+  capabilities: {
+    playerMode: boolean;
+    playerOverride: boolean;
+    planManagement: boolean;
+    evaluator: boolean;
+    infographic: boolean;
+    reliability: boolean;
+  };
+}
+
+export interface ControlledDefensiveBackfillAuditCase {
+  id: 'fade_modifier' | 'unchanged_base' | 'charges_recharge' | 'external_target' | 'unknown_build';
+  label: string;
+  state: 'passed' | 'failed' | 'not_observed';
+  observed: number;
+  detail: string;
 }
 
 export interface PullBriefRow {
@@ -175,6 +285,29 @@ export class EdgeFunctionsService {
     return this.invoke('set-ninja-pull-status', { pullId, excluded });
   }
 
+  /** Autoridad v2: corrige wipe/ninja o el contexto completo, siempre con auditoría. */
+  async setPullEvaluationContext(params:
+    | {
+        pullId: string;
+        action: 'confirm_wipe' | 'clear_wipe' | 'move_wipe_boundary' | 'accept_inferred_wipe' | 'confirm_ninja' | 'mark_valid' | 'mark_probable_ninja';
+        boundaryMs?: number;
+        reason?: string;
+      }
+    | {
+        pullId: string;
+        action: 'override_context';
+        evaluationEligible: boolean;
+        evaluationStartMs: number;
+        evaluationEndMs: number;
+        wipeCallAtMs: number | null;
+        wipeCallVerified: boolean;
+        ninjaConfirmed: boolean;
+        reason: string;
+      },
+  ): Promise<{ ok: true; pullId: string; action: string; context: import('../../../supabase/functions/_shared/combat-evaluation-contract').PullEvaluationContextContract; reanalysisQueued: true }> {
+    return this.invoke('set-pull-evaluation-context', params);
+  }
+
   /**
    * §"Hay que ver la manera de centralizar esta información y, sobretodo,
    * en hacerla fiable" (feedback real, 2026-08-28): vuelve a pedir a WCL
@@ -212,6 +345,8 @@ export class EdgeFunctionsService {
     rawResponseText: string,
   ): Promise<{
     ok: true;
+    submittedCount: number;
+    fullyAppliedCount: number;
     applied: { abilityId: number; difficulty: string; name: string; category: string }[];
     skippedLowConfidence: { abilityId: number; difficulty: string; name: string; category: string | null; notes: string }[];
     skippedUndetermined: { abilityId: number; difficulty: string; name: string }[];
@@ -222,11 +357,55 @@ export class EdgeFunctionsService {
     responsibilitiesApplied: { abilityId: number; difficulty: string; name: string; responsibility: string }[];
     responsibilitiesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     responsibilityContractMissing: boolean;
-    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean }[];
+    avoidablesApplied: { abilityId: number; difficulty: string; name: string; avoidable: boolean | null }[];
     avoidablesSkipped: { abilityId: number; difficulty: string; name: string; reason: string }[];
     avoidableContractMissing: boolean;
   }> {
     return this.invoke('classify-mechanics', { bossId, difficulties, action: 'submit', rawResponseText });
+  }
+
+  /**
+   * Genera un único prompt causal para todas las dificultades/mecánicas del
+   * boss. La respuesta completa se divide después en submits internos de una
+   * dificultad y hasta 20 filas para respetar el presupuesto de cada worker.
+   */
+  async getMechanicPolicyClassificationPrompt(
+    bossId: string,
+    difficulties?: string[],
+  ): Promise<{
+    ok: true;
+    promptVersion: number;
+    systemPrompt: string;
+    userMessage: string;
+    policyCount: number;
+    difficulties: string[];
+    policyIdentities: { abilityId: number; mechanicKey: string; difficulty: string }[];
+    skippedDifficulties: { difficulty: string; totalCandidates: number; missingIdentities: number }[];
+    maxBatchSize: number;
+  }> {
+    const difficulty = difficulties?.length === 1 ? difficulties[0] : undefined;
+    return this.invoke('classify-mechanic-policies', { bossId, ...(difficulty ? { difficulty } : {}), action: 'prompt' });
+  }
+
+  async submitMechanicPolicyClassification(
+    bossId: string,
+    difficulty: string,
+    rawResponseText: string,
+  ): Promise<{
+    ok: true;
+    submittedCount: number;
+    applied: {
+      abilityId: number;
+      mechanicKey: string;
+      difficulty: string;
+      name: string;
+      confidence: 'inferred' | 'uncertain';
+      policyVersion: number;
+    }[];
+    invalid: { abilityId: unknown; mechanicKey: unknown; reason: string }[];
+    maxBatchSize?: number;
+  }> {
+    return this.invoke('classify-mechanic-policies', { bossId, difficulty, action: 'submit', rawResponseText });
   }
 
   /**
@@ -256,28 +435,157 @@ export class EdgeFunctionsService {
   }
 
   /** §"pantalla nueva para clasificar defensivos... parecida a la de mecánicas" — mismo patrón de prompt/pegar-respuesta que classify-mechanics, acotado a una clase. */
-  // className=null => catálogo entero (todas las clases en un único prompt,
-  // feedback real: "la cantidad de habilidades defensivas no es
-  // desorbitante... un único prompt que clasifique todas las specs a la vez").
-  async getDefensiveClassificationPrompt(className: string | null): Promise<{ ok: true; promptVersion: number; systemPrompt: string; userMessage: string; defensiveCount: number }> {
+  // La UI trabaja por clase para que cada investigación sea verificable y la
+  // respuesta no se trunque. El endpoint rechaza el alcance global.
+  async resolvePlayerDefensiveKit(params: {
+    playerName?: string;
+    characterId?: number;
+    className?: string;
+    specName?: string | null;
+    talentBuild?: { id: number; nodeID: number; rank: number; spellId?: number }[] | null;
+    buildFingerprint?: string | null;
+    gameBuild?: string | null;
+    gameBuildConfidence?: DefensiveResolutionConfidence;
+    includeExternal?: boolean;
+  }): Promise<ResolvedPlayerDefensiveKitResult> {
+    return this.invoke<ResolvedPlayerDefensiveKitResult>('resolve-player-defensive-kit', params);
+  }
+
+  async managePlayerDefensiveOverride(params: {
+    action: 'save' | 'deactivate';
+    characterId: number;
+    playerName: string;
+    className: string;
+    specName: string;
+    spellId: number;
+    gameBuild: string;
+    buildFingerprint: string;
+    effectiveCooldownMs?: number | null;
+    effectiveDurationMs?: number | null;
+    reason: string;
+  }): Promise<{
+    ok: true;
+    action: 'save' | 'deactivate';
+    override: Record<string, unknown>;
+    automatic: { effectiveCooldownMs: number | null; effectiveDurationMs: number | null };
+    historicalReanalysisScheduled: false;
+    draftInvalidated: true;
+  }> {
+    return this.invoke('manage-player-defensive-override', params);
+  }
+
+  /** §"si a Gusmi le marco que tiene Barkskin y Frenzied Regeneration..." (feedback real, 2026-09-03): guarda el conjunto COMPLETO de spellIds marcados "usar en el plan" para un jugador — reemplaza, no parchea. Ver migración 20260903120000_player_planning_resource_selections. */
+  async savePlanningResourceSelection(params: {
+    characterId: number;
+    playerName: string;
+    className: string;
+    selectedSpellIds: number[];
+  }): Promise<{ ok: true; selection: Record<string, unknown> }> {
+    return this.invoke('save-planning-resource-selection', params);
+  }
+
+  /**
+   * Diagnóstico técnico explícito: combina la existencia real del endpoint
+   * del resolver con schema M1–M9 y cobertura de backfill. Si el propio
+   * diagnóstico no está desplegado se rechaza; nunca devuelve un falso ready.
+   */
+  async defensiveV2Readiness(): Promise<DefensiveV2ReadinessResult> {
+    type SchemaReadiness = Omit<DefensiveV2ReadinessResult, 'resolverVersion'> & {
+      checks: Exclude<DefensiveV2ReadinessCheck, { id: 'resolver_endpoint' }>[];
+    };
+    const [schema, resolver, overrideEndpoint, generatorEndpoint] = await Promise.all([
+      this.invoke<SchemaReadiness>('defensive-v2-readiness', {}),
+      this.invoke<{ ok: true; resolverVersion: string }>('resolve-player-defensive-kit', { action: 'health' })
+        .then((result) => ({ ready: true as const, result }))
+        .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
+      this.invoke<{ ok: true; overrideVersion: string }>('manage-player-defensive-override', { action: 'health' })
+        .then((result) => ({ ready: true as const, result }))
+        .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
+      this.invoke<{ ok: true; generatorVersion: string }>('generate-defensive-plan', { action: 'health' })
+        .then((result) => ({ ready: true as const, result }))
+        .catch((err: unknown) => ({ ready: false as const, error: err instanceof Error ? err.message : String(err) })),
+    ]);
+    const resolverCheck: DefensiveV2ReadinessCheck = resolver.ready
+      ? {
+          id: 'resolver_endpoint',
+          label: 'Endpoint del resolver',
+          state: 'ready',
+          detail: resolver.result.resolverVersion,
+          requiredMigration: null,
+        }
+      : {
+          id: 'resolver_endpoint',
+          label: 'Endpoint del resolver',
+          state: 'missing',
+          detail: resolver.error,
+          requiredMigration: 'Desplegar resolve-player-defensive-kit',
+        };
+    const capabilities = {
+      playerMode: resolver.ready && schema.capabilities.playerMode,
+      playerOverride: resolver.ready && overrideEndpoint.ready && schema.capabilities.playerOverride,
+      planManagement: resolver.ready && generatorEndpoint.ready && schema.capabilities.planManagement,
+      evaluator: resolver.ready && schema.capabilities.evaluator,
+      infographic: resolver.ready && schema.capabilities.infographic,
+      reliability: resolver.ready && schema.capabilities.reliability,
+    };
+    const overrideEndpointCheck: DefensiveV2ReadinessCheck = overrideEndpoint.ready
+      ? {
+          id: 'override_endpoint',
+          label: 'Endpoint de override',
+          state: 'ready',
+          detail: overrideEndpoint.result.overrideVersion,
+          requiredMigration: null,
+        }
+      : {
+          id: 'override_endpoint',
+          label: 'Endpoint de override',
+          state: 'missing',
+          detail: overrideEndpoint.error,
+          requiredMigration: 'Desplegar manage-player-defensive-override',
+        };
+    const generatorEndpointCheck: DefensiveV2ReadinessCheck = generatorEndpoint.ready
+      ? {
+          id: 'generator_endpoint',
+          label: 'Generador de planes',
+          state: 'ready',
+          detail: generatorEndpoint.result.generatorVersion,
+          requiredMigration: null,
+        }
+      : {
+          id: 'generator_endpoint',
+          label: 'Generador de planes',
+          state: 'missing',
+          detail: generatorEndpoint.error,
+          requiredMigration: 'Desplegar generate-defensive-plan',
+        };
+    return {
+      ...schema,
+      state: !resolver.ready || !overrideEndpoint.ready || !generatorEndpoint.ready ? 'missing' : schema.state,
+      resolverVersion: resolver.ready ? resolver.result.resolverVersion : null,
+      checks: [resolverCheck, overrideEndpointCheck, generatorEndpointCheck, ...schema.checks],
+      capabilities,
+    };
+  }
+
+  async getDefensiveClassificationPrompt(className: string | null): Promise<{ ok: true; promptVersion: number; gameBuild: string; systemPrompt: string; userMessage: string; defensiveCount: number }> {
     return this.invoke('classify-defensives', { class: className, action: 'prompt' });
   }
 
   async submitDefensiveClassification(
     className: string | null,
     rawResponseText: string,
+    expectedGameBuild: string | null,
   ): Promise<{
     ok: true;
-    applied: { spellId: number; name: string; survivalType: string }[];
+    applied: { spellId: number; name: string; survivalType: string; category: string; targetingMode: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
     /** §"que lo sugiera, no que lo borre solo" (feedback real, 2026-08-31): la IA cree que ya no es un defensivo real — nunca se aplica sola, un humano confirma fila por fila con el botón "excluir" manual. */
     suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
     invalid: { spellId: unknown; reason: string }[];
     /** Pulls cuyo snapshot defensivo quedó materialmente obsoleto por survival type/CD/duración aplicados por la IA. */
-    pullIds: string[];
-  }> {
-    return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText });
+  } & DefensiveReanalysisQueueFields> {
+    return this.invoke('classify-defensives', { class: className, action: 'submit', rawResponseText, expectedGameBuild });
   }
 
   /**
@@ -292,14 +600,16 @@ export class EdgeFunctionsService {
    * pulls de Monk): reanalizarlos todos DENTRO de esta misma llamada (o
    * encadenando invocaciones en el propio backend) agotaba la cuota de CPU
    * del edge function (WORKER_RESOURCE_LIMIT) y la respuesta nunca llegaba.
-   * Por eso esta función ya NO reanaliza nada — solo devuelve la lista, y es
-   * quien la llama (ver reanalyzeDefensivePressure más abajo, usado en
-   * defensive-catalog.component.ts) quien la recorre en secuencia.
+   * Por eso esta función ya NO reanaliza nada: registra batch+jobs durables y
+   * devuelve también la lista compatible de pulls. El cliente procesa una
+   * invocación por pull y puede retomar los jobs tras cerrar la pestaña.
    */
   async saveDefensiveEdit(edit: {
     class: string;
     spellId: number;
     survivalType?: string | null;
+    category?: 'personal_defensive' | 'semi_defensive' | 'external_defensive' | 'utility';
+    targetingMode?: 'self' | 'ally' | 'both' | 'raid' | 'unknown';
     reviewed?: boolean;
     baseCooldownMs?: number | null;
     baseDurationMs?: number | null;
@@ -307,12 +617,12 @@ export class EdgeFunctionsService {
     specOverride?: string[] | null;
     /** §"el greater invisibility del mago ya no es un defensivo... no tengo opción de quitarlo" (feedback real, 2026-08-31) — ver excluded en cooldown_catalog. undefined = no tocar. */
     excluded?: boolean;
-  }): Promise<{ ok: true; pullIds?: string[] }> {
+  }): Promise<{ ok: true } & DefensiveReanalysisQueueFields> {
     return this.invoke('save-defensive-edit', edit);
   }
 
   /** §"botón en ajustes → defensivos en una clase para limpiar sus defensivos y volver a calcularlos con el prompt" (feedback real, 2026-08-31): borra survival_type/reviewed/ai_classification/inferred_survival_type de TODA la clase (nunca spec_override ni CD/duración) — deja la clase en "sin clasificar" para reclasificar con el prompt actualizado. */
-  async resetClassDefensives(className: string): Promise<{ ok: true; resetCount: number; pullIds: string[] }> {
+  async resetClassDefensives(className: string): Promise<{ ok: true; resetCount: number } & DefensiveReanalysisQueueFields> {
     return this.invoke('reset-class-defensives', { class: className });
   }
 
@@ -324,8 +634,53 @@ export class EdgeFunctionsService {
    * defensive-catalog.component.ts tras editar un cooldown/duración —
    * nunca en bucle dentro de un edge function (ver saveDefensiveEdit).
    */
-  async reanalyzeDefensivePressure(pullId: string): Promise<{ ok: true; pullId: string; updated: number; skipped: number }> {
-    return this.invoke('reanalyze-defensive-pressure', { pullId });
+  async reanalyzeDefensivePressure(
+    pullId: string,
+    jobId?: string,
+  ): Promise<{ ok: true; pullId: string; updated: number; skipped: number; alreadyDone?: boolean; jobId?: string | null }> {
+    return this.invoke('reanalyze-defensive-pressure', { pullId, ...(jobId ? { jobId } : {}) });
+  }
+
+  async pendingDefensiveReanalysisJobs(
+    batchId?: string,
+    limit = 100,
+  ): Promise<{ ok: true; jobs: PendingDefensiveReanalysisJob[]; blockedCount: number; maxAttempts: number }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'pending', batchId: batchId ?? null, limit });
+  }
+
+  async defensiveReanalysisQueueStatus(batchId?: string): Promise<DefensiveReanalysisQueueStatusResult> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'status', batchId: batchId ?? null });
+  }
+
+  /** Reutiliza el batch y su progreso; solo reencola jobs fallidos. */
+  async retryDefensiveReanalysisQueue(
+    batchId?: string,
+  ): Promise<{ ok: true; retriedCount: number; batchIds: string[]; maxAttempts: number }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'retry', batchId: batchId ?? null });
+  }
+
+  /** Descarta (terminal, nunca se reencola) todo lo no terminal — sin batchId, TODA la cola. */
+  async cancelDefensiveReanalysisQueue(
+    batchId?: string,
+  ): Promise<{ ok: true; cancelledJobs: number; cancelledBatches: number }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'cancel', batchId: batchId ?? null });
+  }
+
+  async startControlledDefensiveBackfill(params: {
+    bossId: string;
+    difficulty: string;
+    sampleSize: number;
+  }): Promise<{ ok: true; batchId: string; reused: boolean; pullIds: string[]; jobs: DefensiveReanalysisJobRef[] }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'start_sample', ...params });
+  }
+
+  async controlledDefensiveBackfillReport(batchId: string): Promise<{
+    ok: true;
+    batchId: string;
+    progress: { total: number; completed: number; running: number; failed: number };
+    cases: ControlledDefensiveBackfillAuditCase[];
+  }> {
+    return this.invoke('defensive-reanalysis-queue', { action: 'sample_report', batchId });
   }
 
   /**
@@ -377,10 +732,72 @@ export class EdgeFunctionsService {
    */
   async syncMechanicDefensiveProfile(bossId: string, difficulties?: number[]): Promise<{
     ok: true;
-    results: { difficulty: string; referenceFightsUsed: number; mechanicsProfiled: number; totalFightsConsumed: number; exhausted: boolean }[];
+    results: {
+      difficulty: string;
+      referenceFightsUsed: number;
+      mechanicsProfiled: number;
+      /** Ausente solo si el frontend habla temporalmente con el sync legacy durante el rollout. */
+      occurrenceProfilesUpdated?: number;
+      totalFightsConsumed: number;
+      exhausted: boolean;
+    }[];
     minReferenceSampleFights: number;
   }> {
     return this.invoke('sync-mechanic-defensive-profile', { bossId, difficulties });
+  }
+
+  async syncLocalDefensiveProfile(bossId: string, difficulty: string): Promise<{
+    ok: true;
+    bossId: string;
+    difficulty: string;
+    eligiblePulls: number;
+    profilesUpdated: number;
+    syncRevision: string;
+  }> {
+    return this.invoke('sync-local-defensive-profile', { bossId, difficulty });
+  }
+
+  async createDefensivePlanDraft(input: DefensivePlanDraftInput): Promise<{ ok: true; plan: DefensivePlanVersionRow }> {
+    return this.invoke('manage-defensive-plan', { action: 'create_draft', ...input });
+  }
+
+  async generateDefensivePlan(input: {
+    bossId: string;
+    difficulty: string;
+    name: string;
+    mode: 'full' | 'partial' | 'no_plan';
+    members: {
+      playerName: string;
+      playerKey?: string;
+      raidGroup?: number | null;
+      role?: 'tank' | 'healer' | 'dps';
+      included?: boolean;
+    }[];
+    resourceSelections?: { playerName: string; spellIds: number[] }[];
+    reservations?: Record<string, unknown>[];
+    maxSearchNodes?: number;
+    supersedesId?: string | null;
+    notes?: string | null;
+  }): Promise<{ ok: true; plan: DefensivePlanVersionRow; solver: Record<string, unknown> }> {
+    return this.invoke('generate-defensive-plan', input);
+  }
+
+  async publishDefensivePlan(planVersionId: string): Promise<{ ok: true; plan: DefensivePlanVersionRow }> {
+    return this.invoke('manage-defensive-plan', { action: 'publish', planVersionId });
+  }
+
+  async bindDefensivePlanToPull(
+    planVersionId: string,
+    pullId: string,
+    reason: string,
+  ): Promise<{ ok: true; binding: PullDefensivePlanBindingRow }> {
+    return this.invoke('manage-defensive-plan', { action: 'bind_pull', planVersionId, pullId, reason });
+  }
+
+  async evaluateDefensiveExecution(
+    pullId: string,
+  ): Promise<{ ok: true; pullId: string; evaluations: PlayerPullDefensiveEvaluationRow[] }> {
+    return this.invoke('evaluate-defensive-execution', { pullId });
   }
 
   /** Persiste los campos MANUALES de boss_mechanic_defensive_profile (requires_defensive/requires_group_split/group_split_notes/reviewed) — los reference_* solo los toca el sync. */
@@ -409,12 +826,64 @@ export class EdgeFunctionsService {
           prewarnSeconds?: number;
           triggerType?: 'bossmod' | 'time';
           bossmodSpellId?: number | null;
+          bossmodCounter?: string | null;
+          bossmodCounterVerified?: boolean;
           notes?: string | null;
           assignedGroups?: number[] | null;
         }
       | { id: string; delete: true },
   ): Promise<{ ok: true; id?: string }> {
     return this.invoke('save-mechanic-defensive-assignment', edit);
+  }
+
+  /** Publica una nueva versión auditable de la semántica causal de una mecánica. */
+  async publishMechanicPolicy(
+    policy: Omit<MechanicPolicyContract, 'policyVersion'>,
+    reason: string,
+  ): Promise<{ ok: true; policy: MechanicPolicyContract }> {
+    return this.invoke('publish-mechanic-policy', { policy, reason });
+  }
+
+  /** Lee una versión concreta de policy o la vigente si no se indica versión. */
+  async queryMechanicPolicy(
+    bossId: string,
+    difficulty: string,
+    mechanicKey: string,
+    policyVersion?: number,
+  ): Promise<{ ok: true; policy: MechanicPolicyContract }> {
+    return this.invoke('query-mechanic-policy', {
+      bossId,
+      difficulty,
+      mechanicKey,
+      ...(policyVersion != null ? { policyVersion } : {}),
+    });
+  }
+
+  /** Registra o actualiza aliases canónicos de una policy ya publicada. */
+  async syncMechanicAliases(params: {
+    bossId: string;
+    difficulty: string;
+    mechanicKey: string;
+    aliases: Array<{
+      ability_id?: number | null;
+      normalized_name?: string | null;
+      source: 'journal' | 'wcl' | 'manual' | 'classifier' | 'legacy';
+      confidence: 'verified' | 'inferred' | 'fallback' | 'uncertain';
+      active?: boolean;
+    }>;
+  }): Promise<{ ok: true; aliases: MechanicAliasContract[] }> {
+    return this.invoke('sync-mechanic-aliases', params);
+  }
+
+  /** Genera policies/aliases base y rellena mechanic_key solo en candidates legacy que aún no tengan identidad. */
+  async backfillMechanicCandidatesToPolicy(): Promise<{
+    ok: true;
+    totalCandidates: number;
+    policiesCreated: number;
+    aliasesCreated: number;
+    message: string;
+  }> {
+    return this.invoke('backfill-mechanic-candidates-to-policy', {});
   }
 
   /** Barrido del histórico de reports de la guild — puebla reports/report_encounters sin pegar cada código a mano. */
@@ -494,31 +963,10 @@ export class EdgeFunctionsService {
 
   private async invoke<T>(fn: string, body: Record<string, unknown>): Promise<T> {
     const { data, error } = await this.supabase.client.functions.invoke(fn, { body });
-    if (error) throw await describeFunctionError(error);
+    if (error) throw await describeFunctionError(error, fn);
     if (data && typeof data === 'object' && 'ok' in data && !(data as { ok: boolean }).ok) {
-      throw new Error((data as { error?: string }).error ?? `${fn} falló sin detalle`);
+      throw new Error(errorMessage((data as { error?: unknown }).error, `${fn} falló sin detalle`));
     }
     return data as T;
   }
-}
-
-/**
- * Cuando una Edge Function responde con un HTTP no-2xx (ej. 500 del guard de
- * §14), supabase-js lanza un FunctionsHttpError genérico ("Edge Function
- * returned a non-2xx status code") y descarta el cuerpo — que es justo donde
- * está el mensaje real (`{ ok: false, error: "..." }`). El cuerpo original
- * sigue accesible en `error.context` (el Response crudo del fetch), así que
- * se relee de ahí antes de rendirse al mensaje genérico.
- */
-async function describeFunctionError(error: unknown): Promise<Error> {
-  const context = (error as { context?: unknown }).context;
-  if (context instanceof Response) {
-    try {
-      const body = await context.clone().json();
-      if (body?.error) return new Error(body.error);
-    } catch {
-      // el cuerpo no era JSON (ej. un 502 de la propia infraestructura) — se cae al mensaje genérico de abajo
-    }
-  }
-  return error instanceof Error ? error : new Error(String(error));
 }

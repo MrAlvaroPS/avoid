@@ -1,6 +1,3 @@
-// Tono warning, no danger — un wipe call no es un error de la app, es
-// información útil para el RL, y "restaurado" (ya no excluye) es un estado
-// neutro/informativo, no una advertencia activa.
 .wipe-banner {
   padding: 10px 14px;
   background: var(--warning-soft);
@@ -9,80 +6,22 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-
-  &.is-restored {
-    background: var(--surface-2);
-    border-color: var(--card-border);
-  }
+  &.is-restored { background: var(--surface-2); border-color: var(--card-border); }
 }
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.icon {
-  flex-shrink: 0;
-}
-
-.headline {
-  flex: 1;
-  min-width: 200px;
-  font-size: 12.5px;
-  color: var(--text);
-}
-
-.link-btn {
-  flex-shrink: 0;
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  font-size: 11.5px;
-  cursor: pointer;
-  padding: 0;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.toggle-btn {
-  flex-shrink: 0;
-  padding: 5px 12px;
-  background: var(--surface);
-  border: 1px solid var(--border-bright);
-  border-radius: 8px;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-
-  &:hover:not(:disabled) {
-    background: var(--surface-hover);
-  }
-  &:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-}
-
-.signal-list {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.banner-note {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.banner-error {
-  margin: 0;
-  font-size: 12px;
-  color: var(--danger);
-}
+.row, .context-meta, .editor-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.icon { flex-shrink: 0; }
+.headline { flex: 1; min-width: 220px; font-size: 12.5px; color: var(--text); }
+.link-btn { flex-shrink: 0; background: transparent; border: 0; color: var(--accent); font-size: 11.5px; cursor: pointer; padding: 0; &:hover { text-decoration: underline; } }
+.toggle-btn { flex-shrink: 0; padding: 5px 12px; background: var(--surface); border: 1px solid var(--border-bright); border-radius: 8px; color: var(--text); font-size: 12px; font-weight: 600; cursor: pointer; &:hover:not(:disabled) { background: var(--surface-hover); } }
+button:disabled { opacity: .6; cursor: default; }
+.signal-list, .banner-note { margin: 0; font-size: 12px; color: var(--text-muted); }
+.signal-list { padding-left: 18px; }
+.banner-error { margin: 0; font-size: 12px; color: var(--danger); }
+.mini-timeline { position: relative; height: 30px; margin: 4px 8px 0; border-bottom: 2px solid var(--card-border); }
+.event-dot { position: absolute; bottom: -4px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); transform: translateX(-50%); &.is-death { background: var(--danger); } }
+.wipe-line { position: absolute; inset-block: 0 -2px; width: 2px; background: var(--warning); span { position: absolute; top: 0; left: 4px; font-size: 9px; white-space: nowrap; color: var(--warning); } }
+.context-meta, .editor-row { font-size: 11.5px; color: var(--text-muted); }
+.editor-row input { margin-left: 5px; padding: 5px 7px; border: 1px solid var(--card-border); border-radius: 6px; color: var(--text); background: var(--surface); }
+.editor-row input[type='number'] { width: 84px; }
+.reason-field { flex: 1; min-width: 220px; }
+.reason-field input { width: min(420px, 70%); }

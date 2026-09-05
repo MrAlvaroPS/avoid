@@ -363,6 +363,34 @@
       }
     </section>
 
+    @if (combatFlags.enabled('playerInfographicV3') && d.mechanicOffensesV3.length) {
+      <section class="widget" aria-labelledby="causal-evidence-heading">
+        <h2 id="causal-evidence-heading" class="widget-heading">Evidencia causal v3</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mecánica</th>
+                <th>Responsabilidad</th>
+                <th>Motivo</th>
+                <th>Confianza</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (offense of d.mechanicOffensesV3; track offense.pull_id + offense.mechanic_key + offense.occurrence_index + offense.reason_code) {
+                <tr>
+                  <td>{{ offense.mechanic_key }} <span class="meta">#{{ offense.occurrence_index }}</span></td>
+                  <td>{{ offense.relationship }}</td>
+                  <td>{{ offense.reason_code }}</td>
+                  <td>{{ offense.confidence }} <span class="meta">v{{ offense.policy_version ?? '—' }} · {{ offense.ledger_evaluator_version }}</span></td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </section>
+    }
+
     <!-- §"informe de mejora por jugador... wipefest para mejorar en el boss
          concreto" (feedback real, 2026-08-27): lo contrario de la sección de
          arriba — aciertos, no fallos. Nuevo con la atribución de interrupt
@@ -434,6 +462,20 @@
             }
           </div>
         </div>
+      </section>
+    }
+
+    @if (combatFlags.enabled('playerInfographicV3') && d.startingPreparation; as prep) {
+      <section class="widget preparation-entry" aria-labelledby="preparation-entry-heading">
+        <h2 id="preparation-entry-heading" class="widget-heading">Preparación al entrar a raid</h2>
+        <p class="gear-sub">
+          Pull #{{ prep.fromPullNumber }} · {{ prep.enchantedSlotCount }}/{{ prep.enchantableSlotCount }} enchants · {{ prep.gemmedSlotCount }}/{{ prep.gemmableSlotCount }} slots con gema
+        </p>
+        @if (prep.preparationSource === 'ledger_v3') {
+          <p class="meta">Verificado por ledger v3 · {{ prep.preparationLedgerVersion }} · {{ prep.preparationEvaluatedAt | date:'short' }}</p>
+        } @else {
+          <p class="meta">Snapshot de Warcraft Logs; los checks v3 no estaban completos.</p>
+        }
       </section>
     }
   </div>
