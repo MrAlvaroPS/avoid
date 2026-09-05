@@ -10,6 +10,16 @@ def replace_once(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new, 1))
 
 
+def replace_nth(path: str, old: str, new: str, n: int) -> None:
+    p = Path(path)
+    text = p.read_text()
+    parts = text.split(old)
+    count = len(parts) - 1
+    if count < n:
+        raise SystemExit(f"{path}: expected at least {n} matches, found {count}\n--- needle ---\n{old}")
+    p.write_text(old.join(parts[:n]) + new + old.join(parts[n:]))
+
+
 # E7-GAP-01 — positive acquisition evidence removes ONLY the uncertainty
 # introduced by the unproven-direct-acquisition gate.
 effective = "supabase/functions/_shared/effective-defensives.ts"
@@ -90,7 +100,9 @@ replace_once(
     expect(resolved.isDefensiveKitMember).toBe(true);
     expect(resolved.createsMissableOpportunity).toBe(true);""",
 )
-replace_once(
+# The same assertion shape also exists in the later Wargreymon fixture; patch
+# the FIRST occurrence here, which is the dedicated exact-fingerprint test.
+replace_nth(
     effective_spec,
     """    expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_build_fingerprint');
     expect(resolved.eligible).toBe(true);
@@ -102,6 +114,7 @@ replace_once(
     expect(resolved.eligible).toBe(true);
     expect(resolved.isDefensiveKitMember).toBe(true);
     expect(resolved.createsMissableOpportunity).toBe(true);""",
+    1,
 )
 replace_once(
     effective_spec,
