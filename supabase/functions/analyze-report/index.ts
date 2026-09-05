@@ -38,6 +38,7 @@ import {
 } from '../_shared/effective-defensives.ts';
 import { effectiveDeathOptions, evaluateEffectiveWindowCoverage } from '../_shared/effective-defensive-state.ts';
 import { evaluateDefensivePull } from '../_shared/defensive-execution-persistence.ts';
+import { buildMechanicEventRows } from '../_shared/mechanic-event-materialization.ts';
 
 // "Engancharse a los pulls": trae fights nuevos de WCL y genera `pulls` +
 // `player_pull_records` reales. A PROPÓSITO no llama al LLM aquí — eso es
@@ -1565,220 +1566,27 @@ Deno.serve(async (req: Request) => {
           comparison_percentile: number | null;
         }[] = [];
 
-        for (const raw of enemyCastEvents) {
-          const cast = raw as CastEvent;
-          const abilityId = cast.abilityGameID;
-          if (typeof abilityId !== 'number') continue;
-          const mech = mechanicById.get(abilityId);
-          if (!mech) continue; // solo nos interesan casts de habilidades ya curadas en el manifiesto
-          const t0 = cast.timestamp ?? 0;
-          const windowEnd = t0 + MECHANIC_REACTION_WINDOW_MS;
-
-          // Mecánicas de categoría 'interrupt' respaldadas por un evento
-          // Interrupt real, en un log público de referencia o en este report:
-          // el outcome no se decide por daño, se decide por si hubo un
-          // evento Interrupts real con extraAbilityGameID = este cast dentro
-          // de la ventana de reacción. Sin partial_fail en esta v1 (saber
-          // "llegó tarde" exigiría el timestamp de INICIO del cast, no solo
-          // el de finalización que da el evento Casts — simplificación conocida).
-          // Ni una inferencia textual ni una etiqueta editorial bastan por sí
-          // solas: un cast detenido por un objeto especial del encuentro no
-          // acepta necesariamente un kick estándar.
-          const observedInCurrentReport = interruptEvents.some((raw) => (raw as InterruptEvent).extraAbilityGameID === abilityId);
-          const effectiveCategory = effectiveMechanicCategory(mech, observedInCurrentReport);
-          if (effectiveCategory === 'interrupt') {
-            // §"informe de mejora por jugador... wipefest para mejorar en el
-            // boss concreto" (feedback real, 2026-08-27): antes solo se
-            // guardaba SI se interrumpió, no QUIÉN — sin eso no hay forma de
-            // atribuirle el mérito a nadie en un informe por jugador. Cuando
-            // hay varios candidatos dentro de la ventana (kick + purga
-            // simultáneos, p.ej.) nos quedamos con el más cercano a t0: es
-            // el que de verdad cortó el cast, no una coincidencia posterior.
-            const interrupter = interruptEvents
-              .map((raw) => raw as InterruptEvent)
-              .filter((e) => e.extraAbilityGameID === abilityId && (e.timestamp ?? 0) >= t0 && (e.timestamp ?? 0) <= windowEnd)
-              .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))[0];
-            const wasInterrupted = interrupter != null;
-            const interrupterName = interrupter?.sourceID != null ? actorById.get(interrupter.sourceID)?.name : undefined;
-            mechanicEventRows.push({
-              pull_id: insertedPull.id,
-              ability_id: abilityId,
-              mechanic_name: mech.name,
-              description: mech.description,
-              category: effectiveCategory,
-              responsibility: mech.responsibility,
-              trigger_time_ms: t0 - fight.startTime,
-              phase_id: resolvePhaseId(t0),
-              outcome: wasInterrupted ? 'clean' : 'fail',
-              players_hit: wasInterrupted ? 1 : 0, // reutilizado como "¿se resolvió?" para esta categoría, no cuenta jugadores golpeados
-              // Solo se rellena en un interrupt CONSEGUIDO, con quien lo hizo
-              // (1 nombre, no "a quién golpeó"). En un fail se deja vacío a
-              // propósito: no sabemos quién tenía la asignación de kick, así
-              // que no hay a quién señalar — night-player-summary.service.ts
-              // ya filtra por outcome='clean' al preguntar "qué interrumpió
-              // este jugador", y PERSONAL_RESPONSIBILITY_CATEGORIES (pull-
-              // analysis.service.ts) no incluye 'interrupt', así que esto no
-              // se cuela en el coaching de "a quién golpeó esta mecánica".
-              players_hit_names: interrupterName ? [interrupterName] : [],
-              avoidable: mech.avoidable,
-              player_hit_details: [],
-              // resolveSeverity no aplica a interrupts (outcome sale de
-              // wasInterrupted arriba, nunca de un ratio contra umbral).
-              comparison_source: null,
-              comparison_percentile: null,
-            });
-            continue;
-          }
-
-          const hitTargets = new Map<number, { total: number; hits: number; maxHitPoints: number | null }>();
-          for (const rawDamage of damageEvents) {
-            const e = rawDamage as DamageEvent;
-            if (e.abilityGameID !== abilityId) continue;
-            const t = e.timestamp ?? 0;
-            if (t < t0 || t > windowEnd) continue;
-            if (typeof e.targetID !== 'number') continue;
-            const cur = hitTargets.get(e.targetID) ?? { total: 0, hits: 0, maxHitPoints: null };
-            cur.total += e.amount ?? 0;
-            cur.hits += 1;
-            const observedMaxHitPoints = e.maxHitPoints ?? e.resources?.maxHitPoints;
-            if (typeof observedMaxHitPoints === 'number' && observedMaxHitPoints > 0) {
-              cur.maxHitPoints = Math.max(cur.maxHitPoints ?? 0, observedMaxHitPoints);
-            }
-            hitTargets.set(e.targetID, cur);
-          }
-
-          let causedDeath = false;
-          for (const rawDeath of deathEvents) {
-            const e = rawDeath as DeathEvent;
-            if (e.killingAbilityGameID !== abilityId) continue;
-            const t = e.timestamp ?? 0;
-            if (t >= t0 && t <= windowEnd) causedDeath = true;
-          }
-
-          const ratio = hitTargets.size / raidSize;
-          const severity = resolveSeverity({
-            ratio,
-            fixedThreshold: mech.severity_threshold ?? 0.35,
-            ownHistoryRatios: ownHistoryRatiosByAbilityId.get(abilityId) ?? [],
-            referenceRatiosSorted: mech.reference_hit_ratio_samples,
-          });
-          const outcome: 'clean' | 'partial_fail' | 'fail' = causedDeath
-            ? 'fail'
-            : mech.avoidable && severity.isSevere
-              ? 'partial_fail'
-              : 'clean';
-
-          const hitNames = [...hitTargets.keys()]
-            .map((id) => actorById.get(id)?.name)
-            .filter((n): n is string => typeof n === 'string');
-
-          mechanicEventRows.push({
-            pull_id: insertedPull.id,
-            ability_id: abilityId,
-            mechanic_name: mech.name,
-            description: mech.description,
-            category: effectiveCategory,
-            responsibility: mech.responsibility,
-            trigger_time_ms: t0 - fight.startTime,
-            phase_id: resolvePhaseId(t0),
-            outcome,
-            players_hit: hitTargets.size,
-            players_hit_names: hitNames,
-            avoidable: mech.avoidable,
-            player_hit_details: buildPlayerHitDetails(hitTargets, t0, windowEnd),
-            comparison_source: severity.source,
-            comparison_percentile: severity.percentile,
-          });
-        }
-
-        // §"en un wipe es raro que hayan salido todas las mecánicas bien"
-        // (feedback real, confirmado investigando): mecánicas letales tipo
-        // debuff/DoT (ej. "Elemental Explosion") pueden no generar NINGÚN
-        // evento Cast en WCL — solo tics de daño — así que el bucle de
-        // arriba (basado en enemyCastEvents) nunca las ve, ni para bien ni
-        // para mal: quedan totalmente ausentes de pull_mechanic_events, no
-        // solo "clean". Para las abilities del manifiesto que NO consiguieron
-        // ni una fila arriba, se reconstruyen "instancias" agrupando sus
-        // eventos de daño por proximidad temporal (un hueco > INSTANCE_GAP_MS
-        // sin ningún tic = empieza una instancia nueva) — mismo criterio de
-        // outcome que las basadas en cast (¿mató a alguien dentro de la
-        // instancia? ¿a cuántos golpeó?), solo cambia de dónde sale t0/tEnd.
-        const abilityIdsWithCastRow = new Set(mechanicEventRows.map((r) => r.ability_id));
-        const INSTANCE_GAP_MS = 3000;
-        for (const [abilityId, mech] of mechanicById) {
-          if (abilityIdsWithCastRow.has(abilityId)) continue;
-          const effectiveCategory = effectiveMechanicCategory(mech);
-          if (effectiveCategory === 'interrupt') continue; // sin daño que agrupar, no aplica este mecanismo
-
-          const events = (damageEvents as DamageEvent[])
-            .filter((e) => e.abilityGameID === abilityId && typeof e.targetID === 'number')
-            .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
-          if (!events.length) continue; // ni cast ni daño — de verdad no ocurrió en este pull
-
-          // Tope de duración además del hueco: un aura ambiente que tiquea
-          // sin pausas de más de INSTANCE_GAP_MS durante TODO el pull (ej.
-          // "Malevolent Presence", raid-wide constante) si no, se agrupa en
-          // UNA sola instancia que abarca el pull entero — y si alguien
-          // muere 5 minutos después, el trigger_time_ms sale del primer tic
-          // (segundo 2), no del momento real. Con tope, un aura así se trocea
-          // en instancias de como mucho MAX_INSTANCE_MS, cada una con su
-          // propio trigger_time_ms razonable.
-          const MAX_INSTANCE_MS = 20_000;
-          const instances: DamageEvent[][] = [];
-          for (const e of events) {
-            const last = instances.at(-1);
-            const withinGap = last && (e.timestamp ?? 0) - (last.at(-1)!.timestamp ?? 0) <= INSTANCE_GAP_MS;
-            const withinMaxSpan = last && (e.timestamp ?? 0) - (last[0].timestamp ?? 0) <= MAX_INSTANCE_MS;
-            if (last && withinGap && withinMaxSpan) last.push(e);
-            else instances.push([e]);
-          }
-
-          for (const instance of instances) {
-            const t0 = instance[0].timestamp ?? 0;
-            const windowEnd = instance.at(-1)!.timestamp ?? 0;
-
-            const hitTargets = new Map<number, { total: number; hits: number; maxHitPoints: number | null }>();
-            for (const e of instance) {
-              const cur = hitTargets.get(e.targetID!) ?? { total: 0, hits: 0, maxHitPoints: null };
-              cur.total += e.amount ?? 0;
-              cur.hits += 1;
-              const observedMaxHitPoints = e.maxHitPoints ?? e.resources?.maxHitPoints;
-              if (typeof observedMaxHitPoints === 'number' && observedMaxHitPoints > 0) {
-                cur.maxHitPoints = Math.max(cur.maxHitPoints ?? 0, observedMaxHitPoints);
-              }
-              hitTargets.set(e.targetID!, cur);
-            }
-
-            const causedDeath = (deathEvents as DeathEvent[]).some((e) => e.killingAbilityGameID === abilityId && (e.timestamp ?? 0) >= t0 && (e.timestamp ?? 0) <= windowEnd);
-            const ratio = hitTargets.size / raidSize;
-            const severity = resolveSeverity({
-              ratio,
-              fixedThreshold: mech.severity_threshold ?? 0.35,
-              ownHistoryRatios: ownHistoryRatiosByAbilityId.get(abilityId) ?? [],
-              referenceRatiosSorted: mech.reference_hit_ratio_samples,
-            });
-            const outcome: 'clean' | 'partial_fail' | 'fail' = causedDeath ? 'fail' : mech.avoidable && severity.isSevere ? 'partial_fail' : 'clean';
-            const hitNames = [...hitTargets.keys()].map((id) => actorById.get(id)?.name).filter((n): n is string => typeof n === 'string');
-
-            mechanicEventRows.push({
-              pull_id: insertedPull.id,
-              ability_id: abilityId,
-              mechanic_name: mech.name,
-              description: mech.description,
-              category: effectiveCategory,
-              responsibility: mech.responsibility,
-              trigger_time_ms: t0 - fight.startTime,
-              phase_id: resolvePhaseId(t0),
-              outcome,
-              players_hit: hitTargets.size,
-              players_hit_names: hitNames,
-              avoidable: mech.avoidable,
-              player_hit_details: buildPlayerHitDetails(hitTargets, t0, windowEnd),
-              comparison_source: severity.source,
-              comparison_percentile: severity.percentile,
-            });
-          }
-        }
+        // §integridad de atribución + backfill histórico: esta llamada es la
+        // ÚNICA autoridad que convierte Casts/DamageTaken/Deaths/Interrupts
+        // crudos en pull_mechanic_events. reanalyze-mechanic-events consume el
+        // mismo helper, así que un pull histórico y uno recién ingerido no
+        // pueden acabar con semánticas distintas por drift de implementación.
+        mechanicEventRows.push(
+          ...buildMechanicEventRows({
+            mechanicByAbilityId: mechanicById,
+            enemyCastEvents: enemyCastEvents as CastEvent[],
+            damageEvents: damageEvents as DamageEvent[],
+            deathEvents: deathEvents as DeathEvent[],
+            interruptEvents: interruptEvents as InterruptEvent[],
+            raidSize,
+            ownHistoryRatiosByAbilityId,
+            reactionWindowMs: MECHANIC_REACTION_WINDOW_MS,
+            fightStartTime: fight.startTime,
+            resolvePlayerName: (actorId) => actorById.get(actorId)?.name ?? null,
+            buildPlayerHitDetails,
+            resolvePhaseId,
+          }).map((row) => ({ pull_id: insertedPull.id, ...row })),
+        );
 
         if (mechanicEventRows.length) {
           const { error: mechError } = await supabase.from('pull_mechanic_events').insert(mechanicEventRows);
