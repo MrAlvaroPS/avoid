@@ -9,6 +9,7 @@ const functions = [
   'materialize-execution-ledger',
   'materialize-consumable-execution',
   'process-combat-evaluation-queue',
+  'enqueue-causal-backfill',
   'publish-mechanic-policy',
   'query-mechanic-policy',
   'sync-mechanic-aliases',
@@ -31,6 +32,7 @@ const tests = [
   'supabase/functions/_shared/error-message_test.ts',
   'supabase/functions/_shared/mechanic-policy-scope_test.ts',
   'supabase/functions/_shared/report-ingestion-recovery_test.ts',
+  'supabase/functions/_shared/causal-backfill-operator_test.ts',
 ];
 for (const testPath of tests) {
   const result = spawnSync(
