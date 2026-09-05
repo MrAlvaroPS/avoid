@@ -316,8 +316,9 @@ export class NightReportComponent {
       // silencian: se muestran al final.
       for (const pullId of pullIds) {
         for (const [label, operation] of [
+          ['mecánicas del boss', () => this.edgeFunctions.reanalyzeMechanicEvents(pullId)],
           ['defensivos', () => this.edgeFunctions.reanalyzeDefensivePressure(pullId)],
-          ['mecánicas', () => this.edgeFunctions.reanalyzeUnassignedMechanics(pullId)],
+          ['mecánicas sin asignar', () => this.edgeFunctions.reanalyzeUnassignedMechanics(pullId)],
         ] as const) {
           let lastError: unknown = null;
           for (let attempt = 0; attempt < 2; attempt++) {

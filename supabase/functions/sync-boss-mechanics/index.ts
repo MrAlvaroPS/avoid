@@ -22,6 +22,7 @@ import {
 import { normalizeAbilityName, buildAbilityIdsByName } from '../_shared/ability-name-match.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
+import { attributeDamageToMechanicCasts } from '../_shared/mechanic-event-attribution.ts';
 
 // Sincroniza mecánicas SIN pedir nada a mano más allá del boss elegido en el
 // desplegable (que ya viene alimentado por vuestros reports sincronizados,
@@ -430,21 +431,24 @@ Deno.serve(async (req: Request) => {
           const casts = bundle.casts.filter((c) => typeof c.abilityGameID === 'number' && realIds.includes(c.abilityGameID));
           if (!casts.length) continue;
           anyBundleQualified = true;
-          const targetsPerCast: Set<number>[] = [];
-          for (const cast of casts) {
-            const t0 = cast.timestamp ?? 0;
-            const windowEnd = t0 + REFERENCE_REACTION_WINDOW_MS;
-            const targets = new Set<number>();
-            for (const dmg of bundle.damageTaken) {
-              if (typeof dmg.abilityGameID !== 'number' || !realIds.includes(dmg.abilityGameID)) continue;
-              const t = dmg.timestamp ?? 0;
-              if (t < t0 || t > windowEnd) continue;
-              if (typeof dmg.targetID === 'number') targets.add(dmg.targetID);
-            }
-            targetsPerCast.push(targets);
-            allRatios.push(targets.size / bundle.raidSize);
-          }
-          totalOccurrences += casts.length;
+          // Misma autoridad que analyze-report: cada DamageTaken de referencia
+          // tiene como máximo un cast owner. Sin esto, casts densos inflaban
+          // targetRatiosPerCast y, por extensión, reference_hit_ratio_samples.
+          const attribution = attributeDamageToMechanicCasts(
+            casts,
+            bundle.damageTaken,
+            realIds,
+            REFERENCE_REACTION_WINDOW_MS,
+          );
+          const targetsPerCast: Set<number>[] = attribution.occurrences.map((occurrence) =>
+            new Set(
+              occurrence.damageEvents
+                .map((damage) => damage.targetID)
+                .filter((targetID): targetID is number => typeof targetID === 'number'),
+            ),
+          );
+          for (const targets of targetsPerCast) allRatios.push(targets.size / bundle.raidSize);
+          totalOccurrences += attribution.occurrences.length;
           const nonEmpty = targetsPerCast.filter((s) => s.size > 0);
           if (nonEmpty.length >= 2) {
             anyBundleTestedSameTarget = true;
