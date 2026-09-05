@@ -210,16 +210,88 @@ app-raider-infographic-v3-canvas {
   color: #e7ebef;
 }
 
+// §Frontend cutover (2026-09-05): la cabecera pasa de 3 métricas equivalentes
+// (Ejecución/Gestión defensiva/Calidad de evidencia) a "1 dimensión general +
+// triángulo defensivo" (§94 del cutover) — Ejecución conserva su donut de
+// siempre a la izquierda; el triángulo (Uso/Gestión pequeños, Respuesta
+// grande y central) ocupa el resto del ancho disponible.
 .iris-v3-hero-metrics {
   min-width: 0;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  // space-between, no gap fijo: Ejecución queda junto a la identidad del jugador y el triángulo (ancho fijo,
+  // ver abajo) se empuja al borde de la columna — llena el mismo ancho que antes sin estirar el triángulo con
+  // porcentajes (eso separaría demasiado Uso/Gestión de Respuesta, ver comentario de .iris-v3-defensive-triangle).
+  justify-content: space-between;
+}
+
+.iris-v3-execution-metric {
+  flex: 0 0 auto;
+  width: 108px;
 }
 
 .iris-v3-hero-metric {
   min-width: 0;
   text-align: center;
+}
+
+// Contenedor del triángulo: los tres círculos se posicionan en absoluto
+// dentro de esta caja de altura fija (cabe en los 190px de .iris-v3-identity)
+// — mismo mecanismo de anillo (conic-gradient vía --ring-pct/--ring-color)
+// que Ejecución, solo con tamaños/posiciones distintos, para que
+// html-to-image lo capture exactamente igual que en el navegador (§73).
+// Ancho FIJO a propósito, no flex:1 — con left/right en % dentro de un contenedor que llenara todo el hueco
+// restante (varios cientos de px), Usage/Gestión quedarían muy separados de Respuesta en vez de solaparla
+// parcialmente. 240px es justo el hueco que necesitan los tres círculos para solaparse de verdad.
+.iris-v3-defensive-triangle {
+  position: relative;
+  flex: 0 0 auto;
+  width: 240px;
+  height: 168px;
+}
+
+.iris-v3-defensive-circle {
+  position: absolute;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.iris-v3-defensive-circle > span {
+  display: block;
+  color: var(--tone);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.iris-v3-defensive-circle > small {
+  display: block;
+  margin-top: 2px;
+  color: var(--iris-muted);
+  font-size: 10px;
+}
+
+// Respuesta: núcleo del triángulo, siempre el KPI defensivo principal
+// (§9/§94) — círculo más grande, centrado/inferior, por encima del resto
+// en el eje z. Usage/Gestión son satélites secundarios ~70-75% del
+// diámetro (§9), superior-izquierda/superior-derecha con solape parcial.
+// Sin z-index explícito a propósito: los tres son hermanos position:absolute
+// y el orden del DOM (usage, gestión, respuesta) ya pinta Respuesta encima —
+// mismo resultado, menos CSS.
+.iris-v3-defensive-response {
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+}
+.iris-v3-defensive-response .iris-v3-metric-ring { width: 108px; height: 108px; }
+.iris-v3-defensive-response > span { font-size: 12px; }
+
+.iris-v3-defensive-usage { left: 6%; top: 0; }
+.iris-v3-defensive-management { right: 6%; top: 0; }
+.iris-v3-defensive-usage .iris-v3-metric-ring,
+.iris-v3-defensive-management .iris-v3-metric-ring {
+  width: 78px;
+  height: 78px;
 }
 
 .iris-v3-metric-ring {
@@ -233,8 +305,8 @@ app-raider-infographic-v3-canvas {
   // que arquear; las categóricas siguen con su --tone fijo de [data-tone]
   // de abajo. El hueco interior se redujo (79%→62%) para que el aro se lea
   // más grueso/sólido, y el inset-shadow da relieve en vez de verse plano.
-  width: 86px;
-  height: 86px;
+  width: 100px;
+  height: 100px;
   margin: 0 auto 6px;
   display: grid;
   place-items: center;
@@ -752,8 +824,8 @@ app-raider-infographic-v3-canvas {
 [data-state='clean'], [data-state='covered'] { --cell-tone: var(--iris-positive); }
 [data-state='coaching'], [data-state='cooldown'] { --cell-tone: var(--iris-warning); }
 [data-state='confirmed_error'], [data-state='uncovered'] { --cell-tone: var(--iris-danger); }
-[data-state='correct_hold'], [data-state='reserved'] { --cell-tone: var(--iris-information); }
-[data-state='no_data'], [data-state='unknown'] { --cell-tone: var(--iris-neutral); }
+[data-state='correct_hold'], [data-state='reserved'], [data-state='not_required'] { --cell-tone: var(--iris-information); }
+[data-state='no_data'], [data-state='unknown'], [data-state='context'] { --cell-tone: var(--iris-neutral); }
 
 .pull-compact .iris-v3-pull-cell { width: 32px; }
 .pull-dense .iris-v3-pull-cell { width: 26px; height: 26px; font-size: 9px; }

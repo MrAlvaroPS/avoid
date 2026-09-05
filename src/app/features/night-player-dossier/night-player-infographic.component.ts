@@ -181,51 +181,35 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     return score == null ? 'neutral' : score < 50 ? 'danger' : score < 75 ? 'warning' : 'success';
   });
 
-  // §"otro nuevo de defensivos más en detalle... hay que montar un sistema
-  // de puntuación de defensivo no usado, usado fuera de tiempo, bien usado,
-  // para normalizar los datos" (feedback real, 2026-08-29): NO se inventa
-  // una fórmula nueva — nightReliability.breakdown.defensiva YA es
-  // exactamente eso (computeReliabilityBreakdown, reliability.service.ts):
-  // ratio real cubiertas/cubribles con el mismo never_touched=0/mistimed=
-  // crédito parcial/covered=ratio que ya vimos y arreglamos hoy. Reutilizarlo
-  // aquí evita una segunda fórmula que pudiera divergir de la de Fiabilidad.
-  // §"si no está listo el plan del MRT para mostrar podemos poner un toggle
-  // en su dosier para calcularlo en base al plan o... en base al uso real
-  // que haya hecho el jugador en los pulls como calculábamos antes...
-  // (pero mismo concepto)" (feedback real, 2026-09-03): v2 puede dar un
-  // managementScore=0 legítimo (p.ej. una noche con solo muertes de causa no
-  // verificable como única oportunidad puntuable) y las cards de coaching se
-  // quedan sin defensivos recomendados por diseño (ver raider-evidence-
-  // projection.ts). El fallback legacy (nightReliability.breakdown.defensiva,
-  // casts reales por defensivo) ya existe y ya se usa como `??` cuando v2 es
-  // null — este toggle simplemente fuerza esa rama a mano, sin inventar una
-  // fórmula nueva: cuando está activo, defensiveManagementV2() devuelve null
-  // y TODO lo que ya depende de "v2 ?? legacy" en este componente y en
-  // evidenceProjection()/v3ViewModel() cae automáticamente al mismo cálculo
-  // legacy que ya existía, solo que a demanda del oficial en vez de solo
-  // cuando el flag está apagado.
-  readonly preferObservedDefensives = signal(false);
-  readonly defensiveManagementV2 = computed(() => {
-    if (this.preferObservedDefensives()) return null;
-    return this.defensiveFlags.enabled('defensiveInfographicV2') ? this.summary().defensiveManagementV2 : null;
-  });
-  toggleDefensiveDataSource(): void {
-    this.preferObservedDefensives.update((prefer) => !prefer);
-  }
-  /** Solo tiene sentido ofrecer el toggle si de verdad hay una generación v2 de la que alejarse — si nunca la hubo, ambas ramas ya muestran lo mismo. */
-  readonly hasV2DefensiveData = computed(() => this.summary().defensiveManagementV2 != null);
+  // §Frontend cutover (2026-09-05): el toggle "Defensivos: automático / recuento
+  // directo" (preferObservedDefensives/toggleDefensiveDataSource/hasV2DefensiveData)
+  // se retira de la infografía — con una única fuente canónica publicada no tiene
+  // sentido dejar al oficial escoger qué verdad defensiva mirar (§15 del cutover).
+  // defensiveManagementV2 sigue existiendo tal cual, SOLO para el layout v1 legacy
+  // (useV3Layout()===false) que sigue viviendo en este mismo componente/template;
+  // el path v3 (evidenceProjectionV3/v3ViewModel, abajo) nunca lo consulta.
+  readonly defensiveManagementV2 = computed(() =>
+    this.defensiveFlags.enabled('defensiveInfographicV2') ? this.summary().defensiveManagementV2 : null,
+  );
   readonly evidenceProjection = computed(() =>
     buildRaiderEvidenceProjection(this.summary(), {
       defensiveManagementV2: this.defensiveManagementV2(),
     }),
   );
+  // §Frontend cutover: proyección dedicada para v3 — nunca pasa v2, siempre pasa
+  // canonicalDefensive (generación publicada), así que sus items `kind:'defensive'`
+  // y sus muertes (§45: sin acusación defensiva sin linkage canónico) nunca dependen
+  // de la fuente legacy que sí sigue alimentando evidenceProjection()/el layout v1.
+  readonly evidenceProjectionV3 = computed(() =>
+    buildRaiderEvidenceProjection(this.summary(), {
+      defensiveManagementV2: null,
+      canonicalDefensive: this.summary().canonicalDefensive,
+      spellNameById: new Map(this.summary().defensiveSummary.spells.map((spell) => [spell.spellId, spell.spellName])),
+    }),
+  );
   readonly useV3Layout = computed(() => this.combatFlags.enabled('playerInfographicV3'));
   readonly v3ViewModel = computed(() =>
-    buildRaiderInfographicViewModel(
-      this.summary(),
-      this.evidenceProjection(),
-      this.defensiveManagementV2(),
-    ),
+    buildRaiderInfographicViewModel(this.summary(), this.evidenceProjectionV3()),
   );
   readonly evidenceQualityTone = computed(() => {
     const quality = this.evidenceProjection().quality;
@@ -1120,6 +1104,24 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     for (const mechanic of this.mechanicPressureBreakdown()) {
       ids.add(mechanic.mechanicId);
       for (const defensive of mechanic.defensives) ids.add(defensive.spellId);
+    }
+    // §54 del cutover: la v3 canvas pinta iconos a partir de la generación defensiva
+    // canónica (coaching/mecánicas), no de las fuentes legacy de arriba — recoger
+    // también desde evidenceProjectionV3 (episodios canónicos) y v3ViewModel
+    // (mecánicas ya agrupadas) para que un cambio de fuente de datos no borre iconos.
+    for (const evidence of this.evidenceProjectionV3().items) {
+      if (evidence.mechanicId) ids.add(evidence.mechanicId);
+      for (const defensive of evidence.defensives) ids.add(defensive.spellId);
+    }
+    for (const mechanic of this.v3ViewModel().mechanics) {
+      ids.add(mechanic.mechanicId);
+      for (const defensive of mechanic.defensives) ids.add(defensive.spellId);
+    }
+    for (const episode of this.summary().canonicalDefensive.episodes) {
+      if (episode.dominantAbilityGameId != null) ids.add(episode.dominantAbilityGameId);
+      for (const spellId of episode.usedSpellIds) ids.add(spellId);
+      for (const spellId of episode.decisiveSpellIds) ids.add(spellId);
+      if (episode.coveredBySpellId != null) ids.add(episode.coveredBySpellId);
     }
 
     const entries = await Promise.all(

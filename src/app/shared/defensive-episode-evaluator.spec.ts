@@ -168,9 +168,9 @@ describe('evaluateDefensiveEpisodesForPlayer — E7 shared damage-window geometr
         rawDamageHits: [{ timestamp: 12_500, abilityGameID: 999, amount: 5000, isAoE: false, tick: false }],
       }),
     );
-    expect(episode.evidence.dominantAbilityGameId).toBe(999);
+    expect(episode.evidence['dominantAbilityGameId']).toBe(999);
     expect(episode.applicableCandidates[0].damageApplicability).toBe('yes');
-    expect(episode.applicableCandidates[0].evidence.damage).toMatchObject({ hitCount: 1 });
+    expect(episode.applicableCandidates[0].evidence['damage']).toMatchObject({ hitCount: 1 });
     expect(episode.responseVerdict).toBe('missed_ready');
   });
 
@@ -180,7 +180,7 @@ describe('evaluateDefensiveEpisodesForPlayer — E7 shared damage-window geometr
         rawDamageHits: [{ timestamp: 13_100, abilityGameID: 999, amount: 5000, isAoE: false, tick: false }],
       }),
     );
-    expect(episode.evidence.dominantAbilityGameId).toBeNull();
+    expect(episode.evidence['dominantAbilityGameId']).toBeNull();
     expect(episode.applicableCandidates[0].damageApplicability).toBe('unknown');
     expect(episode.responseVerdict).toBe('uncertain');
   });

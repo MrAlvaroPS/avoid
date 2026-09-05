@@ -1,4 +1,6 @@
 import type {
+  CanonicalDefensiveEpisodeView,
+  NightCanonicalDefensiveSummary,
   NightDefensiveDecision,
   NightDefensiveManagementV2,
   NightMechanicFailRow,
@@ -23,6 +25,7 @@ export interface RaiderEvidenceRef {
     | 'pull_mechanic_events'
     | 'player_pull_records.death_cause'
     | 'player_pull_defensive_evaluations'
+    | 'player_pull_defensive_episode_evaluations'
     | 'player_pull_records.gear';
   key: string;
   version: string | null;
@@ -110,8 +113,16 @@ export interface RaiderEvidenceProjection {
 }
 
 export interface RaiderEvidenceProjectionOptions {
-  /** Pasar null cuando el feature gate visible esté apagado. */
+  /** Pasar null cuando el feature gate visible esté apagado. Nunca se pasa a la vez que canonicalDefensive — son dos fuentes de verdad defensiva incompatibles (V2/legacy vs. generación v7 publicada) y solo una debe alimentar la infografía a la vez. */
   defensiveManagementV2?: NightDefensiveManagementV2 | null;
+  /** §Frontend cutover (2026-09-05): cuando se pasa (la v3 canvas SIEMPRE la pasa), sustituye por completo la
+   * fuente V2 para los items `kind:'defensive'` — se construyen desde episodios canónicos
+   * (missed_ready/missed_due_to_mistime) en vez de decisiones V2, y las muertes dejan de afirmar
+   * disponibilidad defensiva (§45: no existe linkage canónico episodio↔muerte en v7 todavía). La vista legacy
+   * (v1) nunca pasa esto. */
+  canonicalDefensive?: NightCanonicalDefensiveSummary | null;
+  /** Nombres reales de spell resueltos en night-player-summary.service.ts (defensive_casts/death_defensive_options_v2) — reutilizados aquí solo para presentación de los defensivos citados en items canónicos; nunca decide semántica. */
+  spellNameById?: ReadonlyMap<number, string>;
 }
 
 const KNOWN_DEFENSIVE_REASONS = new Set([
@@ -356,6 +367,75 @@ function defensivePriority(decision: NightDefensiveDecision): number {
   return 6;
 }
 
+/** Nombres de los spellIds citados por un episodio canónico — §26: coveredBySpellId es solo el ganador
+ * representativo determinista, nunca "el único que cubrió"; para mostrar lo usado se recorre usedSpellIds
+ * completo. Sin catálogo de nombres disponible aquí más allá de spellNameById (casts WCL reales, no V2), el
+ * fallback es `#id`, mismo patrón que cleanSpellName ya usa para V2. */
+function canonicalUsedDefensives(
+  episode: CanonicalDefensiveEpisodeView,
+  spellNameById: ReadonlyMap<number, string> | undefined,
+): RaiderEvidenceDefensive[] {
+  return episode.usedSpellIds.map((spellId) => ({
+    spellId,
+    name: safeSpellName(spellNameById?.get(spellId) ?? `#${spellId}`),
+    status: 'used' as const,
+  }));
+}
+
+/** Copy humano para los dos únicos responseVerdict que generan coaching accionable (§76 — nunca mostrar
+ * covered_verified/missed_ready/uncertain/etc. en crudo al raider). */
+function canonicalDefensiveItem(
+  episode: CanonicalDefensiveEpisodeView,
+  spellNameById: ReadonlyMap<number, string> | undefined,
+): RaiderEvidenceItem {
+  const mechanic = episode.mechanicName ?? 'esta ventana defensiva';
+  const isMistimed = episode.responseVerdict === 'missed_due_to_mistime';
+  const title = isMistimed ? 'Mal timing demostrado' : 'CD disponible sin cubrir';
+  const observation = isMistimed
+    ? `El uso previo de tu defensivo demostrablemente no llegó a cubrir ${mechanic}.`
+    : episode.usageEngaged
+      ? `Usaste algo durante ${mechanic}, pero ninguna acción cubrió la ventana; tenías un cooldown listo sin usar.`
+      : `Tenías un cooldown listo para ${mechanic} y no se usó.`;
+  const action = isMistimed
+    ? `Ajusta el timing de tu defensivo para que siga activo cuando llegue ${mechanic}.`
+    : `Ejecuta tu cooldown en cuanto veas venir ${mechanic}; estaba disponible y no se usó.`;
+  return {
+    id: `defensive|canonical|${episode.episodeId}`,
+    kind: 'defensive',
+    pullId: episode.pullId,
+    pullNumber: episode.pullNumber,
+    bossId: episode.bossId,
+    bossName: episode.bossName,
+    difficulty: episode.difficulty,
+    atMs: episode.peakMs,
+    mechanicId: episode.dominantAbilityGameId,
+    mechanicName: episode.mechanicName,
+    title,
+    // missed_ready/missed_due_to_mistime solo los produce el evaluator con confidence punitiva
+    // (verified/inferred) — para cuando lleguen aquí ya son un fallo demostrado, no una sugerencia (§25/§29).
+    verdict: 'confirmed_error',
+    reasonCode: episode.responseVerdict === 'missed_ready' ? 'DEFENSIVE_READY_NOT_USED' : 'DEFENSIVE_MISTIMED',
+    observation,
+    whyItMatters: null,
+    action,
+    preventionKey: isMistimed ? 'Guarda margen de timing antes del impacto.' : 'No dejes el cooldown listo sin usar.',
+    mechanicDescription: episode.mechanicDescription,
+    resolutionText: episode.mechanicResolution,
+    defensives: canonicalUsedDefensives(episode, spellNameById),
+    confidence: episode.confidence === 'verified' ? 'verified' : episode.confidence === 'inferred' ? 'inferred' : 'uncertain',
+    occurrences: [{ pullId: episode.pullId, pullNumber: episode.pullNumber, atMs: episode.peakMs }],
+    provenance: [
+      {
+        source: 'player_pull_defensive_episode_evaluations',
+        key: episode.episodeId,
+        version: episode.confidence,
+      },
+    ],
+    priorityTier: 0,
+    damageTotal: 0,
+  };
+}
+
 function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] {
   const grouped = new Map<string, NightMechanicFailRow[]>();
   for (const row of rows) {
@@ -452,10 +532,18 @@ export function buildRaiderEvidenceProjection(
     'defensiveManagementV2' in options
       ? (options.defensiveManagementV2 ?? null)
       : summary.defensiveManagementV2;
+  const canonical = options.canonicalDefensive ?? null;
+  const spellNameById = options.spellNameById;
   const items: RaiderEvidenceItem[] = [];
   const v2DeathPulls = new Set<string>();
 
-  if (v2) {
+  if (canonical) {
+    for (const episode of canonical.episodes) {
+      if (episode.responseVerdict !== 'missed_ready' && episode.responseVerdict !== 'missed_due_to_mistime') continue;
+      if (!evaluatedPullIds.has(episode.pullId)) continue;
+      items.push(canonicalDefensiveItem(episode, spellNameById));
+    }
+  } else if (v2) {
     const byEpisode = new Map<string, NightDefensiveDecision>();
     for (const decision of v2.decisions) {
       if (!evaluatedPullIds.has(decision.pullId)) continue;
@@ -546,7 +634,12 @@ export function buildRaiderEvidenceProjection(
     if (v2DeathPulls.has(death.pullId)) continue;
     const mechanicIsVerifiable = verifiableMechanic(death.mechanicId, death.mechanicName);
     const hasResponse = death.defensivesAvailable.length > 0;
-    const canCoachDefensiveResponse = mechanicIsVerifiable && hasResponse;
+    // §45 (cutover frontend, corregido en revisión): v7 no tiene linkage canónico episodio↔muerte hoy — ni por
+    // identidad ni por proximidad temporal (un join "misma pull ± N segundos" sería el mismo problema con
+    // disfraz canónico). `death.defensivesAvailable` es legacy (death_cause.defensiveOptions, sin vínculo
+    // canónico) — en el modo canónico (v3) nunca se usa para acusar; la muerte se sigue mostrando como
+    // muerte/contexto, solo deja de afirmar "tenías X disponible" hasta que exista ese vínculo real.
+    const canCoachDefensiveResponse = !canonical && mechanicIsVerifiable && hasResponse;
     const availableDefensiveNames = death.defensivesAvailable.map((row) => safeSpellName(row.name)).join(' / ');
     // §"no tenemos en ningún lado el uso de poción / piedra de brujo" (feedback
     // real, 2026-09-03): usedHealthstoneInPull/usedHealthPotionInPull ya
@@ -610,13 +703,17 @@ export function buildRaiderEvidenceProjection(
         : null,
       mechanicDescription: mechanicIsVerifiable ? death.aiNote : null,
       resolutionText: mechanicIsVerifiable ? death.resolution : null,
-      defensives: mechanicIsVerifiable
-        ? death.defensivesAvailable.map((row) => ({
-            ...row,
-            name: safeSpellName(row.name),
-            status: 'available_unused' as const,
-          }))
-        : [],
+      // §45 (corregido en revisión): en modo canónico (v3) esta lista se suprime por completo, no solo el
+      // verdict/action — death.defensivesAvailable es legacy sin vínculo canónico con el episodio, y mostrarla
+      // como chips informativos seguiría siendo la misma afirmación de disponibilidad sin poder sostenerla.
+      defensives:
+        !canonical && mechanicIsVerifiable
+          ? death.defensivesAvailable.map((row) => ({
+              ...row,
+              name: safeSpellName(row.name),
+              status: 'available_unused' as const,
+            }))
+          : [],
       confidence: mechanicIsVerifiable ? 'inferred' : 'uncertain',
       occurrences: [{ pullId: death.pullId, pullNumber: death.pullNumber, atMs: death.timeMs }],
       provenance: [
@@ -698,10 +795,14 @@ export function buildRaiderEvidenceProjection(
   // reflejando lo que queda fuera de estas 4.
   const coaching = actionable.slice(0, 4);
   const uncertainVisible = coaching.some((item) => item.confidence === 'uncertain');
+  // §Frontend cutover: la v3 canvas nunca pasa v2, así que "high" no puede seguir dependiendo solo de su
+  // presencia — canonicalStrong exige cobertura completa (state='available'), no solo "hay canonicalDefensive".
+  // Una noche con datos parciales (state='partial') cae a 'partial'/'limited' igual que antes lo hacía v2=null.
+  const canonicalStrong = canonical != null && canonical.state === 'available';
   const quality: RaiderEvidenceQuality =
     evaluatedPulls.length === 0
       ? 'limited'
-      : v2 && !uncertainVisible
+      : (v2 || canonicalStrong) && !uncertainVisible
         ? 'high'
         : items.some((item) => item.confidence !== 'uncertain')
           ? 'partial'

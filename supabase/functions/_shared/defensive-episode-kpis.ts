@@ -9,8 +9,40 @@
 // se infiere Uso desde Response — un Barkskin tarde puede ser Uso=✅/
 // Response=❌ simultáneamente, ver defensive-episode-verdict.ts).
 
-import type { PersistedDefensiveEpisode } from './defensive-episode-persistence.ts';
-import type { ResponseVerdict } from './defensive-episode-verdict.ts';
+// §Corrección de límite de dependencias (2026-09-05, cutover frontend hacia esta fuente): este módulo debe
+// seguir siendo una hoja pura sin dependencias — ni siquiera de tipos — hacia el resto del árbol defensivo.
+// defensive-episode-persistence.ts/defensive-episode-verdict.ts arrastran imports de VALOR con extensión .ts
+// estilo Deno (identity.ts/temporal-coverage.ts) que un consumidor TypeScript en modo "bundler" — como la app
+// Angular, que reutiliza este módulo tal cual desde el frontend — no puede resolver sin activar
+// allowImportingTsExtensions a nivel de proyecto; esa opción exige noEmit/emitDeclarationOnly, y ambas rompen
+// el compilador incremental de Angular (ng serve) en esta versión — confirmado empíricamente. ResponseVerdict
+// se define AQUÍ (defensive-episode-verdict.ts lo reimporta y reexporta más abajo, así que ningún otro
+// consumidor backend — defensive-episode-persistence.ts, defensive-episode-ledger-events.ts — cambia una sola
+// línea). El contrato de episodio que este módulo necesita es un subconjunto estructural mínimo (4 campos),
+// nunca PersistedDefensiveEpisode completo — un PersistedDefensiveEpisode real lo sigue satisfaciendo sin
+// ningún cambio en las llamadas existentes (tipado estructural, no nominal).
+
+/**
+ * Los 7 estados canónicos de respuesta defensiva — misma fuente que antes vivía en
+ * defensive-episode-verdict.ts (§10/§11 del plan de canonicalización); el nombre y los valores no cambian.
+ */
+export type ResponseVerdict =
+  | 'covered_verified'
+  | 'missed_ready'
+  | 'missed_due_to_mistime'
+  | 'unavailable_legitimate'
+  | 'no_applicable_resource'
+  | 'uncertain'
+  | 'excluded';
+
+/** Contrato estructural mínimo que este módulo necesita de un episodio — nunca el shape completo de
+ * PersistedDefensiveEpisode (ver comentario de arriba). */
+export interface DefensiveEpisodeKpiEpisodeInput {
+  episodeId: string;
+  usageEngaged: boolean;
+  usageEvaluable: boolean;
+  responseVerdict: ResponseVerdict;
+}
 
 /**
  * Los TRES responseVerdict "evaluables" — idénticos para Uso y para
@@ -60,7 +92,7 @@ export interface DefensiveEpisodeKpiContribution {
  * KPI (§13.1 "Do not count casts").
  */
 export function deriveDefensiveEpisodeKpiContribution(
-  episode: Pick<PersistedDefensiveEpisode, 'episodeId' | 'usageEngaged' | 'usageEvaluable' | 'responseVerdict'>,
+  episode: DefensiveEpisodeKpiEpisodeInput,
 ): DefensiveEpisodeKpiContribution {
   const usageEvaluable = episode.usageEvaluable ?? deriveUsageEvaluable(episode.responseVerdict);
   const responseEvaluable = deriveResponseEvaluable(episode.responseVerdict);
@@ -112,7 +144,7 @@ function round2(value: number): number {
  * episodio a episodio.
  */
 export function aggregateDefensiveEpisodeKpis(
-  episodes: readonly Pick<PersistedDefensiveEpisode, 'episodeId' | 'usageEngaged' | 'usageEvaluable' | 'responseVerdict'>[],
+  episodes: readonly DefensiveEpisodeKpiEpisodeInput[],
 ): DefensiveEpisodeKpiAggregate {
   const contributions = episodes.map((episode) => deriveDefensiveEpisodeKpiContribution(episode));
 

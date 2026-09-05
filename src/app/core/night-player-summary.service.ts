@@ -31,9 +31,16 @@ import {
 } from './pull-analysis.service';
 import {
   loadMechanicCoachingByKey,
+  loadMechanicCatalogByAbilityId,
   mechanicCoachingKey,
+  mechanicCatalogKeyByAbility,
   type MechanicCoaching,
 } from './mechanic-notes';
+import {
+  CanonicalDefensiveSummaryService,
+  type CanonicalDefensiveEpisodeFact,
+  type CanonicalDefensiveSummary,
+} from './canonical-defensive-summary.service';
 import { mechanicDisplayName } from '../shared/format.util';
 import type {
   DeathCause,
@@ -316,6 +323,24 @@ export interface NightDefensiveSummary {
    */
   mechanicPressureBreakdown: NightMechanicPressureSummary[];
 }
+
+/** Un CanonicalDefensiveEpisodeFact (canonical-defensive-summary.service.ts) más metadata de presentación
+ * resuelta aquí — boss/pull identity (mismos bossPullNumber()/bossNameByFightId que el resto del dosier, para
+ * no divergir de la numeración de pull que ya usa toda la app) y nombre/descripción/resolución de la mecánica
+ * (applicable_boss_mechanics_candidates por ability_id — metadata, nunca re-scoring, ver §38 del cutover). */
+export interface CanonicalDefensiveEpisodeView extends CanonicalDefensiveEpisodeFact {
+  bossId: string;
+  bossName: string;
+  difficulty: string;
+  pullNumber: number;
+  mechanicName: string | null;
+  mechanicDescription: string | null;
+  mechanicResolution: string | null;
+}
+
+export type NightCanonicalDefensiveSummary = Omit<CanonicalDefensiveSummary, 'episodes'> & {
+  episodes: CanonicalDefensiveEpisodeView[];
+};
 
 export interface NightDefensiveDecision extends PlayerPullDefensiveEvaluationEvent {
   pullId: string;
@@ -704,6 +729,10 @@ export interface NightPlayerSummary {
   startingPreparation: NightGearSnapshot | null;
   defensiveSummary: NightDefensiveSummary;
   defensiveManagementV2: NightDefensiveManagementV2 | null;
+  /** §Frontend cutover (2026-09-05): única fuente canónica (defensive_generation_pointer → generación
+   * publicada → episodios v7) para el hero/estrip/mecánicas/coaching defensivo de la infografía v3. No
+   * confundir con defensiveManagementV2 (V2/legacy, sigue existiendo para el layout v1). */
+  canonicalDefensive: NightCanonicalDefensiveSummary;
   execution: NightExecutionSnapshot;
   /** Comparación determinista con la noche anterior del jugador, si existe. */
   evolution: NightEvolution | null;
@@ -830,6 +859,7 @@ export class NightPlayerSummaryService {
   private summaryCache = inject(NightPlayerSummaryCacheService);
   private combatFlags = inject(CombatEvaluationFeatureFlagsService);
   private executionLedger = inject(ExecutionLedgerService);
+  private canonicalDefensiveSummary = inject(CanonicalDefensiveSummaryService);
 
   /**
    * §"no todos los días tenemos raid... tiene sentido que actualice una
@@ -1005,6 +1035,23 @@ export class NightPlayerSummaryService {
     const defensiveEvaluations = (defensiveEvaluationsData ?? []) as PlayerPullDefensiveEvaluationRow[];
     const recordByPullId = new Map(records.map((r) => [r.pull_id, r]));
     const pullById = new Map(allPulls.map((p) => [p.id, p]));
+
+    // §Frontend cutover (2026-09-05): NO puede ir en el Promise.all de arriba — depende de `records`
+    // (participación real del jugador vía player_pull_records), que solo se conoce una vez resuelto ese
+    // Promise.all. Se lanza aquí (sin await) para correr en paralelo con el resto del trabajo síncrono/async de
+    // esta función y se espera más abajo, justo antes de construir `summary` — ni una carrera artificial contra
+    // su propia dependencia, ni un await bloqueante innecesario.
+    const canonicalDefensivePromise = this.canonicalDefensiveSummary.getSummary(
+      reportCode,
+      playerName,
+      [...new Set(records.map((r) => r.pull_id))],
+    );
+    // Solo depende de allPulls (boss ids), ya conocido — se lanza aquí también, en paralelo con lo anterior,
+    // en vez de esperar a canonicalDefensivePromise para empezar a pedirlo.
+    const mechanicCatalogByAbilityPromise = loadMechanicCatalogByAbilityId(
+      client,
+      allPulls.map((p) => p.boss_id),
+    ).catch(() => new Map<string, { name: string; note: string | null; resolution: string | null }>());
 
     // §"un golpe de melee a alguien que no es tank probablemente sea porque
     // los tanks estan muertos... OJO: hay que tener algun sistema de
@@ -1857,6 +1904,42 @@ export class NightPlayerSummaryService {
         coachingFor({ boss_id: pull.bossId, difficulty: pull.difficulty }, mechanicName),
     });
 
+    // §Frontend cutover (2026-09-05): metadata de mecánica para los episodios canónicos por ability_id real
+    // (applicable_boss_mechanics_candidates), NUNCA por pull_mechanic_events — esa tabla solo tiene eventos
+    // outcome!=clean donde el jugador fue golpeado, y omitiría en silencio abilities detrás de episodios
+    // missed_ready/no_applicable_resource donde el jugador nunca llegó a ser golpeado (corrección de revisión).
+    const [canonicalRaw, mechanicCatalogByAbility] = await Promise.all([
+      canonicalDefensivePromise,
+      mechanicCatalogByAbilityPromise,
+    ]);
+    const canonicalEpisodes: CanonicalDefensiveEpisodeView[] = [];
+    for (const episode of canonicalRaw.episodes) {
+      const pull = pullById.get(episode.pullId);
+      if (!pull) {
+        console.warn(
+          `[NightPlayerSummary] Episodio canónico ${episode.episodeId} referencia un pull (${episode.pullId}) fuera del report ${reportCode}; omitido.`,
+        );
+        continue;
+      }
+      const catalogEntry =
+        episode.dominantAbilityGameId != null
+          ? mechanicCatalogByAbility.get(
+              mechanicCatalogKeyByAbility(pull.boss_id, pull.difficulty, episode.dominantAbilityGameId),
+            )
+          : undefined;
+      canonicalEpisodes.push({
+        ...episode,
+        bossId: pull.boss_id,
+        bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
+        difficulty: pull.difficulty,
+        pullNumber: bossPullNumber(pull),
+        mechanicName: catalogEntry?.name ?? null,
+        mechanicDescription: catalogEntry?.note ?? null,
+        mechanicResolution: catalogEntry?.resolution ?? null,
+      });
+    }
+    const canonicalDefensive: NightCanonicalDefensiveSummary = { ...canonicalRaw, episodes: canonicalEpisodes };
+
     const avoidableEligible = reliabilityInputRows.reduce(
       (sum, row) => sum + (row.avoidable_mechanic_eligible_count ?? 0),
       0,
@@ -1970,6 +2053,7 @@ export class NightPlayerSummaryService {
       startingPreparation,
       defensiveSummary,
       defensiveManagementV2,
+      canonicalDefensive,
       execution,
       evolution: null,
       battleNetUrl,

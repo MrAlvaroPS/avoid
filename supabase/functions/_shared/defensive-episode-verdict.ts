@@ -40,15 +40,13 @@ import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
 import type { ApplicabilityVerdict, TimingRelation } from './defensive-applicability.ts';
 import type { DefensiveCooldownStatus } from './defensive-cooldowns.ts';
 import { evaluateTemporalCoverage, normalizeCastTimestamps } from './defensive-temporal-coverage.ts';
-
-export type ResponseVerdict =
-  | 'covered_verified'
-  | 'missed_ready'
-  | 'missed_due_to_mistime'
-  | 'unavailable_legitimate'
-  | 'no_applicable_resource'
-  | 'uncertain'
-  | 'excluded';
+// §Corrección de límite de dependencias (2026-09-05): ResponseVerdict se define ahora en
+// defensive-episode-kpis.ts (hoja pura sin dependencias, reutilizable tal cual desde el frontend Angular —
+// ver el comentario en ese archivo) — se reimporta y reexporta aquí para que ningún consumidor existente de
+// `import type { ResponseVerdict } from './defensive-episode-verdict.ts'` (defensive-episode-persistence.ts,
+// defensive-episode-ledger-events.ts) tenga que cambiar una sola línea. Mismos 7 valores, sin cambio semántico.
+import type { ResponseVerdict } from './defensive-episode-kpis.ts';
+export type { ResponseVerdict };
 
 export interface EpisodeWindow {
   startMs: number;

@@ -11,7 +11,12 @@ import type { RepeatOffenderRow } from './offenders.service';
 // roster ya cacheado sigue enseñando el overall de la fórmula vieja.
 // v5 (2026-09-02): el fingerprint incluye evaluaciones defensivas y ledger.
 // Un backfill/replay puede cambiar el score sin tocar pulls.updated_at.
-const STORAGE_KEY = 'avoid:roster-snapshot:v5';
+// v6 (2026-09-05): el fingerprint incluye defensive_generation_pointer
+// (§51 del cutover frontend hacia v7) — cambiar la generación PUBLICADA no
+// mueve necesariamente ningún pull/report/roster, así que sin esta señal un
+// cutover de generación podía servir indefinidamente el NightPlayerSummary
+// (y por tanto la infografía v3) de la generación anterior desde caché.
+const STORAGE_KEY = 'avoid:roster-snapshot:v6';
 
 export interface RosterSnapshot {
   fingerprint: string;
@@ -82,6 +87,7 @@ export class RosterSnapshotCacheService {
       rosterResponse,
       defensiveEvaluationResponse,
       ledgerEvaluationResponse,
+      defensiveGenerationPointerResponse,
     ] = await Promise.all([
       client
         .from('pulls')
@@ -114,6 +120,17 @@ export class RosterSnapshotCacheService {
         .order('evaluated_at', { ascending: false })
         .limit(1)
         .maybeSingle(),
+      // §51 (cutover frontend hacia la generación defensiva v7 publicada): cambiar
+      // published_generation_id es "una operación" (un único UPDATE de esta fila
+      // singleton, ver migración 20260904100000) que no necesariamente mueve
+      // ningún pull/report/roster — sin esta señal en el fingerprint, un cutover
+      // de generación no invalidaría ni este snapshot ni el NightPlayerSummary
+      // cacheado que delega en él.
+      client
+        .from('defensive_generation_pointer')
+        .select('published_generation_id, updated_at')
+        .eq('id', true)
+        .maybeSingle(),
     ]);
     if (pullResponse.error) throw pullResponse.error;
     if (correctedPullResponse.error) throw correctedPullResponse.error;
@@ -121,6 +138,7 @@ export class RosterSnapshotCacheService {
     if (rosterResponse.error) throw rosterResponse.error;
     if (defensiveEvaluationResponse.error) throw defensiveEvaluationResponse.error;
     if (ledgerEvaluationResponse.error) throw ledgerEvaluationResponse.error;
+    if (defensiveGenerationPointerResponse.error) throw defensiveGenerationPointerResponse.error;
 
     const roster = [...(rosterResponse.data ?? [])].sort((a, b) =>
       String(a.name).localeCompare(String(b.name), 'es'),
@@ -133,6 +151,7 @@ export class RosterSnapshotCacheService {
         roster,
         defensiveEvaluation: defensiveEvaluationResponse.data ?? null,
         ledgerEvaluation: ledgerEvaluationResponse.data ?? null,
+        defensiveGenerationPointer: defensiveGenerationPointerResponse.data ?? null,
       }),
     );
   }

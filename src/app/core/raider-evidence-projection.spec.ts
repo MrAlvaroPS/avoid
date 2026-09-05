@@ -1,11 +1,65 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  CanonicalDefensiveEpisodeView,
+  NightCanonicalDefensiveSummary,
   NightDefensiveDecision,
   NightDefensiveManagementV2,
   NightDeathRow,
   NightPlayerSummary,
 } from './night-player-summary.service';
 import { buildRaiderEvidenceProjection } from './raider-evidence-projection';
+
+function emptyCanonicalDefensive(): NightCanonicalDefensiveSummary {
+  return {
+    state: 'available',
+    coverage: { evaluatedPulls: 0, expectedPulls: 0 },
+    usage: { status: 'insufficient_evidence', score: null, engaged: 0, evaluable: 0 },
+    response: { status: 'insufficient_evidence', score: null, covered: 0, evaluable: 0, missedReady: 0, missedMistimed: 0 },
+    management: { status: 'no_plan', score: null, fulfilled: 0, evaluable: 0 },
+    context: { unavailableLegitimate: 0, noApplicableResource: 0, uncertain: 0, excluded: 0 },
+    totalEpisodes: 0,
+    episodes: [],
+    generation: null,
+    integrityIssues: [],
+    diagnostics: {
+      usage: { status: 'insufficient_evidence', engaged: 0, evaluable: 0, score: null },
+      response: { status: 'insufficient_evidence', covered: 0, evaluable: 0, score: null, missedReady: 0, missedMistimed: 0 },
+      rowsExpected: 0,
+      rowsFound: 0,
+    },
+  };
+}
+
+function canonicalEpisode(overrides: Partial<CanonicalDefensiveEpisodeView> = {}): CanonicalDefensiveEpisodeView {
+  return {
+    episodeId: 'episode-1',
+    causalGroupId: 'group-1',
+    pullId: 'p1',
+    pullNumber: 1,
+    bossId: 'boss-1',
+    bossName: 'Boss uno',
+    difficulty: 'mythic',
+    startMs: 29_000,
+    peakMs: 30_000,
+    endMs: 31_000,
+    dominantAbilityGameId: 456,
+    usageEngaged: false,
+    usageEvaluable: true,
+    usedSpellIds: [],
+    applicableCandidates: [],
+    responseVerdict: 'missed_ready',
+    responseReason: 'fixture',
+    coveredBySpellId: null,
+    decisiveSpellIds: [],
+    planAssignmentId: null,
+    planVerdict: null,
+    confidence: 'verified',
+    mechanicName: 'Explosión',
+    mechanicDescription: null,
+    mechanicResolution: null,
+    ...overrides,
+  };
+}
 
 function pull(pullId: string, pullNumber: number, pullScore: number | null) {
   return {
@@ -78,6 +132,7 @@ function summary(overrides: Partial<NightPlayerSummary> = {}): NightPlayerSummar
       mechanicPressureBreakdown: [],
     },
     defensiveManagementV2: null,
+    canonicalDefensive: emptyCanonicalDefensive(),
     execution: {
       evaluatedPulls: 1,
       cleanPulls: 1,
@@ -127,6 +182,8 @@ function decision(
     candidateSpellNames: ['Escudo'],
     evaluationMode: 'full',
     planVersionId: 'plan-1',
+    mechanicDescription: null,
+    mechanicResolution: null,
     ...overrides,
   };
 }
@@ -352,5 +409,58 @@ describe('RaiderEvidenceProjection', () => {
 
     expect(projection.quality).toBe('high');
     expect(projection.coaching).toEqual([]);
+  });
+});
+
+describe('RaiderEvidenceProjection · modo canónico (v3, §42/§45 del cutover)', () => {
+  it('genera items de coaching solo para missed_ready/missed_due_to_mistime, nunca desde decisiones V2', () => {
+    const canonical = {
+      ...emptyCanonicalDefensive(),
+      episodes: [
+        canonicalEpisode({ episodeId: 'e-missed', responseVerdict: 'missed_ready' }),
+        canonicalEpisode({ episodeId: 'e-mistimed', responseVerdict: 'missed_due_to_mistime', pullNumber: 1 }),
+        canonicalEpisode({ episodeId: 'e-covered', responseVerdict: 'covered_verified' }),
+        canonicalEpisode({ episodeId: 'e-uncertain', responseVerdict: 'uncertain' }),
+      ],
+    };
+    const v2 = management([decision()]); // presente en summary, pero NUNCA debe alimentar el modo canónico
+    const projection = buildRaiderEvidenceProjection(summary({ defensiveManagementV2: v2 }), {
+      defensiveManagementV2: null,
+      canonicalDefensive: canonical,
+    });
+
+    const defensiveItems = projection.items.filter((item) => item.kind === 'defensive');
+    expect(defensiveItems).toHaveLength(2);
+    expect(defensiveItems.map((item) => item.id).sort()).toEqual([
+      'defensive|canonical|e-missed',
+      'defensive|canonical|e-mistimed',
+    ]);
+    expect(defensiveItems.every((item) => item.verdict === 'confirmed_error')).toBe(true);
+  });
+
+  it('nunca acusa una muerte de tener un defensivo disponible en modo canónico (§45 — sin linkage episodio↔muerte)', () => {
+    const projection = buildRaiderEvidenceProjection(
+      summary({ deaths: [unknownDeath({ mechanicId: 456, mechanicName: 'Explosión' })], totalDeaths: 1 }),
+      { defensiveManagementV2: null, canonicalDefensive: emptyCanonicalDefensive() },
+    );
+    const item = projection.items.find((row) => row.kind === 'death');
+
+    // La muerte sigue existiendo como contexto (mecánica verificable), pero
+    // nunca reclama "tenías X disponible" — death.defensivesAvailable es
+    // legacy sin vínculo canónico con el episodio.
+    expect(item?.verdict).not.toBe('coaching');
+    expect(item?.defensives).toEqual([]);
+    expect(item?.action).not.toMatch(/preparado/i);
+  });
+
+  it('la misma muerte SÍ acusa en modo v1/legacy (canonicalDefensive ausente) — solo v3 suprime la afirmación', () => {
+    const projection = buildRaiderEvidenceProjection(
+      summary({ deaths: [unknownDeath({ mechanicId: 456, mechanicName: 'Explosión' })], totalDeaths: 1 }),
+      { defensiveManagementV2: null },
+    );
+    const item = projection.items.find((row) => row.kind === 'death');
+
+    expect(item?.verdict).toBe('coaching');
+    expect(item?.defensives.length).toBeGreaterThan(0);
   });
 });

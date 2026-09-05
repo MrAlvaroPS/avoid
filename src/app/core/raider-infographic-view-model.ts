@@ -1,10 +1,13 @@
 import type {
-  NightDefensiveDecision,
-  NightDefensiveManagementV2,
+  CanonicalDefensiveEpisodeView,
+  NightCanonicalDefensiveSummary,
   NightEvolutionMetric,
-  NightMechanicDefensiveStat,
   NightPlayerSummary,
 } from './night-player-summary.service';
+// §Corrección de límite de dependencias (2026-09-05): ResponseVerdict se importa de defensive-episode-kpis.ts
+// (hoja pura sin dependencias), nunca de defensive-episode-verdict.ts — ver el comentario de imports en
+// canonical-defensive-summary.service.ts para el porqué exacto (rompe ng serve si se resuelve la otra vía).
+import type { ResponseVerdict } from '../../../supabase/functions/_shared/defensive-episode-kpis';
 import type {
   RaiderEvidenceDefensive,
   RaiderEvidenceItem,
@@ -26,6 +29,19 @@ export interface RaiderInfographicMetric {
   value: string;
   detail: string;
   tone: RaiderInfographicTone;
+}
+
+/** §Frontend cutover (2026-09-05): los tres KPI defensivos acordados — Usage/Response/Management, siempre
+ * derivados de summary.canonicalDefensive, nunca de un cuarto "Calidad de evidencia" (eso se queda en el
+ * footer). `progressPct` es geometría pura (0..100 o null) — nunca se recupera parseando `value` con regex. */
+export interface RaiderInfographicDefensiveMetric {
+  key: 'usage' | 'response' | 'management';
+  label: string;
+  value: string;
+  fraction: string;
+  detail: string;
+  tone: RaiderInfographicTone;
+  progressPct: number | null;
 }
 
 export interface RaiderCoachingCard {
@@ -79,10 +95,16 @@ export interface RaiderMechanicDefensiveRow {
   coveredCount: number;
   freeUnusedCount: number;
   onCooldownCount: number;
-  reservedCount: number | null;
+  /** unavailable_legitimate donde este spellId fue decisivo — NUNCA "reserva correcta"/correct_hold, solo indisponibilidad legítima demostrada (§corrección de revisión: no confundir con evidencia de plan/hold). */
+  notRequiredCount: number;
   unknownCount: number;
   totalCount: number;
 }
+
+/** covered/uncovered son los dos únicos estados con culpa/mérito real. not_required (unavailable_legitimate) y
+ * context (uncertain/no_applicable_resource/excluded) son neutrales — nunca se pintan en rojo ni verde
+ * (§39/§40 del cutover, corregido en revisión: not_required no es sinónimo de "reserva correcta"). */
+export type RaiderMechanicOccurrenceState = 'covered' | 'uncovered' | 'not_required' | 'context';
 
 export interface RaiderMechanicCard {
   key: string;
@@ -105,7 +127,7 @@ export interface RaiderMechanicCard {
     pullNumber: number;
     cells: {
       key: string;
-      state: 'covered' | 'uncovered' | 'reserved';
+      state: RaiderMechanicOccurrenceState;
       label: string;
     }[];
   }[];
@@ -173,7 +195,17 @@ export interface RaiderInfographicViewModel {
     evaluatedBossCount: number;
     bossKillCount: number;
   };
-  heroMetrics: RaiderInfographicMetric[];
+  /** §Frontend cutover (2026-09-05): 1 dimensión general existente (execution, sin cambios de fórmula) + 3 KPI
+   * defensivos canónicos — nunca un cuarto "Calidad de evidencia" aquí (§12). Ya no es una lista de métricas
+   * equivalentes: response es siempre el KPI defensivo principal (jerarquía visual del triángulo). */
+  hero: {
+    execution: RaiderInfographicMetric;
+    defensive: {
+      usage: RaiderInfographicDefensiveMetric;
+      response: RaiderInfographicDefensiveMetric;
+      management: RaiderInfographicDefensiveMetric;
+    };
+  };
   nightMetrics: RaiderInfographicMetric[];
   coachingCards: RaiderCoachingCard[];
   additionalCoachingCount: number;
@@ -241,6 +273,72 @@ function compactNumber(value: number): string {
   }).format(value);
 }
 
+/** Formato de los tres KPI defensivos — 1 decimal, sin ceros de sobra (78,26→78,3 · 60→60 · 20→20), nunca "—"
+ * para null: el hero usa 'N/D' explícito para distinguirlo de un 0% real (§30). */
+function defensivePercent(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return 'N/D';
+  return `${value.toFixed(1).replace(/\.0$/, '').replace('.', ',')}%`;
+}
+
+/** Misma escala <50 danger / <75 warning / >=75 positive que el resto de la infografía (§33) — null explícito
+ * (`== null`, nunca `score ? … : …`) para que un 0% real siga entrando en 'danger', no en 'neutral'. */
+function defensiveTone(score: number | null): RaiderInfographicTone {
+  if (score == null) return 'neutral';
+  if (score < 50) return 'danger';
+  if (score < 75) return 'warning';
+  return 'positive';
+}
+
+function usageDefensiveMetric(canonical: NightCanonicalDefensiveSummary): RaiderInfographicDefensiveMetric {
+  const { usage } = canonical;
+  return {
+    key: 'usage',
+    label: 'Uso',
+    value: defensivePercent(usage.score),
+    fraction: usage.evaluable === 0 ? 'Sin oportunidades evaluables' : `${usage.engaged}/${usage.evaluable}`,
+    detail: '¿Estoy reaccionando defensivamente cuando tengo una oportunidad real?',
+    tone: defensiveTone(usage.score),
+    progressPct: usage.score,
+  };
+}
+
+function responseDefensiveMetric(canonical: NightCanonicalDefensiveSummary): RaiderInfographicDefensiveMetric {
+  const { response } = canonical;
+  return {
+    key: 'response',
+    label: 'Respuesta',
+    value: defensivePercent(response.score),
+    fraction: response.evaluable === 0 ? 'Sin oportunidades evaluables' : `${response.covered}/${response.evaluable}`,
+    detail: '¿Mi respuesta cubrió realmente la presión?',
+    tone: defensiveTone(response.score),
+    progressPct: response.score,
+  };
+}
+
+function managementDefensiveMetric(canonical: NightCanonicalDefensiveSummary): RaiderInfographicDefensiveMetric {
+  const { management } = canonical;
+  if (management.status === 'no_plan') {
+    return {
+      key: 'management',
+      label: 'Gestión',
+      value: 'N/D',
+      fraction: 'Sin plan',
+      detail: '¿Cumplí el plan defensivo que tenía asignado?',
+      tone: 'neutral',
+      progressPct: null,
+    };
+  }
+  return {
+    key: 'management',
+    label: 'Gestión',
+    value: defensivePercent(management.score),
+    fraction: management.evaluable === 0 ? 'Sin datos suficientes' : `${management.fulfilled}/${management.evaluable}`,
+    detail: '¿Cumplí el plan defensivo que tenía asignado?',
+    tone: defensiveTone(management.score),
+    progressPct: management.score,
+  };
+}
+
 function verdictTone(verdict: RaiderEvidenceVerdict): RaiderInfographicTone {
   if (verdict === 'confirmed_error') return 'danger';
   if (verdict === 'coaching') return 'warning';
@@ -259,6 +357,8 @@ function evidenceSource(item: RaiderEvidenceItem): string {
           return 'muerte y ventana temporal WCL';
         case 'player_pull_defensive_evaluations':
           return 'replay defensivo versionado';
+        case 'player_pull_defensive_episode_evaluations':
+          return 'generación defensiva canónica publicada';
         case 'player_pull_records.gear':
           return 'equipo observado en el primer pull';
       }
@@ -334,56 +434,6 @@ function groupTimeline(projection: RaiderEvidenceProjection): RaiderInfographicT
   return [...groups.values()];
 }
 
-function decisionEpisode(decision: NightDefensiveDecision): string {
-  return (
-    decision.causalGroupId ??
-    `${decision.pullId}|${decision.windowId ?? decision.slotId ?? decision.abilityId ?? 'decision'}|${decision.atMs}`
-  );
-}
-
-function reservedCounts(v2: NightDefensiveManagementV2 | null): Map<string, number> {
-  const episodes = new Set<string>();
-  const counts = new Map<string, number>();
-  for (const decision of v2?.decisions ?? []) {
-    if (decision.state !== 'correct_hold' || decision.abilityId == null) continue;
-    for (const spellId of decision.candidateSpellIds ?? []) {
-      const episode = `${decisionEpisode(decision)}|${spellId}`;
-      if (episodes.has(episode)) continue;
-      episodes.add(episode);
-      const key = `${decision.bossId}|${decision.difficulty}|${decision.abilityId}|${spellId}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-  }
-  return counts;
-}
-
-function defensiveRow(
-  stat: NightMechanicDefensiveStat,
-  mechanicKey: string,
-  reservations: Map<string, number>,
-  hasV2: boolean,
-): RaiderMechanicDefensiveRow {
-  const reserved = hasV2
-    ? Math.min(stat.timesAvailableUnused, reservations.get(`${mechanicKey}|${stat.spellId}`) ?? 0)
-    : null;
-  const freeUnused = Math.max(0, stat.timesAvailableUnused - (reserved ?? 0));
-  return {
-    spellId: stat.spellId,
-    name: safeSpellName(stat.name),
-    coveredCount: stat.timesCovered,
-    freeUnusedCount: freeUnused,
-    onCooldownCount: stat.timesOnCooldown,
-    reservedCount: reserved,
-    unknownCount: stat.timesUnknown,
-    totalCount:
-      stat.timesCovered +
-      freeUnused +
-      stat.timesOnCooldown +
-      (reserved ?? 0) +
-      stat.timesUnknown,
-  };
-}
-
 // §"el literal de 'Buena ejecución' podemos quitarlo porque se entiende bien
 // viendo el resto de colores... en su lugar un texto muy breve de por qué
 // esa mecánica es relevante (para que aparezca ahí)" (feedback real,
@@ -395,67 +445,174 @@ function mechanicRelevanceNote(totalCount: number): string {
     : `Se repitió ${totalCount} veces esta noche.`;
 }
 
-function mechanicCards(
-  summary: NightPlayerSummary,
-  v2: NightDefensiveManagementV2 | null,
-): RaiderMechanicCard[] {
-  const reservations = reservedCounts(v2);
-  const heldOccurrences = new Set(
-    (v2?.decisions ?? [])
-      .filter((decision) => decision.state === 'correct_hold' && decision.abilityId != null)
-      .map((decision) => `${decision.pullId}|${decision.abilityId}|${decision.atMs}`),
-  );
-  return (summary.defensiveSummary.mechanicPressureBreakdown ?? []).map((mechanic) => {
-    const mechanicKey = `${mechanic.bossId}|${mechanic.difficulty}|${mechanic.mechanicId}`;
-    const occurrenceGroups = new Map<number, RaiderMechanicCard['occurrenceGroups'][number]>();
-    for (const occurrence of mechanic.occurrences) {
-      const group = occurrenceGroups.get(occurrence.pullNumber) ?? {
-        pullNumber: occurrence.pullNumber,
-        cells: [],
-      };
-      const held = heldOccurrences.has(
-        `${occurrence.pullId}|${mechanic.mechanicId}|${occurrence.timeMs}`,
-      );
-      const state = occurrence.covered ? 'covered' : held ? 'reserved' : 'uncovered';
-      group.cells.push({
-        key: `${occurrence.pullId}|${occurrence.timeMs}`,
-        state,
-        label: `Pull ${occurrence.pullNumber} · ${formatDuration(occurrence.timeMs)} · ${
-          state === 'covered'
-            ? `cubierta${occurrence.coveredBySpellName ? ` con ${safeSpellName(occurrence.coveredBySpellName)}` : ''}`
-            : state === 'reserved'
-              ? 'reserva correcta'
-              : 'sin cobertura'
-        }`,
-      });
-      occurrenceGroups.set(occurrence.pullNumber, group);
+/** covered_verified es el único estado con mérito real; missed_* es el único con fallo real. unavailable_legitimate
+ * y el resto de estados de contexto son neutrales — §39/§40, corregido en revisión: unavailable_legitimate no
+ * equivale a "reserva correcta"/correct_hold, solo a indisponibilidad legítima demostrada. */
+function occurrenceStateFor(verdict: ResponseVerdict): RaiderMechanicOccurrenceState {
+  if (verdict === 'covered_verified') return 'covered';
+  if (verdict === 'missed_ready' || verdict === 'missed_due_to_mistime') return 'uncovered';
+  if (verdict === 'unavailable_legitimate') return 'not_required';
+  return 'context'; // uncertain | no_applicable_resource | excluded
+}
+
+const OCCURRENCE_STATE_LABEL: Record<RaiderMechanicOccurrenceState, string> = {
+  covered: 'cubierta',
+  uncovered: 'sin cobertura',
+  not_required: 'no exigible (indisponibilidad legítima)',
+  context: 'sin dato suficiente',
+};
+
+function occurrenceCellLabel(episode: CanonicalDefensiveEpisodeView, spellNameById: ReadonlyMap<number, string>): string {
+  const state = occurrenceStateFor(episode.responseVerdict);
+  if (state === 'covered' && episode.coveredBySpellId != null) {
+    const name = safeSpellName(spellNameById.get(episode.coveredBySpellId) ?? `#${episode.coveredBySpellId}`);
+    return `Pull ${episode.pullNumber} · ${formatDuration(episode.peakMs)} · cubierta con ${name}`;
+  }
+  if (state === 'uncovered' && episode.responseVerdict === 'missed_due_to_mistime') {
+    return `Pull ${episode.pullNumber} · ${formatDuration(episode.peakMs)} · sin cobertura (mal timing demostrado)`;
+  }
+  return `Pull ${episode.pullNumber} · ${formatDuration(episode.peakMs)} · ${OCCURRENCE_STATE_LABEL[state]}`;
+}
+
+function timingLabelFor(pattern: { kind: 'fixed' | 'periodic'; ms: number; sampleSize: number } | null): string | null {
+  if (!pattern) return null;
+  return pattern.kind === 'fixed'
+    ? `Suele ocurrir sobre ${formatDuration(pattern.ms)} · ${pattern.sampleSize} pulls históricos`
+    : `Se repite cada ~${formatDuration(pattern.ms)} · ${pattern.sampleSize} repeticiones históricas`;
+}
+
+/** Tabla de defensivos por mecánica (§41): pura cuenta sobre applicableCandidates ya persistidos — nunca
+ * reproduce un verdict nuevo. on_cooldown NUNCA se etiqueta como mistime (solo missed_due_to_mistime lo
+ * demuestra); notRequiredCount NUNCA se muestra como "reserva correcta" (eso exigiría evidencia de plan/hold
+ * que este dato no tiene). */
+function canonicalDefensiveRows(
+  episodes: CanonicalDefensiveEpisodeView[],
+  spellNameById: ReadonlyMap<number, string>,
+): RaiderMechanicDefensiveRow[] {
+  const stats = new Map<
+    number,
+    { covered: number; freeUnused: number; onCooldown: number; notRequired: number; unknown: number }
+  >();
+  for (const episode of episodes) {
+    for (const candidate of episode.applicableCandidates) {
+      if (!candidate.isDefensiveKitMember) continue;
+      const stat = stats.get(candidate.spellId) ?? { covered: 0, freeUnused: 0, onCooldown: 0, notRequired: 0, unknown: 0 };
+      if (episode.responseVerdict === 'covered_verified' && episode.usedSpellIds.includes(candidate.spellId)) stat.covered++;
+      if (candidate.statusAtPeak === 'available_unused') stat.freeUnused++;
+      if (candidate.statusAtPeak === 'on_cooldown') stat.onCooldown++;
+      if (episode.responseVerdict === 'unavailable_legitimate' && episode.decisiveSpellIds.includes(candidate.spellId)) {
+        stat.notRequired++;
+      }
+      if (candidate.statusAtPeak === 'unknown') stat.unknown++;
+      stats.set(candidate.spellId, stat);
     }
-    const timingLabel = mechanic.timingPattern
-      ? mechanic.timingPattern.kind === 'fixed'
-        ? `Suele ocurrir sobre ${formatDuration(mechanic.timingPattern.ms)} · ${mechanic.timingPattern.sampleSize} pulls históricos`
-        : `Se repite cada ~${formatDuration(mechanic.timingPattern.ms)} · ${mechanic.timingPattern.sampleSize} repeticiones históricas`
-      : null;
-    return {
-      key: mechanicKey,
-      mechanicId: mechanic.mechanicId,
-      mechanicName: mechanic.mechanicName,
-      bossId: mechanic.bossId,
-      bossName: mechanic.bossName,
-      difficulty: mechanic.difficulty,
-      coveredCount: mechanic.coveredCount,
-      totalCount: mechanic.totalCount,
-      coverageLabel: percent(
-        mechanic.totalCount > 0 ? (mechanic.coveredCount / mechanic.totalCount) * 100 : null,
-      ),
-      description: mechanic.aiNote,
-      resolution: mechanic.resolution,
-      relevanceNote: mechanicRelevanceNote(mechanic.totalCount),
-      timingLabel,
-      occurrenceGroups: [...occurrenceGroups.values()],
-      defensives: mechanic.defensives.map((stat) =>
-        defensiveRow(stat, mechanicKey, reservations, v2 != null),
-      ),
+  }
+  return [...stats.entries()]
+    .map(([spellId, stat]) => ({
+      spellId,
+      name: safeSpellName(spellNameById.get(spellId) ?? `#${spellId}`),
+      coveredCount: stat.covered,
+      freeUnusedCount: stat.freeUnused,
+      onCooldownCount: stat.onCooldown,
+      notRequiredCount: stat.notRequired,
+      unknownCount: stat.unknown,
+      totalCount: stat.covered + stat.freeUnused + stat.onCooldown + stat.notRequired + stat.unknown,
+    }))
+    .sort((a, b) => b.coveredCount - a.coveredCount || b.freeUnusedCount - a.freeUnusedCount);
+}
+
+/** §38-41 del cutover: agrupa episodios canónicos por boss+dificultad+dominantAbilityGameId — misma anatomía de
+ * card que antes, fuente completamente distinta. Nombre/descripción/resolución ya vienen resueltos por
+ * night-player-summary.service.ts (applicable_boss_mechanics_candidates por ability_id, nunca pull_mechanic_events
+ * ni pressure-window legacy). timingLabel reutiliza el patrón histórico ya calculado para el mismo ability_id
+ * en mechanicPressureBreakdown — es una observación de frecuencia, no un veredicto defensivo, así que no cuenta
+ * como fuente legacy de KPI (§14).
+ */
+function mechanicCards(canonical: NightCanonicalDefensiveSummary, summary: NightPlayerSummary): RaiderMechanicCard[] {
+  const spellNameById = new Map(summary.defensiveSummary.spells.map((spell) => [spell.spellId, spell.spellName]));
+  const timingByKey = new Map(
+    summary.defensiveSummary.mechanicPressureBreakdown.map((m) => [
+      `${m.bossId}|${m.difficulty}|${m.mechanicId}`,
+      m.timingPattern,
+    ]),
+  );
+
+  interface Group {
+    bossId: string;
+    bossName: string;
+    difficulty: string;
+    mechanicId: number;
+    mechanicName: string;
+    description: string | null;
+    resolution: string | null;
+    episodes: CanonicalDefensiveEpisodeView[];
+  }
+  const groups = new Map<string, Group>();
+  for (const episode of canonical.episodes) {
+    if (episode.dominantAbilityGameId == null) continue;
+    const key = `${episode.bossId}|${episode.difficulty}|${episode.dominantAbilityGameId}`;
+    const group = groups.get(key) ?? {
+      bossId: episode.bossId,
+      bossName: episode.bossName,
+      difficulty: episode.difficulty,
+      mechanicId: episode.dominantAbilityGameId,
+      mechanicName: episode.mechanicName ?? `#${episode.dominantAbilityGameId}`,
+      description: episode.mechanicDescription,
+      resolution: episode.mechanicResolution,
+      episodes: [],
     };
+    group.episodes.push(episode);
+    groups.set(key, group);
+  }
+
+  const cards = [...groups.values()].map((group): RaiderMechanicCard => {
+    const sortedEpisodes = [...group.episodes].sort((a, b) => a.pullNumber - b.pullNumber || a.peakMs - b.peakMs);
+    const occurrenceGroups = new Map<number, RaiderMechanicCard['occurrenceGroups'][number]>();
+    for (const episode of sortedEpisodes) {
+      const bucket = occurrenceGroups.get(episode.pullNumber) ?? { pullNumber: episode.pullNumber, cells: [] };
+      bucket.cells.push({
+        key: `${episode.pullId}|${episode.peakMs}`,
+        state: occurrenceStateFor(episode.responseVerdict),
+        label: occurrenceCellLabel(episode, spellNameById),
+      });
+      occurrenceGroups.set(episode.pullNumber, bucket);
+    }
+    const coveredCount = group.episodes.filter((e) => e.responseVerdict === 'covered_verified').length;
+    const totalCount = group.episodes.length;
+    return {
+      key: `${group.bossId}|${group.difficulty}|${group.mechanicId}`,
+      mechanicId: group.mechanicId,
+      mechanicName: group.mechanicName,
+      bossId: group.bossId,
+      bossName: group.bossName,
+      difficulty: group.difficulty,
+      coveredCount,
+      totalCount,
+      coverageLabel: percent(totalCount > 0 ? (coveredCount / totalCount) * 100 : null),
+      description: group.description,
+      resolution: group.resolution,
+      relevanceNote: mechanicRelevanceNote(totalCount),
+      timingLabel: timingLabelFor(timingByKey.get(`${group.bossId}|${group.difficulty}|${group.mechanicId}`) ?? null),
+      occurrenceGroups: [...occurrenceGroups.values()],
+      defensives: canonicalDefensiveRows(group.episodes, spellNameById),
+    };
+  });
+
+  // Mismo criterio de orden que antes (§"ponerlos en orden de bosses... si
+  // hay 3 mecánicas de un mismo boss, poner las 3 seguidas", 2026-08-30):
+  // boss en el orden en que se pulleó esa noche, dentro de un boss más fallos primero.
+  const missCount = (card: RaiderMechanicCard) => card.totalCount - card.coveredCount;
+  const firstPullNumberByBoss = new Map<string, number>();
+  for (const card of cards) {
+    const earliest = Math.min(...card.occurrenceGroups.map((g) => g.pullNumber));
+    const current = firstPullNumberByBoss.get(card.bossId);
+    if (current == null || earliest < current) firstPullNumberByBoss.set(card.bossId, earliest);
+  }
+  return cards.sort((a, b) => {
+    if (a.bossId !== b.bossId) {
+      return (firstPullNumberByBoss.get(a.bossId) ?? 0) - (firstPullNumberByBoss.get(b.bossId) ?? 0);
+    }
+    return missCount(b) - missCount(a);
   });
 }
 
@@ -485,7 +642,7 @@ function selectMechanics(rows: RaiderMechanicCard[]): {
 
 function positiveSignals(
   summary: NightPlayerSummary,
-  v2: NightDefensiveManagementV2 | null,
+  canonical: NightCanonicalDefensiveSummary,
 ): RaiderInfographicSignal[] {
   const rows: RaiderInfographicSignal[] = [];
   if (summary.execution.avoidableEligible > 0) {
@@ -509,15 +666,16 @@ function positiveSignals(
       tone: 'positive',
     });
   }
-  const goodDefensiveDecisions = (v2?.decisions ?? []).filter(
-    (decision) => decision.state === 'correct_hold' || decision.state === 'safe_extra_use',
-  );
-  if (goodDefensiveDecisions.length > 0) {
+  // §Frontend cutover (2026-09-05, corregido en revisión): covered_verified es el único hecho canónico
+  // positivo inequívoco disponible hoy. unavailable_legitimate NUNCA alimenta esto — indisponibilidad legítima
+  // no es lo mismo que una decisión correcta de reserva/plan, y afirmarlo requeriría evidencia de plan/hold que
+  // esta generación todavía no expone. Sin covered_verified, no se inventa un signal.
+  if (canonical.response.covered > 0) {
     rows.push({
       key: 'defensive',
-      label: 'Decisiones defensivas correctas',
-      value: String(goodDefensiveDecisions.length),
-      detail: `${v2!.correctHoldCount} reservas correctas · ${goodDefensiveDecisions.filter((row) => row.state === 'safe_extra_use').length} usos extra seguros.`,
+      label: 'Coberturas defensivas confirmadas',
+      value: String(canonical.response.covered),
+      detail: `${canonical.response.covered}/${canonical.response.evaluable} oportunidades evaluables cubiertas con evidencia verificada.`,
       tone: 'positive',
     });
   }
@@ -538,30 +696,6 @@ function positiveSignals(
   return rows;
 }
 
-// §"0/0 slots required cubiertos... por qué el score no es 100% o sin dato"
-// (feedback real, 2026-09-03): managementScore sale de
-// computeDefensiveManagementScore, que pondera death_with_viable_cd/
-// plan_broken/extras además de los slots required — no solo required. La
-// leyenda anterior citaba únicamente required (0/0 esa noche) y parecía
-// contradecir un score que en realidad venía sobre todo de 2 muertes con CD
-// viable. Ahora la leyenda sigue al dato que de verdad domina el score.
-function defensiveScoreDetail(v2: NightDefensiveManagementV2 | null): string {
-  // §"esto no es información útil para un raider" (feedback real,
-  // 2026-09-03): la explicación anterior hablaba del propio sistema
-  // (v2/legacy) en vez de lo que el número representa para el jugador.
-  if (!v2) return '% de ventanas de presión con algún defensivo usado.';
-  if (v2.planRequiredCount > 0) {
-    return `${v2.requiredCoverageSuccessCount}/${v2.planRequiredCount} slots required cubiertos · ${v2.correctHoldCount} reservas correctas`;
-  }
-  if (v2.deathViableCdCount > 0) {
-    return `${v2.deathViableCdCount} muerte${v2.deathViableCdCount === 1 ? '' : 's'} con CD viable sin usar · ${v2.correctHoldCount} reservas correctas`;
-  }
-  if (v2.brokenReservationCount > 0) {
-    return `${v2.brokenReservationCount} reserva${v2.brokenReservationCount === 1 ? '' : 's'} rota${v2.brokenReservationCount === 1 ? '' : 's'} · ${v2.correctHoldCount} reservas correctas`;
-  }
-  return `${v2.correctHoldCount} reservas correctas · sin slots required esta noche`;
-}
-
 function evolutionValue(value: number, unit: NightEvolutionMetric['unit']): string {
   return unit === 'percent' ? percent(value) : metricNumber(value);
 }
@@ -574,29 +708,18 @@ function evolutionDelta(metric: NightEvolutionMetric): string {
 export function buildRaiderInfographicViewModel(
   summary: NightPlayerSummary,
   projection: RaiderEvidenceProjection,
-  v2: NightDefensiveManagementV2 | null,
 ): RaiderInfographicViewModel {
+  const canonical = summary.canonicalDefensive;
   const evaluatedPulls = summary.pulls.filter((pull) => pull.pullScore != null);
   const evaluatedBosses = new Set(
     evaluatedPulls.map((pull) => `${pull.bossId}|${pull.difficulty}`),
   );
   const bossKills = evaluatedPulls.filter((pull) => pull.kill).length;
-  const mechanics = mechanicCards(summary, v2);
+  const mechanics = mechanicCards(canonical, summary);
   const mechanicSelection = selectMechanics(mechanics);
-  // Coverage/KPIs siempre sobre TODAS las mecánicas, aunque algunas no quepan
-  // en el grid visible — "se tienen en cuenta para las métricas... pero no
-  // se enseñan en la infografía porque no caben" (feedback real, 2026-09-03).
-  const coverage = mechanics.reduce(
-    (totals, mechanic) => ({
-      covered: totals.covered + mechanic.coveredCount,
-      total: totals.total + mechanic.totalCount,
-    }),
-    { covered: 0, total: 0 },
-  );
   const maxDefensiveRows = Math.max(0, ...mechanics.map((mechanic) => mechanic.defensives.length));
   const className = summary.gearSnapshot?.class ?? summary.roster?.class ?? null;
   const executionScore = summary.nightScore == null ? null : summary.nightScore * 100;
-  const defensiveScore = v2?.managementScore ?? summary.nightReliability?.breakdown.defensiva ?? null;
   // §Hallazgo 4 (2026-09-03): antes este contador leía v2.deathViableCdCount
   // (o el agregado legacy) mientras las cards de muerte de abajo se
   // construyen mezclando episodios v2 y legacy pull a pull — un episodio de
@@ -627,12 +750,6 @@ export function buildRaiderInfographicViewModel(
       defensives: item.defensives.map(defensiveView),
     }),
   );
-  const deathResponseCount = deathItems.filter(
-    (item) => item.verdict === 'coaching' && item.defensives.length > 0,
-  ).length;
-  const deathResponseDetail =
-    'defensivo disponible identificado en la card de muerte correspondiente; no prueba que hubiera evitado la muerte';
-
   return {
     identity: {
       playerName: summary.playerName,
@@ -653,12 +770,12 @@ export function buildRaiderInfographicViewModel(
       evaluatedBossCount: evaluatedBosses.size,
       bossKillCount: bossKills,
     },
-    heroMetrics: [
-      {
-        // §"'6/13 pulls sin fallo personal ni muerte evaluable' porque ya
-        // está en la card de abajo" (feedback real, 2026-09-03): ese mismo
-        // par ya es el KPI "Pulls limpios" del stat-strip; aquí describe qué
-        // pesa el % en vez de repetir la fracción.
+    hero: {
+      // §"'6/13 pulls sin fallo personal ni muerte evaluable' porque ya
+      // está en la card de abajo" (feedback real, 2026-09-03): ese mismo
+      // par ya es el KPI "Pulls limpios" del stat-strip; aquí describe qué
+      // pesa el % en vez de repetir la fracción.
+      execution: {
         key: 'execution',
         label: 'Ejecución de la noche',
         value: percent(executionScore),
@@ -672,53 +789,12 @@ export function buildRaiderInfographicViewModel(
                 ? 'warning'
                 : 'positive',
       },
-      {
-        // §"No debería existir el literal de defensivos V2 en la
-        // infografía porque todo tiene que adaptarse al nuevo" (feedback
-        // real, 2026-09-03): una sola etiqueta para el jugador,
-        // independientemente de qué generación interna resolvió el número
-        // — mismo criterio que ya siguen sus dos hermanas ('Ejecución de la
-        // noche', 'Calidad de evidencia'), que tampoco revelan su fuente.
-        key: 'defensive',
-        label: 'Gestión defensiva',
-        value: percent(defensiveScore),
-        detail: defensiveScoreDetail(v2),
-        tone:
-          defensiveScore == null
-            ? 'neutral'
-            : defensiveScore < 50
-              ? 'danger'
-              : defensiveScore < 75
-                ? 'warning'
-                : 'positive',
+      defensive: {
+        usage: usageDefensiveMetric(canonical),
+        response: responseDefensiveMetric(canonical),
+        management: managementDefensiveMetric(canonical),
       },
-      {
-        key: 'evidence',
-        label: 'Calidad de evidencia',
-        value:
-          projection.quality === 'high'
-            ? 'ALTA'
-            : projection.quality === 'partial'
-              ? 'PARCIAL'
-              : 'LIMITADA',
-        // §"PARCIAL / CALIDAD DE EVIDENCIA / Algunas cards se basan en menos
-        // datos... no es útil" (feedback real, 2026-09-03): esa frase ya se
-        // había reescrito una vez el mismo día citando esta misma queja y
-        // seguía sin aportar nada que las propias cards no dijeran ya cada
-        // una con su confidenceLabel. Se retira aquí; la nota fina de
-        // evidencia sigue viva en el pie de página (view.evidenceNote) para
-        // quien la busque, y este hueco pasa a describir la métrica en sí
-        // — mismo patrón que sus dos hermanas ('Ejecución de la noche',
-        // 'Gestión defensiva V2'), que explican qué miden, no cuánto fiarse.
-        detail: 'Cuánta de la noche está verificada u observada directamente, no solo inferida.',
-        tone:
-          projection.quality === 'high'
-            ? 'positive'
-            : projection.quality === 'partial'
-              ? 'warning'
-              : 'neutral',
-      },
-    ],
+    },
     nightMetrics: [
       {
         key: 'clean-pulls',
@@ -756,16 +832,20 @@ export function buildRaiderInfographicViewModel(
         tone: summary.interrupts.length > 0 ? 'positive' : 'neutral',
       },
       {
-        // §Spec visual sección 6: "Pulls evaluados" no debe ocupar un KPI
-        // porque ya aparece junto a la identidad del jugador (hero, arriba).
-        // En su lugar vuelve "Ventanas de presión", que aporta una
-        // dimensión distinta (misma fuente que el strip de la página
-        // derecha, `coverage`, para no introducir un segundo cálculo).
-        key: 'pressure-windows',
-        label: 'Ventanas de presión',
-        value: `${coverage.covered}/${coverage.total}`,
-        detail: percent(coverage.total > 0 ? (coverage.covered / coverage.total) * 100 : null) + ' cubiertas',
-        tone: coverage.total === 0 ? 'neutral' : coverage.covered === coverage.total ? 'positive' : 'warning',
+        // §Spec visual sección 6 (corregido en el cutover, 2026-09-05):
+        // "Ventanas de presión" era pressure-window legacy — sustituida por
+        // Respuesta canónica (misma fuente que el hero y el strip
+        // defensivo, nunca un segundo cálculo).
+        key: 'defensive-opportunities',
+        label: 'Oportunidades defensivas',
+        value: `${canonical.response.covered}/${canonical.response.evaluable}`,
+        detail: canonical.response.score == null ? 'sin oportunidades evaluables' : `${defensivePercent(canonical.response.score)} cubiertas`,
+        tone:
+          canonical.response.score == null
+            ? 'neutral'
+            : canonical.response.evaluable > 0 && canonical.response.covered === canonical.response.evaluable
+              ? 'positive'
+              : 'warning',
       },
       {
         key: 'bosses',
@@ -778,51 +858,50 @@ export function buildRaiderInfographicViewModel(
     coachingCards: projection.coaching.map(coachingCard),
     additionalCoachingCount: projection.additionalCoachingCount,
     timelineGroups: groupTimeline(projection),
-    positiveSignals: positiveSignals(summary, v2),
+    positiveSignals: positiveSignals(summary, canonical),
     defensiveMetrics: [
       {
-        key: 'casts',
-        label: 'Casts defensivos',
-        value: String(summary.defensiveSummary.totalCasts),
-        detail: `en ${summary.defensiveSummary.pullsWithCasts}/${evaluatedPulls.length} pulls`,
-        tone: 'information',
+        key: 'usage',
+        label: 'Uso defensivo',
+        value: `${canonical.usage.engaged}/${canonical.usage.evaluable}`,
+        detail: canonical.usage.score == null ? 'sin oportunidades evaluables' : `${defensivePercent(canonical.usage.score)} · episodios con uso`,
+        tone: canonical.usage.score == null ? 'neutral' : defensiveTone(canonical.usage.score),
       },
       {
-        key: 'coverage',
-        label: 'Ventanas cubiertas',
-        value: `${coverage.covered}/${coverage.total}`,
-        detail: percent(coverage.total > 0 ? (coverage.covered / coverage.total) * 100 : null),
-        tone:
-          coverage.total === 0
-            ? 'neutral'
-            : coverage.covered === coverage.total
-              ? 'positive'
-              : 'warning',
+        key: 'response',
+        label: 'Respuesta correcta',
+        value: `${canonical.response.covered}/${canonical.response.evaluable}`,
+        detail: canonical.response.score == null ? 'sin oportunidades evaluables' : `${defensivePercent(canonical.response.score)} · oportunidades cubiertas`,
+        tone: canonical.response.score == null ? 'neutral' : defensiveTone(canonical.response.score),
       },
       {
-        key: 'uncovered',
-        label: 'Sin cobertura',
-        value: String(Math.max(0, coverage.total - coverage.covered)),
-        detail: 'ocurrencias evaluables, no culpabilidad automática',
-        tone: coverage.total - coverage.covered > 0 ? 'warning' : 'positive',
+        key: 'missed-ready',
+        label: 'CD disponible sin cubrir',
+        value: String(canonical.response.missedReady),
+        detail: 'cooldown listo, oportunidad real, sin usar',
+        tone: canonical.response.missedReady > 0 ? 'warning' : 'positive',
       },
       {
-        key: 'holds',
-        label: 'Reservas correctas',
-        value: v2 ? String(v2.correctHoldCount) : '—',
-        detail: v2 ? 'holds confirmados por el replay' : 'sin datos suficientes esta noche',
-        tone: v2?.correctHoldCount ? 'information' : 'neutral',
+        key: 'missed-mistimed',
+        label: 'Mal timing demostrado',
+        value: String(canonical.response.missedMistimed),
+        detail: 'uso anterior probadamente causó la falta de cobertura',
+        tone: canonical.response.missedMistimed > 0 ? 'danger' : 'positive',
       },
       {
-        key: 'death-response',
-        label: 'Muertes con respuesta disponible',
-        value: String(deathResponseCount),
-        detail: deathResponseDetail,
-        tone: deathResponseCount > 0 ? 'danger' : 'neutral',
+        key: 'management',
+        label: 'Gestión',
+        value:
+          canonical.management.status === 'no_plan'
+            ? 'N/D'
+            : `${canonical.management.fulfilled}/${canonical.management.evaluable}`,
+        detail: canonical.management.status === 'no_plan' ? 'Sin plan defensivo asignado' : 'plan cumplido',
+        tone: canonical.management.status === 'no_plan' ? 'neutral' : defensiveTone(canonical.management.score),
       },
-      // §Spec visual sección 12: 5 columnas, no 6 — "Kills del boss" no
-      // pertenece a este strip (ya está en la identidad de página izquierda
-      // y en las propias cards) y comprimía las otras cinco.
+      // §36 del cutover: exactamente 5 cards canónicas (Uso/Respuesta/CD sin
+      // cubrir/Mal timing/Gestión) — "Muertes con respuesta disponible" salía
+      // de death.defensivesAvailable (legacy, sin vínculo canónico con el
+      // episodio); retirada junto con esa afirmación (§45).
     ],
     mechanics: mechanicSelection.visible,
     additionalMechanicCount: mechanicSelection.additionalCount,
@@ -863,8 +942,11 @@ export function buildRaiderInfographicViewModel(
       })),
     },
     evidenceNote: projection.qualityReason,
-    generationLabel: projection.defensiveGeneration
-      ? `${projection.defensiveGeneration.evaluatorVersion} · ${projection.defensiveGeneration.resolverVersion} · ${projection.defensiveGeneration.solverVersion}`
+    // §Frontend cutover: v3 nunca pasa v2 a buildRaiderEvidenceProjection, así que
+    // projection.defensiveGeneration (v2-only) siempre sería null aquí — la generación real es
+    // summary.canonicalDefensive.generation (id/versión de la publicada, nunca inventada).
+    generationLabel: canonical.generation
+      ? `${canonical.generation.evaluatorVersion ?? canonical.generation.episodeVersion ?? '—'} · ${canonical.generation.resolverVersion} · ${canonical.generation.semanticResolverVersion}`
       : null,
     layout: {
       pullDensity:

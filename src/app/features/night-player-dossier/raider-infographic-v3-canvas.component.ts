@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, ViewEncapsulation, input } from '@angular/core';
 import type {
+  RaiderInfographicDefensiveMetric,
   RaiderInfographicMetric,
   RaiderInfographicViewModel,
 } from '../../core/raider-infographic-view-model';
@@ -60,6 +61,19 @@ export class RaiderInfographicV3CanvasComponent {
     const pct = Math.max(0, Math.min(100, value));
     // 0% = rojo (hue 0) → 100% = verde (hue 120), saturación/luminosidad
     // fijas para que combine con el resto de la paleta oscura del lienzo.
+    return `hsl(${(pct / 100) * 120}, 68%, 50%)`;
+  }
+
+  // §32 del cutover: el triángulo defensivo (Uso/Respuesta/Gestión) recibe progressPct ya calculado —
+  // nunca se recupera parseando `value` con regex (eso rompería especialmente para "N/D"). Mismo mecanismo
+  // visual que metricRingPct/metricRingColor (ring completo + --tone fijo cuando no hay % real que arquear).
+  defensiveRingPct(metric: RaiderInfographicDefensiveMetric): number {
+    return metric.progressPct ?? 100;
+  }
+
+  defensiveRingColor(metric: RaiderInfographicDefensiveMetric): string | null {
+    if (metric.progressPct == null) return null;
+    const pct = Math.max(0, Math.min(100, metric.progressPct));
     return `hsl(${(pct / 100) * 120}, 68%, 50%)`;
   }
 }

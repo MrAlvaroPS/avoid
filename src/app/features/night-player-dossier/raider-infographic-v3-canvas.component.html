@@ -46,19 +46,67 @@
           <strong>{{ view.identity.evaluatedPullCount }} pulls evaluados</strong>
         </div>
         <div class="iris-v3-hero-metrics">
-          @for (metric of view.heroMetrics; track metric.key) {
-            <article class="iris-v3-hero-metric" [attr.data-tone]="metric.tone">
+          <article class="iris-v3-hero-metric iris-v3-execution-metric" [attr.data-tone]="view.hero.execution.tone">
+            <div
+              class="iris-v3-metric-ring"
+              [style.--ring-pct]="metricRingPct(view.hero.execution) + '%'"
+              [style.--ring-color]="metricRingColor(view.hero.execution)"
+            >
+              <strong>{{ view.hero.execution.value }}</strong>
+            </div>
+            <span>{{ view.hero.execution.label }}</span>
+            <p>{{ view.hero.execution.detail }}</p>
+          </article>
+          <div class="iris-v3-defensive-triangle" role="group" aria-label="Análisis defensivo">
+            <article
+              class="iris-v3-defensive-circle iris-v3-defensive-usage"
+              [attr.data-tone]="view.hero.defensive.usage.tone"
+              [attr.aria-label]="view.hero.defensive.usage.detail"
+              [title]="view.hero.defensive.usage.detail"
+            >
               <div
                 class="iris-v3-metric-ring"
-                [style.--ring-pct]="metricRingPct(metric) + '%'"
-                [style.--ring-color]="metricRingColor(metric)"
+                [style.--ring-pct]="defensiveRingPct(view.hero.defensive.usage) + '%'"
+                [style.--ring-color]="defensiveRingColor(view.hero.defensive.usage)"
               >
-                <strong>{{ metric.value }}</strong>
+                <strong>{{ view.hero.defensive.usage.value }}</strong>
               </div>
-              <span>{{ metric.label }}</span>
-              <p>{{ metric.detail }}</p>
+              <span>{{ view.hero.defensive.usage.label }}</span>
+              <small>{{ view.hero.defensive.usage.fraction }}</small>
             </article>
-          }
+            <article
+              class="iris-v3-defensive-circle iris-v3-defensive-management"
+              [attr.data-tone]="view.hero.defensive.management.tone"
+              [attr.aria-label]="view.hero.defensive.management.detail"
+              [title]="view.hero.defensive.management.detail"
+            >
+              <div
+                class="iris-v3-metric-ring"
+                [style.--ring-pct]="defensiveRingPct(view.hero.defensive.management) + '%'"
+                [style.--ring-color]="defensiveRingColor(view.hero.defensive.management)"
+              >
+                <strong>{{ view.hero.defensive.management.value }}</strong>
+              </div>
+              <span>{{ view.hero.defensive.management.label }}</span>
+              <small>{{ view.hero.defensive.management.fraction }}</small>
+            </article>
+            <article
+              class="iris-v3-defensive-circle iris-v3-defensive-response"
+              [attr.data-tone]="view.hero.defensive.response.tone"
+              [attr.aria-label]="view.hero.defensive.response.detail"
+              [title]="view.hero.defensive.response.detail"
+            >
+              <div
+                class="iris-v3-metric-ring"
+                [style.--ring-pct]="defensiveRingPct(view.hero.defensive.response) + '%'"
+                [style.--ring-color]="defensiveRingColor(view.hero.defensive.response)"
+              >
+                <strong>{{ view.hero.defensive.response.value }}</strong>
+              </div>
+              <span>{{ view.hero.defensive.response.label }}</span>
+              <small>{{ view.hero.defensive.response.fraction }}</small>
+            </article>
+          </div>
         </div>
       </section>
 
@@ -274,7 +322,8 @@
           <div class="iris-v3-occurrence-legend">
             <span data-state="covered">Cubierta</span>
             <span data-state="uncovered">Sin cobertura</span>
-            <span data-state="reserved">Reserva correcta</span>
+            <span data-state="not_required">No exigible</span>
+            <span data-state="context">Sin dato</span>
           </div>
         </div>
         @if (view.mechanics.length) {
@@ -320,7 +369,7 @@
                 @if (mechanic.defensives.length) {
                   <div class="iris-v3-defensive-table">
                     <div class="iris-v3-defensive-table-head">
-                      <span>Defensivo</span><span>Cubrió</span><span>Libre</span><span>En CD</span><span>Reserva</span><span>Sin dato</span>
+                      <span>Defensivo</span><span>Cubrió</span><span>Libre sin usar</span><span>En CD</span><span>No exigible</span><span>Sin dato</span>
                     </div>
                     @for (defensive of mechanic.defensives; track defensive.spellId) {
                       <div class="iris-v3-defensive-table-row">
@@ -334,7 +383,7 @@
                         <strong data-state="covered">{{ defensive.coveredCount }}</strong>
                         <strong data-state="uncovered">{{ defensive.freeUnusedCount }}</strong>
                         <strong data-state="cooldown">{{ defensive.onCooldownCount }}</strong>
-                        <strong data-state="reserved">{{ defensive.reservedCount ?? '—' }}</strong>
+                        <strong data-state="not_required">{{ defensive.notRequiredCount }}</strong>
                         <strong data-state="unknown">{{ defensive.unknownCount }}</strong>
                       </div>
                     }

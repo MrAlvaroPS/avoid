@@ -3,15 +3,24 @@ import {
   aggregateDefensiveEpisodeKpis,
   deriveDefensiveEpisodeKpiContribution,
   deriveUsageEvaluable,
+  type DefensiveEpisodeKpiEpisodeInput,
+  type ResponseVerdict,
 } from '../../../supabase/functions/_shared/defensive-episode-kpis';
-import type { PersistedDefensiveEpisode } from '../../../supabase/functions/_shared/defensive-episode-persistence';
-import type { ResponseVerdict } from '../../../supabase/functions/_shared/defensive-episode-verdict';
 
-function episode(overrides: Partial<PersistedDefensiveEpisode> = {}): Pick<PersistedDefensiveEpisode, 'episodeId' | 'usageEngaged' | 'responseVerdict'> {
+// §Corrección de límite de dependencias (2026-09-05): este fixture usaba Pick<PersistedDefensiveEpisode, ...>
+// (defensive-episode-persistence.ts) — desde que aggregateDefensiveEpisodeKpis/deriveDefensiveEpisodeKpiContribution
+// declaran su propio contrato mínimo (DefensiveEpisodeKpiEpisodeInput, en el propio defensive-episode-kpis.ts,
+// hoja pura sin dependencias), el fixture de este spec usa ese mismo contrato directamente — ya no hace falta
+// importar persistence.ts solo para tomar prestado un tipo. usageEvaluable se deriva de responseVerdict por
+// defecto (mismo criterio que ya usa el propio agregador vía deriveUsageEvaluable) — los overrides pueden
+// pisarlo explícitamente cuando un test necesita divergir de la derivación (ver test 36).
+function episode(overrides: Partial<DefensiveEpisodeKpiEpisodeInput> = {}): DefensiveEpisodeKpiEpisodeInput {
+  const responseVerdict = overrides.responseVerdict ?? 'missed_ready';
   return {
     episodeId: 'heuristic:abc',
     usageEngaged: false,
-    responseVerdict: 'missed_ready',
+    usageEvaluable: deriveUsageEvaluable(responseVerdict),
+    responseVerdict,
     ...overrides,
   };
 }

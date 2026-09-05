@@ -75,6 +75,58 @@ export async function loadMechanicCoachingByKey(
   return map;
 }
 
+/** Exact key for the ability-id variant — boss+difficulty+ability_id, never a name (§ability_id join below). */
+export function mechanicCatalogKeyByAbility(bossId: string, difficulty: string, abilityId: number): string {
+  return `${bossId}|${difficulty}|${abilityId}`;
+}
+
+/**
+ * Variant of loadMechanicCoachingByKey keyed by the real WCL ability id instead of name. Needed for surfaces
+ * that only have an ability id and no reliable name of their own (e.g. a canonical DefensiveEpisode's
+ * `dominantAbilityGameId`) — unlike `pull_mechanic_events` (which only carries non-clean, player-hit rows and
+ * would silently omit abilities behind e.g. `missed_ready`/`no_applicable_resource` episodes where the player
+ * was never hit), `boss_mechanics_candidates.ability_id` is the catalog itself and covers every known ability
+ * for the boss, hit or not. Same table/view/fallback as loadMechanicCoachingByKey — metadata lookup only.
+ */
+export async function loadMechanicCatalogByAbilityId(
+  client: SupabaseClient,
+  bossIds: string[],
+): Promise<Map<string, { name: string; note: string | null; resolution: string | null }>> {
+  const uniqueBossIds = [...new Set(bossIds)];
+  const map = new Map<string, { name: string; note: string | null; resolution: string | null }>();
+  if (!uniqueBossIds.length) return map;
+
+  const query = (relation: string) =>
+    client
+      .from(relation)
+      .select('boss_id, difficulty, ability_id, name, ai_classification, resolution')
+      .in('boss_id', uniqueBossIds)
+      .not('ability_id', 'is', null);
+  const { data, error } = await withSupabaseRelationFallback(
+    'applicable_boss_mechanics_candidates',
+    () => query('applicable_boss_mechanics_candidates'),
+    () => query('boss_mechanics_candidates'),
+  );
+  if (error) throw error;
+
+  for (const row of (data ?? []) as {
+    boss_id: string;
+    difficulty: string;
+    ability_id: number | null;
+    name: string;
+    ai_classification: { notes?: string } | null;
+    resolution: string | null;
+  }[]) {
+    if (row.ability_id == null) continue;
+    map.set(mechanicCatalogKeyByAbility(row.boss_id, row.difficulty, row.ability_id), {
+      name: row.name,
+      note: row.ai_classification?.notes?.trim() || null,
+      resolution: row.resolution?.trim() || null,
+    });
+  }
+  return map;
+}
+
 export async function loadMechanicNotesByName(client: SupabaseClient, bossIds: string[]): Promise<Map<string, string>> {
   const uniqueBossIds = [...new Set(bossIds)];
   const map = new Map<string, string>();

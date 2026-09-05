@@ -116,6 +116,11 @@ describe('circuito completo: evaluate → persist → materialize (staging→led
       {
         episodeId: event.evidence['episode_id'] as string,
         usageEngaged: event.evidence['usage_engaged'] as boolean,
+        // §Corrección de límite de dependencias (2026-09-05): usage_evaluable YA viaja en evidence
+        // (buildDefensiveEpisodeResponseLedgerEvent la incluye) — el objeto de reconstrucción "solo desde el
+        // evento" debe leerla de ahí también, no dejar que quede sin valor (DefensiveEpisodeKpiEpisodeInput la
+        // exige explícitamente, igual que el Pick<PersistedDefensiveEpisode,...> original ya la exigía).
+        usageEvaluable: event.evidence['usage_evaluable'] as boolean,
         responseVerdict: reconstructedResponseVerdict,
       },
     ]);
