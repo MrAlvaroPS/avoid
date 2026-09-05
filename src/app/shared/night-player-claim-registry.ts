@@ -75,16 +75,19 @@ export const NIGHT_PLAYER_CLAIM_REGISTRY = {
     note: 'Sin plan publicado el valor correcto es N/D; nunca 0 por ausencia de plan.',
   },
   'mechanics.actionableIncidents': {
-    owner: 'night-player-summary.execution',
-    source: 'iris_derived',
+    owner: 'player_mechanic_offenses_v3 + full_execution_backfill',
+    source: 'iris_canonical',
+    note: 'Solo es un total canónico cuando todos los pulls válidos participados tienen full_execution_backfill=done. La vista contiene únicamente fallos atribuibles mediante occurrence + responsibility graph.',
   },
   'mechanics.avoidableSuccess': {
-    owner: 'night-player-summary.execution',
-    source: 'iris_derived',
+    owner: 'mechanic_occurrence_evaluations + mechanic_responsibility_edges',
+    source: 'iris_canonical',
+    note: 'El contrato player-level de éxitos evitables todavía no publica un numerador/denominador homogéneo. Hasta entonces el claim correcto es N/D; nunca se deriva desde una vista de ofensas.',
   },
   'deaths.total': {
-    owner: 'night-player-summary.deaths',
-    source: 'iris_derived',
+    owner: "player_execution_events(domain='death') + full_execution_backfill",
+    source: 'iris_canonical',
+    note: 'El total solo puede afirmarse tras backfill completo de todos los pulls válidos participados. reasonCode/confidence se muestran como clasificación del ledger y el dosier no reinterpreta la causa.',
   },
   'consumables.reactiveUse': {
     owner: 'player_pull_records.consumables',
