@@ -1,1 +1,0 @@
-Launch immutable Shadow v6 retry over canonical reports 7GbANtw1J2pjZzH9 and 24nwKPpL8tr9Bcg1 using runner e6-shadow-v6-two-log-b5d855a pinned to 202f5c4ba078b3796660d3e691cc226ba80f18ba after applying defensive_exact_current_review_v6 and aligning the live-cast acquisition gate with the canonical persistent-ability guard.
