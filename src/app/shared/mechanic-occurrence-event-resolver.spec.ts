@@ -168,7 +168,22 @@ describe('event-backed mechanic occurrence resolver v2', () => {
     expect(result.occurrences[0].confidence).toBe('inferred');
   });
 
-  it('fails closed to uncertain when identity or policy confidence is fallback', () => {
+  it('uses an active legacy/fallback alias as identity transport without treating it as blame evidence', () => {
+    const result = resolveEventBackedMechanicOccurrences({
+      pullId: 'pull-1',
+      bossId: 'boss',
+      difficulty: 'Mythic',
+      context: context(),
+      events: [event('e1', 101, 2_000, 'fail')],
+      aliases: [{ abilityId: 101, mechanicKey: 'm:a', confidence: 'fallback' }],
+      policies: [policy('m:a')],
+    });
+
+    expect(result.occurrences[0].confidence).toBe('inferred');
+    expect(result.occurrences[0].evidence['identity_alias_confidence']).toBe('fallback');
+  });
+
+  it('fails closed to uncertain when semantic policy confidence is fallback', () => {
     const fallbackPolicy = { ...policy('m:a'), confidence: 'fallback' as const };
     const result = resolveEventBackedMechanicOccurrences({
       pullId: 'pull-1',
