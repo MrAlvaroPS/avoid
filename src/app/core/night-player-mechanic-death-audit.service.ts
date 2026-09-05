@@ -15,9 +15,16 @@ import type {
 } from '../shared/models/night-player-audit';
 
 export type CausalMaterializationState = 'complete' | 'partial' | 'unavailable' | 'incompatible';
+export type CombatEvaluationJobType =
+  | 'pull_context'
+  | 'mechanic_policy'
+  | 'mechanic_assignment'
+  | 'consumable_policy'
+  | 'full_execution_backfill';
 
 export interface CombatBackfillJobFact {
   pull_id: string;
+  job_type: CombatEvaluationJobType;
   status: 'queued' | 'running' | 'done' | 'error';
   stage_progress: Record<string, unknown>;
   last_error: string | null;
@@ -141,15 +148,22 @@ function uniqueNonEmpty(values: readonly (string | null | undefined)[]): string[
 
 function auditStatus(state: CausalMaterializationState): AuditClaimStatus {
   switch (state) {
-    case 'complete':
-      return 'canonical';
-    case 'partial':
-      return 'partial';
-    case 'incompatible':
-      return 'incompatible';
-    case 'unavailable':
-      return 'not_evaluable';
+    case 'complete': return 'canonical';
+    case 'partial': return 'partial';
+    case 'incompatible': return 'incompatible';
+    case 'unavailable': return 'not_evaluable';
   }
+}
+
+function timeMs(value: string): number | null {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isNewerThan(candidate: CombatBackfillJobFact, reference: CombatBackfillJobFact): boolean {
+  const candidateMs = timeMs(candidate.updated_at);
+  const referenceMs = timeMs(reference.updated_at);
+  return candidateMs != null && referenceMs != null && candidateMs > referenceMs;
 }
 
 function executionEvidence(
@@ -216,13 +230,69 @@ function buildPatterns(
     .sort((left, right) => right.count - left.count || left.mechanicKey.localeCompare(right.mechanicKey));
 }
 
+interface MaterializationCoverage {
+  completedPullIds: Set<string>;
+  pendingPullIds: Set<string>;
+  failedPullIds: Set<string>;
+  stalePullIds: Set<string>;
+  hasAnyJob: boolean;
+}
+
+/**
+ * A completed full_execution_backfill is necessary but not sufficient. Any
+ * newer/pending causal invalidation job means that marker is stale and the
+ * dossier must fail closed until a fresh full backfill finishes.
+ */
+function resolveMaterializationCoverage(
+  expectedPullIds: ReadonlySet<string>,
+  jobs: readonly CombatBackfillJobFact[],
+): MaterializationCoverage {
+  const jobsByPullId = new Map<string, CombatBackfillJobFact[]>();
+  for (const job of jobs) {
+    if (!expectedPullIds.has(job.pull_id)) continue;
+    const current = jobsByPullId.get(job.pull_id) ?? [];
+    current.push(job);
+    jobsByPullId.set(job.pull_id, current);
+  }
+
+  const completedPullIds = new Set<string>();
+  const pendingPullIds = new Set<string>();
+  const failedPullIds = new Set<string>();
+  const stalePullIds = new Set<string>();
+
+  for (const pullId of expectedPullIds) {
+    const pullJobs = jobsByPullId.get(pullId) ?? [];
+    const fullBackfill = pullJobs.find((job) => job.job_type === 'full_execution_backfill');
+    const invalidations = pullJobs.filter((job) => job.job_type !== 'full_execution_backfill');
+    const hasFailure = pullJobs.some((job) => job.status === 'error');
+    const hasPending = pullJobs.some((job) => job.status === 'queued' || job.status === 'running');
+    const staleInvalidation =
+      fullBackfill != null && invalidations.some((job) => isNewerThan(job, fullBackfill));
+
+    if (hasFailure) failedPullIds.add(pullId);
+    if (staleInvalidation) stalePullIds.add(pullId);
+
+    const fullBackfillFresh =
+      fullBackfill?.status === 'done' && !hasPending && !hasFailure && !staleInvalidation;
+    if (fullBackfillFresh) completedPullIds.add(pullId);
+    else if (!hasFailure) pendingPullIds.add(pullId);
+  }
+
+  return {
+    completedPullIds,
+    pendingPullIds,
+    failedPullIds,
+    stalePullIds,
+    hasAnyJob: jobsByPullId.size > 0,
+  };
+}
+
 /**
  * Proyección de auditoría sobre el pipeline causal v3.
  *
- * Un `full_execution_backfill=done` por cada pull válido participado es el marker
- * de completitud: ese job encadena occurrences -> responsibility edges -> ledger.
- * Sin ese marker, cero filas NO significa cero fallos/muertes y por tanto los
- * claims permanecen N/D/partial.
+ * Un full_execution_backfill fresco y `done` por cada pull válido participado
+ * es el marker de completitud: encadena occurrences -> responsibility edges ->
+ * execution ledger. Cualquier invalidación posterior vuelve a cerrar el gate.
  */
 export function buildNightPlayerMechanicDeathAudit(args: {
   reportCode: string;
@@ -237,11 +307,7 @@ export function buildNightPlayerMechanicDeathAudit(args: {
   const expectedPullIds = new Set(expectedRows.map((row) => row.pull.pullId));
   const rowByPullId = new Map(expectedRows.map((row) => [row.pull.pullId, row]));
   const integrityIssues = [...ledger.integrityIssues];
-
-  const relevantJobs = jobs.filter((job) => expectedPullIds.has(job.pull_id));
-  const donePullIds = new Set(relevantJobs.filter((job) => job.status === 'done').map((job) => job.pull_id));
-  const failedJobs = relevantJobs.filter((job) => job.status === 'error');
-  const pendingJobs = relevantJobs.filter((job) => job.status === 'queued' || job.status === 'running');
+  const materialization = resolveMaterializationCoverage(expectedPullIds, jobs);
 
   const ledgerVersions = uniqueNonEmpty([
     ...offenseFacts.map((row) => row.ledger_evaluator_version),
@@ -252,7 +318,6 @@ export function buildNightPlayerMechanicDeathAudit(args: {
     ...deathFacts.map((row) => row.context_resolver_version),
   ]);
   const occurrenceVersions = uniqueNonEmpty(offenseFacts.map((row) => row.occurrence_resolver_version));
-
   const versionsCompatible =
     ledgerVersions.length <= 1 && contextVersions.length <= 1 && occurrenceVersions.length <= 1;
 
@@ -265,9 +330,9 @@ export function buildNightPlayerMechanicDeathAudit(args: {
   } else if (expectedRows.length === 0) {
     materializationState = 'unavailable';
     integrityIssues.push('No hay pulls válidos participados sobre los que auditar mecánicas o muertes.');
-  } else if (donePullIds.size === expectedRows.length) {
+  } else if (materialization.completedPullIds.size === expectedRows.length) {
     materializationState = 'complete';
-  } else if (relevantJobs.length === 0) {
+  } else if (!materialization.hasAnyJob) {
     materializationState = 'unavailable';
     integrityIssues.push(
       `No existe full_execution_backfill para los ${expectedRows.length} pulls válidos participados; cero filas causales no puede interpretarse como cero incidentes.`,
@@ -275,13 +340,18 @@ export function buildNightPlayerMechanicDeathAudit(args: {
   } else {
     materializationState = 'partial';
     integrityIssues.push(
-      `Backfill causal incompleto: ${donePullIds.size}/${expectedRows.length} pulls terminados, ${pendingJobs.length} pendientes y ${failedJobs.length} con error.`,
+      `Materialización causal incompleta: ${materialization.completedPullIds.size}/${expectedRows.length} pulls completos, ${materialization.pendingPullIds.size} pendientes y ${materialization.failedPullIds.size} con error.`,
     );
   }
 
-  for (const failed of failedJobs) {
+  if (materialization.stalePullIds.size) {
     integrityIssues.push(
-      `Backfill ${failed.pull_id} falló${failed.last_error ? `: ${failed.last_error}` : '.'}`,
+      `${materialization.stalePullIds.size} pull(s) tienen una invalidación causal más reciente que su último full_execution_backfill; el marker anterior no se acepta como vigente.`,
+    );
+  }
+  for (const job of jobs.filter((row) => expectedPullIds.has(row.pull_id) && row.status === 'error')) {
+    integrityIssues.push(
+      `${job.job_type} de ${job.pull_id} falló${job.last_error ? `: ${job.last_error}` : '.'}`,
     );
   }
 
@@ -365,7 +435,7 @@ export function buildNightPlayerMechanicDeathAudit(args: {
   );
 
   const scope = { reportCode, playerName, pullIds: [...expectedPullIds] } as const;
-  const coverage = { expected: expectedRows.length, observed: donePullIds.size };
+  const coverage = { expected: expectedRows.length, observed: materialization.completedPullIds.size };
   const status = auditStatus(materializationState);
   const complete = materializationState === 'complete';
 
@@ -378,7 +448,7 @@ export function buildNightPlayerMechanicDeathAudit(args: {
     definition:
       'Eventos mechanic failure/missed penalty-eligible materializados desde occurrence + responsibility graph. Ser alcanzado por una mecánica no basta para aparecer aquí.',
     numerator: complete ? mechanicOffenses.length : undefined,
-    formula: 'count(player_mechanic_offenses_v3) after complete full_execution_backfill',
+    formula: 'count(player_mechanic_offenses_v3) after fresh complete full_execution_backfill',
     evidence: mechanicOffenses.flatMap((offense) => offense.evidence),
     sourceVersion: ledgerVersions[0] ?? null,
     coverage,
@@ -408,9 +478,9 @@ export function buildNightPlayerMechanicDeathAudit(args: {
     status,
     scope,
     definition:
-      'Eventos domain=death del execution ledger tras backfill causal completo. El conteo de muertes es factual; reasonCode/confidence se muestran aparte y el dosier no reinterpreta la causa.',
+      'Eventos domain=death del execution ledger tras backfill causal fresco y completo. El conteo de muertes es factual; reasonCode/confidence se muestran aparte y el dosier no reinterpreta la causa.',
     numerator: complete ? deaths.length : undefined,
-    formula: "count(player_execution_events where domain='death') after complete full_execution_backfill",
+    formula: "count(player_execution_events where domain='death') after fresh complete full_execution_backfill",
     evidence: deaths.map((death) => death.evidence),
     sourceVersion: ledgerVersions[0] ?? null,
     coverage,
@@ -423,9 +493,9 @@ export function buildNightPlayerMechanicDeathAudit(args: {
     materializationState,
     coverage: {
       expectedPulls: expectedRows.length,
-      completedPulls: donePullIds.size,
-      pendingPulls: pendingJobs.length,
-      failedPulls: failedJobs.length,
+      completedPulls: materialization.completedPullIds.size,
+      pendingPulls: materialization.pendingPullIds.size,
+      failedPulls: materialization.failedPullIds.size,
     },
     actionableMechanicIncidents,
     avoidableSuccess,
@@ -465,8 +535,7 @@ export class NightPlayerMechanicDeathAuditService {
     const [jobsResult, offensesResult, deathsResult] = await Promise.all([
       client
         .from('combat_evaluation_jobs')
-        .select('pull_id,status,stage_progress,last_error,updated_at')
-        .eq('job_type', 'full_execution_backfill')
+        .select('pull_id,job_type,status,stage_progress,last_error,updated_at')
         .in('pull_id', pullIds),
       client
         .from('player_mechanic_offenses_v3')
