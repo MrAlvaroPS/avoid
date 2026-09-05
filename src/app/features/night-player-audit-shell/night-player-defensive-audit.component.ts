@@ -3,12 +3,12 @@ import {
   NightPlayerDefensiveAuditService,
   type NightPlayerDefensiveAudit,
   type NightPlayerDefensiveEpisodeAudit,
+  type NightPlayerDefensiveResponseVerdict,
 } from '../../core/night-player-defensive-audit.service';
 import { errorMessage } from '../../shared/error-message.util';
 import { formatDuration, formatPct } from '../../shared/format.util';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
 import type { AuditClaim, AuditClaimStatus } from '../../shared/models/night-player-audit';
-import type { ResponseVerdict } from '../../../supabase/functions/_shared/defensive-episode-kpis';
 
 @Component({
   selector: 'app-night-player-defensive-audit',
@@ -29,7 +29,6 @@ export class NightPlayerDefensiveAuditComponent {
   protected readonly expandedEpisodeId = signal<string | null>(null);
 
   protected readonly formatDuration = formatDuration;
-  protected readonly formatPct = formatPct;
 
   constructor() {
     effect(() => {
@@ -86,7 +85,7 @@ export class NightPlayerDefensiveAuditComponent {
     }
   }
 
-  protected responseLabel(verdict: ResponseVerdict): string {
+  protected responseLabel(verdict: NightPlayerDefensiveResponseVerdict): string {
     switch (verdict) {
       case 'covered_verified':
         return 'Cubierto';
@@ -105,7 +104,7 @@ export class NightPlayerDefensiveAuditComponent {
     }
   }
 
-  protected responseTone(verdict: ResponseVerdict): string {
+  protected responseTone(verdict: NightPlayerDefensiveResponseVerdict): string {
     if (verdict === 'covered_verified') return 'positive';
     if (verdict === 'missed_ready' || verdict === 'missed_due_to_mistime') return 'negative';
     if (verdict === 'uncertain') return 'warning';
