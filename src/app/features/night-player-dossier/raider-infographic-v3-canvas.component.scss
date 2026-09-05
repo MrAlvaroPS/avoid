@@ -222,7 +222,7 @@ app-raider-infographic-v3-canvas {
   // space-between, no gap fijo: Ejecución queda junto a la identidad del jugador y el triángulo (ancho fijo,
   // ver abajo) se empuja al borde de la columna — llena el mismo ancho que antes sin estirar el triángulo con
   // porcentajes (eso separaría demasiado Uso/Gestión de Respuesta, ver comentario de .iris-v3-defensive-triangle).
-  justify-content: space-between;
+  justify-content: space-around;
 }
 
 .iris-v3-execution-metric {
