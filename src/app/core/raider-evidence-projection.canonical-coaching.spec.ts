@@ -72,7 +72,7 @@ function canonical(episodes: CanonicalDefensiveEpisodeView[]): NightCanonicalDef
   };
 }
 
-function summary(): NightPlayerSummary {
+function summary(overrides: Partial<NightPlayerSummary> = {}): NightPlayerSummary {
   return {
     playerName: 'Gusmï',
     reportCode: '7GbANtw1J2pjZzH9',
@@ -91,7 +91,28 @@ function summary(): NightPlayerSummary {
     deaths: [],
     mechanicFails: [],
     startingPreparation: null,
+    ...overrides,
   } as unknown as NightPlayerSummary;
+}
+
+function mechanicPressureMetadata(overrides: Record<string, unknown> = {}) {
+  return {
+    mechanicId: 1288772,
+    mechanicName: 'Soulcoil Rite',
+    bossId: 'boss-1',
+    bossName: "Nek'zali the Soulcoiler",
+    difficulty: 'Heroic',
+    timingPattern: null,
+    occurrences: [],
+    coveredCount: 0,
+    totalCount: 1,
+    defensives: [],
+    aiNote:
+      'Soulcoil Rite daña a toda la raid y deja un DoT prolongado que acumula; parte de sus aplicaciones son guionizadas.',
+    resolution:
+      'Sana las aplicaciones guionizadas y evita stacks extra; en fase 2 cada Invoke incrementa la presión.',
+    ...overrides,
+  };
 }
 
 describe('RaiderEvidenceProjection · canonical defensive coaching details', () => {
@@ -148,7 +169,172 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
 
     const item = projection.items.find((row) => row.id === 'defensive|canonical|episode-1');
     expect(item?.defensives).toEqual([{ spellId: 22812, name: 'Barkskin', status: 'used' }]);
-    expect(item?.title).toBe('Mal timing demostrado');
+    expect(item?.title).toContain('Mal timing demostrado');
     expect(item?.whyItMatters).toContain('fallo de timing');
+  });
+
+  it('recupera nombre, contexto y resolución por boss+dificultad+abilityId sin tocar el verdict canónico', () => {
+    const projection = buildRaiderEvidenceProjection(
+      summary({
+        defensiveSummary: {
+          mechanicPressureBreakdown: [mechanicPressureMetadata()],
+        } as NightPlayerSummary['defensiveSummary'],
+      }),
+      {
+        defensiveManagementV2: null,
+        canonicalDefensive: canonical([
+          episode({
+            mechanicName: null,
+            mechanicDescription: null,
+            mechanicResolution: null,
+          }),
+        ]),
+        spellNameById: new Map([[22812, 'Barkskin']]),
+      },
+    );
+
+    const item = projection.items.find((row) => row.id === 'defensive|canonical|episode-1');
+    expect(item?.mechanicName).toBe('Soulcoil Rite');
+    expect(item?.title).toBe('Soulcoil Rite · CD disponible sin cubrir');
+    expect(item?.whyItMatters).toContain('Soulcoil Rite daña a toda la raid');
+    expect(item?.whyItMatters).not.toContain('IRIS verificó que Barkskin');
+    expect(item?.resolutionText).toContain('Sana las aplicaciones guionizadas');
+    expect(item?.preventionKey).toContain('Barkskin');
+    expect(item?.reasonCode).toBe('DEFENSIVE_READY_NOT_USED');
+    // La descripción se consume en "Qué sabemos" y no se duplica bajo el boss de la misma card.
+    expect(item?.mechanicDescription).toBeNull();
+  });
+
+  it('si hay resolución revisada pero no nota, no repite Barkskin: usa la resolución como conocimiento y la acción personal en Cómo resolver', () => {
+    const projection = buildRaiderEvidenceProjection(
+      summary({
+        defensiveSummary: {
+          mechanicPressureBreakdown: [
+            mechanicPressureMetadata({
+              mechanicId: 1281925,
+              mechanicName: 'Plague Froth',
+              aiNote: null,
+              resolution: 'Los objetivos se separan y orientan las líneas lejos de la raid.',
+            }),
+          ],
+        } as NightPlayerSummary['defensiveSummary'],
+      }),
+      {
+        defensiveManagementV2: null,
+        canonicalDefensive: canonical([
+          episode({
+            dominantAbilityGameId: 1281925,
+            mechanicName: null,
+            mechanicDescription: null,
+            mechanicResolution: null,
+          }),
+        ]),
+        spellNameById: new Map([[22812, 'Barkskin']]),
+      },
+    );
+
+    const item = projection.items.find((row) => row.id === 'defensive|canonical|episode-1');
+    expect(item?.mechanicName).toBe('Plague Froth');
+    expect(item?.whyItMatters).toContain('La resolución revisada de Plague Froth');
+    expect(item?.whyItMatters).toContain('Los objetivos se separan');
+    expect(item?.resolutionText).toContain('Usa Barkskin como respuesta a Plague Froth');
+    expect(item?.preventionKey).toContain('Barkskin');
+  });
+
+  it('no hace fallback por nombre/timing si boss+dificultad+abilityId no coinciden exactamente', () => {
+    const projection = buildRaiderEvidenceProjection(
+      summary({
+        defensiveSummary: {
+          mechanicPressureBreakdown: [mechanicPressureMetadata({ difficulty: 'Normal' })],
+        } as NightPlayerSummary['defensiveSummary'],
+      }),
+      {
+        defensiveManagementV2: null,
+        canonicalDefensive: canonical([
+          episode({
+            mechanicName: null,
+            mechanicDescription: null,
+            mechanicResolution: null,
+          }),
+        ]),
+        spellNameById: new Map([[22812, 'Barkskin']]),
+      },
+    );
+
+    const item = projection.items.find((row) => row.id === 'defensive|canonical|episode-1');
+    expect(item?.mechanicName).toBeNull();
+    expect(item?.title).toBe('CD disponible sin cubrir');
+    expect(item?.whyItMatters).toContain('IRIS verificó que Barkskin');
+  });
+
+  it('reserva hasta dos huecos del top 4 para coaching no defensivo cuando existe', () => {
+    const episodes = [1, 2, 3, 4].map((index) =>
+      episode({ episodeId: `episode-${index}`, causalGroupId: `group-${index}`, peakMs: 30_000 + index }),
+    );
+    const projection = buildRaiderEvidenceProjection(
+      summary({
+        mechanicFails: [
+          {
+            pullId: 'pull-1',
+            bossId: 'boss-1',
+            bossName: "Nek'zali the Soulcoiler",
+            difficulty: 'Heroic',
+            pullNumber: 1,
+            mechanicName: 'Avoidable One',
+            mechanicId: 900001,
+            category: 'avoidable-ground',
+            outcome: 'fail',
+            timeMs: 10_000,
+            damageTaken: 100_000,
+            aiNote: 'Sal de la zona.',
+            comparisonSource: 'fixed_threshold',
+            comparisonPercentile: null,
+            resolution: 'Muévete fuera antes del impacto.',
+          },
+          {
+            pullId: 'pull-1',
+            bossId: 'boss-1',
+            bossName: "Nek'zali the Soulcoiler",
+            difficulty: 'Heroic',
+            pullNumber: 1,
+            mechanicName: 'Avoidable Two',
+            mechanicId: 900002,
+            category: 'spread',
+            outcome: 'fail',
+            timeMs: 20_000,
+            damageTaken: 80_000,
+            aiNote: 'Sepárate del grupo.',
+            comparisonSource: 'fixed_threshold',
+            comparisonPercentile: null,
+            resolution: 'Mantén la separación asignada.',
+          },
+        ],
+      }),
+      {
+        defensiveManagementV2: null,
+        canonicalDefensive: canonical(episodes),
+        spellNameById: new Map([[22812, 'Barkskin']]),
+      },
+    );
+
+    expect(projection.coaching).toHaveLength(4);
+    expect(projection.coaching.filter((item) => item.kind === 'defensive')).toHaveLength(2);
+    expect(projection.coaching.filter((item) => item.kind === 'mechanic')).toHaveLength(2);
+    expect(projection.additionalCoachingCount).toBe(2);
+  });
+
+  it('permite cuatro cards defensivas si realmente no existe otro coaching accionable', () => {
+    const episodes = [1, 2, 3, 4, 5].map((index) =>
+      episode({ episodeId: `episode-${index}`, causalGroupId: `group-${index}`, peakMs: 30_000 + index }),
+    );
+    const projection = buildRaiderEvidenceProjection(summary(), {
+      defensiveManagementV2: null,
+      canonicalDefensive: canonical(episodes),
+      spellNameById: new Map([[22812, 'Barkskin']]),
+    });
+
+    expect(projection.coaching).toHaveLength(4);
+    expect(projection.coaching.every((item) => item.kind === 'defensive')).toBe(true);
+    expect(projection.additionalCoachingCount).toBe(1);
   });
 });
