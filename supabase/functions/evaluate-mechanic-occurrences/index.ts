@@ -165,9 +165,6 @@ Deno.serve(async (req: Request) => {
         .eq('difficulty', pull.difficulty)
         .eq('active', true)
         .not('ability_id', 'is', null),
-      // The applicable view is the canonical difficulty-filtered event population.
-      // Identity is resolved through active aliases because historical event rows
-      // legitimately have mechanic_key=null.
       client
         .from('applicable_pull_mechanic_events')
         .select(
@@ -239,9 +236,7 @@ Deno.serve(async (req: Request) => {
       policy_version: occurrence.policyVersion,
       context_resolver_version: occurrence.contextResolverVersion,
       occurrence_resolver_version: occurrence.occurrenceResolverVersion,
-      created_by: guard.userId,
       evaluated_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
     }));
 
     let result: MechanicOccurrenceEvaluationContract[] = [];
