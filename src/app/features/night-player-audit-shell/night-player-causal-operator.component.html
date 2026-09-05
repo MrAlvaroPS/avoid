@@ -1,0 +1,86 @@
+<section class="causal-operator" aria-labelledby="causal-operator-title">
+  <header class="operator-header">
+    <div>
+      <p class="operator-kicker">Fase 4B · Operación causal</p>
+      <h2 id="causal-operator-title">Materialización y cola E2E</h2>
+      <p>
+        Esta herramienta no calcula mecánicas. Solo encola y procesa el pipeline causal ya existente.
+        La sección de Mecánicas + Muertes seguirá en N/D hasta que su propio gate confirme cobertura fresca completa.
+      </p>
+    </div>
+    <button type="button" class="operator-link" [disabled]="busy()" (click)="refresh()">Refrescar estado</button>
+  </header>
+
+  @if (loading()) {
+    <div class="operator-state">Leyendo cola causal…</div>
+  } @else if (status(); as current) {
+    <div class="operator-stats">
+      <div><strong>{{ current.counts.targetPulls }}</strong><span>pulls objetivo</span></div>
+      <div><strong>{{ current.counts.freshDone }}</strong><span>markers full done</span></div>
+      <div><strong>{{ current.counts.queued }}</strong><span>jobs queued</span></div>
+      <div><strong>{{ current.counts.running }}</strong><span>jobs running</span></div>
+      <div><strong>{{ current.counts.error }}</strong><span>jobs error</span></div>
+      <div><strong>{{ current.counts.missingFullBackfill }}</strong><span>sin full marker</span></div>
+    </div>
+
+    <div class="operator-warning">
+      <strong>Importante:</strong>
+      “full done” aquí es un marker operativo, no una declaración de canonicalidad. El read-model de Fase 4A
+      vuelve a comprobar invalidaciones posteriores, cobertura y versiones antes de publicar un cero real.
+    </div>
+
+    <div class="operator-actions">
+      <button type="button" class="operator-primary" [disabled]="busy() || current.counts.targetPulls === 0" (click)="enqueue()">
+        {{ busy() ? 'Operando…' : 'Encolar / reparar evidencia causal' }}
+      </button>
+      <button type="button" class="operator-secondary" [disabled]="busy()" (click)="processBatch()">
+        Procesar hasta 10 jobs
+      </button>
+    </div>
+
+    <p class="global-queue-note">
+      El processor existente reclama la cola causal global. Un lote puede procesar jobs de otros reports antes de
+      llegar a este jugador; eso es intencionado y evita crear una segunda cola específica del dosier.
+    </p>
+
+    @if (enqueueResult(); as result) {
+      <div class="operator-result">
+        <strong>Encolado completado.</strong>
+        <span>{{ result.enqueuedPullIds.length }} nuevos/reintentos</span>
+        <span>{{ result.alreadyCompletePullIds.length }} ya completos</span>
+        <span>{{ result.deferredPullIds.length }} diferidos por jobs pendientes</span>
+        <span>{{ result.blockedPullIds.length }} bloqueados por error de invalidación</span>
+      </div>
+    }
+
+    @if (processResult(); as result) {
+      <div class="operator-result">
+        <strong>Lote procesado.</strong>
+        <span>{{ result.processed }} jobs ejecutados</span>
+        <span>{{ result.iterations }} iteraciones</span>
+        <span>{{ result.queueEmpty ? 'cola vacía' : 'pueden quedar jobs pendientes' }}</span>
+      </div>
+    }
+
+    @if (current.jobs.length) {
+      <details class="operator-jobs">
+        <summary>Ver jobs del jugador ({{ current.jobs.length }})</summary>
+        <div class="job-list">
+          @for (job of current.jobs; track job.pullId + ':' + job.jobType) {
+            <div class="job-row" [attr.data-status]="job.status">
+              <code>{{ job.pullId }}</code>
+              <span>{{ job.jobType }}</span>
+              <strong>{{ job.status }}</strong>
+              <small>{{ job.attempts }}/{{ job.maxAttempts }} intentos</small>
+              @if (job.lastError) { <small class="job-error">{{ job.lastError }}</small> }
+            </div>
+          }
+        </div>
+      </details>
+    }
+  }
+
+  @if (error()) {
+    <div class="operator-error" role="alert">{{ error() }}</div>
+  }
+</section>

@@ -1,0 +1,296 @@
+<section class="causal-audit" id="mecanicas" aria-labelledby="causal-audit-title">
+  <header class="section-heading">
+    <div>
+      <p class="section-kicker">Fase 4 · causalidad y responsabilidad</p>
+      <h2 id="causal-audit-title">Mecánicas y muertes</h2>
+      <p>
+        Esta sección consume únicamente el pipeline causal v3. Un impacto no equivale a culpabilidad:
+        las ofensas requieren occurrence evaluada, responsibility edge atribuible y evento del execution ledger.
+      </p>
+    </div>
+    <span class="causal-badge">Causal v3</span>
+  </header>
+
+  @if (loading()) {
+    <div class="state-card">Comprobando materialización causal…</div>
+  } @else if (error(); as loadError) {
+    <div class="state-card state-card--error">
+      <strong>No se pudo leer el pipeline causal.</strong>
+      <span>{{ loadError }}</span>
+    </div>
+  } @else if (data(); as audit) {
+    <article class="readiness-card" [attr.data-state]="audit.materializationState">
+      <div class="readiness-main">
+        <div class="readiness-state">
+          <span class="state-dot"></span>
+          <div>
+            <span>Estado runtime</span>
+            <strong>{{ materializationLabel(audit.materializationState) }}</strong>
+          </div>
+        </div>
+        <div class="readiness-metric">
+          <span>Backfills completos</span>
+          <strong>{{ audit.coverage.completedPulls }}/{{ audit.coverage.expectedPulls }}</strong>
+        </div>
+        <div class="readiness-metric">
+          <span>Pendientes</span>
+          <strong>{{ audit.coverage.pendingPulls }}</strong>
+        </div>
+        <div class="readiness-metric">
+          <span>Errores</span>
+          <strong>{{ audit.coverage.failedPulls }}</strong>
+        </div>
+      </div>
+
+      <div class="readiness-meta">
+        <span><b>Ledger</b> {{ audit.sourceVersions.ledgerEvaluatorVersion ?? 'N/D' }}</span>
+        <span><b>Context</b> {{ audit.sourceVersions.contextResolverVersion ?? 'N/D' }}</span>
+        <span><b>Occurrence</b> {{ audit.sourceVersions.occurrenceResolverVersion ?? 'N/D' }}</span>
+      </div>
+    </article>
+
+    @if (audit.materializationState !== 'complete') {
+      <article class="blocker-card">
+        <div class="blocker-icon">!</div>
+        <div>
+          <strong>No se publican totales incompletos como si fueran cero.</strong>
+          <p>
+            El marker de completitud es <code>full_execution_backfill=done</code> para cada pull válido participado.
+            Ese job encadena occurrences, responsibility edges y execution ledger. Hasta completar ese universo,
+            Mecánicas y Muertes permanecen N/D/partial y no caen al dosier legacy.
+          </p>
+        </div>
+      </article>
+    }
+
+    @if (audit.integrityIssues.length) {
+      <details class="integrity-panel">
+        <summary>
+          <span>Diagnóstico de integridad</span>
+          <strong>{{ audit.integrityIssues.length }}</strong>
+        </summary>
+        <ul>
+          @for (issue of audit.integrityIssues; track issue) {
+            <li>{{ issue }}</li>
+          }
+        </ul>
+      </details>
+    }
+
+    <div class="kpi-grid">
+      <article class="kpi-card" [attr.data-status]="audit.actionableMechanicIncidents.status">
+        <div class="kpi-topline">
+          <span>Incidentes atribuibles</span>
+          <span class="claim-state">{{ statusLabel(audit.actionableMechanicIncidents.status) }}</span>
+        </div>
+        <strong class="kpi-value">{{ claimValue(audit.actionableMechanicIncidents) }}</strong>
+        <p>{{ audit.actionableMechanicIncidents.definition }}</p>
+        <div class="audit-foot">
+          <span>{{ audit.mechanicOffenses.length }} filas observadas</span>
+          <code>{{ audit.actionableMechanicIncidents.formula ?? 'N/D' }}</code>
+        </div>
+      </article>
+
+      <article class="kpi-card" [attr.data-status]="audit.avoidableSuccess.status">
+        <div class="kpi-topline">
+          <span>Éxito evitable</span>
+          <span class="claim-state">{{ statusLabel(audit.avoidableSuccess.status) }}</span>
+        </div>
+        <strong class="kpi-value">{{ claimValue(audit.avoidableSuccess) }}</strong>
+        <p>{{ audit.avoidableSuccess.definition }}</p>
+        <div class="audit-foot">
+          <span>Denominador player-level pendiente</span>
+          <code>No derivado desde una vista de fallos</code>
+        </div>
+      </article>
+
+      <article class="kpi-card" [attr.data-status]="audit.totalDeaths.status">
+        <div class="kpi-topline">
+          <span>Muertes</span>
+          <span class="claim-state">{{ statusLabel(audit.totalDeaths.status) }}</span>
+        </div>
+        <strong class="kpi-value">{{ claimValue(audit.totalDeaths) }}</strong>
+        <p>{{ audit.totalDeaths.definition }}</p>
+        <div class="audit-foot">
+          <span>{{ audit.deaths.length }} eventos observados</span>
+          <code>{{ audit.totalDeaths.formula ?? 'N/D' }}</code>
+        </div>
+      </article>
+    </div>
+
+    @if (audit.repeatedMechanicPatterns.length) {
+      <article class="pattern-card">
+        <header class="subsection-heading">
+          <div>
+            <p class="section-kicker">Solo con cobertura completa</p>
+            <h3>Patrones mecánicos repetidos</h3>
+          </div>
+          <span>{{ audit.repeatedMechanicPatterns.length }} mecánicas</span>
+        </header>
+        <div class="pattern-grid">
+          @for (pattern of audit.repeatedMechanicPatterns; track pattern.mechanicKey) {
+            <div class="pattern-row">
+              <div>
+                <code>{{ pattern.mechanicKey }}</code>
+                <span>{{ pattern.reasonCodes.join(' · ') }}</span>
+              </div>
+              <div class="pattern-count">
+                <strong>{{ pattern.count }}</strong>
+                <span>incidentes · {{ pattern.pullIds.length }} pulls</span>
+              </div>
+            </div>
+          }
+        </div>
+      </article>
+    }
+
+    <article class="evidence-card">
+      <header class="subsection-heading">
+        <div>
+          <p class="section-kicker">Occurrence + responsibility + ledger</p>
+          <h3>Ofensas mecánicas atribuibles</h3>
+        </div>
+        <span>{{ audit.mechanicOffenses.length }} observadas</span>
+      </header>
+
+      @if (audit.mechanicOffenses.length) {
+        <div class="table-wrap">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>Pull</th>
+                <th>Tiempo</th>
+                <th>Mechanic key</th>
+                <th>Relación</th>
+                <th>Reason</th>
+                <th>Confianza</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (offense of audit.mechanicOffenses; track offense.eventId) {
+                <tr>
+                  <td><a [href]="offense.wclUrl" target="_blank" rel="noopener">{{ offense.pullLabel }}</a></td>
+                  <td class="mono">{{ formatDuration(offense.timestampMs) }}</td>
+                  <td><code>{{ offense.mechanicKey }}</code><span class="occurrence">#{{ offense.occurrenceIndex }}</span></td>
+                  <td>{{ mechanicRelationshipLabel(offense.relationship) }}</td>
+                  <td><code>{{ offense.reasonCode }}</code></td>
+                  <td>{{ offense.confidence }}</td>
+                  <td class="action-cell">
+                    <button type="button" (click)="toggleMechanic(offense)">
+                      {{ expandedMechanicEventId() === offense.eventId ? 'Cerrar' : 'Auditar' }}
+                    </button>
+                  </td>
+                </tr>
+                @if (expandedMechanicEventId() === offense.eventId) {
+                  <tr class="detail-row">
+                    <td colspan="7">
+                      <div class="detail-panel">
+                        <div class="detail-grid">
+                          <div><span>Execution event</span><code>{{ offense.eventId }}</code></div>
+                          <div><span>Occurrence</span><code>{{ offense.occurrenceId }}</code></div>
+                          <div><span>Policy version</span><b>{{ offense.policyVersion ?? 'N/D' }}</b></div>
+                          <div><span>Severity / priority</span><b>{{ offense.severity ?? 'N/D' }} / {{ offense.priority ?? 'N/D' }}</b></div>
+                          <div><span>Context resolver</span><code>{{ offense.contextResolverVersion }}</code></div>
+                          <div><span>Occurrence resolver</span><code>{{ offense.occurrenceResolverVersion }}</code></div>
+                          <div><span>Ledger evaluator</span><code>{{ offense.ledgerEvaluatorVersion }}</code></div>
+                          <div><span>Evidence refs</span><b>{{ offense.evidence.length }}</b></div>
+                        </div>
+                        <pre>{{ evidenceJson(offense.evidencePayload) }}</pre>
+                        <a [href]="offense.wclUrl" target="_blank" rel="noopener">Abrir fight exacto en WCL ↗</a>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        </div>
+      } @else {
+        <div class="empty-state">
+          @if (audit.materializationState === 'complete') {
+            No hay ofensas mecánicas atribuibles para este jugador en el universo completamente materializado.
+          } @else {
+            No hay una población causal completa con la que afirmar si existen o no ofensas mecánicas.
+          }
+        </div>
+      }
+    </article>
+
+    <article class="evidence-card">
+      <header class="subsection-heading">
+        <div>
+          <p class="section-kicker">Execution ledger · domain=death</p>
+          <h3>Muertes y clasificación causal</h3>
+        </div>
+        <span>{{ audit.deaths.length }} observadas</span>
+      </header>
+
+      @if (audit.deaths.length) {
+        <div class="table-wrap">
+          <table class="audit-table death-table">
+            <thead>
+              <tr>
+                <th>Pull</th>
+                <th>Tiempo</th>
+                <th>Clasificación</th>
+                <th>Reason code</th>
+                <th>Confianza</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (death of audit.deaths; track death.eventId) {
+                <tr>
+                  <td><a [href]="death.wclUrl" target="_blank" rel="noopener">{{ death.pullLabel }}</a></td>
+                  <td class="mono">{{ formatDuration(death.timestampMs) }}</td>
+                  <td>
+                    <span class="verdict-chip" [attr.data-tone]="deathTone(death)">{{ deathVerdictLabel(death) }}</span>
+                  </td>
+                  <td><code>{{ death.reasonCode }}</code></td>
+                  <td>{{ death.confidence }}</td>
+                  <td class="action-cell">
+                    <button type="button" (click)="toggleDeath(death)">
+                      {{ expandedDeathEventId() === death.eventId ? 'Cerrar' : 'Auditar' }}
+                    </button>
+                  </td>
+                </tr>
+                @if (expandedDeathEventId() === death.eventId) {
+                  <tr class="detail-row">
+                    <td colspan="6">
+                      <div class="detail-panel">
+                        <div class="detail-grid">
+                          <div><span>Execution event</span><code>{{ death.eventId }}</code></div>
+                          <div><span>Verdict</span><b>{{ death.verdict }}</b></div>
+                          <div><span>Penalty eligible</span><b>{{ death.penaltyEligible ? 'Sí' : 'No' }}</b></div>
+                          <div><span>Primary penalty</span><b>{{ death.primaryPenalty ? 'Sí' : 'No' }}</b></div>
+                          <div><span>Severity / priority</span><b>{{ death.severity ?? 'N/D' }} / {{ death.priority ?? 'N/D' }}</b></div>
+                          <div><span>Context resolver</span><code>{{ death.contextResolverVersion }}</code></div>
+                          <div><span>Ledger evaluator</span><code>{{ death.ledgerEvaluatorVersion }}</code></div>
+                          <div><span>Confidence</span><b>{{ death.confidence }}</b></div>
+                        </div>
+                        <p class="detail-warning">
+                          La clasificación mostrada es la que ya materializó el ledger. El dosier no transforma este payload en una causa nueva.
+                        </p>
+                        <pre>{{ evidenceJson(death.evidencePayload) }}</pre>
+                        <a [href]="death.wclUrl" target="_blank" rel="noopener">Abrir fight exacto en WCL ↗</a>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        </div>
+      } @else {
+        <div class="empty-state">
+          @if (audit.materializationState === 'complete') {
+            No hay eventos de muerte para este jugador en el universo completamente materializado.
+          } @else {
+            No hay una población causal completa con la que afirmar que el jugador tuvo cero muertes.
+          }
+        </div>
+      }
+    </article>
+  }
+</section>

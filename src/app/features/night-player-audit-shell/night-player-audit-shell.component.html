@@ -1,0 +1,186 @@
+<main class="audit-shell">
+  <a
+    class="back-link"
+    [routerLink]="['/report', reportCode(), 'player', playerName()]"
+  >
+    ← Volver al dosier actual
+  </a>
+
+  <header class="audit-hero">
+    <div class="hero-copy">
+      <p class="eyebrow">IRIS · DOSIER AUDITABLE</p>
+      <h1>{{ playerName() }}</h1>
+      <p class="hero-subtitle">
+        Consola de auditoría del pull · report <code>{{ reportCode() }}</code>
+      </p>
+    </div>
+
+    <div class="hero-actions">
+      <div class="integrity-pill" aria-label="Estado de datos parcial">
+        <span class="integrity-dot"></span>
+        Parcial
+      </div>
+      <button class="provenance-btn" type="button" (click)="openProvenance()">
+        Ver procedencia
+      </button>
+    </div>
+  </header>
+
+  <section class="integrity-banner" aria-labelledby="integrity-title">
+    <div class="integrity-icon" aria-hidden="true">i</div>
+    <div class="integrity-copy">
+      <p class="integrity-kicker">Estado de datos</p>
+      <h2 id="integrity-title">Fase 4 tiene operador y acceptance gate; el cutover sigue condicionado al E2E real</h2>
+      <p>
+        Mecánicas y muertes consumen únicamente causal v3. El operador de Fase 4B mueve la cola causal
+        existente y Fase 4C comprueba materialización, versiones, trust y ownership. Aun con todos los
+        checks automáticos verdes, el estado máximo es “listo para comparación manual”: Attribution
+        Safety v1 (#17) sigue siendo un gate humano obligatorio antes de aceptar el cutover.
+      </p>
+    </div>
+    <div class="integrity-count" title="Claims registrados en el catálogo de ownership">
+      <strong>{{ provenanceRows.length }}</strong>
+      <span>claims con owner</span>
+    </div>
+  </section>
+
+  <nav class="section-nav" aria-label="Secciones del dosier auditable">
+    <span class="section-tab">Visión general</span>
+    <a class="section-tab section-tab--active" href="#pull-ledger">Pull Ledger · Fase 2</a>
+    <a class="section-tab section-tab--active" href="#defensivos">Defensivos · Fase 3</a>
+    <a class="section-tab section-tab--active" href="#mecanicas">Mecánicas + muertes · Fase 4</a>
+  </nav>
+
+  <section class="shell-grid">
+    <article class="foundation-card">
+      <div class="card-heading">
+        <div>
+          <p class="card-kicker">Fundación de auditoría</p>
+          <h2>Una sola verdad, visible y reconstruible</h2>
+        </div>
+        <span class="ready-badge">Fases 1–3 + F4 causal</span>
+      </div>
+
+      <div class="foundation-grid">
+        <div class="foundation-item">
+          <span class="foundation-index">01</span>
+          <h3>Claim explícito</h3>
+          <p>
+            Cada valor viaja con status, scope, evidencia, versión e integridad. El shell solo
+            presenta esos contratos.
+          </p>
+        </div>
+        <div class="foundation-item">
+          <span class="foundation-index">02</span>
+          <h3>Owner único</h3>
+          <p>
+            La pantalla no decide quién tiene razón. El registro de ownership indica qué read-model
+            es responsable de cada claim.
+          </p>
+        </div>
+        <div class="foundation-item">
+          <span class="foundation-index">03</span>
+          <h3>Evidencia trazable</h3>
+          <p>
+            Pull refs, DefensiveEpisodes, occurrences y execution events se enlazan sin fabricar
+            filtros ni reinterpretar scoring en frontend.
+          </p>
+        </div>
+      </div>
+    </article>
+
+    <aside class="next-card">
+      <p class="card-kicker">Gate operativo actual</p>
+      <h2>Aceptar materialización causal de Fase 4</h2>
+      <p>
+        El código ya puede operar la cola y evaluar automáticamente el resultado. El siguiente paso
+        real es desplegar esta rama de integración en un entorno officer, materializar un corpus y
+        ejecutar la comparación legacy → Attribution Safety v1 → causal v3.
+      </p>
+      <div class="next-rule">
+        <span>Regla activa</span>
+        <strong>No avanzar a Fase 5 sin E2E aceptado</strong>
+      </div>
+    </aside>
+  </section>
+
+  <app-night-player-pull-ledger
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+  />
+
+  <app-night-player-defensive-audit
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+  />
+
+  <app-night-player-causal-operator
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+    (changed)="refreshCausalAudit()"
+  />
+
+  <app-night-player-mechanic-death-audit
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+    [refreshToken]="causalRefreshToken()"
+  />
+
+  <app-night-player-causal-acceptance
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+    [refreshToken]="causalRefreshToken()"
+  />
+</main>
+
+@if (provenanceOpen()) {
+  <div class="drawer-backdrop" (click)="closeProvenance()">
+    <aside
+      class="provenance-drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="provenance-title"
+      (click)="$event.stopPropagation()"
+    >
+      <header class="drawer-header">
+        <div>
+          <p class="card-kicker">Truth Catalog</p>
+          <h2 id="provenance-title">Procedencia contractual</h2>
+          <p>
+            Registro de ownership. Un owner registrado no implica que el claim esté disponible para
+            este report; el estado runtime sigue viajando en cada AuditClaim.
+          </p>
+        </div>
+        <button class="drawer-close" type="button" aria-label="Cerrar procedencia" (click)="closeProvenance()">
+          ×
+        </button>
+      </header>
+
+      <div class="source-legend" aria-label="Tipos de fuente">
+        @for (source of sourceKinds; track source) {
+          <span class="source-chip" [attr.data-tone]="sourceMeta[source].tone">
+            {{ sourceMeta[source].label }}
+          </span>
+        }
+      </div>
+
+      <div class="provenance-list">
+        @for (row of provenanceRows; track row.id) {
+          <article class="provenance-row">
+            <div class="provenance-row-top">
+              <code>{{ row.id }}</code>
+              <span class="source-chip" [attr.data-tone]="sourceMeta[row.source].tone">
+                {{ sourceMeta[row.source].label }}
+              </span>
+            </div>
+            <strong>{{ row.owner }}</strong>
+            <p>{{ sourceMeta[row.source].description }}</p>
+            @if (row.note) {
+              <p class="owner-note">{{ row.note }}</p>
+            }
+          </article>
+        }
+      </div>
+    </aside>
+  </div>
+}
