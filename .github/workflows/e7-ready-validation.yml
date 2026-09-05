@@ -1,7 +1,7 @@
 name: E7 READY validation
 on:
   push:
-    branches: [feature/mechanics, fix/defensive-evidence-claims-shadow-v5, fix/canonical-defensive-coaching]
+    branches: [feature/mechanics, fix/defensive-evidence-claims-shadow-v5]
   workflow_dispatch:
 jobs:
   validate:
@@ -18,7 +18,6 @@ jobs:
       - run: npm ci
       - run: deno install --allow-scripts
       - run: npx vitest run supabase/functions/_shared/defensive-episode-verdict.e7-low-confidence.spec.ts src/app/shared/defensive-evidence-v5.spec.ts src/app/shared/defensive-evidence-v6.spec.ts src/app/shared/defensive-temporal-coverage.spec.ts src/app/shared/defensive-version-identity.spec.ts src/app/shared/protection-divine-shield-final-stand.spec.ts
-      - run: npx vitest run src/app/core/raider-evidence-projection.canonical-coaching.spec.ts
       - run: npm run verify:defensive-contract
       - run: npm run verify:causal-schema
       - run: npm run verify:causal-runtime
