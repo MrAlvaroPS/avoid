@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MECHANIC_ATTRIBUTION_SAFETY_VERSION,
   classifyMechanicAttribution,
   isPunitivePersonalMechanicEvent,
 } from '../../../supabase/functions/_shared/mechanic-attribution';
 
 describe('mechanic attribution safety v1', () => {
-  it('lets explicit personal responsibility create a personal candidate', () => {
+  it('keeps an explicitly personal failure only inside the previous punitive categories', () => {
     expect(
       classifyMechanicAttribution({
         category: 'avoidable-ground',
@@ -34,6 +35,30 @@ describe('mechanic attribution safety v1', () => {
     ).toEqual({ kind: 'role_or_raid', source: 'responsibility' });
   });
 
+  it('does not expand v1 scoring to new categories just because responsibility is personal', () => {
+    expect(
+      classifyMechanicAttribution({
+        category: 'tankbuster',
+        responsibility: 'personal',
+      }),
+    ).toEqual({ kind: 'unclassified', source: 'unsupported_personal_category' });
+    expect(
+      isPunitivePersonalMechanicEvent({
+        category: 'tankbuster',
+        responsibility: 'personal',
+      }),
+    ).toBe(false);
+  });
+
+  it('fails closed for personal responsibility without a supported category', () => {
+    expect(
+      classifyMechanicAttribution({
+        category: null,
+        responsibility: 'personal',
+      }),
+    ).toEqual({ kind: 'unclassified', source: 'unsupported_personal_category' });
+  });
+
   it('keeps the old category rule only for historical rows without responsibility', () => {
     expect(
       classifyMechanicAttribution({
@@ -60,5 +85,11 @@ describe('mechanic attribution safety v1', () => {
     expect(
       isPunitivePersonalMechanicEvent({ category: null, responsibility: null }),
     ).toBe(false);
+  });
+
+  it('is explicitly versioned', () => {
+    expect(MECHANIC_ATTRIBUTION_SAFETY_VERSION).toBe(
+      'mechanic-attribution-safety@1.0.0',
+    );
   });
 });
