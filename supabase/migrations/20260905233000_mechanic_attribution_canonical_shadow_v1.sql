@@ -17,7 +17,7 @@ create table if not exists mechanic_attribution_shadow_evaluations (
   attribution_status text not null check (attribution_status in (
     'verified', 'role_only', 'raid_only', 'unresolved', 'not_applicable'
   )),
-  reason_code text not null check (reason_code in (
+  attribution_reason text not null check (attribution_reason in (
     'NO_FAILURE_TO_ATTRIBUTE',
     'OCCURRENCE_NOT_EVALUABLE',
     'IDENTITY_OR_POLICY_MISSING',
@@ -62,7 +62,7 @@ create table if not exists mechanic_attribution_shadow_evaluations (
 create index if not exists mechanic_attribution_shadow_pull_idx
   on mechanic_attribution_shadow_evaluations (pull_id, occurrence_index);
 create index if not exists mechanic_attribution_shadow_status_idx
-  on mechanic_attribution_shadow_evaluations (attribution_status, reason_code, evaluated_at desc);
+  on mechanic_attribution_shadow_evaluations (attribution_status, attribution_reason, evaluated_at desc);
 create index if not exists mechanic_attribution_shadow_mechanic_idx
   on mechanic_attribution_shadow_evaluations (
     boss_id, difficulty, mechanic_key, occurrence_resolver_version, evaluator_version
