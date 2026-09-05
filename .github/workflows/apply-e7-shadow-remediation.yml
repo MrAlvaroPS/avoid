@@ -1,0 +1,66 @@
+name: Apply E7 shadow remediation
+
+on:
+  push:
+    branches:
+      - fix/e7-shadow-confidence-window-geometry
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/e7-shadow-confidence-window-geometry
+          fetch-depth: 0
+
+      - name: Apply focused E7 codemod
+        run: python3 scripts/apply-e7-shadow-remediation.py
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Targeted regression tests
+        run: npx vitest run src/app/shared/effective-defensives.spec.ts src/app/shared/defensive-episode-evaluator.spec.ts
+
+      - name: Canonical defensive contract checks
+        run: |
+          npm run verify:defensive-contract
+          npm run verify:causal-schema
+          npm run verify:causal-runtime
+
+      - name: Angular build
+        run: npm run build
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno typecheck focused pipeline
+        run: |
+          deno check --node-modules-dir=auto supabase/functions/_shared/effective-defensives.ts
+          deno check --node-modules-dir=auto supabase/functions/_shared/damage-pressure-windows.ts
+          deno check --node-modules-dir=auto supabase/functions/_shared/defensive-episode-evaluator.ts
+          deno check --node-modules-dir=auto supabase/functions/_shared/defensive-episode-ledger-events.ts
+
+      - name: Validate version bumps and diff
+        run: |
+          grep -q "effective-defensive-semantics@1.3.2" supabase/functions/_shared/effective-defensives.ts
+          grep -q "episode-evaluator@3" supabase/functions/_shared/defensive-episode-ledger-events.ts
+          grep -q "isDamageEventWithinPressureWindow" supabase/functions/_shared/defensive-episode-evaluator.ts
+          git diff --check
+          git diff --stat
+
+      - name: Commit integrated patch
+        run: |
+          rm -f scripts/apply-e7-shadow-remediation.py
+          rm -f .github/workflows/apply-e7-shadow-remediation.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(defensives): close E7 confidence and window geometry gaps"
+          git push origin HEAD:fix/e7-shadow-confidence-window-geometry
