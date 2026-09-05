@@ -1,0 +1,71 @@
+name: Execute defensive shadow v5
+
+on:
+  push:
+    branches:
+      - ops/shadow-v5-execution-20260905
+
+permissions:
+  contents: read
+
+jobs:
+  shadow-v5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BASE_URL: https://qiniulkhivpvbjoquvon.supabase.co/functions/v1/e6-shadow-28abf632c7d8d2d4
+      EXPECTED_COMMIT: 3570c06b7d77c87f84c9b6ea13e3dc74d70249ef
+    steps:
+      - name: Health and version gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          HEALTH="$(curl --fail --silent --show-error --max-time 60 "${BASE_URL}?action=health")"
+          echo "$HEALTH" | jq .
+          test "$(echo "$HEALTH" | jq -r '.ok')" = "true"
+          test "$(echo "$HEALTH" | jq -r '.sourceCommit')" = "$EXPECTED_COMMIT"
+          test "$(echo "$HEALTH" | jq -r '.gameBuild')" = "12.1.0.68914"
+          test "$(echo "$HEALTH" | jq -r '.resolver')" = "effective-defensives@2.2.0"
+          test "$(echo "$HEALTH" | jq -r '.semanticResolver')" = "effective-defensive-semantics@1.4.0"
+          test "$(echo "$HEALTH" | jq -r '.evaluator')" = "episode-evaluator@5"
+
+      - name: Create fresh generation and process full canonical corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+          START="$(curl --fail --silent --show-error --max-time 60 "${BASE_URL}?action=start")"
+          echo "$START" | jq .
+          test "$(echo "$START" | jq -r '.ok')" = "true"
+          test "$(echo "$START" | jq -r '.reused')" = "false"
+          GENERATION_ID="$(echo "$START" | jq -r '.generation.id')"
+          test -n "$GENERATION_ID"
+          test "$GENERATION_ID" != "null"
+          echo "GENERATION_ID=$GENERATION_ID"
+          echo "generation_id=$GENERATION_ID" >> "$GITHUB_ENV"
+
+          DONE=false
+          for i in $(seq 1 120); do
+            echo "--- process call $i ---"
+            RESPONSE="$(curl --fail --silent --show-error --max-time 150 "${BASE_URL}?action=process&generation_id=${GENERATION_ID}")"
+            echo "$RESPONSE" | jq .
+            test "$(echo "$RESPONSE" | jq -r '.ok')" = "true"
+            ERROR="$(echo "$RESPONSE" | jq -r '.error // empty')"
+            if [ -n "$ERROR" ]; then
+              echo "Shadow processing error: $ERROR" >&2
+              exit 1
+            fi
+            if [ "$(echo "$RESPONSE" | jq -r '.done // false')" = "true" ]; then
+              DONE=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$DONE" != "true" ]; then
+            echo "Shadow did not reach done=true within 120 calls" >&2
+            exit 1
+          fi
+
+      - name: Final marker
+        shell: bash
+        run: echo "Completed generation: ${generation_id}"
