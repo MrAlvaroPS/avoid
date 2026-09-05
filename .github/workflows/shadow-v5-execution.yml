@@ -68,4 +68,5 @@ jobs:
 
       - name: Final marker
         shell: bash
-        run: echo "Completed generation: ${generation_id}"
+        run: |
+          echo "Completed generation: ${generation_id}"
