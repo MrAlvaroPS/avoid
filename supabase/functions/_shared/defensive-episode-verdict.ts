@@ -56,63 +56,29 @@ export interface EpisodeWindow {
   peakMs: number;
 }
 
-/**
- * UN candidato ya resuelto para UN episodio (§6 del plan de continuación —
- * "explicit candidate contract"). Ningún campo mezcla dos preguntas
- * distintas: "¿el spell puede cubrir este daño?" (damageApplicability) es
- * independiente de "¿este cast concreto estuvo bien cronometrado?"
- * (temporalCastCoverage/temporalOpportunity).
- */
 export interface EpisodeVerdictCandidate {
   spellId: number;
-  /** isDefensiveKitMember del resolver — puede acreditar Uso (credit_only incluido) aunque no pueda generar missed_ready. */
   isDefensiveKitMember: boolean;
-  /** createsMissableOpportunity del resolver — el único que puede producir missed_ready. */
   createsMissableOpportunity: boolean;
-  /**
-   * true solo cuando la relevancia personal de ESTE candidato está
-   * materialmente sin resolver (semántica pending, buildPresence unknown,
-   * resolutionStatus conflict/unresolved, o una regla runtime sin resolver
-   * que podría cambiar su membership) — computado por el caller a partir de
-   * ResolvedDefensive, nunca adivinado aquí. Nunca crea un miss; puede
-   * bloquear una conclusión positiva de ausencia/disponibilidad.
-   */
   materiallyUnresolved: boolean;
-  /** "¿puede este spell cubrir mecánicamente el daño de ESTE episodio?" — veredicto combinado de canDefensiveCover()/combineHitApplicability() sobre los hits relevantes. */
   damageApplicability: ApplicabilityVerdict;
-  /** "¿pudo este defensivo, por su relación temporal, ser una oportunidad legítima para este episodio?" — independiente de cualquier cast concreto. */
   temporalOpportunity: ApplicabilityVerdict;
-  /** "¿el/los cast(s) realmente usados demuestran cobertura de ESTE episodio?" — un proactivo tarde puede tener engagement=true, temporalOpportunity='yes', temporalCastCoverage='no'. */
   temporalCastCoverage: ApplicabilityVerdict;
-  /** Cast real dentro de la ventana de decisión/efecto relevante — señal de Uso, independiente de si cubrió algo. */
   engagement: boolean;
   statusAtPeak: DefensiveCooldownStatus;
-  /** Confidence de la evidencia de ESTE candidato — nunca la más débil de todo el kit (§11). */
   confidence: EvaluationConfidence;
-  /** Auditoría (hits evaluados, razones de daño/timing) — nunca se parsea para scoring; solo explica el resultado sin tener que refetchear WCL. */
   evidence: Record<string, unknown>;
 }
 
 export interface EpisodeVerdictResult {
-  /** KPI Uso — independiente de si la respuesta fue correcta. */
   usageEngaged: boolean;
   usedSpellIds: number[];
-  /** KPI Response — el estado canónico de 7 valores. */
   responseVerdict: ResponseVerdict;
   reason: string;
   coveredBySpellId: number | null;
-  /** Confidence decision-scoped — de la evidencia que decidió el veredicto, nunca contaminada por un candidato no relacionado (§11). */
   confidence: EvaluationConfidence;
-  /** spellIds cuya evidencia decidió directamente el veredicto. */
   decisiveSpellIds: number[];
-  /** spellIds de candidatos sin resolver/inciertos que bloquearon una conclusión positiva (vacío cuando el veredicto no necesitó ningún bloqueador). */
   uncertaintyBlockers: number[];
-  /**
-   * Interno — true solo cuando el veredicto base es 'uncertain' PORQUE todo
-   * lo estratégico-aplicable-demostrado está on_cooldown/activo (el único
-   * caso que resolveEpisodeVerdictWithCausalAvailability puede promocionar a
-   * unavailable_legitimate).
-   */
   causalUpgradeEligible?: boolean;
 }
 
@@ -126,30 +92,16 @@ function bySpellId<T extends { spellId: number }>(a: T, b: T): number {
   return a.spellId - b.spellId;
 }
 
-/**
- * Veredicto de UN episodio a partir de candidatos ya resueltos. No conoce la
- * cadena causal de episodios anteriores — cuando el resultado base es
- * 'uncertain' porque todo lo estratégico-aplicable está en cooldown,
- * resolveEpisodeVerdictWithCausalAvailability() puede refinarlo más abajo.
- *
- * `excluded` no lo produce esta función — lo decide el caller ANTES de
- * llamar (wipe call, episodio en/después del cutoff de evaluación) sin
- * evaluar el episodio en absoluto.
- *
- * Precedencia exacta (§7 del plan de continuación):
- *  1) VERIFIED COVER
- *  2) USED BUT POSSIBLY VALID UNKNOWN ACTION
- *  3) POSITIVE READY OPPORTUNITY
- *  4) NO POSITIVE MISSABLE OPPORTUNITY → no_applicable_resource / uncertain
- *  5) (en el wrapper causal) TODO APLICABLE ESTÁ INDISPONIBLE
- */
+function isPunitiveConfidence(confidence: EvaluationConfidence): boolean {
+  return confidence === 'verified' || confidence === 'inferred';
+}
+
 export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): EpisodeVerdictResult {
   const sorted = [...candidates].sort(bySpellId);
   const engagedKitMembers = sorted.filter((c) => c.isDefensiveKitMember && c.engagement);
   const usageEngaged = engagedKitMembers.length > 0;
   const usedSpellIds = [...new Set(engagedKitMembers.map((c) => c.spellId))].sort((a, b) => a - b);
 
-  // 1) VERIFIED COVER — cualquier miembro del kit usado (credit_only incluido) con daño+timing demostrados.
   const verifiedCovers = sorted.filter(
     (c) => c.isDefensiveKitMember && c.engagement && c.damageApplicability === 'yes' && c.temporalCastCoverage === 'yes',
   );
@@ -167,9 +119,6 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
     };
   }
 
-  // 2) USED BUT POSSIBLY VALID UNKNOWN — un miembro del kit realmente usado
-  // cuya cobertura no está demostrada ni descartada. Nunca se acusa mientras
-  // ese cast pudiera haber sido cobertura válida.
   const usedUnknown = sorted.filter(
     (c) =>
       c.isDefensiveKitMember &&
@@ -191,22 +140,18 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
     };
   }
 
-  // A partir de aquí nada de lo usado (si hubo algo) sirvió con evidencia
-  // real — Uso puede seguir acreditado por usageEngaged de arriba; Response
-  // sigue evaluando como si no hubiera cobertura.
-
-  // 3) POSITIVE READY OPPORTUNITY — estrictamente damageApplicability='yes' Y temporalOpportunity='yes'.
   const missable = sorted.filter(
     (c) => c.createsMissableOpportunity && c.damageApplicability === 'yes' && c.temporalOpportunity === 'yes',
   );
-  const ready = missable.filter((c) => c.statusAtPeak === 'available_unused');
+  const otherwiseReady = missable.filter((c) => c.statusAtPeak === 'available_unused');
+  const ready = otherwiseReady.filter((c) => isPunitiveConfidence(c.confidence));
   if (ready.length) {
     const winner = ready[0];
     return {
       usageEngaged,
       usedSpellIds,
       responseVerdict: 'missed_ready',
-      reason: `spellId ${winner.spellId} estaba disponible y su aplicabilidad de daño y su oportunidad temporal están demostradas; no se usó.`,
+      reason: `spellId ${winner.spellId} estaba disponible y su aplicabilidad de daño, oportunidad temporal y confianza punitiva están demostradas; no se usó.`,
       coveredBySpellId: null,
       confidence: winner.confidence,
       decisiveSpellIds: [winner.spellId],
@@ -214,7 +159,21 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
     };
   }
 
-  // 4) NO POSITIVE MISSABLE OPPORTUNITY — no_applicable_resource (positivo) vs uncertain (bloqueado por algo sin resolver).
+  const lowConfidenceReady = otherwiseReady.filter((c) => !isPunitiveConfidence(c.confidence));
+  if (lowConfidenceReady.length) {
+    return {
+      usageEngaged,
+      usedSpellIds,
+      responseVerdict: 'uncertain',
+      reason: 'Hay defensivos estratégicos aparentemente disponibles, pero la confianza de la evidencia no permite convertirlos en missed_ready.',
+      coveredBySpellId: null,
+      confidence: weakestConfidence(...lowConfidenceReady.map((c) => c.confidence)),
+      decisiveSpellIds: lowConfidenceReady.map((c) => c.spellId).sort((a, b) => a - b),
+      uncertaintyBlockers: lowConfidenceReady.map((c) => c.spellId).sort((a, b) => a - b),
+      causalUpgradeEligible: false,
+    };
+  }
+
   const strategic = sorted.filter((c) => c.createsMissableOpportunity || c.materiallyUnresolved);
   if (!strategic.length) {
     return {
@@ -264,10 +223,6 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
     };
   }
 
-  // Todo lo estratégico-aplicable-demostrado está on_cooldown/activo en el
-  // pico — la causa exacta exige la cadena de episodios anteriores (ver
-  // resolveEpisodeVerdictWithCausalAvailability). Sin ella, uncertain: no se
-  // acusa sin poder demostrarlo.
   return {
     usageEngaged,
     usedSpellIds,
@@ -281,7 +236,6 @@ export function resolveEpisodeVerdict(candidates: EpisodeVerdictCandidate[]): Ep
   };
 }
 
-/** Contexto temporal mínimo necesario para reconstruir si un cast pasado cubrió un episodio anterior — mismos campos que consume evaluateTemporalCoverage(), sin duplicar su lógica. */
 export interface CausalTimingContext {
   timingRelation: TimingRelation | null;
   effectiveDurationMs: number | null;
@@ -290,22 +244,11 @@ export interface CausalTimingContext {
 }
 
 export interface CausalAvailabilityResult {
-  /** missed_due_to_mistime NO es alcanzable desde esta función todavía — ver cabecera del fichero. */
   classification: 'unavailable_legitimate' | 'uncertain';
   reason: string;
   justifyingEpisodeIndex?: number;
 }
 
-/**
- * Por qué UNA habilidad concreta no estaba lista en el pico de
- * episodes[episodeIndex]: busca el cast que la puso en cooldown y comprueba,
- * retrocediendo por los episodios ANTERIORES, si ese cast demuestra
- * cobertura de alguno de verdad — vía el MISMO evaluador temporal puro que
- * decide el candidato actual (nunca una heurística de mechanisms aparte).
- *
- * Busca desde el episodio más cercano hacia atrás — el primer match es la
- * explicación más probable, no cualquier coincidencia lejana.
- */
 export function reconstructCausalAvailability(
   timing: CausalTimingContext,
   castsForSpellMs: readonly number[],
@@ -341,10 +284,6 @@ export function reconstructCausalAvailability(
     }
   }
 
-  // Sin evidencia positiva de mal uso (eso vive en el evaluator de Plan —
-  // reserva rota, asignación incumplida — o en una fuente futura de "gasto
-  // demostrablemente injustificado"). La AUSENCIA de un episodio anterior
-  // que lo explique no es esa evidencia.
   return {
     classification: 'uncertain',
     reason: `El cast anterior (${lastCastBefore}ms) no demuestra cobertura de ningún episodio anterior conocido — puede ser uso legítimo contra una amenaza que el detector no capturó. Sin evidencia positiva de mal uso, no se demuestra mistime.`,
@@ -356,19 +295,6 @@ export interface CausallyAwareCandidate extends EpisodeVerdictCandidate {
   timing: CausalTimingContext;
 }
 
-/**
- * Envoltorio de resolveEpisodeVerdict(): cuando el veredicto base es
- * 'uncertain' Y está marcado `causalUpgradeEligible` (es decir, PORQUE todo
- * lo estratégico-aplicable estaba en cooldown, sin ningún otro bloqueador
- * sin resolver mezclado), reconstruye la causa de cada uno y decide el
- * veredicto FINAL del episodio.
- *
- * Precedencia cuando SÍ hace falta reconstrucción causal:
- *  - todos los on_cooldown resultan unavailable_legitimate → el episodio es
- *    unavailable_legitimate.
- *  - cualquier otra combinación (alguno uncertain) → el episodio se queda
- *    uncertain — no se acusa sin que TODOS estén demostrados.
- */
 export function resolveEpisodeVerdictWithCausalAvailability(
   candidates: CausallyAwareCandidate[],
   episodes: readonly EpisodeWindow[],
@@ -380,7 +306,7 @@ export function resolveEpisodeVerdictWithCausalAvailability(
   const onCooldownMissable = candidates.filter(
     (c) => c.createsMissableOpportunity && c.damageApplicability === 'yes' && c.temporalOpportunity === 'yes' && c.statusAtPeak === 'on_cooldown',
   );
-  if (!onCooldownMissable.length) return base; // el uncertain venía de status 'active'/'unknown' — nada que reconstruir con causalidad
+  if (!onCooldownMissable.length) return base;
 
   const causalResults = onCooldownMissable.map((c) => ({
     spellId: c.spellId,
@@ -398,5 +324,5 @@ export function resolveEpisodeVerdictWithCausalAvailability(
     };
   }
 
-  return base; // al menos uno sin evidencia positiva — se queda uncertain
+  return base;
 }
