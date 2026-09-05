@@ -2,12 +2,12 @@
 import type { MechanicOccurrenceEvaluationContract, MechanicPolicyContract, OccurrenceOutcome, ResponsibilityRelationship } from './combat-evaluation-contract.ts';
 
 export interface OwnershipResolution {
-  primaryOwners: string[]; // actor_id, puede ser > 1 si responsibility_mode='group'
+  primaryOwners: string[]; // actor/player identity only when ownership is explicit
   coOwners: string[];
-  assignedResolvers: string[]; // del plan de defensivos
-  targets: string[]; // destinatarios de la mecánica
-  collateralVictims: string[]; // dañados por propagación
-  successfulResolvers: string[]; // quiénes evitaron activamente
+  assignedResolvers: string[];
+  targets: string[];
+  collateralVictims: string[];
+  successfulResolvers: string[];
   beneficiaries: string[];
 }
 
@@ -22,14 +22,21 @@ export interface EdgeDecision {
 }
 
 /**
- * Determina quién es owner/assignee/resolver de una ocurrencia
- * según boss_mechanic_policy.responsibility_mode
+ * Resolves actor ownership only when the occurrence itself contains explicit
+ * actor/assignment evidence.
+ *
+ * Critical invariant: responsibility for a ROLE is not proof that every member
+ * of that role caused the failure. Previous shadow code expanded tank_role,
+ * healer_role, dps_role and raid into the whole roster as primary_owner; if
+ * materialised, that could blame two tanks (or an entire role) for one actor's
+ * error. Shadow v1 deliberately leaves those owners unresolved until a family
+ * evaluator proves the actor.
  */
 export function resolveOccurrenceOwnership(
   occurrence: MechanicOccurrenceEvaluationContract,
   policy: MechanicPolicyContract,
   assignmentSnapshot: Record<string, unknown> | null,
-  rosterByRole: Map<string, string[]>, // 'tank'|'healer'|'dps' → [player_names]
+  rosterByRole: Map<string, string[]>,
 ): OwnershipResolution {
   const result: OwnershipResolution = {
     primaryOwners: [],
@@ -41,86 +48,61 @@ export function resolveOccurrenceOwnership(
     beneficiaries: [],
   };
 
-  // Determinar owners primarios según responsibility_mode
   switch (policy.responsibilityMode) {
     case 'target':
-      // Targets directos de la mecánica
       if (occurrence.targetActorIds.length > 0) {
         result.primaryOwners = occurrence.targetActorIds.map(String);
       }
       break;
 
-    case 'tank_role':
-      // Todos los tanques del roster
-      result.primaryOwners = rosterByRole.get('tank') || [];
-      break;
-
-    case 'healer_role':
-      // Todos los sanadores
-      result.primaryOwners = rosterByRole.get('healer') || [];
-      break;
-
-    case 'dps_role':
-      // Todos los DPS
-      result.primaryOwners = rosterByRole.get('dps') || [];
-      break;
-
     case 'assigned_player':
-      // Asignado específicamente
       if (assignmentSnapshot && assignmentSnapshot['assignedPlayer']) {
         result.primaryOwners = [String(assignmentSnapshot['assignedPlayer'])];
       }
       break;
 
     case 'assigned_group':
-      // Grupo asignado (tank + healer + dps específicos)
-      if (assignmentSnapshot && assignmentSnapshot['assignedGroup']) {
-        const group = assignmentSnapshot['assignedGroup'] as string[];
-        result.primaryOwners = group;
+      if (assignmentSnapshot && Array.isArray(assignmentSnapshot['assignedGroup'])) {
+        result.primaryOwners = (assignmentSnapshot['assignedGroup'] as unknown[])
+          .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
       }
       break;
 
-    case 'volunteer':
-      // Sin propietario específico; cualquiera puede resolver
-      result.primaryOwners = [];
-      break;
-
+    case 'tank_role':
+    case 'healer_role':
+    case 'dps_role':
     case 'raid':
-      // Toda la raid es responsable
-      result.primaryOwners = Array.from(rosterByRole.values()).flat();
-      break;
-
+    case 'volunteer':
     case 'none':
     default:
+      // Role/raid membership is context, not actor ownership. The roster is
+      // intentionally NOT expanded into primaryOwners here.
+      void rosterByRole;
       result.primaryOwners = [];
       break;
   }
 
-  // Targets del mechanic
   result.targets = occurrence.targetActorIds.map(String);
 
-  // Nota: assignedResolvers, successfulResolvers, collateralVictims y beneficiaries
-  // se determinan en responsibility-edge-builder.ts tras análisis WCL
+  // assignedResolvers, successfulResolvers, collateralVictims and
+  // beneficiaries require explicit WCL/plan evidence and are filled by later
+  // family-specific evaluators, never by role membership alone.
   return result;
 }
 
-/**
- * Determina si una ocurrencia debe ser evaluable según el outcome y la confianza
- */
+/** Determines if an occurrence can participate in evaluation. */
 export function isOccurrenceEvaluable(
   occurrence: MechanicOccurrenceEvaluationContract,
   policy: MechanicPolicyContract,
 ): boolean {
-  // 'uncertain' nunca es punitivo, pero sí evaluable para logging
+  void policy;
   if (occurrence.confidence === 'uncertain' && occurrence.outcome === 'fail') {
-    return false; // No punir incertidumbre
+    return false;
   }
   return true;
 }
 
-/**
- * Mapea outcome de occurrence a responsibility edges
- */
+/** Maps occurrence outcome to generic credit/failure state. */
 export function mapOccurrenceOutcomeToEdgeMappings(
   outcome: OccurrenceOutcome,
 ): { creditOutcome: boolean; failureOutcome: boolean } {
@@ -130,25 +112,17 @@ export function mapOccurrenceOutcomeToEdgeMappings(
   };
 }
 
-/**
- * Determina si una relación puede resultar en penalización
- */
+/** Determines if a relationship is eligible for a future penalty. */
 export function canRelationshipBePenalized(
   relationship: ResponsibilityRelationship,
   confidence: 'verified' | 'inferred' | 'fallback' | 'uncertain',
 ): boolean {
-  // Solo owners y assigned_resolvers pueden ser penalizados
   const penalizableRelationships: ResponsibilityRelationship[] = ['primary_owner', 'co_owner', 'assigned_resolver'];
-  if (!penalizableRelationships.includes(relationship)) {
-    return false;
-  }
-  // Nunca penalizar si confidence='uncertain'
+  if (!penalizableRelationships.includes(relationship)) return false;
   return confidence === 'verified' || confidence === 'inferred';
 }
 
-/**
- * Determina si una relación puede resultar en crédito
- */
+/** Determines if a relationship can receive credit. */
 export function canRelationshipGetCredit(
   relationship: ResponsibilityRelationship,
   outcome: OccurrenceOutcome,
