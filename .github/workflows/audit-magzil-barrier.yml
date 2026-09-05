@@ -4,7 +4,7 @@ on:
   push:
     branches: [fix/defensive-evidence-claims-shadow-v5]
     paths:
-      - '.shadow-v6-launch/magzil-barrier-audit'
+      - '.audit/magzil-barrier-v2'
 
 permissions:
   contents: read
