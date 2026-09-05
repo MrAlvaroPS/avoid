@@ -155,7 +155,7 @@ Deno.serve(async (req: Request) => {
         mechanic_key: occurrence['mechanic_key'],
         occurrence_index: occurrence['occurrence_index'],
         attribution_status: decision.status,
-        reason_code: decision.reason,
+        attribution_reason: decision.reason,
         responsible_players: decision.responsiblePlayers,
         safety_v1_players: decision.safetyV1Players,
         new_accusation_players: decision.newAccusationPlayers,
@@ -194,8 +194,6 @@ Deno.serve(async (req: Request) => {
     );
 
     if (newAccusationCount !== 0) {
-      // Should also be impossible at DB level. Keep this runtime gate so a
-      // future schema drift cannot silently expand blame.
       throw new Error(`Shadow invariant violated: ${newAccusationCount} new accusation(s).`);
     }
 
