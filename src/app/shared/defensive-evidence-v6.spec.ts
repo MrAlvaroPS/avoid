@@ -109,10 +109,31 @@ describe('defensive evidence v6 — semantic closure gates', () => {
     expect(defensiveSemanticClosureViolationsV6([fixed])).toEqual([]);
   });
 
-  it('flags a live defensive cast that still resolves acquisition as unknown', () => {
-    const kit: any[] = [{ spellId: 48707, semanticStatus: 'verified', buildPresence: 'unknown' }];
+  it('flags a stable active live defensive cast that still resolves acquisition as unknown', () => {
+    const kit: any[] = [{
+      spellId: 48707,
+      semanticStatus: 'verified',
+      buildPresence: 'unknown',
+      activationMode: 'active',
+      unresolvedRuntimeRules: [],
+    }];
     expect(observedSelfCastAcquisitionViolationsV6(kit as any, [48707])).toEqual([
       { spellId: 48707, error: 'same-pull WCL cast observed but buildPresence=unknown' },
     ]);
+  });
+
+  it('does not accuse a runtime-conditioned replacement identity from its observed cast', () => {
+    const kit: any[] = [{
+      spellId: 1256581,
+      semanticStatus: 'verified',
+      buildPresence: 'unknown',
+      activationMode: 'active',
+      unresolvedRuntimeRules: [{
+        ruleId: 'runtime-replacement',
+        condition: 'runtime_state',
+        reason: 'runtime-conditioned replacement target',
+      }],
+    }];
+    expect(observedSelfCastAcquisitionViolationsV6(kit as any, [1256581])).toEqual([]);
   });
 });
