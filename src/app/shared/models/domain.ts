@@ -335,6 +335,9 @@ export interface BossMechanicCandidateRow {
   boss_id: string;
   difficulty: string;
   ability_id: number;
+  /** Identidad canónica M12. Null únicamente mientras una fila legacy no haya pasado por backfill. */
+  mechanic_key: string | null;
+  policy_version: number | null;
   name: string;
   /** Nombre en castellano (Blizzard Journal, locale=es_ES) — para localizar la habilidad en el juego/logs, no una traducción de la descripción. Null si Blizzard no lo tiene traducido todavía. */
   name_es: string | null;
@@ -722,6 +725,9 @@ export interface DefensivePlanSlotRow {
   build_fingerprint_snapshot: string | null;
   notes: string | null;
   rationale: Record<string, unknown>;
+  /** false = ya cubierto por la duración de un cast anterior del mismo jugador+defensivo; ver defensive-plan-solver.ts. */
+  needs_fresh_cast: boolean;
+  covered_by_prior_cast_at_ms: number | null;
   created_at: string;
 }
 
@@ -745,6 +751,7 @@ export type DefensiveExecutionState =
   | 'plan_broken'
   | 'reminder_missed'
   | 'death_with_viable_cd'
+  | 'death_with_ready_cd'
   | 'no_feasible_alternative'
   | 'uncertain_data';
 
@@ -754,6 +761,7 @@ export interface PlayerPullDefensiveEvaluationEvent {
   atMs: number;
   coverageOutcome: 'covered' | 'uncovered' | 'not_applicable' | 'uncertain';
   adherenceOutcome: 'followed' | 'substituted' | 'held' | 'broken' | 'missed' | 'not_applicable' | 'uncertain';
+  managementOutcome: 'success' | 'failure' | 'neutral' | 'uncertain';
   requirementLevel?: 'required' | 'recommended' | 'optional';
   slotId?: string;
   windowId?: string;
@@ -767,6 +775,12 @@ export interface PlayerPullDefensiveEvaluationEvent {
   relatedFutureAtMs?: number;
   cooldownRemainingMs?: number;
   candidateSpellIds?: number[];
+  lethalWindowStartMs?: number;
+  /** Pico de daño real de la ventana que originó este evento — ver
+   * EvaluationPressureWindow.peakValue en defensive-execution-evaluator.ts. */
+  peakValue?: number;
+  causalGroupId?: string;
+  primaryPenalty?: boolean;
 }
 
 export interface PlayerPullDefensiveEvaluationRow {
@@ -781,6 +795,8 @@ export interface PlayerPullDefensiveEvaluationRow {
   evaluator_version: string;
   plan_required_count: number;
   plan_executed_count: number;
+  required_exact_adherence_count?: number;
+  required_coverage_success_count?: number;
   critical_window_count: number;
   critical_covered_count: number;
   correct_hold_count: number;
@@ -862,6 +878,8 @@ export interface DefensivePlanDraftInput {
     buildFingerprintSnapshot?: string | null;
     notes?: string | null;
     rationale?: Record<string, unknown>;
+    needsFreshCast?: boolean;
+    coveredByPriorCastAtMs?: number | null;
   }[];
 }
 
@@ -879,6 +897,9 @@ export interface MechanicDefensiveAssignmentRow {
   trigger_type: 'bossmod' | 'time';
   /** Normalmente = ability_id; distinto solo si el timer real de BigWigs/DBM usa otro spellID. */
   bossmod_spell_id: number | null;
+  /** Contador de la ocurrencia en el timer de BigWigs/DBM — solo se usa si bossmod_counter_verified es true. Ver migración 20260903110000. */
+  bossmod_counter: string | null;
+  bossmod_counter_verified: boolean;
   notes: string | null;
   /** Grupos de raid (1-6) a los que aplica — null = todos/sin restringir. Solo informativo (se refleja en el texto del reminder), MRT no filtra por esto — ver migración 20260831130000. */
   assigned_groups: number[] | null;

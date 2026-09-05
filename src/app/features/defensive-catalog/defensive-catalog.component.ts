@@ -14,7 +14,7 @@ import {
 } from '../../core/edge-functions.service';
 import { DefensiveCatalogService } from '../../core/defensive-catalog.service';
 import { ClassIconComponent } from '../../shared/class-icon.component';
-import { CLASS_DISPLAY_NAME, SURVIVAL_TYPE_KEYS, classDisplayName, survivalTypeMeta } from '../../shared/format.util';
+import { CLASS_DISPLAY_NAME, SURVIVAL_TYPE_KEYS, classDisplayName, safeSpellName, survivalTypeMeta } from '../../shared/format.util';
 import { specsForClass } from '../../shared/spec-role.util';
 import { MechanicInfoIconComponent } from '../../shared/mechanic-info-icon.component';
 import { WowheadLinkComponent } from '../../shared/wowhead-link.component';
@@ -45,6 +45,7 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
   readonly defensiveTargetingModes: CooldownCatalogRow['targeting_mode'][] = ['self', 'ally', 'both', 'raid', 'unknown'];
   readonly classDisplayName = classDisplayName;
   readonly survivalTypeMeta = survivalTypeMeta;
+  readonly safeSpellName = safeSpellName;
 
   selectedClass = signal<string | null>(null);
   defensives = signal<CooldownCatalogRow[]>([]);
@@ -70,6 +71,9 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
   queueHealthError = signal<string | null>(null);
   queueDetailsOpen = signal(false);
   queueRetrying = signal(false);
+  queueCancelling = signal(false);
+  /** Doble clic en 5s antes de cancelar TODA la cola, mismo patrón que confirmingResetClassId. */
+  queueCancelArmed = signal(false);
   queueActionMessage = signal<string | null>(null);
 
   /** Serializa también operaciones iniciadas mientras otra cola sigue viva. */
@@ -109,7 +113,7 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
   classifySubmitting = signal(false);
   classifySubmitError = signal<string | null>(null);
   classifyResult = signal<{
-    applied: { spellId: number; name: string; survivalType: string }[];
+    applied: { spellId: number; name: string; survivalType: string; category: string; targetingMode: string }[];
     skippedLowConfidence: { spellId: number; name: string; survivalType: string | null; notes: string }[];
     skippedUndetermined: { spellId: number; name: string }[];
     suggestedExclusions: { spellId: number; name: string; class: string; notes: string }[];
@@ -139,13 +143,51 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
     void this.loadDefensives();
   }
 
+  // §"quiero enseñar icono de la habilidad defensiva en la tabla de
+  // defensivos" (feedback real, 2026-09-03): mismo mecanismo que ya usa
+  // night-player-infographic.component.ts (loadSpellIcons) — sin servicio
+  // compartido todavía, así que se repite aquí en vez de bloquear esto a que
+  // exista uno.
+  readonly iconUrls = signal<Record<number, string>>({});
+
+  iconUrl(spellId: number | null): string | null {
+    return spellId ? (this.iconUrls()[spellId] ?? null) : null;
+  }
+
+  onIconError(event: Event): void {
+    (event.currentTarget as HTMLImageElement).style.display = 'none';
+  }
+
+  private async loadSpellIcons(spellIds: number[]): Promise<void> {
+    const entries = await Promise.all(
+      spellIds.map(async (spellId): Promise<[number, string] | null> => {
+        try {
+          const response = await fetch(`https://nether.wowhead.com/tooltip/spell/${spellId}`);
+          if (!response.ok) return null;
+          const payload = (await response.json()) as { icon?: string };
+          return payload.icon
+            ? [spellId, `https://wow.zamimg.com/images/wow/icons/large/${payload.icon}.jpg`]
+            : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    this.iconUrls.update((current) => ({
+      ...current,
+      ...Object.fromEntries(entries.filter((entry): entry is [number, string] => entry != null)),
+    }));
+  }
+
   async loadDefensives(): Promise<void> {
     const className = this.selectedClass();
     if (!className) return;
     this.loadingDefensives.set(true);
     this.error.set(null);
     try {
-      this.defensives.set(await this.defensiveCatalogService.listByClass(className));
+      const rows = await this.defensiveCatalogService.listByClass(className);
+      this.defensives.set(rows);
+      void this.loadSpellIcons(rows.map((row) => row.spell_id));
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
@@ -333,6 +375,53 @@ export class DefensiveCatalogComponent implements OnInit, OnDestroy {
       this.queueActionMessage.set(null);
     } finally {
       this.queueRetrying.set(false);
+    }
+  }
+
+  /**
+   * §"la cola está, hay que limpiarla... un botón de cancelar cola al lado
+   * de ocultar detalle/reintentar que efectivamente cancele toda la cola de
+   * forma real y eficiente" (feedback real, 2026-09-04): a diferencia de
+   * "Reintentar" (reencola errores), esto descarta TERMINALMENTE todo lo no
+   * terminal — pensado para el backlog viejo (pre-refactor v10, rate limit
+   * de WCL ya expirado, catálogo ya reemplazado) que no tiene sentido seguir
+   * arrastrando. Doble clic en 5s porque es destructivo y afecta a TODA la
+   * cola, no solo al batch visible.
+   */
+  requestCancelReanalysisQueue(): void {
+    if (this.queueCancelling()) return;
+    if (this.queueCancelArmed()) {
+      void this.confirmCancelReanalysisQueue();
+      return;
+    }
+    this.queueCancelArmed.set(true);
+    setTimeout(() => this.queueCancelArmed.set(false), 5000);
+  }
+
+  private async confirmCancelReanalysisQueue(): Promise<void> {
+    this.queueCancelArmed.set(false);
+    this.queueCancelling.set(true);
+    this.queueActionMessage.set(null);
+    try {
+      const result = await this.edgeFunctions.cancelDefensiveReanalysisQueue();
+      this.queueActionMessage.set(
+        result.cancelledJobs
+          ? `${result.cancelledJobs} job${result.cancelledJobs === 1 ? '' : 's'} y ${result.cancelledBatches} batch${result.cancelledBatches === 1 ? '' : 'es'} cancelados.`
+          : 'No había nada pendiente que cancelar.',
+      );
+      // Cancelar detiene la reanudación local en curso — evita que
+      // resumePendingReanalysisQueue() vuelva a traer jobs que ya se
+      // acaban de descartar en el servidor.
+      this.pendingReanalysisResumeStarted = true;
+      this.scheduledReanalysisJobIds.clear();
+      await this.refreshQueueHealth();
+    } catch (err) {
+      const detail = errorMessage(err);
+      this.queueHealth.set('unreachable');
+      this.queueHealthError.set(detail);
+      this.queueActionMessage.set(null);
+    } finally {
+      this.queueCancelling.set(false);
     }
   }
 

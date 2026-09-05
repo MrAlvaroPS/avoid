@@ -10,7 +10,7 @@ import { defensiveReanalysisHealth } from '../_shared/defensive-reanalysis-healt
 import { enqueueDefensiveReanalysis } from '../_shared/defensive-reanalysis-queue.ts';
 import { auditControlledDefensiveBackfill } from '../_shared/controlled-defensive-backfill-audit.ts';
 
-type QueueAction = 'pending' | 'status' | 'retry' | 'start_sample' | 'sample_report';
+type QueueAction = 'pending' | 'status' | 'retry' | 'cancel' | 'start_sample' | 'sample_report';
 
 interface QueueRequestBody {
   action?: QueueAction;
@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
   } catch {
     return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
   }
-  if (!body.action || !['pending', 'status', 'retry', 'start_sample', 'sample_report'].includes(body.action)) {
+  if (!body.action || !['pending', 'status', 'retry', 'cancel', 'start_sample', 'sample_report'].includes(body.action)) {
     return jsonResponse({ ok: false, error: 'action inválida' }, 400);
   }
   if (
@@ -198,6 +198,42 @@ Deno.serve(async (req: Request) => {
         retriedCount: retriedRows?.length ?? 0,
         batchIds,
         maxAttempts: DEFENSIVE_REANALYSIS_MAX_ATTEMPTS,
+      });
+    }
+
+    if (body.action === 'cancel') {
+      // §"cancelar cola... de forma real y eficiente" (feedback real,
+      // 2026-09-04): dos UPDATE masivos (uno por tabla), no un bucle
+      // job-a-job — cientos de filas en una sola sentencia SQL cada uno.
+      // Sin batchId cancela TODA la cola no terminal, que es el caso de uso
+      // real (limpiar el backlog acumulado de antes del refactor v10, ya
+      // irrecuperable — rate limit de WCL expirado, catálogo viejo).
+      let jobsQuery = supabase
+        .from('defensive_reanalysis_jobs')
+        .update({
+          status: 'cancelled',
+          last_error: 'Cancelado por officer.',
+          claimed_at: null,
+          finished_at: now,
+          updated_at: now,
+        })
+        .in('status', ['queued', 'running', 'error']);
+      if (body.batchId) jobsQuery = jobsQuery.eq('batch_id', body.batchId);
+      const { data: cancelledJobs, error: cancelJobsError } = await jobsQuery.select('id,batch_id');
+      if (cancelJobsError) throw cancelJobsError;
+
+      let batchesQuery = supabase
+        .from('defensive_reanalysis_batches')
+        .update({ status: 'cancelled', finished_at: now, updated_at: now })
+        .in('status', ['queued', 'running', 'completed_with_errors']);
+      if (body.batchId) batchesQuery = batchesQuery.eq('id', body.batchId);
+      const { data: cancelledBatches, error: cancelBatchesError } = await batchesQuery.select('id');
+      if (cancelBatchesError) throw cancelBatchesError;
+
+      return jsonResponse({
+        ok: true,
+        cancelledJobs: cancelledJobs?.length ?? 0,
+        cancelledBatches: cancelledBatches?.length ?? 0,
       });
     }
 

@@ -329,20 +329,24 @@ Deno.serve(async (req: Request) => {
     // un fallo aquí degrada a "sin talentGate", igual que analyze-report,
     // nunca bloquea el backfill del resto del pull).
     let talentSpellLookup: Map<number, number> | null = null;
+    let knownTalentEntryIds: Set<number> | null = null;
     let currentGameBuild: string | null = null;
     try {
       const namespace = await getCurrentBuildNamespace();
       if (namespace) {
         const build = buildFromBlizzardNamespace(namespace);
         currentGameBuild = build;
-        const { data: cached } = await supabase.from('talent_spell_lookup').select('entry_to_spell').eq('build', build).maybeSingle();
+        const { data: cached } = await supabase.from('talent_spell_lookup').select('entry_to_spell,known_entry_ids').eq('build', build).maybeSingle();
         if (cached) {
           talentSpellLookup = new Map(Object.entries(cached.entry_to_spell as Record<string, number>).map(([id, spellId]) => [Number(id), spellId]));
+          knownTalentEntryIds = new Set((cached.known_entry_ids as number[] | null) ?? []);
         } else {
-          const fresh = (await fetchTalentSpellLookup(build)).entryIdToSpellId;
-          talentSpellLookup = fresh;
-          const entry_to_spell = Object.fromEntries([...fresh.entries()].map(([id, spellId]) => [String(id), spellId]));
-          await supabase.from('talent_spell_lookup').upsert({ build, entry_to_spell }).then(
+          const fresh = await fetchTalentSpellLookup(build);
+          talentSpellLookup = fresh.entryIdToSpellId;
+          knownTalentEntryIds = fresh.knownEntryIds;
+          const entry_to_spell = Object.fromEntries([...fresh.entryIdToSpellId.entries()].map(([id, spellId]) => [String(id), spellId]));
+          const known_entry_ids = [...fresh.knownEntryIds];
+          await supabase.from('talent_spell_lookup').upsert({ build, entry_to_spell, known_entry_ids }).then(
             () => {},
             (err) => console.error('No se pudo cachear talent_spell_lookup (no bloqueante):', err),
           );
@@ -393,15 +397,18 @@ Deno.serve(async (req: Request) => {
     // se usa una caché ya versionada; nunca se descarga el DB2 de la patch de
     // hoy y se hace pasar por el del pull antiguo.
     const talentLookupsByBuild = new Map<string, Map<number, number>>();
+    const knownEntryIdsByBuild = new Map<string, Set<number>>();
     if (currentGameBuild && talentSpellLookup) talentLookupsByBuild.set(currentGameBuild, talentSpellLookup);
+    if (currentGameBuild && knownTalentEntryIds) knownEntryIdsByBuild.set(currentGameBuild, knownTalentEntryIds);
     const persistedBuilds = [...new Set(records.map((record) => record.game_build).filter((build): build is string => Boolean(build)))];
     for (const build of persistedBuilds) {
       if (talentLookupsByBuild.has(build)) continue;
-      const { data: cached, error } = await supabase.from('talent_spell_lookup').select('entry_to_spell').eq('build', build).maybeSingle();
+      const { data: cached, error } = await supabase.from('talent_spell_lookup').select('entry_to_spell,known_entry_ids').eq('build', build).maybeSingle();
       if (error) {
         resolverShadowWarnings.push(`talent_spell_lookup ${build}: ${error.message}`);
         continue;
       }
+      if (cached?.known_entry_ids) knownEntryIdsByBuild.set(build, new Set(cached.known_entry_ids as number[]));
       if (cached?.entry_to_spell) {
         talentLookupsByBuild.set(
           build,
@@ -487,6 +494,7 @@ Deno.serve(async (req: Request) => {
           playerIdentity: { playerName: record.player_name },
           allTalentSpellIds: lookupForObservedBuild ? new Set(lookupForObservedBuild.values()) : null,
           talentLookupComplete: lookupForObservedBuild != null,
+          knownTalentEntryIds: observedBuild.gameBuild ? (knownEntryIdsByBuild.get(observedBuild.gameBuild) ?? null) : null,
         },
         resolverData,
       );

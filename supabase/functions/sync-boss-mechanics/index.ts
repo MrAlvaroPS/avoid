@@ -219,6 +219,7 @@ Deno.serve(async (req: Request) => {
     }[] = [];
 
     for (const wclDifficultyId of difficultyIds) {
+      const upsertsBeforeDifficulty = upserts;
       const difficultyName = WCL_DIFFICULTY_NAME_BY_ID[wclDifficultyId] ?? `Dificultad ${wclDifficultyId}`;
       const mapping = resolveDb2Difficulty(snapshot, journalEncounterId, { name: difficultyName, sizes: WCL_DIFFICULTY_RAID_SIZES[wclDifficultyId] ?? [] }, abilities);
       const abilitiesForDifficulty = filterAbilitiesForDifficulty(abilities, snapshot, mapping);
@@ -597,7 +598,7 @@ Deno.serve(async (req: Request) => {
           );
         if (!error) upserts++;
       }
-      difficultySummary.push({
+      const difficultyResult = {
         difficulty: difficultyName,
         mappingStatus: mapping.status,
         db2DifficultyId: mapping.db2DifficultyId,
@@ -605,7 +606,23 @@ Deno.serve(async (req: Request) => {
         referenceBundleCount: referenceBundles.length,
         referenceFetchError,
         snapshotFetchError,
-      });
+      };
+      difficultySummary.push(difficultyResult);
+
+      const { error: syncStateError } = await supabase
+        .from('boss_mechanic_catalog_sync_state')
+        .upsert({
+          boss_id: body.bossId,
+          difficulty: difficultyName,
+          last_synced_at: new Date().toISOString(),
+          sync_mode: body.deepSync ? 'deep' : 'quick',
+          candidate_count: upserts - upsertsBeforeDifficulty,
+          reference_bundle_count: referenceBundles.length,
+          mapping_status: mapping.status,
+          reference_fetch_error: referenceFetchError,
+          snapshot_fetch_error: snapshotFetchError,
+        }, { onConflict: 'boss_id,difficulty' });
+      if (syncStateError) throw syncStateError;
     }
 
     return jsonResponse({ ok: true, bossName, journalEncounterId, candidates: abilities.length, upserts, difficulties: difficultySummary });

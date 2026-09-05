@@ -246,6 +246,35 @@ export function mechanicDisplayName(name: string | null | undefined): string {
   return name;
 }
 
+// §"el oso del druida y el paladin... esa fuente de información no debe
+// existir en una infografía porque no es útil" (feedback real, 2026-09-03):
+// un envío manual de classify-defensives dejó en cooldown_catalog.name un
+// fragmento de JSON/markdown sin terminar de parsear (URL de cita pegada al
+// nombre, p.ej. spellId 5487 "Bear Form"). La causa vive en el dato ya
+// persistido, no en un bug de este render — pero la infografía nunca debe
+// imprimir eso, tenga o no editor la fila. Mismo criterio que la spec visual
+// (sección 9): un nombre no resuelto se rotula, nunca se muestra crudo.
+const TECHNICAL_NAME_PATTERN = /https?:\/\/|[{}[\]]|%[0-9a-f]{2}|"[a-z]+"\s*:/i;
+const MAX_SPELL_NAME_LENGTH = 40;
+
+// §"ahora sale habilidad sin nombre" (feedback real, 2026-09-03): en la
+// infografía el nombre es solo narrativo, así que el rótulo genérico basta.
+// En una pantalla donde alguien tiene que DECIDIR sobre esa fila concreta
+// (p.ej. marcar/desmarcar un defensivo en Preparación), el rótulo genérico
+// deja al oficial sin forma de saber cuál era — `fallbackId` (el spellId,
+// que nunca está corrupto, viene de una columna aparte) permite mostrar
+// "#12345" en su lugar: no identifica el hechizo por nombre, pero sigue
+// siendo distinguible y con un Wowhead link real detrás para averiguarlo.
+export function safeSpellName(name: string | null | undefined, fallbackId?: number | string | null): string {
+  const trimmed = name?.trim();
+  const fallback = fallbackId != null ? `#${fallbackId}` : 'Habilidad sin nombre';
+  if (!trimmed) return fallback;
+  if (trimmed.length > MAX_SPELL_NAME_LENGTH || TECHNICAL_NAME_PATTERN.test(trimmed)) {
+    return fallback;
+  }
+  return trimmed;
+}
+
 // §"WCL tiene fases de encuentro, importarlas e implementarlas en todos los
 // sitios donde corresponda" (feedback real): "Fase X/N" o "Fase X/N —
 // Nombre" cuando se conoce, con el sufijo de intermedio — un único sitio

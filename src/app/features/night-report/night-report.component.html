@@ -238,6 +238,9 @@
                       @if (row.isTrial) {
                         <small class="trial-badge">Trial</small>
                       }
+                      @if (row.isUnlisted) {
+                        <small class="trial-badge unlisted-badge" title="Jugó esta noche pero no tiene fila en el roster de WowAudit todavía">Sin roster</small>
+                      }
                     </a>
                   </td>
                   <td class="col-num">

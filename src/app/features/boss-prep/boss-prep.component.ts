@@ -23,7 +23,7 @@ import {
   type DefensivePreparationPlayer,
 } from '../../core/defensive-preparation-roster.service';
 import { ReportsService, type KnownBoss } from '../../core/reports.service';
-import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../../shared/format.util';
+import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID, safeSpellName } from '../../shared/format.util';
 import { ALL_CLASSES, specsForClass, mechanicAppliesToRole, roleFromSpec } from '../../shared/spec-role.util';
 import { defensivesForSpec } from '../../shared/defensive-spec-match.util';
 import { encodeMrtExport, spellTag, type MrtReminderInput, type MrtTrigger } from '../../shared/mrt/mrt-reminder-codec';
@@ -68,6 +68,10 @@ interface AssignmentDraft {
   prewarnSeconds: number;
   triggerType: 'bossmod' | 'time';
   bossmodSpellId: string;
+  /** Contador real del timer de BigWigs/DBM (p.ej. "2") — solo se usa si bossmodCounterVerified es true. */
+  bossmodCounter: string;
+  /** El oficial confirmó este counter contra un timer real en juego. Ver migración 20260903110000. */
+  bossmodCounterVerified: boolean;
   notes: string;
   /** Grupos de raid (1-6) — [] = todos/sin restringir. Ver migración 20260831130000. */
   assignedGroups: number[];
@@ -81,6 +85,8 @@ interface ExportResult {
   text: string;
   skippedForMissingTiming: string[];
   timeFallbacks: string[];
+  /** §"un cast debe cubrir toda su ventana de duración" — slots que no generaron recordatorio propio porque un cast anterior ya los cubre. */
+  durationCovered: string[];
 }
 
 interface TimelineEntry {
@@ -120,7 +126,10 @@ export class BossPrepComponent {
   loadingBosses = signal(true);
   selectedEncounterId = signal<number | null>(null);
   selectedDifficultyId = signal<number | null>(null);
-  assignmentView = signal<'spec' | 'player'>('spec');
+  // §"Preparación... que por defecto entre en la pestaña Jugador" (feedback
+  // real, 2026-09-03). loadV2Readiness() ya hace fallback a 'spec' si
+  // playerMode no está disponible o la comprobación falla — ver abajo.
+  assignmentView = signal<'spec' | 'player'>('player');
   preparationPlayers = signal<DefensivePreparationPlayer[]>([]);
   loadingPreparationPlayers = signal(false);
   preparationPlayersError = signal<string | null>(null);
@@ -139,8 +148,10 @@ export class BossPrepComponent {
   overrideResult = signal<string | null>(null);
   draftInvalidatedByOverride = signal(false);
   planningResourceSelections = signal<Record<string, number[]>>({});
+  planningResourceSaveError = signal<string | null>(null);
   includeSemiInTemplateAuto = signal(false);
   generatingPlan = signal(false);
+  generatingPlanScope = signal<'global' | 'individual' | null>(null);
   publishingPlan = signal(false);
   planActionMessage = signal<string | null>(null);
 
@@ -158,6 +169,13 @@ export class BossPrepComponent {
   v2ReadinessLoading = signal(true);
   v2ReadinessError = signal<string | null>(null);
   v2ReadinessDetailsOpen = signal(false);
+  // §"el flujo aquí es un poco caótico" (feedback real, 2026-09-03): el
+  // panel de readiness técnico y el de "Backfill controlado" (herramienta de
+  // QA que audita 5 casos fijos de resolución de spellmods, no algo que un
+  // oficial necesite tocar para preparar un boss) vivían por delante del
+  // selector de boss. Se agrupan aquí, colapsados por defecto, fuera del
+  // flujo principal — nada de su lógica interna cambia.
+  technicalDiagnosticsOpen = signal(false);
   private v2ReadinessTask: Promise<void> | null = null;
 
   backfillSampleSize = signal(5);
@@ -215,9 +233,34 @@ export class BossPrepComponent {
     }
     return player.freshness;
   });
-  selectedPlayerEffectiveKit = computed(() => this.selectedPlayerKit()?.kit ?? []);
+  // safeSpellName(): mismo saneado que loadCooldownCatalog() — este kit viene
+  // resuelto por separado en el backend, con el mismo riesgo de arrastrar un
+  // nombre corrupto de cooldown_catalog.
+  selectedPlayerEffectiveKit = computed(() =>
+    (this.selectedPlayerKit()?.kit ?? []).map((entry) => ({ ...entry, name: safeSpellName(entry.name, entry.spellId) })),
+  );
   selectedPlayerEligibleDefensiveCount = computed(() => this.selectedPlayerEffectiveKit().filter((defensive) => defensive.eligible).length);
+  // §"en las cards de habilidades NO deberían salir habilidades pasivas de
+  // la spec" (feedback real, 2026-09-03): una pasiva nunca es `eligible`
+  // (effective-defensives.ts la marca así) y no hay ninguna acción de
+  // planificación posible sobre ella — mostrarla solo como card deshabilitada
+  // es ruido, no información. Solo afecta al grid; selectedPlayerEffectiveKit()
+  // sigue completo para el contador de arriba y para cualquier otro consumo.
+  selectedPlayerVisibleKit = computed(() => this.selectedPlayerEffectiveKit().filter((defensive) => defensive.activationMode !== 'passive'));
   activeDraft = computed(() => this.activePlanVersion()?.status === 'draft' ? this.activePlanVersion() : null);
+  // §"incluso después de muestrear, para The Twin Fangs en HC se están
+  // solapando habilidades defensivas" (feedback real, 2026-09-03): runSync()
+  // SÍ reescribe boss_mechanic_occurrence_profile con el clustering
+  // corregido (ver iris-mechanics-audit-remediation-progress.md, "Pasos 3 y
+  // 4"), pero un borrador ya generado antes de ese sync no se regenera solo
+  // — nada avisaba de este hueco. source_profile_revision ya viaja en cada
+  // plan (generate-defensive-plan/index.ts) pero nunca se leía en cliente;
+  // aquí basta comparar contra la última sync conocida.
+  draftPredatesLastSync = computed(() => {
+    const draft = this.activePlanVersion();
+    const sync = this.syncState();
+    return Boolean(draft && sync?.lastSyncedAt && draft.created_at < sync.lastSyncedAt);
+  });
   publishedPlan = computed(() => this.planVersions().find((plan) => plan.status === 'published') ?? null);
   exactOverrideScopeReady = computed(() => {
     const source = this.selectedPlayerKit()?.sourceBuild;
@@ -304,6 +347,18 @@ export class BossPrepComponent {
         this.selectedPlayerCharacterId.set(null);
         this.selectedPlayerKit.set(null);
       }
+      // §"si a Gusmi le marco que tiene Barkskin y Frenzied Regeneration..."
+      // (feedback real, 2026-09-03): hidrata la selección persistida por
+      // jugador; se conserva lo que ya hubiera en memoria (p.ej. un toggle
+      // hecho justo antes de que esta carga terminara) sin sobrescribirlo.
+      this.planningResourceSelections.update((selections) => {
+        const next = { ...selections };
+        for (const player of players) {
+          const key = String(player.characterId);
+          if (player.planningResourceSpellIds != null && !(key in next)) next[key] = player.planningResourceSpellIds;
+        }
+        return next;
+      });
     } catch (err) {
       this.preparationPlayersError.set(errorMessage(err));
       this.preparationPlayers.set([]);
@@ -413,29 +468,62 @@ export class BossPrepComponent {
     return this.cooldownCatalog().find((entry) => entry.spell_id === spellId)?.name ?? `#${spellId}`;
   }
 
+  // §"solo auto-incluir defensivos de tipo personal mitigation por defecto
+  // (nunca sustain/emergency/passive/external/utility salvo elegidos
+  // explícitamente)" (feedback real, 2026-09-03). category ya excluía
+  // external/utility, pero un personal_defensive de survivalType sustain o
+  // emergency (p.ej. un self-heal o un "get out of jail free") se
+  // preseleccionaba igual — un raider que nunca tocó el selector recibía
+  // reminders de cosas que no debería usar por defecto. Elegirlo a mano
+  // siempre lo permite igual (planningResourceSelectable no cambia).
+  private defaultsToPersonalMitigation(defensive: Pick<ResolvedDefensiveRow, 'category' | 'survivalType' | 'eligible'>): boolean {
+    return (
+      defensive.eligible &&
+      defensive.category === 'personal_defensive' &&
+      (defensive.survivalType === 'mitigation' || defensive.survivalType === 'absorption')
+    );
+  }
+
   planningResourceSelected(defensive: ResolvedDefensiveRow): boolean {
     const player = this.selectedPreparationPlayer();
     if (!player) return false;
-    const explicit = this.planningResourceSelections()[player.name.toLocaleLowerCase()];
-    return explicit ? explicit.includes(defensive.spellId) : defensive.category === 'personal_defensive';
+    const explicit = this.planningResourceSelections()[String(player.characterId)];
+    return explicit ? explicit.includes(defensive.spellId) : this.defaultsToPersonalMitigation(defensive);
   }
 
   planningResourceSelectable(defensive: ResolvedDefensiveRow): boolean {
     return defensive.eligible && defensive.category !== 'utility';
   }
 
+  // §"si a Gusmi le marco que tiene Barkskin y Frenzied Regeneration, no
+  // tiene sentido que cada vez que entre en Gusmi tenga que quitarle el
+  // check de Ironfur..." (feedback real, 2026-09-03): antes solo vivía en
+  // memoria (se perdía al recargar); ahora se persiste por characterId
+  // (estable, a diferencia del nombre) vía save-planning-resource-selection.
+  // Guardado en segundo plano: el checkbox ya cambió en pantalla al
+  // instante, un fallo de red no debe bloquear seguir planificando, pero sí
+  // se avisa para no dar una falsa sensación de "ya quedó guardado".
   togglePlanningResource(defensive: ResolvedDefensiveRow): void {
     const player = this.selectedPreparationPlayer();
     const kit = this.selectedPlayerKit()?.kit ?? [];
     if (!player || !this.planningResourceSelectable(defensive)) return;
-    const key = player.name.toLocaleLowerCase();
+    const key = String(player.characterId);
     const current = this.planningResourceSelections()[key] ?? kit
-      .filter((entry) => entry.category === 'personal_defensive' && entry.eligible)
+      .filter((entry) => this.defaultsToPersonalMitigation(entry))
       .map((entry) => entry.spellId);
     const next = current.includes(defensive.spellId)
       ? current.filter((spellId) => spellId !== defensive.spellId)
       : [...current, defensive.spellId].sort((left, right) => left - right);
     this.planningResourceSelections.update((selections) => ({ ...selections, [key]: next }));
+    this.planningResourceSaveError.set(null);
+    void this.edgeFunctions
+      .savePlanningResourceSelection({
+        characterId: player.characterId,
+        playerName: player.name,
+        className: player.className,
+        selectedSpellIds: next,
+      })
+      .catch((err) => this.planningResourceSaveError.set(errorMessage(err)));
   }
 
   toggleKitInspector(spellId: number): void {
@@ -668,9 +756,20 @@ export class BossPrepComponent {
     }
   }
 
+  // §"hay varias habilidades que sale un texto raro... pasa en el monk y
+  // también en el druida y en alguno más" (feedback real, 2026-09-03): la
+  // misma corrupción de nombre (URL de WoWhead + JSON de clasificación IA
+  // filtrado a cooldown_catalog.name) que ya se saneó en la infografía con
+  // safeSpellName() — aquí faltaba aplicarla. Se sanea al cargar, no en cada
+  // sitio donde se pinta, para que TODO consumidor (tarjetas de kit,
+  // dropdown de asignación manual, exportación MRT) quede cubierto de una
+  // vez. defensive-catalog.component.ts (la pantalla de edición) NO se toca
+  // — ahí un oficial necesita ver el nombre roto de verdad para poder
+  // corregirlo, no que se lo oculte un sanitizador.
   async loadCooldownCatalog(): Promise<void> {
     try {
-      this.cooldownCatalog.set(await this.defensiveCatalogService.listAll());
+      const rows = await this.defensiveCatalogService.listAll();
+      this.cooldownCatalog.set(rows.map((row) => ({ ...row, name: safeSpellName(row.name, row.spell_id) })));
     } catch (err) {
       this.error.set(errorMessage(err));
     }
@@ -721,7 +820,7 @@ export class BossPrepComponent {
           ? this.profileService.listPlanVersions(String(bossId), difficulty)
           : Promise.resolve([] as DefensivePlanVersionRow[]),
       ]);
-      this.candidates.set(candidates);
+      this.candidates.set(candidates.map((candidate) => ({ ...candidate, name: safeSpellName(candidate.name, candidate.ability_id) })));
       this.profiles.set(profiles);
       this.assignments.set(assignments);
       this.syncState.set(syncState);
@@ -899,6 +998,14 @@ export class BossPrepComponent {
   onDraftBossmodSpellIdChange(raw: string): void {
     this.updateAssignmentDraft({ bossmodSpellId: raw });
   }
+  onDraftBossmodCounterChange(raw: string): void {
+    // Un counter distinto ya no está verificado contra el juego — igual que
+    // defensive_plan_slots, nunca se hereda una verificación de otro texto.
+    this.updateAssignmentDraft({ bossmodCounter: raw, bossmodCounterVerified: false });
+  }
+  onDraftBossmodCounterVerifiedChange(checked: boolean): void {
+    this.updateAssignmentDraft({ bossmodCounterVerified: checked });
+  }
   onDraftNotesChange(raw: string): void {
     this.updateAssignmentDraft({ notes: raw });
   }
@@ -913,6 +1020,8 @@ export class BossPrepComponent {
       prewarnSeconds: existing?.prewarn_seconds ?? 5,
       triggerType: existing?.trigger_type ?? 'bossmod',
       bossmodSpellId: existing?.bossmod_spell_id != null ? String(existing.bossmod_spell_id) : '',
+      bossmodCounter: existing?.bossmod_counter ?? '',
+      bossmodCounterVerified: existing?.bossmod_counter_verified ?? false,
       notes: existing?.notes ?? '',
       assignedGroups: existing?.assigned_groups ?? [],
     });
@@ -978,6 +1087,8 @@ export class BossPrepComponent {
         prewarnSeconds: draft.prewarnSeconds,
         triggerType: draft.triggerType,
         bossmodSpellId: draft.bossmodSpellId.trim() ? Number(draft.bossmodSpellId.trim()) : null,
+        bossmodCounter: draft.bossmodCounter.trim() || null,
+        bossmodCounterVerified: draft.bossmodCounterVerified,
         notes: draft.notes.trim() || null,
         assignedGroups: draft.assignedGroups.length ? draft.assignedGroups : null,
       });
@@ -1013,44 +1124,77 @@ export class BossPrepComponent {
   }
 
   async generateGlobalPlan(): Promise<void> {
+    await this.generatePlanDraft('global');
+  }
+
+  async generateIndividualPlan(): Promise<void> {
+    await this.generatePlanDraft('individual');
+  }
+
+  private async generatePlanDraft(scope: 'global' | 'individual'): Promise<void> {
     const bossId = this.selectedEncounterId();
     const difficulty = this.selectedDifficultyName();
     const boss = this.selectedBoss();
     if (bossId == null || !difficulty || !boss || this.generatingPlan()) return;
-    if (!this.preparationPlayers().length) {
+    const selectedPlayer = this.selectedPreparationPlayer();
+    if (scope === 'individual' && !selectedPlayer) {
+      this.error.set('Selecciona un jugador antes de generar su plan individual.');
+      return;
+    }
+    const players = scope === 'individual' && selectedPlayer
+      ? [selectedPlayer]
+      : this.preparationPlayers();
+    if (!players.length) {
       this.error.set('No hay roster disponible para generar el plan. Actualiza WoWAudit/roster y vuelve a intentarlo.');
       return;
     }
     this.generatingPlan.set(true);
+    this.generatingPlanScope.set(scope);
     this.error.set(null);
     this.planActionMessage.set(null);
     try {
       const selections = this.planningResourceSelections();
+      // §"si a Gusmi le marco que tiene Barkskin..." (feedback real,
+      // 2026-09-03): la clave pasó de nombre en minúsculas a characterId
+      // (estable) al persistir la selección — el emparejamiento aquí sigue
+      // el mismo esquema.
+      const playersByCharacterId = new Map(players.map((player) => [String(player.characterId), player]));
       const result = await this.edgeFunctions.generateDefensivePlan({
         bossId: String(bossId),
         difficulty,
-        name: `${boss.bossName} · ${difficulty}`,
-        mode: 'full',
-        members: this.preparationPlayers().map((player) => ({
+        name: scope === 'individual'
+          ? `${boss.bossName} · ${difficulty} · ${selectedPlayer!.name}`
+          : `${boss.bossName} · ${difficulty}`,
+        mode: scope === 'individual' ? 'partial' : 'full',
+        members: players.map((player) => ({
           playerName: player.name,
           playerKey: `character:${player.characterId}`,
           included: true,
         })),
-        resourceSelections: Object.entries(selections).map(([normalizedName, spellIds]) => ({
-          playerName: this.preparationPlayers().find((player) => player.name.toLocaleLowerCase() === normalizedName)?.name ?? normalizedName,
-          spellIds,
-        })),
+        resourceSelections: Object.entries(selections)
+          .filter(([characterIdKey]) => playersByCharacterId.has(characterIdKey))
+          .map(([characterIdKey, spellIds]) => ({
+            playerName: playersByCharacterId.get(characterIdKey)!.name,
+            spellIds,
+          })),
         supersedesId: this.activePlanVersion()?.id ?? null,
-        notes: 'Generado desde Preparación. Personal seleccionado por defecto; semi/external solo con opt-in explícito.',
+        notes: scope === 'individual'
+          ? `Plan parcial individual de ${selectedPlayer!.name}. Personal seleccionado por defecto; semi/external solo con opt-in explícito.`
+          : 'Plan global generado desde Preparación. Personal seleccionado por defecto; semi/external solo con opt-in explícito.',
       });
       await this.loadRows();
       const solver = result.solver as { diagnostics?: { uncoveredRequired?: unknown[] }; planningQuality?: string };
       const uncovered = solver.diagnostics?.uncoveredRequired?.length ?? 0;
-      this.planActionMessage.set(`Borrador generado${uncovered ? ` · ${uncovered} ventanas obligatorias siguen sin cobertura` : ' · cobertura obligatoria completa'}.`);
+      this.planActionMessage.set(
+        scope === 'individual'
+          ? `Borrador parcial de ${selectedPlayer!.name} generado${uncovered ? ` · ${uncovered} ventanas obligatorias quedan fuera de su cobertura individual` : ' · cubre todas las ventanas obligatorias'}. Los huecos globales no bloquean su publicación.`
+          : `Borrador global generado${uncovered ? ` · ${uncovered} ventanas obligatorias siguen sin cobertura` : ' · cobertura obligatoria completa'}.`,
+      );
     } catch (err) {
       this.error.set(errorMessage(err));
     } finally {
       this.generatingPlan.set(false);
+      this.generatingPlanScope.set(null);
     }
   }
 
@@ -1082,11 +1226,34 @@ export class BossPrepComponent {
 
   // --- export MRT ---
 
+  // §"las notas del MRT no saltan... he pasado a 4-5 raiders y ninguna
+  // salta donde debe" (feedback real, 2026-09-03) — causa confirmada: se
+  // mandaba el encounter_id de Warcraft Logs como bossID de MRT. El cliente
+  // del juego no conoce ese ID; solo conoce journal_encounter_id
+  // (EJ_GetEncounterInfo). Falla explícito en vez de exportar con el ID
+  // equivocado en silencio otra vez — eso es justo lo que ya pasó.
+  private mrtBossIdentity(encounterId: number): { bossId: number; zoneId: number | null } {
+    const boss = this.bosses().find((b) => b.encounterId === encounterId);
+    if (!boss?.journalEncounterId) {
+      throw new Error(
+        `Este boss no tiene journal_encounter_id sincronizado (known_raid_bosses) — exportar con el ID de Warcraft Logs no funcionaría en MRT. Sincroniza la temporada/raid antes de exportar.`,
+      );
+    }
+    return { bossId: boss.journalEncounterId, zoneId: boss.blizzardZoneId };
+  }
+
   async generateExport(cls: string, spec: string, playerName?: string): Promise<void> {
     const bossId = this.selectedEncounterId();
     const wclDifficultyId = this.selectedDifficultyId();
     if (bossId == null || wclDifficultyId == null) return;
     const mrtDifficultyId = MRT_DIFFICULTY_ID_BY_WCL_DIFFICULTY_ID[wclDifficultyId] ?? wclDifficultyId;
+    let mrtBoss: { bossId: number; zoneId: number | null };
+    try {
+      mrtBoss = this.mrtBossIdentity(bossId);
+    } catch (err) {
+      this.error.set(errorMessage(err));
+      return;
+    }
 
     const publishedPlan = this.planVersions().find((plan) => plan.status === 'published') ?? null;
     if (publishedPlan) {
@@ -1107,8 +1274,9 @@ export class BossPrepComponent {
           {
             id: publishedPlan.id,
             name: publishedPlan.name,
-            bossId: Number(bossId),
+            bossId: mrtBoss.bossId,
             difficultyId: mrtDifficultyId,
+            zoneId: mrtBoss.zoneId,
           },
           selectedMembers.map((member) => ({ playerKey: member.player_key, playerName: member.player_name })),
           selectedSlots.map((slot) => ({
@@ -1125,9 +1293,11 @@ export class BossPrepComponent {
             bossmodCounter: slot.bossmod_counter,
             bossmodCounterVerified: slot.bossmod_counter_verified,
             assignedGroups: slot.assigned_groups,
+            needsFreshCast: slot.needs_fresh_cast,
           })),
           new Map(this.candidates().map((candidate) => [candidate.ability_id, candidate.name])),
           new Map(this.cooldownCatalog().map((defensive) => [defensive.spell_id, defensive.name])),
+          new Set(this.candidates().filter((candidate) => candidate.category === 'soak').map((candidate) => candidate.ability_id)),
         );
         const slotById = new Map(contents.slots.map((slot) => [slot.id, slot]));
         this.exportResult.set({
@@ -1136,6 +1306,12 @@ export class BossPrepComponent {
           text: exported.text,
           skippedForMissingTiming: [],
           timeFallbacks: exported.timeFallbackSlotIds.map((id) => {
+            const slot = slotById.get(id);
+            return slot
+              ? `${this.candidates().find((candidate) => candidate.ability_id === slot.ability_id)?.name ?? slot.ability_id} #${slot.occurrence_index}`
+              : id;
+          }),
+          durationCovered: exported.durationCoveredSlotIds.map((id) => {
             const slot = slotById.get(id);
             return slot
               ? `${this.candidates().find((candidate) => candidate.ability_id === slot.ability_id)?.name ?? slot.ability_id} #${slot.occurrence_index}`
@@ -1178,8 +1354,9 @@ export class BossPrepComponent {
         uid: `avoid_${bossId}_${mrtDifficultyId}_${a.ability_id}_${cls}_${spec}`.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
         name: `${candidateName} - ${spec}`,
         message: `${groupPrefix}${spellTag(a.defensive_spell_id)} ${defensiveName}`.trim(),
-        bossId: Number(bossId),
+        bossId: mrtBoss.bossId,
         difficultyId: mrtDifficultyId,
+        zoneId: mrtBoss.zoneId,
         players: [],
         prewarnSeconds: a.prewarn_seconds,
         trigger,
@@ -1191,7 +1368,7 @@ export class BossPrepComponent {
       return;
     }
     const profileName = `Preparación - ${this.selectedBoss()?.bossName ?? ''} ${this.selectedDifficultyName() ?? ''} - ${spec}`;
-    this.exportResult.set({ class: cls, spec, text: encodeMrtExport(profileName, reminders), skippedForMissingTiming: skipped, timeFallbacks: [] });
+    this.exportResult.set({ class: cls, spec, text: encodeMrtExport(profileName, reminders), skippedForMissingTiming: skipped, timeFallbacks: [], durationCovered: [] });
     this.copyStatus.set('idle');
     this.exportModalOpen.set(true);
   }
@@ -1235,22 +1412,44 @@ export class BossPrepComponent {
           })
           .map((member) => member.player_key),
       );
-      const entries: TimelineEntry[] = this.planSlots()
-        .filter((slot) =>
-          this.assignmentView() === 'spec'
-            ? slot.assigned_player_key == null || relevantPlayerKeys.has(slot.assigned_player_key)
-            : (slot.assigned_player_key != null && relevantPlayerKeys.has(slot.assigned_player_key)) ||
-              (slot.target_player_key != null && relevantPlayerKeys.has(slot.target_player_key)),
-        )
+      const relevantSlots = this.planSlots().filter((slot) =>
+        this.assignmentView() === 'spec'
+          ? slot.assigned_player_key == null || relevantPlayerKeys.has(slot.assigned_player_key)
+          : (slot.assigned_player_key != null && relevantPlayerKeys.has(slot.assigned_player_key)) ||
+            (slot.target_player_key != null && relevantPlayerKeys.has(slot.target_player_key)),
+      );
+      // §"hay un único momento de lanzarlo aunque luego cubra varias
+      // mecánicas... lo que tenemos que ver es ESE momento concreto de
+      // lanzarlo (da igual las mecánicas que cubra)" (feedback real,
+      // 2026-09-03, con captura de Magzil/The Twin Fangs mostrando 18+
+      // filas de un único Prismatic Barrier). needs_fresh_cast: false =
+      // la duración de un cast anterior ya cubre este slot — no es un
+      // press nuevo, así que no es un momento a evaluar por separado. Se
+      // cuenta cuántas ocurrencias cuelgan de cada press real para no
+      // perder esa información, solo dejar de repetir la fila.
+      const castKey = (playerKey: string | null, spellId: number | null, castAtMs: number | null): string =>
+        `${playerKey} ${spellId} ${castAtMs}`;
+      const coveredCountByCast = new Map<string, number>();
+      for (const slot of relevantSlots) {
+        if (slot.coverage_status === 'uncovered' || slot.coverage_status === 'excluded') continue;
+        const anchorCastAtMs = slot.needs_fresh_cast === false ? slot.covered_by_prior_cast_at_ms : slot.planned_cast_at_ms;
+        if (anchorCastAtMs == null) continue;
+        const key = castKey(slot.assigned_player_key, slot.defensive_spell_id, anchorCastAtMs);
+        coveredCountByCast.set(key, (coveredCountByCast.get(key) ?? 0) + 1);
+      }
+      const entries: TimelineEntry[] = relevantSlots
+        .filter((slot) => slot.needs_fresh_cast !== false)
         .map((slot) => {
           const member = slot.assigned_player_key ? membersByKey.get(slot.assigned_player_key) : null;
           const defensiveName = slot.defensive_spell_id
             ? this.cooldownCatalog().find((entry) => entry.spell_id === slot.defensive_spell_id)?.name ?? `#${slot.defensive_spell_id}`
             : null;
+          const coveredCount = coveredCountByCast.get(castKey(slot.assigned_player_key, slot.defensive_spell_id, slot.planned_cast_at_ms)) ?? 1;
+          const mechanicName = this.candidates().find((candidate) => candidate.ability_id === slot.ability_id)?.name ?? `Mecánica ${slot.ability_id}`;
           return {
             trackKey: `${slot.ability_id}:${slot.occurrence_index}:${slot.slot_index}`,
             abilityId: slot.ability_id,
-            name: `${this.candidates().find((candidate) => candidate.ability_id === slot.ability_id)?.name ?? `Mecánica ${slot.ability_id}`} #${slot.occurrence_index}`,
+            name: `${mechanicName} #${slot.occurrence_index}${coveredCount > 1 ? ` (cubre ${coveredCount} ocurrencias)` : ''}`,
             timeMs: slot.occurrence_time_ms,
             priority: slot.priority,
             assignment: slot.coverage_status === 'uncovered' || slot.coverage_status === 'excluded' ? null : slot,

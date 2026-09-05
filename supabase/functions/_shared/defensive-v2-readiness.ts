@@ -23,13 +23,18 @@ export function defensiveV2Capabilities(input: {
   const playerMode = input.resolverEndpoint && input.resolverSchema === 'ready';
   const planManagement = playerMode && input.planSchema === 'ready';
   const evaluator = planManagement && input.evaluatorSchema === 'ready';
-  const reporting = evaluator && input.reliabilitySchema === 'ready' && input.backfill === 'ready';
+  // La infografía aplica además un gate atómico jugador×noche: si falta una
+  // evaluación o la generación no es homogénea, usa el resumen legacy completo.
+  // Por eso puede activarse con el evaluator listo sin esperar el histórico
+  // global. Fiabilidad sí agrega ventanas históricas y exige el backfill total.
+  const infographic = evaluator;
+  const reliability = evaluator && input.reliabilitySchema === 'ready' && input.backfill === 'ready';
   return {
     playerMode,
     playerOverride: playerMode && input.overrideAudit === 'ready',
     planManagement,
     evaluator,
-    infographic: reporting,
-    reliability: reporting,
+    infographic,
+    reliability,
   };
 }

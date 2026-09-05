@@ -1,0 +1,104 @@
+<section class="policy-editor" aria-label="Policy causal de la mecánica">
+  @if (error(); as message) {
+    <p class="error" role="alert">{{ message }}</p>
+  }
+  @if (loading()) {
+    <p class="meta">Cargando semántica causal...</p>
+  } @else if (draft(); as policy) {
+    <form class="policy-form" (ngSubmit)="save()">
+      <header>
+        <strong>Semántica causal</strong>
+        <span>v{{ currentPolicy()?.policyVersion }} · {{ currentPolicy()?.confidence }}</span>
+      </header>
+        <div class="field-grid">
+          <label>Categoría
+            <select [ngModel]="policy.displayCategory ?? ''" name="displayCategory" (ngModelChange)="update('displayCategory', $event || null)">
+              <option value="">Sin categoría</option>
+              @for (category of categories; track category) { <option [value]="category">{{ category }}</option> }
+            </select>
+          </label>
+          <label>Confianza
+            <select [ngModel]="policy.confidence" name="confidence" (ngModelChange)="update('confidence', $event)">
+              @for (confidence of confidences; track confidence) { <option [value]="confidence">{{ confidence }}</option> }
+            </select>
+          </label>
+          <label>Targeting
+            <select [ngModel]="policy.targetingMode" name="targetingMode" (ngModelChange)="update('targetingMode', $event)">
+              @for (mode of targetingModes; track mode) { <option [value]="mode">{{ mode }}</option> }
+            </select>
+          </label>
+          <label>Responsabilidad
+            <select [ngModel]="policy.responsibilityMode" name="responsibilityMode" (ngModelChange)="update('responsibilityMode', $event)">
+              @for (mode of responsibilityModes; track mode) { <option [value]="mode">{{ mode }}</option> }
+            </select>
+          </label>
+          <label>Semántica de daño
+            <select [ngModel]="policy.damageSemantics" name="damageSemantics" (ngModelChange)="update('damageSemantics', $event)">
+              @for (mode of damageSemantics; track mode) { <option [value]="mode">{{ mode }}</option> }
+            </select>
+          </label>
+          <label>Propagación
+            <select [ngModel]="policy.failurePropagation" name="failurePropagation" (ngModelChange)="update('failurePropagation', $event)">
+              @for (mode of failurePropagations; track mode) { <option [value]="mode">{{ mode }}</option> }
+            </select>
+          </label>
+          <label>Asignación
+            <select [ngModel]="policy.assignmentMode" name="assignmentMode" (ngModelChange)="update('assignmentMode', $event)">
+              @for (mode of assignmentModes; track mode) { <option [value]="mode">{{ mode }}</option> }
+            </select>
+          </label>
+          <label>Expectativa defensiva
+            <select [ngModel]="policy.defensiveExpectation" name="defensiveExpectation" (ngModelChange)="update('defensiveExpectation', $event)">
+              @for (expectation of defensiveExpectations; track expectation) { <option [value]="expectation">{{ expectation }}</option> }
+            </select>
+          </label>
+          <label>Crédito
+            <select [ngModel]="policy.creditScope" name="creditScope" (ngModelChange)="update('creditScope', $event)">
+              @for (scope of creditScopes; track scope) { <option [value]="scope">{{ scope }}</option> }
+            </select>
+          </label>
+          <label>Penalización
+            <select [ngModel]="policy.penaltyScope" name="penaltyScope" (ngModelChange)="update('penaltyScope', $event)">
+              @for (scope of penaltyScopes; track scope) { <option [value]="scope">{{ scope }}</option> }
+            </select>
+          </label>
+        </div>
+        <label>Respuesta requerida
+          <textarea [ngModel]="policy.requiredResponse ?? ''" name="requiredResponse" (ngModelChange)="update('requiredResponse', $event || null)"></textarea>
+        </label>
+        <label>Motivo de la revisión
+          <textarea [ngModel]="reason()" name="reason" (ngModelChange)="reason.set($event)" required></textarea>
+        </label>
+        <button type="submit" [disabled]="saving()">
+          {{ saving() ? 'Publicando...' : 'Publicar nueva versión' }}
+        </button>
+
+        <section class="aliases" aria-labelledby="aliases-heading">
+          <h3 id="aliases-heading">Aliases canónicos</h3>
+          @if (aliases().length) {
+            <ul>
+              @for (alias of aliases(); track alias.id) {
+                <li>
+                  <span>{{ alias.abilityId ?? alias.normalizedName }}</span>
+                  <small>{{ alias.source }} · {{ alias.confidence }} · {{ alias.active ? 'activo' : 'inactivo' }}</small>
+                </li>
+              }
+            </ul>
+          } @else {
+            <p>No hay aliases registrados.</p>
+          }
+          <div class="alias-inputs">
+            <label>ID de habilidad
+              <input type="number" [ngModel]="aliasAbilityId() ?? ''" name="aliasAbilityId" min="1" (ngModelChange)="aliasAbilityId.set($event === '' ? null : +$event)">
+            </label>
+            <label>Nombre normalizado
+              <input [ngModel]="aliasNormalizedName()" name="aliasNormalizedName" (ngModelChange)="aliasNormalizedName.set($event)">
+            </label>
+          </div>
+          <button type="button" (click)="addAlias()" [disabled]="saving()">Registrar alias manual</button>
+        </section>
+    </form>
+  } @else {
+    <p class="empty">Esta mecánica aún no tiene policy. Ejecuta el backfill global desde la barra de clasificación.</p>
+  }
+</section>

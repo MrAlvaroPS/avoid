@@ -100,6 +100,9 @@ interface TemplateRow {
   prewarn_seconds: number;
   trigger_type: 'bossmod' | 'time';
   bossmod_spell_id: number | null;
+  /** Ver migración 20260903110000 — solo se usa si bossmod_counter_verified es true. */
+  bossmod_counter: string | null;
+  bossmod_counter_verified: boolean;
   notes: string | null;
 }
 
@@ -152,7 +155,7 @@ Deno.serve(async (req: Request) => {
   if (body.action === 'health') {
     return jsonResponse({
       ok: true,
-      generatorVersion: 'generate-defensive-plan@2.1.0',
+      generatorVersion: 'generate-defensive-plan@2.2.0',
       solverVersion: DEFENSIVE_PLAN_SOLVER_VERSION,
       resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
     });
@@ -179,6 +182,7 @@ Deno.serve(async (req: Request) => {
   }
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+  let stage = 'load_sources';
   try {
     const [rosterResult, latestResult, occurrenceResult, planningResult, candidateResult, templateResult] = await Promise.all([
       supabase.from('wowaudit_roster').select('character_id,name,class,role').in('name', requestedNames),
@@ -198,6 +202,7 @@ Deno.serve(async (req: Request) => {
     const occurrenceRows = (occurrenceResult.data ?? []) as OccurrenceRow[];
     if (!occurrenceRows.length) return jsonResponse({ ok: false, error: 'No hay perfiles por ocurrencia; sincroniza primero el boss y dificultad.' }, 409);
 
+    stage = 'resolve_roster';
     const rosterByName = new Map(((rosterResult.data ?? []) as RosterRow[]).map((row) => [row.name, row]));
     const latestByName = new Map(((latestResult.data ?? []) as LatestBuildRow[]).map((row) => [row.player_name, row]));
     const memberSources = body.members.map((requested) => {
@@ -210,13 +215,14 @@ Deno.serve(async (req: Request) => {
     const classes = [...new Set(memberSources.map((source) => source.className))];
     const builds = [...new Set(memberSources.map((source) => source.latest?.game_build).filter((value): value is string => Boolean(value)))];
 
+    stage = 'load_defensive_catalog';
     const [catalogResult, profileResult, ruleResult, overrideResult, lookupResult] = await Promise.all([
       supabase.from('cooldown_catalog').select('*').in('class', classes).eq('excluded', false),
       supabase.from('defensive_spec_profiles').select('*').in('class', classes),
       supabase.from('defensive_modifier_rules').select('*').in('class', classes).eq('active', true),
       supabase.from('player_defensive_overrides').select('*').in('class', classes).eq('active', true),
       builds.length
-        ? supabase.from('talent_spell_lookup').select('build,entry_to_spell').in('build', builds)
+        ? supabase.from('talent_spell_lookup').select('build,entry_to_spell,known_entry_ids').in('build', builds)
         : Promise.resolve({ data: [], error: null }),
     ]);
     for (const result of [catalogResult, profileResult, ruleResult, overrideResult, lookupResult]) {
@@ -231,7 +237,14 @@ Deno.serve(async (req: Request) => {
     const lookupByBuild = new Map(
       ((lookupResult.data ?? []) as { build: string; entry_to_spell: Record<string, number> }[]).map((row) => [row.build, row.entry_to_spell]),
     );
+    // §E2.1: ver knownTalentEntryIds en effective-defensives.ts — evita que un
+    // nodo estructural sin spell (p. ej. selector de Hero Talents) bloquee
+    // buildPresence='absent' para todo el build.
+    const knownEntryIdsByBuild = new Map(
+      ((lookupResult.data ?? []) as { build: string; known_entry_ids?: number[] }[]).map((row) => [row.build, new Set(row.known_entry_ids ?? [])]),
+    );
 
+    stage = 'resolve_effective_kits';
     const memberSnapshots: CreateDraftRequest['members'] = [];
     const solverPlayers: SolverPlayerKit[] = [];
     const resourceSelectionByPlayer = new Map(
@@ -269,6 +282,7 @@ Deno.serve(async (req: Request) => {
           includeExternal: true,
           allTalentSpellIds,
           talentLookupComplete: allTalentSpellIds != null,
+          knownTalentEntryIds: gameBuild ? (knownEntryIdsByBuild.get(gameBuild) ?? null) : null,
         },
         resolverData,
       );
@@ -365,13 +379,19 @@ Deno.serve(async (req: Request) => {
             source: 'template',
             triggerMode: template.trigger_type,
             bossmodSpellId: template.bossmod_spell_id,
-            bossmodCounterVerified: false,
+            // §"el trigger... se puede anclar a una mecánica de bossmod o de
+            // bigwigs" (feedback real, 2026-09-03) — antes siempre false, así
+            // que una asignación automática con bossmod_spell_id igual
+            // degradaba en silencio a tiempo fijo en la exportación MRT.
+            bossmodCounter: template.bossmod_counter,
+            bossmodCounterVerified: template.bossmod_counter_verified,
             notes: template.notes,
           });
         }
       }
     }
 
+    stage = 'solve_plan';
     const result = solveDefensivePlan({
       mode: body.mode,
       occurrences,
@@ -381,6 +401,7 @@ Deno.serve(async (req: Request) => {
     });
     if (!result.feasible) return jsonResponse({ ok: false, error: 'Las reservas hard contienen conflictos.', solver: result }, 409);
 
+    stage = 'build_draft';
     const rosterFingerprint = await sha256(
       memberSnapshots
         .map((member) => ({ playerKey: member.playerKey, buildFingerprint: member.buildFingerprint, included: member.included }))
@@ -459,15 +480,19 @@ Deno.serve(async (req: Request) => {
         buildFingerprintSnapshot: slot.buildFingerprintSnapshot,
         notes: slot.notes,
         rationale: slot.rationale,
+        needsFreshCast: slot.needsFreshCast,
+        coveredByPriorCastAtMs: slot.coveredByPriorCastAtMs,
       })),
     };
+    stage = 'validate_draft';
     const validationError = validateDefensivePlanDraft(draft);
     if (validationError) throw new Error(`El solver produjo un draft inválido: ${validationError}`);
+    stage = 'persist_draft';
     const plan = await persistDefensivePlanDraft(supabase, draft, guard.userId);
 
     return jsonResponse({ ok: true, plan, solver: result });
   } catch (error) {
-    console.error('generate-defensive-plan error:', error);
-    return jsonResponse({ ok: false, error: errorMessage(error) }, 500);
+    console.error(`generate-defensive-plan error at ${stage}:`, error);
+    return jsonResponse({ ok: false, error: `No se pudo generar el borrador (${stage}): ${errorMessage(error)}`, stage }, 500);
   }
 });
