@@ -1,0 +1,107 @@
+name: Verify mechanic attribution canonical shadow
+
+on:
+  push:
+    branches:
+      - feature/mechanic-attribution-canonical-shadow-v1
+
+permissions:
+  contents: write
+
+jobs:
+  verify-shadow:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Align causal verification scripts with occurrence v2 shadow
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          schema_path = Path('scripts/verify-causal-schema.mjs')
+          text = schema_path.read_text()
+
+          old_top = "const ingestionHardeningMigration = '20260903070000_harden_pull_ingestion_recovery.sql';\nconst ingestionHardeningSql = readFileSync(join(migrationDir, ingestionHardeningMigration), 'utf8');"
+          new_top = old_top + "\nconst mechanicAttributionShadowMigration = '20260905233000_mechanic_attribution_canonical_shadow_v1.sql';\nconst mechanicAttributionShadowSql = readFileSync(join(migrationDir, mechanicAttributionShadowMigration), 'utf8');"
+          if old_top in text and 'mechanicAttributionShadowMigration' not in text:
+              text = text.replace(old_top, new_top, 1)
+
+          old_occ = """const occurrenceEvaluator = readFileSync(join(root, 'supabase', 'functions', 'evaluate-mechanic-occurrences', 'index.ts'), 'utf8');
+          assert(/occurrence_index:\\s*1\\b/.test(occurrenceEvaluator), 'El evaluator debe usar un occurrence_index positivo.');
+          assert(
+            occurrenceEvaluator.includes(\"onConflict: 'pull_id,mechanic_key,occurrence_index,occurrence_resolver_version'\"),
+            'El UPSERT de occurrences no coincide con el unique versionado de M13.',
+          );"""
+          new_occ = """const occurrenceEvaluator = readFileSync(join(root, 'supabase', 'functions', 'evaluate-mechanic-occurrences', 'index.ts'), 'utf8');
+          assert(occurrenceEvaluator.includes('resolveEventBackedMechanicOccurrences'), 'Occurrences siguen usando el placeholder y no el resolver event-backed.');
+          assert(occurrenceEvaluator.includes('EVENT_BACKED_OCCURRENCE_RESOLVER_VERSION'), 'Occurrences no persisten identidad explícita del resolver v2.');
+          assert(occurrenceEvaluator.includes(\".from('applicable_pull_mechanic_events')\"), 'Occurrences v2 no parten de eventos reales aplicables del pull.');
+          assert(
+            occurrenceEvaluator.includes(\"onConflict: 'pull_id,mechanic_key,occurrence_index,occurrence_resolver_version'\"),
+            'El UPSERT de occurrences no coincide con el unique versionado de M13.',
+          );"""
+          if old_occ in text:
+              text = text.replace(old_occ, new_occ, 1)
+
+          anchor = "assert(occurrenceSql.includes(\"check (relationship <> 'collateral_victim' or not penalty_eligible)\"), 'Una víctima colateral podría quedar penalizada.');"
+          shadow_checks = """
+
+          assert(mechanicAttributionShadowSql.includes('create table if not exists mechanic_attribution_shadow_evaluations'), 'El shadow canónico no crea su tabla aditiva.');
+          assert(mechanicAttributionShadowSql.includes('alter table mechanic_attribution_shadow_evaluations enable row level security'), 'El shadow canónico no activa RLS.');
+          assert(mechanicAttributionShadowSql.includes('on mechanic_attribution_shadow_evaluations for select using (is_officer())'), 'El shadow canónico no limita lectura a officers.');
+          assert(mechanicAttributionShadowSql.includes('cardinality(new_accusation_players) = 0'), 'El schema shadow no impide crear acusaciones nuevas.');
+          assert(mechanicAttributionShadowSql.includes('with (security_invoker = true)'), 'La vista de reporte shadow no respeta RLS del invocador.');
+          const attributionShadowEvaluator = readFileSync(join(root, 'supabase', 'functions', 'evaluate-mechanic-attribution-shadow', 'index.ts'), 'utf8');
+          assert(attributionShadowEvaluator.includes('MECHANIC_ATTRIBUTION_SHADOW_VERSION'), 'El evaluator shadow no persiste versión explícita.');
+          assert(attributionShadowEvaluator.includes('newAccusationCount !== 0'), 'El evaluator shadow no aplica el gate runtime de cero acusaciones nuevas.');
+          """
+          if anchor in text and 'shadow canónico no crea su tabla aditiva' not in text:
+              text = text.replace(anchor, anchor + shadow_checks, 1)
+
+          schema_path.write_text(text)
+
+          runtime_path = Path('scripts/verify-causal-runtime.mjs')
+          runtime = runtime_path.read_text()
+          needle = "  'evaluate-mechanic-occurrences',\n"
+          if "'evaluate-mechanic-attribution-shadow'" not in runtime:
+              runtime = runtime.replace(needle, needle + "  'evaluate-mechanic-attribution-shadow',\n", 1)
+          runtime_path.write_text(runtime)
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused attribution tests
+        run: >-
+          npx vitest run
+          src/app/shared/mechanic-attribution.spec.ts
+          src/app/shared/mechanic-attribution-shadow.spec.ts
+          src/app/shared/mechanic-occurrence-event-resolver.spec.ts
+          src/app/shared/mechanic-occurrence-ownership.spec.ts
+          src/app/shared/pull-consistency.util.spec.ts
+
+      - name: Verify causal schema
+        run: npm run verify:causal-schema
+
+      - name: Verify causal runtime
+        run: npm run verify:causal-runtime
+
+      - name: Angular build
+        run: npm run build
+
+      - name: Commit verifier updates
+        shell: bash
+        run: |
+          if git diff --quiet -- scripts/verify-causal-schema.mjs scripts/verify-causal-runtime.mjs; then
+            echo 'Verification scripts already aligned.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/verify-causal-schema.mjs scripts/verify-causal-runtime.mjs
+          git commit -m 'test: align causal gates with mechanic attribution shadow v1'
+          git push
