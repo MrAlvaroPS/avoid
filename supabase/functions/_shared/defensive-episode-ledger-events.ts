@@ -2,37 +2,19 @@
 // fila de staging YA evaluada (`player_pull_defensive_episode_evaluations`,
 // ver `defensive-episode-staging.ts`) en eventos canónicos del ledger
 // (`player_execution_events`), namespace `defensive_episode_*` (Respuesta)
-// y `defensive_plan_*` (Gestión, solo cuando el episodio lleva plan
-// linkage). Puro — el caller (materialize-execution-ledger) hace el I/O.
-//
-// Identidad ESTABLE, corrección de infraestructura #2 del plan: a
-// diferencia de `generateDefensiveEvents()` (V2 legacy, dedup key con hash
-// de evidence — una reevaluación con la MISMA decisión pero evidencia
-// nueva inserta fila en vez de actualizar), aquí el deduplicationKey NUNCA
-// incluye evidence/veredicto: `${generationId}:${episodeId}:${playerName}:response`
-// (o `:plan:${planAssignmentId}` para Gestión). Reevaluar el mismo episodio
-// dentro de la MISMA generación siempre pisa la misma fila vía UPSERT.
+// y `defensive_plan_*` (Gestión, solo cuando el episodio lleva plan linkage).
+// Identidad estable: el deduplicationKey nunca depende de evidence/verdict.
 
 import type { EvaluationConfidence, ExecutionReasonCode, ExecutionVerdict } from './combat-evaluation-contract.ts';
 import type { PersistedDefensiveEpisode } from './defensive-episode-persistence.ts';
 import type { ResponseVerdict } from './defensive-episode-verdict.ts';
 import type { DefensiveEpisodeEvaluationRow } from './defensive-episode-staging.ts';
 
-// episode-evaluator@1 — asignado en §8 del plan original ("pendiente de
-// asignar cuando se construya el materializer"). §E4 (continuación del plan,
-// 2026-09-04) cambia MATERIALMENTE el comportamiento del Episode Evaluator:
-// el candidato deja de tener un `applicability` ambiguo y pasa a distinguir
-// damageApplicability/temporalOpportunity/temporalCastCoverage/engagement
-// explícitos (§6), la disponibilidad ya no depende de un heurístico de
-// mechanisms (§5, ventana reactiva ahora es política explícita
-// afterDamageResponseWindowMs), un episodio de presión ya no desaparece
-// cuando el kit conocido está vacío (§2), y la confidence del veredicto es
-// decision-scoped en vez de la más débil de todo el kit (§11) — bump
-// episode-evaluator@1 → episode-evaluator@2. Único constante autoritativa;
-// no se introduce una segunda versión duplicada en ningún otro fichero.
-export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@3';
+// @4: `missed_ready` exige además confidence punitiva (verified/inferred).
+// fallback/uncertain apparent-ready degrada a uncertain y queda fuera del
+// denominador de Response. Esta versión es la constante autoritativa.
+export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@4';
 
-/** Mapeo §2.6 — tabla "Mapeo a ExecutionVerdict", literal. */
 export const RESPONSE_VERDICT_TO_EXECUTION_VERDICT: Record<ResponseVerdict, ExecutionVerdict> = {
   covered_verified: 'success',
   missed_ready: 'missed',
@@ -43,7 +25,6 @@ export const RESPONSE_VERDICT_TO_EXECUTION_VERDICT: Record<ResponseVerdict, Exec
   excluded: 'context',
 };
 
-/** Reason codes nuevos §2.6 — uno por responseVerdict, nunca compartidos con Gestión/legacy. */
 export const RESPONSE_VERDICT_TO_REASON_CODE: Record<ResponseVerdict, ExecutionReasonCode> = {
   covered_verified: 'DEFENSIVE_EPISODE_COVERED',
   missed_ready: 'DEFENSIVE_READY_NOT_USED',
@@ -54,7 +35,6 @@ export const RESPONSE_VERDICT_TO_REASON_CODE: Record<ResponseVerdict, ExecutionR
   excluded: 'DEFENSIVE_EPISODE_EXCLUDED',
 };
 
-/** Solo estos dos pueden penalizar (tabla §2.6: creditEligible/penaltyEligible). */
 const PENALTY_ELIGIBLE_RESPONSE_VERDICTS = new Set<ResponseVerdict>(['missed_ready', 'missed_due_to_mistime']);
 
 function isPenaltyConfidence(confidence: EvaluationConfidence): boolean {
@@ -110,15 +90,6 @@ export interface DefensiveEpisodeLedgerEventContext {
   semanticResolverVersion: string;
   resolverVersion: string;
   contextResolverVersion: string;
-  /**
-   * Solo se enlaza occurrence_id cuando el episodio es realmente
-   * occurrence-backed (episodeId no heurístico) Y el caller aporta la
-   * versión del resolver de occurrence que lo demuestra — la causalidad v3
-   * sigue en shadow (ver defensive-episode-grouping.ts), así que sin este
-   * dato explícito se deja null en ambos lados (invariante de la FK
-   * emparejada de player_execution_events: occurrence_id null ⟺
-   * occurrence_resolver_version null).
-   */
   occurrenceResolverVersion?: string | null;
 }
 
@@ -126,7 +97,6 @@ function isOccurrenceBackedEpisodeId(episodeId: string): boolean {
   return !episodeId.startsWith('heuristic:');
 }
 
-/** UN evento de Respuesta por episodio — siempre se emite (los 7 estados son mutuamente excluyentes). */
 export function buildDefensiveEpisodeResponseLedgerEvent(
   ctx: DefensiveEpisodeLedgerEventContext,
 ): DefensiveEpisodeLedgerEvent {
@@ -179,13 +149,6 @@ export function buildDefensiveEpisodeResponseLedgerEvent(
   };
 }
 
-/**
- * UN evento de Gestión por episodio — solo cuando el episodio lleva plan
- * linkage real (`planAssignmentId`+`planVerdict`). Hoy ningún evaluator
- * puebla esos campos todavía (Gestión es "un evaluator distinto de
- * Respuesta", §2.5.3 — no se construye en este corte); esta función queda
- * lista y testeada para cuando exista, en vez de inventar su lógica aquí.
- */
 export function buildDefensiveEpisodePlanLedgerEvent(
   ctx: DefensiveEpisodeLedgerEventContext,
 ): DefensiveEpisodeLedgerEvent | null {
@@ -193,9 +156,6 @@ export function buildDefensiveEpisodePlanLedgerEvent(
   if (episode.planAssignmentId == null || episode.planVerdict == null) return null;
 
   const verdict: ExecutionVerdict = episode.planVerdict === 'covered' ? 'success' : 'missed';
-  // Reutiliza los reason codes YA existentes de Gestión/Plan legacy — son
-  // conceptualmente correctos aquí (esto SÍ es Gestión, no Respuesta); la
-  // prohibición del plan es solo no usarlos para eventos de Respuesta.
   const reasonCode: ExecutionReasonCode = episode.planVerdict === 'covered' ? 'PLAN_COVERED' : 'REMINDER_MISSED';
   const creditEligible = episode.planVerdict === 'covered';
   const penaltyEligible = episode.planVerdict === 'missed' && isPenaltyConfidence(episode.confidence);
@@ -248,7 +208,6 @@ export interface BuildDefensiveEpisodeLedgerEventsParams {
   resolveOccurrenceResolverVersion?: (episode: PersistedDefensiveEpisode) => string | null | undefined;
 }
 
-/** Todos los eventos canónicos (Respuesta + Gestión cuando aplique) de UNA fila de staging completa. */
 export function buildDefensiveEpisodeLedgerEvents(
   params: BuildDefensiveEpisodeLedgerEventsParams,
 ): DefensiveEpisodeLedgerEvent[] {
