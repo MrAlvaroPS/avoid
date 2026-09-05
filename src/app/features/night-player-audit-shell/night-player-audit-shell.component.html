@@ -30,12 +30,12 @@
     <div class="integrity-icon" aria-hidden="true">i</div>
     <div class="integrity-copy">
       <p class="integrity-kicker">Estado de datos</p>
-      <h2 id="integrity-title">Pull Ledger y Defensive v7 conectados; dominios posteriores siguen bloqueados</h2>
+      <h2 id="integrity-title">Pull Ledger y Defensive v7 conectados; Fase 4 ya audita readiness causal sin fallback</h2>
       <p>
-        La población de pulls y la auditoría defensiva ya se proyectan desde sus owners explícitos.
-        La sección defensiva resuelve exclusivamente el pointer de generación publicada y falla cerrado
-        cuando ese report no está cubierto. Mecánicas, Execution, Reliability y build siguen pendientes
-        de sus fases y no se rellenan con métricas legacy.
+        Mecánicas y muertes ya tienen owner causal explícito, pero sus totales solo se publican cuando
+        todos los pulls válidos participados tienen <code>full_execution_backfill=done</code>. Mientras
+        el pipeline no esté materializado, la sección muestra el blocker y conserva N/D en lugar de
+        reutilizar <code>mechanicFails</code>, <code>NightDeathRow</code> o cualquier otro dato legacy.
       </p>
     </div>
     <div class="integrity-count" title="Claims registrados en el catálogo de ownership">
@@ -48,7 +48,7 @@
     <span class="section-tab">Visión general</span>
     <a class="section-tab section-tab--active" href="#pull-ledger">Pull Ledger · Fase 2</a>
     <a class="section-tab section-tab--active" href="#defensivos">Defensivos · Fase 3</a>
-    <span class="section-tab section-tab--locked">Mecánicas · Fase 4</span>
+    <a class="section-tab section-tab--active" href="#mecanicas">Mecánicas + muertes · Fase 4</a>
   </nav>
 
   <section class="shell-grid">
@@ -58,7 +58,7 @@
           <p class="card-kicker">Fundación de auditoría</p>
           <h2>Una sola verdad, visible y reconstruible</h2>
         </div>
-        <span class="ready-badge">Fases 1–3</span>
+        <span class="ready-badge">Fases 1–3 + gate F4</span>
       </div>
 
       <div class="foundation-grid">
@@ -82,23 +82,24 @@
           <span class="foundation-index">03</span>
           <h3>Evidencia trazable</h3>
           <p>
-            Pull refs, WCL fights y DefensiveEpisodes se enlazan sin fabricar filtros ni
-            reinterpretar scoring en frontend.
+            Pull refs, DefensiveEpisodes, occurrences y execution events se enlazan sin fabricar
+            filtros ni reinterpretar scoring en frontend.
           </p>
         </div>
       </div>
     </article>
 
     <aside class="next-card">
-      <p class="card-kicker">Siguiente gate</p>
-      <h2>Fase 4 · Mecánicas + muertes</h2>
+      <p class="card-kicker">Gate operativo actual</p>
+      <h2>Completar materialización causal de Fase 4</h2>
       <p>
-        El siguiente bloque deberá consumir las evaluaciones causales y ownership de mecánicas sin
-        reutilizar incidentes o causas de muerte legacy como si fueran verdad canónica.
+        Antes de entrar en Fase 5 hay que ejecutar y aceptar el E2E causal: occurrences,
+        responsibility edges y <code>full_execution_backfill</code> deben quedar completos y
+        homogéneos sobre un corpus real. El dosier ya está preparado para consumirlos cuando existan.
       </p>
       <div class="next-rule">
         <span>Regla activa</span>
-        <strong>N/D antes que falsa precisión</strong>
+        <strong>No avanzar fase con un gate runtime abierto</strong>
       </div>
     </aside>
   </section>
@@ -109,6 +110,11 @@
   />
 
   <app-night-player-defensive-audit
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+  />
+
+  <app-night-player-mechanic-death-audit
     [reportCode]="reportCode()"
     [playerName]="playerName()"
   />
