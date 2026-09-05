@@ -30,7 +30,7 @@ import type { DefensiveEpisodeEvaluationRow } from './defensive-episode-staging.
 // decision-scoped en vez de la más débil de todo el kit (§11) — bump
 // episode-evaluator@1 → episode-evaluator@2. Único constante autoritativa;
 // no se introduce una segunda versión duplicada en ningún otro fichero.
-export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@2';
+export const DEFENSIVE_EPISODE_EVALUATOR_VERSION = 'episode-evaluator@3';
 
 /** Mapeo §2.6 — tabla "Mapeo a ExecutionVerdict", literal. */
 export const RESPONSE_VERDICT_TO_EXECUTION_VERDICT: Record<ResponseVerdict, ExecutionVerdict> = {

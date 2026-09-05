@@ -1465,6 +1465,8 @@ describe('resolveEffectiveDefensiveKit — E2.6 false-negative fix: eligible res
     const resolved = kit.find((d) => d.spellId === talentDefensive.spellId)!;
     expect(resolved.buildPresence).toBe('present');
     expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_pull');
+    expect(resolved.buildPresenceConfidence).toBe('verified');
+    expect(resolved.confidence).toBe('verified');
     expect(resolved.eligible).toBe(true);
     expect(resolved.isDefensiveKitMember).toBe(true);
     expect(resolved.createsMissableOpportunity).toBe(true);
@@ -1484,9 +1486,29 @@ describe('resolveEffectiveDefensiveKit — E2.6 false-negative fix: eligible res
     const resolved = kit.find((d) => d.spellId === talentDefensive.spellId)!;
     expect(resolved.buildPresence).toBe('present');
     expect(resolved.buildPresenceEvidence).toBe('observed_cast_same_build_fingerprint');
+    expect(resolved.buildPresenceConfidence).toBe('inferred');
+    expect(resolved.confidence).toBe('inferred');
     expect(resolved.eligible).toBe(true);
     expect(resolved.isDefensiveKitMember).toBe(true);
     expect(resolved.createsMissableOpportunity).toBe(true);
+  });
+
+  it('cast proof preserves unrelated confidence uncertainty that existed before the acquisition gate', () => {
+    const talentDefensive: EffectiveDefensiveCatalogEntry = { ...fade, spellId: 19236, name: 'Desperate Prayer' };
+    const [resolved] = resolveEffectiveDefensiveKit(
+      input({
+        gameBuild: null,
+        gameBuildConfidence: 'uncertain',
+        talentBuild: [],
+        allTalentSpellIds: new Set([talentDefensive.spellId]),
+        talentLookupComplete: true,
+        demonstratedPersistentCastSpellIds: new Map([[talentDefensive.spellId, 'observed_cast_same_pull']]),
+      }),
+      data({ catalog: [talentDefensive], semantics: [semanticEntry({ spellId: talentDefensive.spellId })] }),
+    );
+    expect(resolved.buildPresence).toBe('present');
+    expect(resolved.buildPresenceConfidence).toBe('verified');
+    expect(resolved.confidence).toBe('uncertain');
   });
 
   it('pre-existing legitimate eligible=false blocker (talent-selected passive conversion) + cast evidence: remains eligible=false', () => {

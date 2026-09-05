@@ -83,7 +83,7 @@ export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0'
 // comportamiento observable real en isDefensiveKitMember/
 // createsMissableOpportunity para cualquier caller que ya pasara
 // demonstratedPersistentCastSpellIds junto con allTalentSpellIds.
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.3.1';
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.3.2';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 // §E1 — presencia real en ESTE build, independiente de "elegible ahora mismo"
@@ -945,6 +945,10 @@ export function resolveEffectiveDefensiveKit(
       // talent_spell_lookup, o sí resuelve seleccionado, o el build no está
       // resuelto), queda en null y no hay nada que restaurar.
       let eligibleBeforeUnprovenDirectAcquisitionGate: boolean | null = null;
+      // §E7-GAP-01: confidence immediately before the same acquisition gate.
+      // A positive cast may remove uncertainty introduced by that gate, but
+      // must preserve any unrelated uncertainty that already existed.
+      let confidenceBeforeUnprovenDirectAcquisitionGate: DefensiveResolutionConfidence | null = null;
       const provenance: ResolutionStep[] = [
         {
           kind: 'catalog_base',
@@ -1120,6 +1124,7 @@ export function resolveEffectiveDefensiveKit(
           // §E2.6: se captura el valor de `eligible` INMEDIATAMENTE antes de
           // esta asignación — ver declaración de la variable más arriba.
           eligibleBeforeUnprovenDirectAcquisitionGate = eligible;
+          confidenceBeforeUnprovenDirectAcquisitionGate = confidence;
           eligible = false;
           confidence = weakerConfidence(confidence, 'uncertain');
           buildPresence = 'unknown';
@@ -1235,6 +1240,8 @@ export function resolveEffectiveDefensiveKit(
       // resolver solo lo consume.
       const castEvidence = input.demonstratedPersistentCastSpellIds?.get(entry.spellId);
       if (buildPresence !== 'present' && castEvidence != null) {
+        const castEvidenceConfidence: DefensiveResolutionConfidence =
+          castEvidence === 'observed_cast_same_pull' ? 'verified' : 'inferred';
         // §E2.6 (Acquisition Safety Closure — false-negative fix): la puerta
         // legacy de adquisición directa no probada (§E2.5, arriba) dejaba
         // `eligible=false` sin tocarlo nunca — pero isDefensiveKitMember /
@@ -1252,8 +1259,16 @@ export function resolveEffectiveDefensiveKit(
         if (eligibleBeforeUnprovenDirectAcquisitionGate != null) {
           eligible = eligibleBeforeUnprovenDirectAcquisitionGate;
         }
+        if (confidenceBeforeUnprovenDirectAcquisitionGate != null) {
+          confidence = weakerConfidence(
+            confidenceBeforeUnprovenDirectAcquisitionGate,
+            castEvidenceConfidence,
+          );
+        }
         buildPresence = 'present';
-        buildPresenceConfidence = weakerConfidence(buildPresenceConfidence, 'inferred');
+        // The positive observation disproves the acquisition UNKNOWN itself:
+        // same-pull is verified; exact same-build fingerprint is inferred.
+        buildPresenceConfidence = castEvidenceConfidence;
         buildPresenceEvidence = castEvidence;
         buildPresenceReason =
           castEvidence === 'observed_cast_same_pull'
