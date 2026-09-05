@@ -1,0 +1,278 @@
+<section class="defensive-audit" id="defensivos" aria-labelledby="defensive-audit-title">
+  <header class="section-heading">
+    <div>
+      <p class="section-kicker">Fase 3 · fuente canónica v7</p>
+      <h2 id="defensive-audit-title">Auditoría defensiva</h2>
+      <p>
+        Usage, Response y Gestión se proyectan desde la generación defensiva publicada. Esta pantalla
+        no usa <code>pullScore</code>, pressure windows legacy ni penalizaciones defensivas antiguas.
+      </p>
+    </div>
+    <span class="canonical-badge">DefensiveEpisodes</span>
+  </header>
+
+  @if (loading()) {
+    <div class="state-card">Cargando generación defensiva canónica…</div>
+  } @else if (error(); as loadError) {
+    <div class="state-card state-card--error">
+      <strong>No se pudo cargar la auditoría defensiva.</strong>
+      <span>{{ loadError }}</span>
+    </div>
+  } @else if (data(); as audit) {
+    <article class="generation-card" [attr.data-state]="audit.integrity">
+      <div class="generation-main">
+        <div class="generation-status">
+          <span class="status-dot"></span>
+          <div>
+            <span>Estado defensivo</span>
+            <strong>{{ stateLabel(audit) }}</strong>
+          </div>
+        </div>
+
+        <div class="generation-metric">
+          <span>Cobertura de pulls</span>
+          <strong>{{ audit.coverage.evaluatedPulls }}/{{ audit.coverage.expectedPulls }}</strong>
+        </div>
+
+        <div class="generation-metric">
+          <span>Episodios</span>
+          <strong>{{ audit.totalEpisodes }}</strong>
+        </div>
+      </div>
+
+      @if (audit.generation; as generation) {
+        <div class="generation-meta">
+          <span><b>Generation</b> <code [title]="generation.id">{{ shortId(generation.id) }}</code></span>
+          <span><b>Evaluator</b> {{ generation.evaluatorVersion ?? 'N/D' }}</span>
+          <span><b>Resolver</b> {{ generation.resolverVersion }}</span>
+          <span><b>Semantic resolver</b> {{ generation.semanticResolverVersion }}</span>
+          <span><b>Build</b> {{ generation.gameBuild }}</span>
+        </div>
+      } @else {
+        <p class="generation-empty">
+          No existe una generación publicada seleccionable para este read-model. Los KPI permanecen N/D.
+        </p>
+      }
+    </article>
+
+    @if (audit.integrityIssues.length) {
+      <details class="integrity-panel">
+        <summary>
+          <span>Incidencias de integridad</span>
+          <strong>{{ audit.integrityIssues.length }}</strong>
+        </summary>
+        <ul>
+          @for (issue of audit.integrityIssues; track issue) {
+            <li>{{ issue }}</li>
+          }
+        </ul>
+      </details>
+    }
+
+    <div class="kpi-grid">
+      <article class="kpi-card" [attr.data-status]="audit.usage.status">
+        <div class="kpi-topline">
+          <span>Usage</span>
+          <span class="claim-state">{{ claimStatusLabel(audit.usage.status) }}</span>
+        </div>
+        <strong class="kpi-value">{{ claimValue(audit.usage) }}</strong>
+        <div class="kpi-fraction">
+          <b>{{ claimFraction(audit.usage) }}</b>
+          <span>episodios con implicación defensiva</span>
+        </div>
+        <p>{{ audit.usage.definition }}</p>
+        <div class="audit-foot">
+          <span>{{ audit.usage.evidence.length }} evidencias enlazables</span>
+          <code>{{ audit.usage.formula }}</code>
+        </div>
+      </article>
+
+      <article class="kpi-card kpi-card--primary" [attr.data-status]="audit.response.status">
+        <div class="kpi-topline">
+          <span>Response</span>
+          <span class="claim-state">{{ claimStatusLabel(audit.response.status) }}</span>
+        </div>
+        <strong class="kpi-value">{{ claimValue(audit.response) }}</strong>
+        <div class="kpi-fraction">
+          <b>{{ claimFraction(audit.response) }}</b>
+          <span>episodios cubiertos / decisión evaluable</span>
+        </div>
+        <div class="response-breakdown">
+          <span><b>{{ audit.response.numerator ?? 0 }}</b> covered</span>
+          <span><b>{{ audit.context.uncertain }}</b> uncertain fuera del denominador</span>
+        </div>
+        <p>{{ audit.response.definition }}</p>
+        <div class="audit-foot">
+          <span>{{ audit.response.evidence.length }} evidencias enlazables</span>
+          <code>{{ audit.response.formula }}</code>
+        </div>
+      </article>
+
+      <article class="kpi-card" [attr.data-status]="audit.management.status">
+        <div class="kpi-topline">
+          <span>Gestión</span>
+          <span class="claim-state">{{ claimStatusLabel(audit.management.status) }}</span>
+        </div>
+        <strong class="kpi-value">{{ claimValue(audit.management) }}</strong>
+        <div class="kpi-fraction">
+          <b>{{ claimFraction(audit.management) }}</b>
+          <span>asignaciones publicadas cumplidas</span>
+        </div>
+        <p>{{ audit.management.definition }}</p>
+        <div class="audit-foot">
+          <span>{{ audit.managementAssignments.length }} assignments reconstruibles</span>
+          <code>{{ audit.management.formula }}</code>
+        </div>
+      </article>
+    </div>
+
+    <div class="context-strip" aria-label="Episodios fuera de los denominadores punitivos">
+      <div>
+        <span>No disponible legítimo</span>
+        <strong>{{ audit.context.unavailableLegitimate }}</strong>
+      </div>
+      <div>
+        <span>Sin recurso aplicable</span>
+        <strong>{{ audit.context.noApplicableResource }}</strong>
+      </div>
+      <div>
+        <span>Inciertos</span>
+        <strong>{{ audit.context.uncertain }}</strong>
+      </div>
+      <div>
+        <span>Excluidos</span>
+        <strong>{{ audit.context.excluded }}</strong>
+      </div>
+    </div>
+
+    @if (audit.state === 'available' || audit.state === 'partial') {
+      <article class="episode-card">
+        <header class="episode-card-header">
+          <div>
+            <p class="section-kicker">Evidencia episodio a episodio</p>
+            <h3>DefensiveEpisode Ledger</h3>
+          </div>
+          <span>{{ audit.episodes.length }} enlazables</span>
+        </header>
+
+        @if (audit.episodes.length) {
+          <div class="episode-table-wrap">
+            <table class="episode-table">
+              <thead>
+                <tr>
+                  <th>Pull</th>
+                  <th>Peak</th>
+                  <th>Mecánica</th>
+                  <th>Usage</th>
+                  <th>Response</th>
+                  <th>Defensivo</th>
+                  <th>Confianza</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (episode of audit.episodes; track episode.episodeId) {
+                  <tr class="episode-row">
+                    <td>
+                      <a [href]="episode.wclUrl" target="_blank" rel="noopener">{{ episode.pullLabel }}</a>
+                    </td>
+                    <td class="mono">{{ formatDuration(episode.peakMs) }}</td>
+                    <td>
+                      @if (episode.dominantAbilityGameId; as abilityId) {
+                        <app-wowhead-link type="spell" [id]="abilityId">
+                          Spell {{ abilityId }}
+                        </app-wowhead-link>
+                      } @else {
+                        <span class="muted">N/D</span>
+                      }
+                    </td>
+                    <td>
+                      <span class="verdict-chip" [attr.data-tone]="usageTone(episode)">
+                        {{ usageLabel(episode) }}
+                      </span>
+                    </td>
+                    <td>
+                      <span class="verdict-chip" [attr.data-tone]="responseTone(episode.responseVerdict)">
+                        {{ responseLabel(episode.responseVerdict) }}
+                      </span>
+                    </td>
+                    <td>
+                      @if (episode.coveredBySpellId; as spellId) {
+                        <app-wowhead-link type="spell" [id]="spellId">
+                          {{ spellId }}
+                        </app-wowhead-link>
+                      } @else if (episode.usedSpellIds.length) {
+                        <span class="spell-list">
+                          @for (spellId of episode.usedSpellIds; track spellId) {
+                            <app-wowhead-link type="spell" [id]="spellId">{{ spellId }}</app-wowhead-link>
+                          }
+                        </span>
+                      } @else {
+                        <span class="muted">—</span>
+                      }
+                    </td>
+                    <td>{{ episode.confidence }}</td>
+                    <td class="episode-action">
+                      <button type="button" (click)="toggleEpisode(episode)">
+                        {{ expandedEpisodeId() === episode.episodeId ? 'Cerrar' : 'Auditar' }}
+                      </button>
+                    </td>
+                  </tr>
+
+                  @if (expandedEpisodeId() === episode.episodeId) {
+                    <tr class="episode-detail-row">
+                      <td colspan="8">
+                        <div class="episode-detail">
+                          <div class="detail-grid">
+                            <div><span>Episode ID</span><code>{{ episode.episodeId }}</code></div>
+                            <div><span>Causal group</span><code>{{ episode.causalGroupId }}</code></div>
+                            <div><span>Ventana</span><b>{{ formatDuration(episode.startMs) }} → {{ formatDuration(episode.endMs) }}</b></div>
+                            <div><span>Response reason</span><b>{{ episode.responseReason }}</b></div>
+                            <div><span>Used spell IDs</span><b>{{ episode.usedSpellIds.length ? episode.usedSpellIds.join(', ') : '—' }}</b></div>
+                            <div><span>Decisive spell IDs</span><b>{{ episode.decisiveSpellIds.length ? episode.decisiveSpellIds.join(', ') : '—' }}</b></div>
+                            <div><span>Plan assignment</span><code>{{ episode.planAssignmentId ?? 'N/D' }}</code></div>
+                            <div><span>Plan verdict</span><b>{{ episode.planVerdict ?? 'N/D' }}</b></div>
+                          </div>
+                          <div class="detail-links">
+                            <a [href]="episode.wclUrl" target="_blank" rel="noopener">Abrir fight exacto en WCL ↗</a>
+                            <code>{{ episode.evidence.locator }}</code>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  }
+                }
+              </tbody>
+            </table>
+          </div>
+        } @else {
+          <div class="empty-episodes">
+            La generación es compatible con el report, pero este jugador no tiene episodios defensivos evaluables que mostrar.
+          </div>
+        }
+      </article>
+    } @else {
+      <div class="blocked-card">
+        <strong>No se muestran veredictos defensivos.</strong>
+        <p>
+          El read-model ha fallado cerrado para este report/jugador. No se sustituye por V2, pressure windows,
+          disponibilidad al morir ni ningún scoring defensivo legacy.
+        </p>
+      </div>
+    }
+
+    @if (audit.unresolvedEpisodes.length) {
+      <details class="unresolved-panel">
+        <summary>{{ audit.unresolvedEpisodes.length }} episodios sin deep-link de pull</summary>
+        <ul>
+          @for (episode of audit.unresolvedEpisodes; track episode.episodeId) {
+            <li>
+              <code>{{ episode.episodeId }}</code> · pull <code>{{ episode.pullId }}</code> ·
+              {{ responseLabel(episode.responseVerdict) }} — {{ episode.reason }}
+            </li>
+          }
+        </ul>
+      </details>
+    }
+  }
+</section>

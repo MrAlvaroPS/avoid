@@ -30,11 +30,12 @@
     <div class="integrity-icon" aria-hidden="true">i</div>
     <div class="integrity-copy">
       <p class="integrity-kicker">Estado de datos</p>
-      <h2 id="integrity-title">Pull Ledger conectado; dominios de evaluación todavía parciales</h2>
+      <h2 id="integrity-title">Pull Ledger y Defensive v7 conectados; dominios posteriores siguen bloqueados</h2>
       <p>
-        La población de pulls, identidad boss-local, resultado, duración y parse ya se proyectan con
-        evidencia directa y fail-closed. Defensivos, mecánicas, Execution, Reliability y build siguen
-        bloqueados hasta su fase correspondiente; este shell no reutiliza sus métricas legacy.
+        La población de pulls y la auditoría defensiva ya se proyectan desde sus owners explícitos.
+        La sección defensiva resuelve exclusivamente el pointer de generación publicada y falla cerrado
+        cuando ese report no está cubierto. Mecánicas, Execution, Reliability y build siguen pendientes
+        de sus fases y no se rellenan con métricas legacy.
       </p>
     </div>
     <div class="integrity-count" title="Claims registrados en el catálogo de ownership">
@@ -46,7 +47,7 @@
   <nav class="section-nav" aria-label="Secciones del dosier auditable">
     <span class="section-tab">Visión general</span>
     <a class="section-tab section-tab--active" href="#pull-ledger">Pull Ledger · Fase 2</a>
-    <span class="section-tab section-tab--locked">Defensivos · Fase 3</span>
+    <a class="section-tab section-tab--active" href="#defensivos">Defensivos · Fase 3</a>
     <span class="section-tab section-tab--locked">Mecánicas · Fase 4</span>
   </nav>
 
@@ -57,7 +58,7 @@
           <p class="card-kicker">Fundación de auditoría</p>
           <h2>Una sola verdad, visible y reconstruible</h2>
         </div>
-        <span class="ready-badge">Fase 1</span>
+        <span class="ready-badge">Fases 1–3</span>
       </div>
 
       <div class="foundation-grid">
@@ -81,8 +82,8 @@
           <span class="foundation-index">03</span>
           <h3>Evidencia trazable</h3>
           <p>
-            Los deep-links y pull refs se conectan sin fabricar filtros ni reinterpretar hechos en
-            frontend.
+            Pull refs, WCL fights y DefensiveEpisodes se enlazan sin fabricar filtros ni
+            reinterpretar scoring en frontend.
           </p>
         </div>
       </div>
@@ -90,10 +91,10 @@
 
     <aside class="next-card">
       <p class="card-kicker">Siguiente gate</p>
-      <h2>Fase 3 · Defensive v7</h2>
+      <h2>Fase 4 · Mecánicas + muertes</h2>
       <p>
-        El siguiente bloque solo podrá exponer Usage, Response y Management cuando exista una
-        generación canónica publicada y seleccionable sin fallback legacy.
+        El siguiente bloque deberá consumir las evaluaciones causales y ownership de mecánicas sin
+        reutilizar incidentes o causas de muerte legacy como si fueran verdad canónica.
       </p>
       <div class="next-rule">
         <span>Regla activa</span>
@@ -103,6 +104,11 @@
   </section>
 
   <app-night-player-pull-ledger
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+  />
+
+  <app-night-player-defensive-audit
     [reportCode]="reportCode()"
     [playerName]="playerName()"
   />
