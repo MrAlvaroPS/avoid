@@ -30,7 +30,7 @@ reconstruct every numerator and denominator.
 
 ## Phase 1A — contractual foundation
 
-Status: IMPLEMENTED ON BRANCH / VALIDATION PENDING.
+Status: IMPLEMENTED AND VALIDATED ON BRANCH.
 
 Included:
 
@@ -55,6 +55,28 @@ Explicitly NOT included in Phase 1A:
 - no frontend/UI changes;
 - no new fallback to legacy data;
 - no defensive, mechanics, execution or reliability cutover.
+
+### Validation
+
+GitHub Actions run `33991638821` on commit
+`19e58d17ad3317f5bfeae4c6d19888f131f66960`: PASS.
+
+Executed successfully:
+
+- dossier audit + WCL helper Vitest suites;
+- existing E7 defensive regression suite;
+- `npm run verify:defensive-contract`;
+- `npm run verify:causal-schema`;
+- `npm run verify:causal-runtime`;
+- `npm run build`;
+- Deno checks for the canonical defensive evaluator/ledger/evidence/shadow
+  modules covered by the permanent E7 workflow.
+
+An earlier validation attempt failed before executing any test because the two
+new standalone specs relied on global Vitest symbols. The specs now import
+`describe`, `it` and `expect` explicitly; the subsequent complete run passed.
+The temporary branch trigger used only to execute this validation was removed
+before opening the PR, so no CI-only change remains in the final diff.
 
 ## Next step after merge
 
