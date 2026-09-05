@@ -1,8 +1,17 @@
 import type { MechanicCategory } from './models/domain';
 import {
   classifyMechanicAttribution,
+  LEGACY_PERSONAL_MECHANIC_CATEGORIES,
   type MechanicResponsibility,
 } from '../../../supabase/functions/_shared/mechanic-attribution';
+
+/**
+ * @deprecated Attribution Safety v1: solo compatibilidad para consumers que
+ * todavía no han migrado a responsibility. No ampliar este Set ni usarlo
+ * como autoridad nueva; la fuente canónica es classifyMechanicAttribution().
+ */
+export const PERSONAL_RESPONSIBILITY_CATEGORIES =
+  LEGACY_PERSONAL_MECHANIC_CATEGORIES as ReadonlySet<MechanicCategory>;
 
 export interface IncidentBreakdownItem {
   label: string;
