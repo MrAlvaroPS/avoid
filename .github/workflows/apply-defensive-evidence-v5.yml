@@ -1,0 +1,54 @@
+name: Apply defensive evidence v5
+
+on:
+  push:
+    branches:
+      - fix/defensive-evidence-claims-shadow-v5
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/defensive-evidence-claims-shadow-v5
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Apply codemod
+        run: python .github/scripts/apply-defensive-evidence-v5.py
+
+      - name: Focused tests
+        run: npx vitest run src/app/shared/defensive-temporal-coverage.spec.ts src/app/shared/defensive-evidence-v5.spec.ts src/app/shared/defensive-episode-evaluator.spec.ts src/app/shared/defensive-episode-kpis.spec.ts src/app/shared/effective-defensives.spec.ts
+
+      - name: Defensive contracts
+        run: |
+          npm run verify:defensive-contract
+          npm run verify:causal-schema
+          npm run verify:causal-runtime
+
+      - name: Angular build
+        run: npm run build
+
+      - name: Remove temporary codemod workflow
+        run: rm -f .github/workflows/apply-defensive-evidence-v5.yml .github/scripts/apply-defensive-evidence-v5.py
+
+      - name: Commit materialized changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: normalize defensive evidence claims and temporal coverage"
+          git push origin HEAD:fix/defensive-evidence-claims-shadow-v5
