@@ -21,12 +21,12 @@ import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
 import { CombatEvaluationFeatureFlagsService } from './combat-evaluation-feature-flags.service';
 import type { PullEvaluationContextContract } from '../../../supabase/functions/_shared/combat-evaluation-contract';
 import {
-  PERSONAL_RESPONSIBILITY_CATEGORIES,
   buildAttemptComparison,
   summarizeExecutionIncidents,
   type AttemptComparison,
   type ExecutionIncidentSummary,
 } from '../shared/pull-consistency.util';
+import { isPunitivePersonalMechanicEvent } from '../../../supabase/functions/_shared/mechanic-attribution';
 
 export interface PullHeaderData {
   encounterName: string;
@@ -1308,7 +1308,7 @@ function buildMechanicFails(
     // responsabilidad individual (confirmadas o inferidas) — null pasa, se
     // enseña marcado "sin clasificar" y el RL decide con el dato crudo
     // (cuánta gente golpeó) en vez de que se lo ocultemos.
-    if (ev.category != null && !PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category)) continue;
+    if (!isPunitivePersonalMechanicEvent(ev)) continue;
     for (const detail of ev.player_hit_details) {
       // Una muerte solo cubre ESTA instancia correlacionada. El Set antiguo
       // player|ability ocultaba también un fallo anterior de la misma spell,
@@ -1338,7 +1338,7 @@ function buildMechanicFails(
         usedDefensiveSpellId: detail.used_defensive_spell_id,
         provenance: {
           source: 'pull_mechanic_events.player_hit_details',
-          method: `Instancia con outcome='${ev.outcome}' (categoría ${ev.category ?? 'sin clasificar todavía'}); daño = solo el de esta ability sobre este jugador en su ventana de reacción, sanación = recibida durante esa misma ventana, defensivo = cast propio en los ±10s alrededor.`,
+          method: `Instancia con outcome='${ev.outcome}' (categoría ${ev.category ?? 'sin clasificar todavía'}, responsibility ${ev.responsibility ?? 'legacy/null'}); Attribution Safety exige responsabilidad personal explícita o fallback histórico antes de señalar al receptor.`,
           detail: [
             ev.category == null ? 'Sin categoría confirmada NI sugerida en el manifiesto todavía — clasifícala en Ajustes.' : null,
             ev.description ?? '(sin descripción en el manifiesto)',

@@ -46,6 +46,7 @@ import type {
   DeathCause,
   DefensivePressureWindow,
   MechanicCategory,
+  MechanicResponsibility,
   PlayerPullDefensiveEvaluationEvent,
   PlayerPullDefensiveEvaluationRow,
   PlayerPullRecordRow,
@@ -60,11 +61,12 @@ import {
 } from '../shared/death-statistics.util';
 import { gearPreparationCounts } from '../shared/gear-preparation.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
-import { PERSONAL_RESPONSIBILITY_CATEGORIES, validAttemptOrdinal } from '../shared/pull-consistency.util';
+import { validAttemptOrdinal } from '../shared/pull-consistency.util';
 import { roleFromSpec } from '../shared/spec-role.util';
 import { errorMessage } from '../shared/error-message.util';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { computeDefensiveManagementScore } from '../../../supabase/functions/_shared/defensive-management-score';
+import { isPunitivePersonalMechanicEvent } from '../../../supabase/functions/_shared/mechanic-attribution';
 import { homogeneousDefensiveEvaluationGeneration } from '../shared/defensive-evaluation-generation';
 
 const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.0';
@@ -166,6 +168,8 @@ export interface NightDeathRow {
   /** §"un tooltip con la descripción de la habilidad, como en otras partes de la app" (feedback real): ability_id REAL de WCL para envolver el nombre en app-wowhead-link — null solo si WCL ni siquiera lo dio (rarísimo). */
   mechanicId: number | null;
   category: MechanicCategory | null;
+  /** Quién controla la resolución; recibir el daño no demuestra autoría del fallo. */
+  responsibility: MechanicResponsibility | null;
   rootCause: DeathCause['rootCause'];
   /** §"que lo pueda usar efectiva y realmente porque lo tenga en sus habilidades y no esté en CD" (feedback real): exactamente status==='available_unused' — lo tiene en su catálogo real de clase/spec/talentos (defensivesForClass en analyze-report) Y no estaba en cooldown Y no lo tenía ya activo. Lista completa (no solo sí/no) para pintar los iconos reales. */
   defensivesAvailable: { spellId: number; name: string }[];
@@ -201,6 +205,8 @@ export interface NightMechanicFailRow {
   mechanicName: string;
   mechanicId: number;
   category: MechanicCategory | null;
+  /** Attribution Safety v1: conservado para auditar por qué esta fila sí es personal. */
+  responsibility: MechanicResponsibility | null;
   outcome: 'partial_fail' | 'fail';
   timeMs: number;
   damageTaken: number;
@@ -782,7 +788,7 @@ export const NIGHT_DEFENSIVE_ESCALATION_STEP = 0.08;
 export const NIGHT_DEFENSIVE_ESCALATION_FLOOR = 0.5;
 
 const MECHANIC_EVENT_FIELDS =
-  'pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms, player_hit_details, comparison_source, comparison_percentile';
+  'pull_id, ability_id, mechanic_name, category, responsibility, outcome, trigger_time_ms, player_hit_details, comparison_source, comparison_percentile';
 
 async function loadPlayerMechanicEvents(
   client: SupabaseClient,
@@ -1228,6 +1234,7 @@ export class NightPlayerSummaryService {
           mechanicName: mechanicDisplayName(dc.mechanicName),
           mechanicId: dc.mechanicId || null,
           category: dc.category ?? null,
+          responsibility: dc.responsibility ?? null,
           rootCause: dc.rootCause,
           defensivesAvailable: excludedFromStatistics
             ? []
@@ -1286,7 +1293,7 @@ export class NightPlayerSummaryService {
           !isMechanicExcludedByWipeCall(pull as unknown as PullRow, ev as PullMechanicEventRow)
         );
       })
-      .filter((ev) => ev.category == null || PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category))
+      .filter((ev) => isPunitivePersonalMechanicEvent(ev))
       .map((ev) => {
         const pull = pullById.get(ev.pull_id)!;
         const detail = ev.player_hit_details.find((d) => d.name === playerName);
@@ -1300,6 +1307,7 @@ export class NightPlayerSummaryService {
           mechanicName: ev.mechanic_name,
           mechanicId: ev.ability_id,
           category: ev.category,
+          responsibility: ev.responsibility,
           outcome: ev.outcome as 'partial_fail' | 'fail',
           timeMs: ev.trigger_time_ms,
           damageTaken: detail?.damage_taken ?? 0,
@@ -1609,8 +1617,11 @@ export class NightPlayerSummaryService {
     // evaluatedDeaths ya aplica exactamente este mismo filtro (wipe call +
     // ninja pull + exclusión estadística) — reusarlo en vez de repetirlo
     // evita que un tercer sitio se olvide de alguna de las tres exclusiones.
+    const attributableDeaths = evaluatedDeaths.filter((death) =>
+      isPunitivePersonalMechanicEvent({ category: death.category, responsibility: death.responsibility }),
+    );
     const patternSource = [
-      ...evaluatedDeaths.map((d) => ({
+      ...attributableDeaths.map((d) => ({
         mechanicName: d.mechanicName ?? 'Sin identificar',
         mechanicId: d.mechanicId,
         category: d.category,
@@ -1654,7 +1665,7 @@ export class NightPlayerSummaryService {
         // Normal Y" en un único texto) no debe mostrarse cuando la noche
         // mezcla dificultades del mismo mecanismo — el texto sería correcto
         // pero hablaría de una dificultad que no se jugó esa parte.
-        const rowsForMechanic = [...evaluatedDeaths, ...mechanicFails].filter(
+        const rowsForMechanic = [...attributableDeaths, ...mechanicFails].filter(
           (row) => row.mechanicName === mechanicName,
         );
         const difficulties = new Set(rowsForMechanic.map((row) => row.difficulty));
@@ -1953,9 +1964,7 @@ export class NightPlayerSummaryService {
       (pull) =>
         pull.scoreBreakdown.mechanicFailCount === 0 && !evaluatedDeathByPullId.has(pull.pullId),
     ).length;
-    const actionableDeaths = evaluatedDeaths.filter(
-      (death) => death.category != null && PERSONAL_RESPONSIBILITY_CATEGORIES.has(death.category),
-    );
+    const actionableDeaths = attributableDeaths;
     const actionableIncidents = mechanicFails.length + actionableDeaths.length;
     const emergencyConsumableUses = evaluatedDeaths.filter(
       (death) => death.usedHealthstoneInPull || death.usedHealthPotionInPull,
@@ -2620,8 +2629,7 @@ export function buildNightEvolution(
           !row.statisticalExclusionReason &&
           row.mechanicId != null &&
           row.mechanicId > 0 &&
-          row.category != null &&
-          PERSONAL_RESPONSIBILITY_CATEGORIES.has(row.category) &&
+          isPunitivePersonalMechanicEvent({ category: row.category, responsibility: row.responsibility }) &&
           isVerifiableMechanicName(row.mechanicName),
       )
       .map((row) => ({
@@ -2731,6 +2739,7 @@ interface MechEventRowLite {
   ability_id: number;
   mechanic_name: string;
   category: MechanicCategory | null;
+  responsibility: MechanicResponsibility | null;
   outcome: string;
   trigger_time_ms: number;
   player_hit_details: {
