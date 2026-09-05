@@ -143,9 +143,11 @@ before the child PR was finalized.
 
 ## Phase 2 — auditable Pull Ledger
 
-Status: IMPLEMENTED AND VALIDATED ON CHILD BRANCH.
+Status: IMPLEMENTED, VALIDATED AND MERGED INTO INTEGRATION BRANCH.
 
 Child branch: `feature/dossier-audit-p2-pull-ledger`.
+PR: #18.
+Integration merge commit: `2bf3425a4954d4f1f82d04482bba8f7c767752f5`.
 Target integration branch: `feature/dossier-audit-p1-contracts`.
 Baseline: Phase 1B integration merge `1342e27b2fcc28247278267bde0aa637195cad6e`.
 
