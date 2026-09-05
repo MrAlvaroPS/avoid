@@ -39,14 +39,23 @@
           <span>REVISIÓN DE LA NOCHE</span>
           <h1>{{ view.identity.playerName }}</h1>
           <p>
-            @if (view.identity.specName) { {{ view.identity.specName }} }
-            @if (view.identity.className) { · {{ view.identity.className }} }
-            @if (view.identity.role) { · {{ view.identity.role }} }
+            @if (view.identity.specName) {
+              {{ view.identity.specName }}
+            }
+            @if (view.identity.className) {
+              · {{ view.identity.className }}
+            }
+            @if (view.identity.role) {
+              · {{ view.identity.role }}
+            }
           </p>
           <strong>{{ view.identity.evaluatedPullCount }} pulls evaluados</strong>
         </div>
         <div class="iris-v3-hero-metrics">
-          <article class="iris-v3-hero-metric iris-v3-execution-metric" [attr.data-tone]="view.hero.execution.tone">
+          <article
+            class="iris-v3-hero-metric iris-v3-execution-metric"
+            [attr.data-tone]="view.hero.execution.tone"
+          >
             <div
               class="iris-v3-metric-ring"
               [style.--ring-pct]="metricRingPct(view.hero.execution) + '%'"
@@ -148,8 +157,12 @@
                   </div>
                   <strong>{{ card.bossName ?? 'Noche de raid' }}</strong>
                   <span>
-                    @if (card.pullLabel) { {{ card.pullLabel }} }
-                    @if (card.timeLabel) { · {{ card.timeLabel }} }
+                    @if (card.pullLabel) {
+                      {{ card.pullLabel }}
+                    }
+                    @if (card.timeLabel) {
+                      · {{ card.timeLabel }}
+                    }
                   </span>
                   @if (card.mechanicDescription) {
                     <p class="iris-v3-event-description">{{ card.mechanicDescription }}</p>
@@ -173,11 +186,22 @@
                       <span>Defensivos</span>
                       @if (card.defensives.length) {
                         <div>
-                          @for (defensive of card.defensives; track defensive.spellId + defensive.status) {
+                          @for (
+                            defensive of card.defensives;
+                            track defensive.spellId + defensive.status
+                          ) {
                             <span class="iris-v3-defensive-chip">
-                              <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z" /></svg>
+                              <svg viewBox="0 0 32 32" aria-hidden="true">
+                                <path
+                                  d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z"
+                                />
+                              </svg>
                               @if (iconUrl(defensive.spellId); as icon) {
-                                <img [src]="icon" [alt]="defensive.name" (error)="onIconError($event)" />
+                                <img
+                                  [src]="icon"
+                                  [alt]="defensive.name"
+                                  (error)="onIconError($event)"
+                                />
                               }
                               <b>{{ defensive.name }}</b>
                               <small>{{ defensive.statusLabel }}</small>
@@ -249,8 +273,11 @@
                   <span
                     class="iris-v3-pull-cell"
                     [attr.data-state]="cell.state"
-                    [title]="'Pull ' + cell.pullNumber + ' · ' + cell.scoreLabel + ' · ' + cell.stateLabel"
-                  >{{ cell.pullNumber }}</span>
+                    [title]="
+                      'Pull ' + cell.pullNumber + ' · ' + cell.scoreLabel + ' · ' + cell.stateLabel
+                    "
+                    >{{ cell.pullNumber }}</span
+                  >
                 }
               </div>
             }
@@ -281,12 +308,17 @@
             }
           </div>
         } @else {
-          <p class="iris-v3-inline-empty">Sin señales positivas atribuibles suficientes para publicar.</p>
+          <p class="iris-v3-inline-empty">
+            Sin señales positivas atribuibles suficientes para publicar.
+          </p>
         }
       </section>
 
       <footer class="iris-v3-page-footer">
-        <div><img src="/assets/avoid-guild-logo.png" alt="" /><b>IRIS</b><span>EVIDENCE-BASED RAID COACHING</span></div>
+        <div>
+          <img src="/assets/avoid-guild-logo.png" alt="" /><b>IRIS</b
+          ><span>EVIDENCE-BASED RAID COACHING</span>
+        </div>
         <p>Fuentes: Warcraft Logs · WoWAudit · IRIS. Ejecución no es Fiabilidad.</p>
       </footer>
     </article>
@@ -336,23 +368,40 @@
                       <path d="M24 4 8 11v12c0 10 6.8 17.4 16 21 9.2-3.6 16-11 16-21V11L24 4Z" />
                     </svg>
                     @if (iconUrl(mechanic.mechanicId); as icon) {
-                      <img [src]="icon" [alt]="mechanic.mechanicName" (error)="onIconError($event)" />
+                      <img
+                        [src]="icon"
+                        [alt]="mechanic.mechanicName"
+                        (error)="onIconError($event)"
+                      />
                     } @else {
-                      <img [src]="bossIconUrl(mechanic.bossId)" [alt]="mechanic.bossName" (error)="onBossIconError($event)" />
+                      <img
+                        [src]="bossIconUrl(mechanic.bossId)"
+                        [alt]="mechanic.bossName"
+                        (error)="onBossIconError($event)"
+                      />
                     }
                   </div>
                   <div class="iris-v3-mechanic-identity">
                     <h3>{{ mechanic.mechanicName }}</h3>
                     <span>{{ mechanic.bossName }} · {{ mechanic.difficulty }}</span>
-                    @if (mechanic.timingLabel) { <small>{{ mechanic.timingLabel }}</small> }
+                    @if (mechanic.timingLabel) {
+                      <small>{{ mechanic.timingLabel }}</small>
+                    }
                   </div>
                   @if (mechanic.description || mechanic.resolution) {
                     <div class="iris-v3-mechanic-note">
-                      @if (mechanic.description) { <p class="what">{{ mechanic.description }}</p> }
-                      @if (mechanic.resolution) { <p class="how">{{ mechanic.resolution }}</p> }
+                      @if (mechanic.description) {
+                        <p class="what">{{ mechanic.description }}</p>
+                      }
+                      @if (mechanic.resolution) {
+                        <p class="how">{{ mechanic.resolution }}</p>
+                      }
                     </div>
                   }
-                  <strong>{{ mechanic.coveredCount }}/{{ mechanic.totalCount }}<small>{{ mechanic.coverageLabel }}</small></strong>
+                  <strong
+                    >{{ mechanic.coveredCount }}/{{ mechanic.totalCount
+                    }}<small>{{ mechanic.coverageLabel }}</small></strong
+                  >
                 </header>
                 <div class="iris-v3-occurrence-groups">
                   @for (group of mechanic.occurrenceGroups; track group.pullNumber) {
@@ -369,14 +418,23 @@
                 @if (mechanic.defensives.length) {
                   <div class="iris-v3-defensive-table">
                     <div class="iris-v3-defensive-table-head">
-                      <span>Defensivo</span><span>Cubrió</span><span>Libre sin usar</span><span>En CD</span><span>No exigible</span><span>Sin dato</span>
+                      <span>Defensivo</span><span>Cubrió</span><span>Libre sin usar</span
+                      ><span>En CD</span><span>No exigible</span><span>Sin dato</span>
                     </div>
                     @for (defensive of mechanic.defensives; track defensive.spellId) {
                       <div class="iris-v3-defensive-table-row">
                         <span>
-                          <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z" /></svg>
+                          <svg viewBox="0 0 32 32" aria-hidden="true">
+                            <path
+                              d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z"
+                            />
+                          </svg>
                           @if (iconUrl(defensive.spellId); as icon) {
-                            <img [src]="icon" [alt]="defensive.name" (error)="onIconError($event)" />
+                            <img
+                              [src]="icon"
+                              [alt]="defensive.name"
+                              (error)="onIconError($event)"
+                            />
                           }
                           <b>{{ defensive.name }}</b>
                         </span>
@@ -389,7 +447,9 @@
                     }
                   </div>
                 } @else {
-                  <p class="iris-v3-mechanic-empty">Sin defensivos evaluables para esta mecánica.</p>
+                  <p class="iris-v3-mechanic-empty">
+                    Sin defensivos evaluables para esta mecánica.
+                  </p>
                 }
                 <p class="iris-v3-mechanic-relevance">{{ mechanic.relevanceNote }}</p>
               </article>
@@ -397,28 +457,44 @@
           </div>
           @if (view.additionalMechanicCount > 0) {
             <p class="iris-v3-more-evidence">
-              {{ view.additionalMechanicCount }} más mecánica{{ view.additionalMechanicCount === 1 ? '' : 's' }} relevante{{ view.additionalMechanicCount === 1 ? '' : 's' }} de la noche necesita{{ view.additionalMechanicCount === 1 ? '' : 'n' }} revisión.
+              {{ view.additionalMechanicCount }} más mecánica{{
+                view.additionalMechanicCount === 1 ? '' : 's'
+              }}
+              relevante{{ view.additionalMechanicCount === 1 ? '' : 's' }} de la noche necesita{{
+                view.additionalMechanicCount === 1 ? '' : 'n'
+              }}
+              revisión.
             </p>
           }
         } @else {
           <div class="iris-v3-empty-state compact">
-            <div><strong>Sin ventanas defensivas evaluables</strong><p>No se rellena este bloque con mecánicas inventadas.</p></div>
+            <div>
+              <strong>Sin ventanas defensivas evaluables</strong>
+              <p>No se rellena este bloque con mecánicas inventadas.</p>
+            </div>
           </div>
         }
       </section>
 
       <div class="iris-v3-lower-grid">
         <section class="iris-v3-section iris-v3-deaths-section">
-          <div class="iris-v3-section-heading compact"><div><span>MUERTES Y RESPUESTA DEFENSIVA</span></div></div>
+          <div class="iris-v3-section-heading compact">
+            <div><span>MUERTES Y RESPUESTA DEFENSIVA</span></div>
+          </div>
           @if (view.deaths.length) {
             @for (death of view.deaths.slice(0, 3); track death.id) {
               <article class="iris-v3-death-card" [attr.data-tone]="death.tone">
-                <header><strong>{{ death.title }}</strong><span>{{ death.verdictLabel }}</span></header>
+                <header>
+                  <strong>{{ death.title }}</strong
+                  ><span>{{ death.verdictLabel }}</span>
+                </header>
                 <small>{{ death.bossName }} · {{ death.when }}</small>
                 <div class="iris-v3-death-body">
                   <div class="iris-v3-death-text">
                     <p>{{ death.observation }}</p>
-                    @if (death.evidence) { <p class="evidence">{{ death.evidence }}</p> }
+                    @if (death.evidence) {
+                      <p class="evidence">{{ death.evidence }}</p>
+                    }
                   </div>
                   @if (death.damageLabel) {
                     <div class="iris-v3-death-damage">
@@ -429,9 +505,14 @@
                 </div>
                 @if (death.defensives.length) {
                   <div class="iris-v3-death-defensives">
-                    @for (defensive of death.defensives; track defensive.spellId + defensive.status) {
+                    @for (
+                      defensive of death.defensives;
+                      track defensive.spellId + defensive.status
+                    ) {
                       <span class="iris-v3-defensive-chip">
-                        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z" /></svg>
+                        <svg viewBox="0 0 32 32" aria-hidden="true">
+                          <path d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z" />
+                        </svg>
                         @if (iconUrl(defensive.spellId); as icon) {
                           <img [src]="icon" [alt]="defensive.name" (error)="onIconError($event)" />
                         }
@@ -444,37 +525,54 @@
               </article>
             }
             @if (view.additionalDeathCount > 0) {
-              <p class="iris-v3-more-evidence">+{{ view.additionalDeathCount }} muertes conservadas en el dosier.</p>
+              <p class="iris-v3-more-evidence">
+                +{{ view.additionalDeathCount }} muertes conservadas en el dosier.
+              </p>
             }
           } @else {
             <p class="iris-v3-inline-empty">Sin muertes evaluables.</p>
           }
         </section>
         <section class="iris-v3-section iris-v3-patterns-section">
-          <div class="iris-v3-section-heading compact"><div><span>PATRONES DE LA NOCHE</span></div></div>
+          <div class="iris-v3-section-heading compact">
+            <div><span>PATRONES DE LA NOCHE</span></div>
+          </div>
           @if (view.patterns.length) {
             @for (pattern of view.patterns.slice(0, 3); track pattern.key) {
               <article class="iris-v3-pattern-card">
                 <div class="iris-v3-pattern-icon">
-                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M8 35c5-12 9-17 16-22 2 8 6 12 16 15M8 15c8 2 13 7 16 20" /></svg>
+                  <svg viewBox="0 0 48 48" aria-hidden="true">
+                    <path d="M8 35c5-12 9-17 16-22 2 8 6 12 16 15M8 15c8 2 13 7 16 20" />
+                  </svg>
                   @if (iconUrl(pattern.mechanicId); as icon) {
                     <img [src]="icon" [alt]="pattern.mechanicName" (error)="onIconError($event)" />
                   }
                 </div>
                 <div>
                   <strong>{{ pattern.mechanicName }}</strong>
-                  <span>{{ pattern.bossNames }}{{ pattern.difficultyLabel ? ' · ' + pattern.difficultyLabel : '' }}</span>
+                  <span
+                    >{{ pattern.bossNames
+                    }}{{ pattern.difficultyLabel ? ' · ' + pattern.difficultyLabel : '' }}</span
+                  >
                   <p>{{ pattern.instanceLabel }}</p>
-                  @if (pattern.description) { <p class="iris-v3-pattern-note what">{{ pattern.description }}</p> }
-                  @if (pattern.resolution) { <p class="iris-v3-pattern-note how">{{ pattern.resolution }}</p> }
+                  @if (pattern.description) {
+                    <p class="iris-v3-pattern-note what">{{ pattern.description }}</p>
+                  }
+                  @if (pattern.resolution) {
+                    <p class="iris-v3-pattern-note how">{{ pattern.resolution }}</p>
+                  }
                 </div>
               </article>
             }
             @if (view.additionalPatternCount > 0) {
-              <p class="iris-v3-more-evidence">+{{ view.additionalPatternCount }} patrones en el dosier.</p>
+              <p class="iris-v3-more-evidence">
+                +{{ view.additionalPatternCount }} patrones en el dosier.
+              </p>
             }
           } @else {
-            <p class="iris-v3-inline-empty">Sin patrón repetido confirmado (mínimo 2 incidencias).</p>
+            <p class="iris-v3-inline-empty">
+              Sin patrón repetido confirmado (mínimo 2 incidencias).
+            </p>
           }
         </section>
       </div>
@@ -482,25 +580,34 @@
       <section class="iris-v3-section iris-v3-evolution-section">
         <div class="iris-v3-section-heading compact">
           <div><span>EVOLUCIÓN VS. NOCHE ANTERIOR</span></div>
-          @if (view.evolution.previousNightLabel) { <small>{{ view.evolution.previousNightLabel }}</small> }
+          @if (view.evolution.previousNightLabel) {
+            <small>{{ view.evolution.previousNightLabel }}</small>
+          }
         </div>
         @if (view.evolution.cards.length) {
           <div class="iris-v3-evolution-grid">
             @for (metric of view.evolution.cards; track metric.key) {
               <article [attr.data-direction]="metric.direction">
-                <span>{{ metric.label }}</span><strong>{{ metric.current }}</strong>
+                <span>{{ metric.label }}</span
+                ><strong>{{ metric.current }}</strong>
                 <small>{{ metric.previous }} → {{ metric.current }}</small>
-                <b>{{ metric.delta }}</b><p>{{ metric.evidence }}</p>
+                <b>{{ metric.delta }}</b>
+                <p>{{ metric.evidence }}</p>
               </article>
             }
           </div>
         } @else {
-          <p class="iris-v3-inline-empty">Sin noche anterior comparable; no se afirma mejora ni empeoramiento.</p>
+          <p class="iris-v3-inline-empty">
+            Sin noche anterior comparable; no se afirma mejora ni empeoramiento.
+          </p>
         }
       </section>
 
       <footer class="iris-v3-page-footer">
-        <div><img src="/assets/avoid-guild-logo.png" alt="" /><b>IRIS</b><span>EVIDENCE-BASED RAID COACHING</span></div>
+        <div>
+          <img src="/assets/avoid-guild-logo.png" alt="" /><b>IRIS</b
+          ><span>EVIDENCE-BASED RAID COACHING</span>
+        </div>
         <p>{{ view.evidenceNote }}</p>
       </footer>
     </article>

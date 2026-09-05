@@ -6,7 +6,9 @@ import type {
 } from './night-player-summary.service';
 import { buildRaiderEvidenceProjection } from './raider-evidence-projection';
 
-function episode(overrides: Partial<CanonicalDefensiveEpisodeView> = {}): CanonicalDefensiveEpisodeView {
+function episode(
+  overrides: Partial<CanonicalDefensiveEpisodeView> = {},
+): CanonicalDefensiveEpisodeView {
   return {
     episodeId: 'episode-1',
     causalGroupId: 'group-1',
@@ -24,7 +26,8 @@ function episode(overrides: Partial<CanonicalDefensiveEpisodeView> = {}): Canoni
     usedSpellIds: [],
     applicableCandidates: [],
     responseVerdict: 'missed_ready',
-    responseReason: 'spellId 22812 estaba disponible con evidencia suficiente; no hubo respuesta defensiva.',
+    responseReason:
+      'spellId 22812 estaba disponible con evidencia suficiente; no hubo respuesta defensiva.',
     coveredBySpellId: null,
     decisiveSpellIds: [22812],
     planAssignmentId: null,
@@ -48,7 +51,8 @@ function canonical(episodes: CanonicalDefensiveEpisodeView[]): NightCanonicalDef
       covered: 0,
       evaluable: 1,
       missedReady: episodes.filter((row) => row.responseVerdict === 'missed_ready').length,
-      missedMistimed: episodes.filter((row) => row.responseVerdict === 'missed_due_to_mistime').length,
+      missedMistimed: episodes.filter((row) => row.responseVerdict === 'missed_due_to_mistime')
+        .length,
     },
     management: { status: 'no_plan', score: null, fulfilled: 0, evaluable: 0 },
     context: { unavailableLegitimate: 0, noApplicableResource: 0, uncertain: 0, excluded: 0 },
@@ -64,7 +68,8 @@ function canonical(episodes: CanonicalDefensiveEpisodeView[]): NightCanonicalDef
         covered: 0,
         evaluable: 1,
         missedReady: episodes.filter((row) => row.responseVerdict === 'missed_ready').length,
-        missedMistimed: episodes.filter((row) => row.responseVerdict === 'missed_due_to_mistime').length,
+        missedMistimed: episodes.filter((row) => row.responseVerdict === 'missed_due_to_mistime')
+          .length,
       },
       rowsExpected: 1,
       rowsFound: 1,
@@ -236,10 +241,12 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
     const item = projection.items.find((row) => row.id === 'defensive|canonical|episode-1');
     expect(item?.mechanicName).toBe('Plague Froth');
     expect(item?.whyItMatters).toContain('Plague Froth tiene una resolución táctica revisada');
-  expect(item?.whyItMatters).toContain('Los objetivos se separan');
-  expect(item?.resolutionText).toBe('Los objetivos se separan y orientan las líneas lejos de la raid.');
-  expect(item?.resolutionText).not.toContain('Barkskin');
-  expect(item?.preventionKey).toContain('Barkskin');
+    expect(item?.whyItMatters).toContain('Los objetivos se separan');
+    expect(item?.resolutionText).toBe(
+      'Los objetivos se separan y orientan las líneas lejos de la raid.',
+    );
+    expect(item?.resolutionText).not.toContain('Barkskin');
+    expect(item?.preventionKey).toContain('Barkskin');
   });
 
   it('no hace fallback por nombre/timing si boss+dificultad+abilityId no coinciden exactamente', () => {
@@ -270,7 +277,11 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
 
   it('reserva hasta dos huecos del top 4 para coaching no defensivo cuando existe', () => {
     const episodes = [1, 2, 3, 4].map((index) =>
-      episode({ episodeId: `episode-${index}`, causalGroupId: `group-${index}`, peakMs: 30_000 + index }),
+      episode({
+        episodeId: `episode-${index}`,
+        causalGroupId: `group-${index}`,
+        peakMs: 30_000 + index,
+      }),
     );
     const projection = buildRaiderEvidenceProjection(
       summary({
@@ -325,43 +336,48 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
   });
 
   it('en una card puramente mecánica combina contexto + impacto y genera prevención desde la resolución revisada', () => {
-  const projection = buildRaiderEvidenceProjection(
-    summary({
-      mechanicFails: [
-        {
-          pullId: 'pull-1',
-          bossId: 'boss-1',
-          bossName: 'The Coiled Altar',
-          difficulty: 'Heroic',
-          pullNumber: 1,
-          mechanicName: 'Axegrinder',
-          mechanicId: 900010,
-          category: 'avoidable-ground',
-          outcome: 'fail',
-          timeMs: 69_000,
-          damageTaken: 1_417_944,
-          aiNote: 'Axegrinder lanza hachas que recorren la sala y se evitan por posicionamiento.',
-          comparisonSource: 'fixed_threshold',
-          comparisonPercentile: null,
-          resolution: 'Esquiva los puntos de impacto y no cruces la trayectoria de las hachas que recorren la sala.',
-        },
-      ],
-    }),
-    { defensiveManagementV2: null, canonicalDefensive: canonical([]) },
-  );
+    const projection = buildRaiderEvidenceProjection(
+      summary({
+        mechanicFails: [
+          {
+            pullId: 'pull-1',
+            bossId: 'boss-1',
+            bossName: 'The Coiled Altar',
+            difficulty: 'Heroic',
+            pullNumber: 1,
+            mechanicName: 'Axegrinder',
+            mechanicId: 900010,
+            category: 'avoidable-ground',
+            outcome: 'fail',
+            timeMs: 69_000,
+            damageTaken: 1_417_944,
+            aiNote: 'Axegrinder lanza hachas que recorren la sala y se evitan por posicionamiento.',
+            comparisonSource: 'fixed_threshold',
+            comparisonPercentile: null,
+            resolution:
+              'Esquiva los puntos de impacto y no cruces la trayectoria de las hachas que recorren la sala.',
+          },
+        ],
+      }),
+      { defensiveManagementV2: null, canonicalDefensive: canonical([]) },
+    );
 
-  const item = projection.items.find((row) => row.id === 'mechanic|boss-1|Heroic|900010');
-  expect(item?.defensives).toEqual([]);
-  expect(item?.whyItMatters).toContain('Axegrinder lanza hachas');
-  expect(item?.whyItMatters).toContain('1.417.944 de daño');
-  expect(item?.resolutionText).toContain('Esquiva los puntos de impacto');
-  expect(item?.preventionKey).toContain('Esquiva los puntos de impacto');
-  expect(item?.preventionKey).not.toBe('—');
-});
+    const item = projection.items.find((row) => row.id === 'mechanic|boss-1|Heroic|900010');
+    expect(item?.defensives).toEqual([]);
+    expect(item?.whyItMatters).toContain('Axegrinder lanza hachas');
+    expect(item?.whyItMatters).toContain('1.417.944 de daño');
+    expect(item?.resolutionText).toContain('Esquiva los puntos de impacto');
+    expect(item?.preventionKey).toContain('Esquiva los puntos de impacto');
+    expect(item?.preventionKey).not.toBe('—');
+  });
 
   it('permite cuatro cards defensivas si realmente no existe otro coaching accionable', () => {
     const episodes = [1, 2, 3, 4, 5].map((index) =>
-      episode({ episodeId: `episode-${index}`, causalGroupId: `group-${index}`, peakMs: 30_000 + index }),
+      episode({
+        episodeId: `episode-${index}`,
+        causalGroupId: `group-${index}`,
+        peakMs: 30_000 + index,
+      }),
     );
     const projection = buildRaiderEvidenceProjection(summary(), {
       defensiveManagementV2: null,
