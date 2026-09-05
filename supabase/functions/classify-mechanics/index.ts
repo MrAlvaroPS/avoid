@@ -1,7 +1,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
-import { invalidateNightFullReportsForBossDifficulty, resyncMechanicAvoidable, resyncMechanicCategory, resyncMechanicResponsibility } from '../_shared/resync-mechanic-category.ts';
 
 // §"un prompt para pasar a la IA y que investigue... los nombres de las
 // habilidades, con instrucciones muy claras de que averigüe en todas las
@@ -128,7 +128,7 @@ Antes de responder, comprueba fila por fila (habilidad + dificultad) que cada ob
 }
 
 function buildResolutionFinalReminder(rowCount: number): string {
-  return `RECORDATORIO FINAL OBLIGATORIO: devuelve exactamente ${rowCount} objetos (una fila = una habilidad EN una dificultad) y asegúrate de que TODOS contienen las nueve claves abilityId, difficulty, category, confidence, sources, notes, resolution, responsibility y avoidable. "difficulty" debe copiar exactamente el texto de la fila de entrada — es como se identifica cada respuesta sin ambigüedad cuando la misma habilidad aparece en varias dificultades. No omitas resolution ni avoidable: usa null cuando no puedas contrastarlos. No omitas responsibility y usa exactamente tank, dps, healer, raid o personal. En sources escribe al menos dos URLs puras de dominios distintos, sin etiquetas ni formato Markdown.`;
+  return `RECORDATORIO FINAL OBLIGATORIO: devuelve exactamente ${rowCount} objetos (una fila = una habilidad EN una dificultad) y asegúrate de que TODOS contienen abilityId, difficulty, category, confidence, sources, notes, resolution, responsibility y avoidable. "difficulty" debe copiar exactamente el texto de la fila de entrada. No omitas resolution ni avoidable: usa null cuando no puedas contrastarlos. No omitas responsibility. En sources escribe al menos dos URLs puras de dominios distintos, sin etiquetas ni formato Markdown. No incluyas causalPolicy: se genera después, en un prompt separado y acotado a una sola dificultad.`;
 }
 
 interface CandidateForPrompt {
@@ -253,7 +253,7 @@ Deno.serve(async (req: Request) => {
   try {
     let candidatesQuery = supabase
       .from('applicable_boss_mechanics_candidates')
-      .select('ability_id,name,difficulty,category,inferred_category,resolution,responsibility,avoidable')
+      .select('ability_id,mechanic_key,name,difficulty,category,inferred_category,resolution,responsibility,avoidable')
       .eq('boss_id', body.bossId)
       .order('name', { ascending: true })
       .order('difficulty', { ascending: true });
@@ -273,6 +273,7 @@ Deno.serve(async (req: Request) => {
     const bossName = (bossRow as { boss_name: string } | null)?.boss_name ?? `Boss ${body.bossId}`;
     const candidates = (candidateRows ?? []) as {
       ability_id: number;
+      mechanic_key: string | null;
       name: string;
       difficulty: string;
       category: string | null;
@@ -305,6 +306,10 @@ Deno.serve(async (req: Request) => {
       }));
       const systemPrompt = `${buildSystemPrompt(bossName, difficultiesInScope)}\n\n${buildResolutionPromptAddendum(difficultiesInScope)}`;
       const userMessage = `Boss: ${bossName}\nDificultades: ${difficultiesInScope.join(', ')}\nHabilidades a clasificar (${list.length} filas, una por habilidad+dificultad):\n${JSON.stringify(list, null, 2)}\n\n${buildResolutionFinalReminder(list.length)}`;
+      // promptVersion 8: vuelve a acotar este worker al catálogo. La policy
+      // causal se investiga y publica desde classify-mechanic-policies en
+      // lotes pequeños de una sola dificultad.
+      //
       // promptVersion 6: cubre varias dificultades del mismo boss en un
       // único prompt (antes una llamada por dificultad) — añade "difficulty"
       // al contrato de entrada/salida para identificar cada fila sin
@@ -315,7 +320,7 @@ Deno.serve(async (req: Request) => {
       // cualquier otra (antes el ejemplo de "dps" mezclaba un check
       // colectivo de enrage con una acción individual, sesgando hacia
       // "dps" un caso que casi siempre es "raid").
-      return jsonResponse({ ok: true, promptVersion: 6, systemPrompt, userMessage, mechanicCount: list.length });
+      return jsonResponse({ ok: true, promptVersion: 8, systemPrompt, userMessage, mechanicCount: list.length });
     }
 
     if (body.action === 'submit') {
@@ -370,6 +375,7 @@ Deno.serve(async (req: Request) => {
         if (raw == null || typeof raw !== 'object') return true;
         return !Object.hasOwn(raw, 'avoidable');
       });
+      const submittedPairs = new Set<string>();
 
       for (const raw of parsed) {
         const entry = raw as Partial<ClassificationEntry>;
@@ -382,6 +388,12 @@ Deno.serve(async (req: Request) => {
           invalid.push({ abilityId: entry.abilityId, difficulty: entry.difficulty, reason: `abilityId+difficulty no reconocidos para este boss (¿difficulty mal escrita? se esperaba una de: ${difficultiesInScope.join('/')})` });
           continue;
         }
+        const submittedPair = `${entry.abilityId}::${entry.difficulty}`;
+        if (submittedPairs.has(submittedPair)) {
+          invalid.push({ abilityId: entry.abilityId, difficulty: entry.difficulty, reason: 'fila duplicada en la respuesta; solo se procesa la primera' });
+          continue;
+        }
+        submittedPairs.add(submittedPair);
         const { name, difficulty } = candidate;
         const rawNotes = typeof entry.notes === 'string' ? entry.notes : '';
         const notesCorrupted = /%22|\]\(https?:\/\/|"resolution"\s*:/i.test(rawNotes);
@@ -447,100 +459,73 @@ Deno.serve(async (req: Request) => {
       }
 
       const submittedAt = new Date().toISOString();
-      // Se guarda en un recorrido independiente: una resolución inválida no
-      // bloquea la categoría, y una categoría low/null no impide conservar
-      // una resolución que sí esté contrastada correctamente.
-      // §"asegurando la calidad de datos obviamente": cada fila lleva su
-      // PROPIA difficulty ahora (ya no hay un único body.difficulty común a
-      // toda la tanda) — se filtra por ella explícitamente en cada update,
-      // así una respuesta para "Heroic" nunca puede escribir por accidente
-      // en la fila de "Normal" del mismo abilityId.
+      // Este worker vuelve a tener una sola responsabilidad: parchear el
+      // catálogo. Se consolida cada fila en una única escritura y no se
+      // recorren pulls históricos, policies, snapshots ni auditorías. Esos
+      // efectos pertenecen a procesos separados y acotados.
+      const catalogPatches = new Map<string, Record<string, unknown>>();
+      const patchFor = (abilityId: number, difficulty: string): Record<string, unknown> => {
+        const key = `${abilityId}::${difficulty}`;
+        const current = catalogPatches.get(key) ?? {
+          ability_id: abilityId,
+          difficulty,
+          updated_at: submittedAt,
+        };
+        catalogPatches.set(key, current);
+        return current;
+      };
       for (const resolution of resolutionsApplied) {
-        const { error } = await supabase
-          .from('boss_mechanics_candidates')
-          .update({
-            resolution: resolution.resolution,
-            resolution_verified_at: submittedAt,
-            updated_at: submittedAt,
-          })
-          .eq('boss_id', body.bossId)
-          .eq('difficulty', resolution.difficulty)
-          .eq('ability_id', resolution.abilityId);
-        if (error) throw error;
+        Object.assign(patchFor(resolution.abilityId, resolution.difficulty), {
+          resolution: resolution.resolution,
+          resolution_verified_at: submittedAt,
+        });
       }
-
       for (const responsibility of responsibilitiesApplied) {
-        const { error } = await supabase
-          .from('boss_mechanics_candidates')
-          .update({ responsibility: responsibility.responsibility, updated_at: submittedAt })
-          .eq('boss_id', body.bossId)
-          .eq('difficulty', responsibility.difficulty)
-          .eq('ability_id', responsibility.abilityId);
-        if (error) throw error;
-        await resyncMechanicResponsibility(
-          supabase,
-          body.bossId,
-          responsibility.difficulty,
-          responsibility.name,
-          responsibility.responsibility,
-        );
+        patchFor(responsibility.abilityId, responsibility.difficulty)['responsibility'] = responsibility.responsibility;
       }
-
       for (const avoidable of avoidablesApplied) {
-        const { error } = await supabase
-          .from('boss_mechanics_candidates')
-          .update({ avoidable: avoidable.avoidable, updated_at: submittedAt })
-          .eq('boss_id', body.bossId)
-          .eq('difficulty', avoidable.difficulty)
-          .eq('ability_id', avoidable.abilityId);
-        if (error) throw error;
-        await resyncMechanicAvoidable(supabase, body.bossId, avoidable.difficulty, avoidable.name, avoidable.avoidable);
+        patchFor(avoidable.abilityId, avoidable.difficulty)['avoidable'] = avoidable.avoidable;
+      }
+      for (const classification of applied) {
+        Object.assign(patchFor(classification.abilityId, classification.difficulty), {
+          category: classification.category,
+          ai_classification: {
+            confidence: classification.confidence,
+            sources: classification.sources,
+            notes: classification.notes,
+            classifiedAt: submittedAt,
+          },
+        });
       }
 
-      for (const a of applied) {
-        // §"un botón de información que te venga lo que dice en 'notas'...
-        // parece bastante útil" (feedback real): antes se descartaba
-        // confidence/sources/notes en cuanto se aplicaba la categoría — se
-        // guardan para que Ajustes pueda mostrarlos junto a la mecánica.
-        const { error } = await supabase
-          .from('boss_mechanics_candidates')
-          .update({
-            category: a.category,
-            ai_classification: { confidence: a.confidence, sources: a.sources, notes: a.notes, classifiedAt: submittedAt },
-            updated_at: submittedAt,
-          })
-          .eq('boss_id', body.bossId)
-          .eq('difficulty', a.difficulty)
-          .eq('ability_id', a.abilityId);
-        if (error) throw error;
-        // §"falta ahí cruce de datos... arruinando varias partes de la
-        // app": ver resync-mechanic-category.ts — sin esto, la categoría
-        // recién aplicada aquí nunca llega a los pulls ya analizados. Por
-        // NOMBRE, no por ability_id (el del manifiesto casi nunca coincide
-        // con el real que guardó WCL en los eventos).
-        await resyncMechanicCategory(supabase, body.bossId, a.difficulty, a.name, a.category);
+      const patches = [...catalogPatches.values()];
+      const catalogWriteBatchSize = 8;
+      for (let offset = 0; offset < patches.length; offset += catalogWriteBatchSize) {
+        const results = await Promise.all(patches.slice(offset, offset + catalogWriteBatchSize).map((patch) => {
+          const { ability_id: abilityId, difficulty, ...values } = patch;
+          return supabase
+            .from('boss_mechanics_candidates')
+            .update(values)
+            .eq('boss_id', body.bossId)
+            .eq('difficulty', difficulty)
+            .eq('ability_id', abilityId);
+        }));
+        const failed = results.find((result) => result.error);
+        if (failed?.error) throw failed.error;
       }
 
-      // §"Daño evitable de toda la noche — solo hay cobertura en 1 de 3
-      // combinaciones boss/dificultad" (feedback real, investigado): el
-      // informe de noche cacheado no se invalidaba al clasificar más
-      // mecánicas después de generarlo — se quedaba con la cobertura de
-      // aquel momento (verificado en real contra un caso concreto). Igual
-      // de aplicable a resolution: también se guarda dentro del informe.
-      // Ahora puede haber tocado varias dificultades a la vez — se invalida
-      // una vez por cada dificultad realmente afectada, no solo una.
-      const touchedDifficulties = new Set([
-        ...applied.map((a) => a.difficulty),
-        ...responsibilitiesApplied.map((r) => r.difficulty),
-        ...avoidablesApplied.map((a) => a.difficulty),
-        ...resolutionsApplied.map((r) => r.difficulty),
-      ]);
-      for (const difficulty of touchedDifficulties) {
-        await invalidateNightFullReportsForBossDifficulty(supabase, body.bossId, difficulty);
-      }
+      const appliedCategoryKeys = new Set(applied.map((entry) => `${entry.abilityId}::${entry.difficulty}`));
+      const appliedResolutionKeys = new Set(resolutionsApplied.map((entry) => `${entry.abilityId}::${entry.difficulty}`));
+      const appliedResponsibilityKeys = new Set(responsibilitiesApplied.map((entry) => `${entry.abilityId}::${entry.difficulty}`));
+      const appliedAvoidableKeys = new Set(avoidablesApplied.map((entry) => `${entry.abilityId}::${entry.difficulty}`));
+      const fullyAppliedCount = [...appliedCategoryKeys].filter((key) =>
+        appliedResolutionKeys.has(key) && appliedResponsibilityKeys.has(key) && appliedAvoidableKeys.has(key),
+      ).length;
 
       return jsonResponse({
         ok: true,
+        submittedCount: parsed.length,
+        fullyAppliedCount,
         applied,
         skippedLowConfidence,
         skippedUndetermined,
@@ -560,6 +545,8 @@ Deno.serve(async (req: Request) => {
 
     return jsonResponse({ ok: false, error: `action inválida: ${body.action}` }, 400);
   } catch (err) {
-    return jsonResponse({ ok: false, error: err instanceof Error ? err.message : String(err) }, 500);
+    const message = errorMessage(err);
+    console.error('classify-mechanics error:', err);
+    return jsonResponse({ ok: false, error: message }, 500);
   }
 });

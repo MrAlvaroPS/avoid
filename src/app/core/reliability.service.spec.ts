@@ -1,4 +1,9 @@
-import { computeReliabilityBreakdown, type ReliabilityInputRow } from './reliability.service';
+import {
+  compareExecutionLedgerShadow,
+  computeReliabilityBreakdown,
+  type ReliabilityInputRow,
+} from './reliability.service';
+import type { ExecutionLedgerPullSummary } from './execution-ledger.service';
 
 const NOW = Date.parse('2026-08-26T12:00:00.000Z');
 
@@ -51,11 +56,16 @@ function row(overrides: Partial<ReliabilityInputRow> = {}): ReliabilityInputRow 
     defensive_management_decision_count: null,
     defensive_required_count: null,
     defensive_required_success_count: null,
+    defensive_required_exact_adherence_count: null,
     defensive_broken_reservation_count: null,
     defensive_death_viable_cd_count: null,
     defensive_evaluation_confidence: null,
     defensive_evaluator_version: null,
     defensive_resolver_version: null,
+    defensive_solver_version: null,
+    defensive_game_build: null,
+    defensive_build_fingerprint: null,
+    defensive_evaluated_at: null,
     ...overrides,
   };
 }
@@ -66,11 +76,16 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
     defensive_management_decision_count: 2,
     defensive_required_count: 1,
     defensive_required_success_count: score > 0 ? 1 : 0,
+    defensive_required_exact_adherence_count: score > 0 ? 1 : 0,
     defensive_broken_reservation_count: 0,
     defensive_death_viable_cd_count: 0,
     defensive_evaluation_confidence: 'verified',
-    defensive_evaluator_version: 'defensive-execution-evaluator@2.2.0',
+    defensive_evaluator_version: 'defensive-execution-evaluator@2.4.0',
     defensive_resolver_version: 'effective-defensives@2.1.0',
+    defensive_solver_version: 'defensive-plan-solver@2.0.0',
+    defensive_game_build: '12.0.0.1',
+    defensive_build_fingerprint: 'sha256:build-a',
+    defensive_evaluated_at: new Date(NOW).toISOString(),
   });
 
   it('mantiene v1 como score visible con el feature flag apagado y calcula shadow', () => {
@@ -84,7 +99,7 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
       v2Score: 25,
       delta: -75,
       comparablePullCount: 1,
-      evaluatorVersions: ['defensive-execution-evaluator@2.2.0'],
+      evaluatorVersions: ['defensive-execution-evaluator@2.4.0'],
     });
   });
 
@@ -116,6 +131,91 @@ describe('computeReliabilityBreakdown defensiva v2 y shadow', () => {
     expect(incomplete?.breakdown.defensiva).toBe(100);
     expect(uncertain?.breakdown.defensiva).toBe(0);
     expect(staleResolver?.breakdown.defensiva).toBe(0);
+  });
+
+  it('no mezcla v2 y legacy cuando el backfill de una noche es parcial', () => {
+    const result = computeReliabilityBreakdown(
+      [
+        row({ pull_id: 'pull-1', defensive_use_opportunity: true, used_defensive_in_pull: true, ...v2(20) }),
+        row({ pull_id: 'pull-2', defensive_use_opportunity: true, used_defensive_in_pull: true }),
+      ],
+      NOW,
+      { defensiveV2Enabled: true },
+    );
+    expect(result?.breakdown.defensiva).toBe(100);
+  });
+
+  it('bloquea v2 visible si la generacion mezcla builds', () => {
+    const result = computeReliabilityBreakdown(
+      [
+        row({ pull_id: 'pull-1', defensive_use_opportunity: true, used_defensive_in_pull: true, ...v2(20) }),
+        row({
+          pull_id: 'pull-2',
+          defensive_use_opportunity: true,
+          used_defensive_in_pull: true,
+          ...v2(80),
+          defensive_build_fingerprint: 'sha256:build-b',
+        }),
+      ],
+      NOW,
+      { defensiveV2Enabled: true },
+    );
+    expect(result?.breakdown.defensiva).toBe(100);
+  });
+});
+
+describe('compareExecutionLedgerShadow', () => {
+  it('compara solo pulls materializados con versiones homogéneas', () => {
+    const summaries: ExecutionLedgerPullSummary[] = [
+      {
+        pull_id: 'pull-1',
+        player_name: 'Raider',
+        ledger_evaluator_version: 'execution-ledger@1.0.0',
+        event_count: 3,
+        credit_count: 0,
+        penalty_count: 2,
+        primary_penalty_count: 1,
+        mechanic_failure_count: 2,
+        defensive_failure_count: 0,
+        consumable_failure_count: 0,
+        versions_homogeneous: true,
+        evaluated_at: '2026-08-26T12:00:00.000Z',
+      },
+      {
+        pull_id: 'pull-2',
+        player_name: 'Raider',
+        ledger_evaluator_version: 'execution-ledger@1.0.0',
+        event_count: 1,
+        credit_count: 0,
+        penalty_count: 1,
+        primary_penalty_count: 1,
+        mechanic_failure_count: 9,
+        defensive_failure_count: 9,
+        consumable_failure_count: 9,
+        versions_homogeneous: false,
+        evaluated_at: '2026-08-26T12:00:00.000Z',
+      },
+    ];
+
+    expect(
+      compareExecutionLedgerShadow(
+        [
+          row({ personal_mechanic_fail_count: 1 }),
+          row({ pull_id: 'pull-2', personal_mechanic_fail_count: 7 }),
+        ],
+        summaries,
+      ),
+    ).toEqual({
+      legacyMechanicFailureCount: 1,
+      ledgerMechanicFailureCount: 2,
+      ledgerDefensiveFailureCount: 0,
+      ledgerConsumableFailureCount: 0,
+      primaryPenaltyCount: 1,
+      mechanicFailureDelta: 1,
+      comparablePullCount: 1,
+      evaluatorVersions: ['execution-ledger@1.0.0'],
+      versionsCompatible: true,
+    });
   });
 });
 

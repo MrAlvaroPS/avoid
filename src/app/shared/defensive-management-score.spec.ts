@@ -51,4 +51,31 @@ describe('defensive management score v2', () => {
     expect(result.requiredCount).toBe(1);
     expect(result.requiredSuccessCount).toBe(0);
   });
+
+  it('conserva cobertura pero penaliza una sustitucion con coste futuro', () => {
+    const result = computeDefensiveManagementScore([
+      {
+        state: 'covered_with_substitution',
+        reason: 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT',
+        requirementLevel: 'required',
+      },
+    ]);
+    expect(result.requiredSuccessCount).toBe(0);
+    expect(result.weightedSuccess).toBe(0);
+    expect(result.weightedOpportunity).toBe(
+      DEFENSIVE_MANAGEMENT_SCORE_WEIGHTS.brokenReservation,
+    );
+    expect(result.score).toBe(0);
+  });
+
+  it('no penaliza dos veces evidencia secundaria del mismo hecho causal', () => {
+    const result = computeDefensiveManagementScore([
+      { state: 'missed_extra_opportunity', primaryPenalty: true },
+      { state: 'death_with_viable_cd', primaryPenalty: false },
+    ]);
+    expect(result.decisionCount).toBe(1);
+    expect(result.weightedOpportunity).toBe(
+      DEFENSIVE_MANAGEMENT_SCORE_WEIGHTS.recommended,
+    );
+  });
 });

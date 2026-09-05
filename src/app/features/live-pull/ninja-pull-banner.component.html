@@ -1,26 +1,18 @@
-<section class="ninja-banner" [class.is-restored]="!excluded()" aria-live="polite">
+<section class="ninja-banner" [class.is-restored]="context()?.ninjaStatus !== 'confirmed' && !excluded()" aria-live="polite">
   <div class="row">
     <span class="icon" aria-hidden="true">🥷</span>
-    <span class="headline">
-      @if (excluded()) {
-        Posible ninja pull detectado — muy pocos jugadores llegaron a engancharse. No cuenta como intento en wipes, fiabilidad ni histórico.
-      } @else {
-        Ninja pull detectado pero marcado a mano como intento real — vuelve a contar en todas las estadísticas.
-      }
-    </span>
+    <span class="headline">{{ statusLabel() }}@if (context()) { · fuente {{ context()?.ninjaSource }}. }</span>
     <button type="button" class="link-btn" (click)="detailsOpen.set(!detailsOpen())">{{ detailsOpen() ? 'ocultar evidencia' : 'ver evidencia' }}</button>
-    <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="toggle()">
-      {{ toggling() ? 'Guardando…' : excluded() ? 'Fue un intento real →' : 'Marcar como ninja pull →' }}
-    </button>
+    @if (context()?.ninjaStatus === 'confirmed' || (!context() && excluded())) {
+      <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="toggle()">Marcar intento válido</button>
+    } @else {
+      @if (context()) { <button type="button" class="link-btn" [disabled]="toggling()" (click)="apply('mark_probable_ninja')">Dejar probable</button> }
+      <button type="button" class="toggle-btn" [disabled]="toggling()" (click)="toggle()">Confirmar ninja</button>
+    }
   </div>
-  @if (detailsOpen()) {
-    <ul class="signal-list">
-      @for (line of signalLines(); track line) {
-        <li>{{ line }}</li>
-      }
-    </ul>
+  @if (context()) {
+    <label class="review-reason">Motivo <input type="text" maxlength="240" [value]="reason()" (input)="reason.set($any($event.target).value)" placeholder="Opcional; queda auditado" /></label>
   }
-  @if (error(); as e) {
-    <p class="banner-error" role="alert">{{ e }}</p>
-  }
+  @if (detailsOpen()) { <ul class="signal-list">@for (line of signalLines(); track line) { <li>{{ line }}</li> }</ul> }
+  @if (error(); as message) { <p class="banner-error" role="alert">{{ message }}</p> }
 </section>

@@ -248,8 +248,15 @@ export interface MrtReminderInput {
   name: string;
   /** Ej. "{spell:48792} Escudo de fuego" */
   message: string;
+  /** §"las notas del MRT no saltan" (feedback real, 2026-09-03, verificado
+   * contra el código de la app): DEBE ser el journal_encounter_id real de
+   * Blizzard, nunca el encounter_id de Warcraft Logs — son dos IDs
+   * completamente distintos y el cliente del juego solo conoce el primero.
+   * Ver known_raid_bosses.journal_encounter_id. */
   bossId: number;
   difficultyId: number;
+  /** known_raid_bosses.blizzard_zone_id — ID de instancia de Blizzard, no el zone_id de WCL. Opcional: con bossId correcto no debería hacer falta, pero el usuario reportó una prueba real donde omitirlo impedía que el reminder cargara. */
+  zoneId?: number | null;
   /** Nombres de personaje. Vacío = sin restricción (lo recibe cualquiera que importe la nota) — el uso previsto en esta app es repartir el export ya filtrado por spec/persona a mano, así que normalmente vacío. */
   players: string[];
   /** Segundos de aviso previo (countdown) antes del momento real de la mecánica. */
@@ -263,6 +270,7 @@ export interface MrtDecodedReminder {
   message: string;
   bossId: number | null;
   difficultyId: number | null;
+  zoneId: number | null;
   players: string[];
   prewarnSeconds: number;
   countdown: boolean;
@@ -293,7 +301,7 @@ function serializeReminder(r: MrtReminderInput): Uint8Array {
     escapeMrtValue(''), // 12 extraCheck
     escapeMrtValue(r.bossId), // 13 bossID
     escapeMrtValue(r.difficultyId), // 14 diffID
-    escapeMrtValue(''), // 15 zoneID
+    escapeMrtValue(r.zoneId ?? ''), // 15 zoneID
     escapeMrtValue(r.players.join(':')), // 16 players
     escapeMrtValue(''), // 17 notePattern
     escapeMrtValue(0), // 18 roles
@@ -319,6 +327,7 @@ function deserializeReminder(bytes: Uint8Array): MrtDecodedReminder {
     message: raw[2],
     bossId: raw[12] === '' ? null : Number(raw[12]),
     difficultyId: raw[13] === '' ? null : Number(raw[13]),
+    zoneId: raw[14] === '' ? null : Number(raw[14]),
     players: raw[15] ? raw[15].split(':').filter(Boolean) : [],
     prewarnSeconds: Number(raw[4]) || 0,
     countdown: (checks & CHECK_COUNTDOWN) !== 0,

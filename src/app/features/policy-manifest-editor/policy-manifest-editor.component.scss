@@ -1,0 +1,43 @@
+.policy-editor {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.error { color: #b42318; }
+
+.policy-form { display: grid; gap: 8px; }
+.field-grid { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; }
+.aliases { display: grid; gap: 6px; border-top: 1px solid var(--card-border); padding-top: 8px; }
+.aliases h3 { margin: 0; font-size: 12px; }
+.aliases ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.aliases li { display: flex; gap: 5px; background: var(--surface); border-radius: 5px; padding: 3px 6px; }
+.aliases small { color: var(--text-faint); }
+.alias-inputs { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 8px; }
+label { display: grid; gap: 3px; font-size: 10.5px; color: var(--text-muted); }
+select, textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--card-border);
+  border-radius: 5px;
+  padding: 5px 6px;
+  font: inherit;
+}
+textarea { min-height: 42px; resize: vertical; }
+.policy-form button { justify-self: start; }
+.empty, .meta { color: var(--text-faint); font-size: 11.5px; margin: 0; }
+
+@media (max-width: 720px) {
+  .field-grid, .alias-inputs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

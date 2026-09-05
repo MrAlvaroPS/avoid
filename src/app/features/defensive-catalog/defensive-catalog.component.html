@@ -62,6 +62,23 @@
             {{ queueRetrying() ? 'Reintentando…' : (queueHealth() === 'unreachable' ? 'Volver a comprobar' : 'Reintentar') }}
           </button>
         }
+        @if (queueHealth() !== 'healthy' && queueHealth() !== 'checking') {
+          <!-- §"la cola está, hay que limpiarla... botón de cancelar cola
+               que efectivamente cancele toda la cola" (feedback real,
+               2026-09-04): descarta TERMINALMENTE (nunca se reencola) todo
+               lo no terminal — a diferencia de Reintentar, que solo
+               reencola errores. Doble clic en 5s: es destructivo y afecta a
+               TODA la cola, no a un batch. -->
+          <button
+            type="button"
+            class="queue-retry queue-cancel"
+            [disabled]="queueCancelling()"
+            (click)="requestCancelReanalysisQueue()"
+            [title]="queueCancelArmed() ? 'Pulsa otra vez para confirmar' : 'Cancela TODA la cola (todas las clases/batches)'"
+          >
+            {{ queueCancelling() ? 'Cancelando…' : (queueCancelArmed() ? '¿Seguro? Pulsa otra vez' : 'Cancelar cola') }}
+          </button>
+        }
       </div>
     </div>
 
@@ -167,7 +184,7 @@
             @if (r.applied.length) {
               <p class="result-line result-ok">
                 ✓ {{ r.applied.length }} defensivo{{ r.applied.length === 1 ? '' : 's' }} clasificado{{ r.applied.length === 1 ? '' : 's' }} (sugerido, revisa y confirma en la
-                tabla): {{ r.applied.map((a) => a.name + ' → ' + a.survivalType).join(', ') }}
+                tabla): {{ r.applied.map((a) => a.name + ' → ' + a.survivalType + ' · ' + a.category + ' · target ' + a.targetingMode).join(', ') }}
               </p>
             }
             @if (r.skippedLowConfidence.length) {
@@ -196,7 +213,20 @@
               </div>
             }
             @if (r.invalid.length) {
-              <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada.</p>
+              <!-- §"me clasifica algunos y otros me da inválido... es normal?"
+                   (feedback real, 2026-09-03): antes solo se enseñaba el
+                   número, sin motivo — con el contrato v10 (muchos más
+                   campos, mucha más superficie para que la IA se despiste en
+                   uno) hacía falta ver spellId + reason exactos para poder
+                   diagnosticar, no solo saber que "algo" falló. -->
+              <div class="suggested-exclusions">
+                <p class="result-line result-warn">✕ {{ r.invalid.length }} fila{{ r.invalid.length === 1 ? '' : 's' }} inválida{{ r.invalid.length === 1 ? '' : 's' }} en la respuesta pegada — no se aplicó nada de estas filas (ni siquiera los datos legacy):</p>
+                @for (inv of r.invalid; track $index) {
+                  <div class="suggested-exclusion-row">
+                    <span><strong>spellId {{ inv.spellId }}</strong> — {{ inv.reason }}</span>
+                  </div>
+                }
+              </div>
             }
           </div>
         }
@@ -271,11 +301,24 @@
             </thead>
             <tbody>
               @for (d of defensives(); track d.spell_id) {
-                <tr [class.saving]="savingSpellId() === d.spell_id" [class.reviewed]="d.reviewed" [class.excluded]="d.excluded">
+                <tr [class.saving]="savingSpellId() === d.spell_id" [class.reviewed]="d.reviewed" [class.excluded]="d.excluded" [class.passive]="d.activation_mode === 'passive'">
                   <td>
-                    <!-- Sin columna de descripción propia (cooldown_catalog no la tiene) — el tooltip de Wowhead del enlace de arriba ya trae el texto real del hechizo al pasar el ratón. -->
-                    <app-wowhead-link type="spell" [id]="d.spell_id" class="name"><span class="name">{{ d.name }}</span></app-wowhead-link>
-                    <span class="meta">#{{ d.spell_id }} @if (d.synced_from_commit) { · sincronizado de WoWAnalyzer } @else { · semilla manual }</span>
+                    <div class="name-cell">
+                      <span class="spell-icon">
+                        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z" /></svg>
+                        @if (iconUrl(d.spell_id); as icon) {
+                          <img [src]="icon" [alt]="safeSpellName(d.name, d.spell_id)" (error)="onIconError($event)" />
+                        }
+                      </span>
+                      <div>
+                        <!-- Sin columna de descripción propia (cooldown_catalog no la tiene) — el tooltip de Wowhead del enlace de arriba ya trae el texto real del hechizo al pasar el ratón. safeSpellName() por si cooldown_catalog.name arrastra un fragmento corrupto (JSON/markdown sin terminar de parsear de un envío manual de classify-defensives, ver format.util.ts) — mismo saneado que ya usa boss-prep. -->
+                        <app-wowhead-link type="spell" [id]="d.spell_id" class="name"><span class="name">{{ safeSpellName(d.name, d.spell_id) }}</span></app-wowhead-link>
+                        @if (d.activation_mode === 'passive') {
+                          <small class="passive-badge" title="Pasivo: nunca se evalúa como disponible/usado, ninguna pantalla debería penalizarlo">Pasivo</small>
+                        }
+                        <span class="meta">#{{ d.spell_id }} @if (d.synced_from_commit) { · sincronizado de WoWAnalyzer } @else { · semilla manual }</span>
+                      </div>
+                    </div>
                   </td>
                   <td>
                     @if (d.ai_classification; as ai) {

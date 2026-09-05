@@ -30,6 +30,9 @@ interface UpsertRequest {
   prewarnSeconds?: number;
   triggerType?: 'bossmod' | 'time';
   bossmodSpellId?: number | null;
+  /** Contador del timer de BigWigs/DBM — solo se respeta si bossmodCounterVerified es true. Ver migración 20260903110000. */
+  bossmodCounter?: string | null;
+  bossmodCounterVerified?: boolean;
   notes?: string | null;
   /** Grupos de raid (1-6) a los que aplica — null/undefined = todos. Solo informativo, ver migración 20260831130000. */
   assignedGroups?: number[] | null;
@@ -70,6 +73,12 @@ Deno.serve(async (req: Request) => {
   const triggerType = upsertBody.triggerType ?? 'bossmod';
   if (!VALID_TRIGGER_TYPES.has(triggerType)) return jsonResponse({ ok: false, error: `triggerType inválido: ${triggerType}` }, 400);
 
+  // Nunca se asume verified sin counter real ni sin trigger bossmod — mismo
+  // criterio defensivo que la constraint de la migración 20260903110000, para
+  // no depender solo de que Postgres la rechace.
+  const bossmodCounter = upsertBody.bossmodCounter?.trim() || null;
+  const bossmodCounterVerified = triggerType === 'bossmod' && bossmodCounter != null && upsertBody.bossmodCounterVerified === true;
+
   const payload = {
     boss_id: upsertBody.bossId,
     difficulty: upsertBody.difficulty,
@@ -80,6 +89,8 @@ Deno.serve(async (req: Request) => {
     prewarn_seconds: upsertBody.prewarnSeconds ?? 5,
     trigger_type: triggerType,
     bossmod_spell_id: upsertBody.bossmodSpellId ?? null,
+    bossmod_counter: bossmodCounter,
+    bossmod_counter_verified: bossmodCounterVerified,
     notes: upsertBody.notes ?? null,
     assigned_groups: upsertBody.assignedGroups?.length ? upsertBody.assignedGroups : null,
     updated_at: new Date().toISOString(),

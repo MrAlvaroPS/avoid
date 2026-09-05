@@ -16,18 +16,48 @@
       [phaseLabel]="d.header.phaseLabel"
     />
 
-    @if (d.wipeCall; as wc) {
+    @if (d.useEvaluationContextV2) {
+      @if (d.evaluationContext; as context) {
+        @if (auth.officerStatus() === 'officer') {
+          <app-pull-evaluation-context-editor
+            [pullId]="d.pullId"
+            [durationMs]="d.header.durationMs ?? 0"
+            [context]="context"
+            (contextChanged)="onWipeCallStatusChanged()"
+          />
+        }
+      }
       <app-wipe-call-banner
         [pullId]="d.pullId"
-        [confidence]="wc.confidence"
-        [excluded]="wc.excluded"
-        [signals]="wc.signals"
+        [confidence]="d.wipeCall?.confidence ?? 0"
+        [excluded]="d.evaluationContext?.wipeCallAtMs != null"
+        [signals]="d.wipeCall?.signals ?? {}"
+        [context]="d.evaluationContext"
+        [durationMs]="d.header.durationMs ?? 0"
+        [timeline]="d.timeline"
         (statusChanged)="onWipeCallStatusChanged()"
       />
-    }
-
-    @if (d.ninjaPull; as np) {
-      <app-ninja-pull-banner [pullId]="d.pullId" [excluded]="np.excluded" [signals]="np.signals" (statusChanged)="onNinjaPullStatusChanged()" />
+      <app-ninja-pull-banner
+        [pullId]="d.pullId"
+        [excluded]="d.evaluationContext?.ninjaStatus === 'confirmed'"
+        [signals]="d.ninjaPull?.signals ?? {}"
+        [context]="d.evaluationContext"
+        (statusChanged)="onNinjaPullStatusChanged()"
+      />
+    } @else {
+      @if (d.wipeCall; as wc) {
+        <app-wipe-call-banner
+          [pullId]="d.pullId"
+          [confidence]="wc.confidence"
+          [excluded]="wc.excluded"
+          [signals]="wc.signals"
+          [durationMs]="d.header.durationMs ?? 0"
+          (statusChanged)="onWipeCallStatusChanged()"
+        />
+      }
+      @if (d.ninjaPull; as np) {
+        <app-ninja-pull-banner [pullId]="d.pullId" [excluded]="np.excluded" [signals]="np.signals" (statusChanged)="onNinjaPullStatusChanged()" />
+      }
     }
 
     <div class="overview-grid">

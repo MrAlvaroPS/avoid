@@ -89,14 +89,14 @@ Deno.serve(async (req: Request) => {
         { table: 'defensive_plan_slots', columns: 'id,plan_version_id,assigned_player_key,occurrence_time_ms' },
         { table: 'pull_defensive_plan_binding', columns: 'pull_id,plan_version_id,bound_at' },
       ]),
-      probe('evaluator_schema', 'Evaluator post-pull', 'M8 · 20260901120000', [
-        { table: 'player_pull_defensive_evaluations', columns: 'pull_id,player_name,evaluator_version,data_confidence,management_score' },
+      probe('evaluator_schema', 'Evaluator post-pull', 'M8 + consistencia · 20260901120000, 20260902150000', [
+        { table: 'player_pull_defensive_evaluations', columns: 'pull_id,player_name,evaluator_version,data_confidence,management_score,required_exact_adherence_count,required_coverage_success_count' },
       ]),
       probe('reliability_v2', 'Vista Fiabilidad v2', 'M9 · 20260901130000', [
         {
           table: 'player_pull_reliability_inputs',
           columns:
-            'pull_id,player_name,defensive_management_score_v2,defensive_management_decision_count,defensive_required_count,defensive_required_success_count,defensive_broken_reservation_count,defensive_death_viable_cd_count,defensive_evaluation_confidence,defensive_evaluator_version,defensive_resolver_version',
+            'pull_id,player_name,defensive_management_score_v2,defensive_management_decision_count,defensive_required_count,defensive_required_success_count,defensive_required_exact_adherence_count,defensive_broken_reservation_count,defensive_death_viable_cd_count,defensive_evaluation_confidence,defensive_evaluator_version,defensive_resolver_version,defensive_solver_version,defensive_game_build,defensive_build_fingerprint,defensive_evaluated_at',
         },
       ]),
     ]);
@@ -121,9 +121,14 @@ Deno.serve(async (req: Request) => {
         .not('defensive_management_decision_count', 'is', null)
         .not('defensive_required_count', 'is', null)
         .not('defensive_required_success_count', 'is', null)
+        .not('defensive_required_exact_adherence_count', 'is', null)
         .not('defensive_broken_reservation_count', 'is', null)
         .not('defensive_death_viable_cd_count', 'is', null)
         .not('defensive_evaluation_confidence', 'is', null)
+        .not('defensive_solver_version', 'is', null)
+        .not('defensive_game_build', 'is', null)
+        .not('defensive_build_fingerprint', 'is', null)
+        .not('defensive_evaluated_at', 'is', null)
         .eq('defensive_evaluator_version', DEFENSIVE_EXECUTION_EVALUATOR_VERSION)
         .eq('defensive_resolver_version', EFFECTIVE_DEFENSIVE_RESOLVER_VERSION)
         .or('defensive_management_decision_count.eq.0,defensive_management_score_v2.not.is.null');

@@ -50,6 +50,8 @@ function plainNote(value: string): string {
 export interface NightReportAttendanceExtras {
   attendingMain: string[];
   attendingTrial: string[];
+  /** Jugó esta noche sin tener fila en wowaudit_roster — ver NightReport.attendingUnlisted. */
+  attendingUnlisted: string[];
   absentMain: string[];
 }
 
@@ -281,6 +283,7 @@ export function buildNightFullReportMarkdown(report: NightFullReport, generatedA
       '## Asistencia',
       `- **Main presentes (${attendance.attendingMain.length}):** ${attendance.attendingMain.map(escapeMarkdown).join(', ') || '—'}`,
       ...(attendance.attendingTrial.length ? [`- **Trial presentes (${attendance.attendingTrial.length}):** ${attendance.attendingTrial.map(escapeMarkdown).join(', ')}`] : []),
+      ...(attendance.attendingUnlisted.length ? [`- **Sin roster en WowAudit (${attendance.attendingUnlisted.length}):** ${attendance.attendingUnlisted.map(escapeMarkdown).join(', ')}`] : []),
       ...(attendance.absentMain.length ? [`- **Main ausentes (${attendance.absentMain.length}):** ${attendance.absentMain.map(escapeMarkdown).join(', ')}`] : []),
     );
   }

@@ -14,9 +14,11 @@ import { ProvenanceDrawerComponent } from './provenance-drawer.component';
 import { DonutChartComponent, type DonutSegment } from '../../shared/charts/donut-chart.component';
 import { TrendBarsComponent } from '../../shared/charts/trend-bars.component';
 import { CompareBarRowComponent } from './compare-bar-row.component';
+import { PullEvaluationContextEditorComponent } from './pull-evaluation-context-editor.component';
 import { EMPTY_BRIEF_ENTITIES, type BriefEntities } from '../../shared/brief-text.component';
 import type { LlmPullAnalysis, ProvenanceEntry, TimelineChip } from '../../shared/models/ui';
 import { errorMessage } from '../../shared/error-message.util';
+import { AuthService } from '../../core/auth.service';
 
 @Component({
   selector: 'app-live-pull',
@@ -34,12 +36,14 @@ import { errorMessage } from '../../shared/error-message.util';
     DonutChartComponent,
     TrendBarsComponent,
     CompareBarRowComponent,
+    PullEvaluationContextEditorComponent,
   ],
   templateUrl: './live-pull.component.html',
   styleUrl: './live-pull.component.scss',
 })
 export class LivePullComponent {
   private pullAnalysis = inject(PullAnalysisService);
+  protected auth = inject(AuthService);
 
   pullId = input.required<string>();
 

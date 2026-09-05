@@ -93,6 +93,16 @@ describe('defensive plan solver', () => {
     expect(result.assignments.map((slot) => slot.coverageStatus)).toEqual(['covered', 'uncovered', 'covered']);
   });
 
+  it('keeps a one-player partial plan feasible when required windows remain uncovered', () => {
+    const result = solveDefensivePlan(input({
+      mode: 'partial',
+      occurrences: [occurrence(60_000, 1), occurrence(90_000, 2), occurrence(120_000, 3)],
+    }));
+
+    expect(result).toMatchObject({ mode: 'partial', feasible: true, coverageComplete: false });
+    expect(result.diagnostics.uncoveredRequired).toHaveLength(1);
+  });
+
   it('models two consecutive charges and sequential recharge', () => {
     const twoCharges = defensive({ charges: 2, effectiveCooldownMs: 20_000, rechargeMs: 20_000 });
     expect(
@@ -177,5 +187,67 @@ describe('defensive plan solver', () => {
     expect(result.planningQuality).toBe('fallback_greedy');
     expect(result.strictScoringEligible).toBe(false);
     expect(result.assignments[0].source).toBe('fallback');
+  });
+
+  // §"un cast debe cubrir toda su ventana de duración (no un recordatorio
+  // por cada ocurrencia cercana)" (feedback real, 2026-09-03): el solver
+  // elige jugador+defensivo mirando solo cooldown/cargas, así que dos
+  // ocurrencias cercanas quedaban cada una "cubierta" con su propio cast
+  // aunque la duración del primero ya bastase — dos recordatorios de MRT
+  // para pulsar el mismo botón en unos segundos.
+  it('marks a second nearby occurrence as already covered by the first cast duration', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1), occurrence(64_000, 2, { abilityId: 501 })],
+        players: [player([defensive({ effectiveCooldownMs: 30_000, effectiveDurationMs: 8_000 })])],
+      }),
+    );
+    const first = result.assignments.find((slot) => slot.occurrenceIndex === 1)!;
+    const second = result.assignments.find((slot) => slot.occurrenceIndex === 2)!;
+    expect(first).toMatchObject({ coverageStatus: 'covered', needsFreshCast: true, coveredByPriorCastAtMs: null });
+    expect(second).toMatchObject({ coverageStatus: 'covered', needsFreshCast: false, coveredByPriorCastAtMs: first.plannedCastAtMs });
+  });
+
+  it('requires a fresh cast once the first duration has actually expired', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1), occurrence(90_000, 2, { abilityId: 501 })],
+        players: [player([defensive({ effectiveCooldownMs: 30_000, effectiveDurationMs: 8_000 })])],
+      }),
+    );
+    expect(result.assignments.map((slot) => slot.needsFreshCast)).toEqual([true, true]);
+  });
+
+  it('does not mark a locked/manual reservation as redundant even inside another cast duration', () => {
+    const result = solveDefensivePlan(
+      input({
+        occurrences: [occurrence(60_000, 1), occurrence(64_000, 2, { abilityId: 501 })],
+        players: [player([defensive({ effectiveCooldownMs: 30_000, effectiveDurationMs: 8_000 })])],
+        reservations: [
+          { playerKey: 'player:a', spellId: 100, abilityId: 501, occurrenceIndex: 2, hard: true, locked: true, source: 'manual' },
+        ],
+      }),
+    );
+    const second = result.assignments.find((slot) => slot.occurrenceIndex === 2)!;
+    expect(second).toMatchObject({ locked: true, needsFreshCast: true, coveredByPriorCastAtMs: null });
+  });
+
+  it('skips an exponential DFS and falls back before consuming its node budget', () => {
+    const players = Array.from({ length: 20 }, (_, index) => ({
+      ...player([defensive({ spellId: 1_000 + index })]),
+      playerKey: `player:${index.toString().padStart(2, '0')}`,
+      playerName: `Player ${index}`,
+    }));
+    const occurrences = Array.from({ length: 20 }, (_, index) => occurrence((index + 1) * 70_000, index + 1));
+
+    const result = solveDefensivePlan(input({ occurrences, players, maxSearchNodes: 50_000_000 }));
+
+    expect(result.planningQuality).toBe('fallback_greedy');
+    expect(result.diagnostics).toMatchObject({
+      searchNodes: 0,
+      searchBudget: 5_000,
+      fallbackReason: 'search_space_exceeds_budget',
+    });
+    expect(result.assignments).toHaveLength(20);
   });
 });

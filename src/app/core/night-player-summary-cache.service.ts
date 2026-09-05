@@ -81,7 +81,9 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // la versión.
 // v10 (2026-09-01): añade defensiveManagementV2. Sin bump, una entrada v9
 // ocultaría la sección 04 nueva aunque el backfill de evaluations ya exista.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v10:';
+// v11 (2026-09-02): separa adherencia/cobertura, admite modo mixed y usa el
+// score nocturno central. El fingerprint delegado ya incluye evaluated_at.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v11:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;

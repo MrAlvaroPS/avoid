@@ -8,6 +8,7 @@
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
+import { NightReportCacheService } from './night-report-cache.service';
 import { loadMechanicNotesByName } from './mechanic-notes';
 import { mapBrief } from './pull-analysis.service';
 import { mechanicCategoryMeta, mechanicDisplayName } from '../shared/format.util';
@@ -98,6 +99,8 @@ export interface NightReport {
   /** Ordenados tanks → healers → dps, como se pide para "identificarlos rápido" en el roster de la noche. */
   attendingMain: NightAttendee[];
   attendingTrial: NightAttendee[];
+  /** Jugó esta noche (aparece en player_pull_records) pero no tiene fila en wowaudit_roster — alt sin dar de alta, sync por detrás del raid, nombre distinto. Sin rol/clase de roster porque no los tenemos; class viene del propio log si WCL lo aportó. */
+  attendingUnlisted: NightAttendee[];
   /** Miembros Main del roster de wowaudit que NO aparecen en ningún pull de esta noche — "quién faltó". Vacío si el roster de wowaudit no está sincronizado todavía. */
   absentMain: NightAttendee[];
   totalDeaths: number;
@@ -119,6 +122,7 @@ export interface NightReport {
 export class NightReportService {
   private supabase = inject(SupabaseService);
   private wowauditRoster = inject(WowauditRosterService);
+  private reportCache = inject(NightReportCacheService);
 
   /** §"recalcular todo" (feedback real, 2026-08-31): ids de pulls de este report, para poder reanalizarlos de verdad (no solo releer el caché) desde el botón de recálculo. */
   async listPullIds(reportCode: string): Promise<string[]> {
@@ -140,7 +144,18 @@ export class NightReportService {
     return { report, generatedAt: data.generated_at as string };
   }
 
-  async load(reportCode: string): Promise<NightReport> {
+  async load(reportCode: string, forceRefresh = false): Promise<NightReport> {
+    // §"no están persistiendo los datos y métricas... calcula todo siempre
+    // que se entra" (feedback real, 2026-09-03): mismo patrón que ya usa
+    // night-player-summary.service.ts — si el fingerprint global (último
+    // pull, último pull corregido, último report, roster) no cambió desde
+    // que se guardó este informe, es el mismo resultado exacto.
+    const fingerprint = await this.reportCache.fingerprint().catch(() => null);
+    if (!forceRefresh && fingerprint) {
+      const cached = this.reportCache.read(reportCode);
+      if (cached && cached.fingerprint === fingerprint) return cached.report;
+    }
+
     const client = this.supabase.client;
 
     const [{ data: reportRow }, { data: pullsData, error: pullsErr }, { data: encounters }, roster] = await Promise.all([
@@ -158,7 +173,7 @@ export class NightReportService {
 
     const [{ data: recordsData, error: recordsErr }, { data: mechEventsData, error: mechErr }, notesByMechanicName, { data: briefRow }, { data: unassignedCatalogData }] = await Promise.all([
       pullIds.length
-        ? client.from('player_pull_records').select('pull_id, player_name, died, death_cause, wipe_call_cluster').in('pull_id', pullIds)
+        ? client.from('player_pull_records').select('pull_id, player_name, class, died, death_cause, wipe_call_cluster').in('pull_id', pullIds)
         : Promise.resolve({ data: [] as RecordLite[], error: null }),
       pullIds.length
         ? withSupabaseRelationFallback(
@@ -319,6 +334,19 @@ export class NightReportService {
     const attendingMain = roster.filter((r) => r.rank === 'Main' && attendedNames.has(r.name)).map(toAttendee).sort(byRoleThenName);
     const attendingTrial = roster.filter((r) => r.rank === 'Trial' && attendedNames.has(r.name)).map(toAttendee).sort(byRoleThenName);
     const absentMain = roster.filter((r) => r.rank === 'Main' && !attendedNames.has(r.name)).map(toAttendee).sort(byRoleThenName);
+    // §"si sale en el roster de esa noche... entonces debería salir en el
+    // resumen también si es un miembro de la guild" (feedback real,
+    // 2026-09-03): alguien puede haber jugado (está en el log de WCL) sin
+    // tener fila en wowaudit_roster todavía — alt recién añadido, sync de
+    // wowaudit por detrás del último raid, nombre distinto en wowaudit... En
+    // vez de desaparecer en silencio del resumen, se enseña aparte en vez de
+    // fingir un rol/clase de roster que no tenemos.
+    const rosterNames = new Set(roster.map((r) => r.name));
+    const classByAttendedName = new Map(records.map((r) => [r.player_name, r.class] as const));
+    const attendingUnlisted: NightAttendee[] = [...attendedNames]
+      .filter((name) => !rosterNames.has(name))
+      .map((name) => ({ name, class: classByAttendedName.get(name) ?? null, role: null }))
+      .sort((a, b) => a.name.localeCompare(b.name));
     const playerClasses = new Map(roster.filter((r) => attendedNames.has(r.name)).map((r) => [r.name, r.class]));
 
     // §"stat de cobertura a nivel de raid" (feedback real, 2026-08-29): una
@@ -356,7 +384,7 @@ export class NightReportService {
       // no aporta nada mostrar un "0/0".
       .filter((row) => row.totalPulls > 0);
 
-    return {
+    const report: NightReport = {
       reportCode,
       reportTitle: (reportRow as { title: string } | null)?.title ?? reportCode,
       reportDate: (reportRow as { start_time: number } | null)?.start_time ? new Date((reportRow as { start_time: number }).start_time).toISOString() : '',
@@ -367,6 +395,7 @@ export class NightReportService {
       totalDurationMs,
       attendingMain,
       attendingTrial,
+      attendingUnlisted,
       absentMain,
       totalDeaths: realDeaths.length,
       totalWipeCallDeathsExcluded: wipeCallDeaths.length,
@@ -379,12 +408,15 @@ export class NightReportService {
       brief: briefRow ? mapBrief(briefRow as unknown as Parameters<typeof mapBrief>[0]) : null,
       unassignedMechanicCoverage,
     };
+    if (fingerprint) this.reportCache.write(reportCode, fingerprint, report);
+    return report;
   }
 }
 
 interface RecordLite {
   pull_id: string;
   player_name: string;
+  class: string | null;
   died: boolean;
   death_cause: DeathCause | null;
   wipe_call_cluster: boolean;

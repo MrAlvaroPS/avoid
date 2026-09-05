@@ -71,4 +71,19 @@ describe('defensive plan draft contract', () => {
     draft.slots[0].coverageStatus = 'uncovered';
     expect(validateDefensivePlanDraft(draft)).toContain('no puede contener una asignación');
   });
+
+  it('accepts an uncovered slot in an individual partial draft', () => {
+    const draft = validDraft();
+    draft.planMode = 'partial';
+    draft.slots[0] = {
+      ...draft.slots[0],
+      coverageStatus: 'uncovered',
+      assignedPlayerKey: null,
+      defensiveSpellId: null,
+      plannedCastAtMs: null,
+      chargesSnapshot: null,
+    };
+
+    expect(validateDefensivePlanDraft(draft)).toBeNull();
+  });
 });

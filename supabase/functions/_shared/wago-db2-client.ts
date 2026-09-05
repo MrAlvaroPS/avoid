@@ -155,6 +155,19 @@ export interface TalentSpellLookup {
   build: string;
   /** talentTree[].id que da WCL en combatantInfo (== TraitNodeEntry.ID) -> spell ID real de Blizzard. */
   entryIdToSpellId: Map<number, number>;
+  /**
+   * §E2.1 (2026-09-04, corrección de build-provenance tras la auditoría de
+   * roster completo): TODOS los TraitNodeEntry.ID que existen de verdad en el
+   * DB2 de este build, resuelvan o no a un spell — entryIdToSpellId por sí
+   * solo NO distingue "entry real sin spell" (nodo estructural — p. ej. el
+   * selector del árbol de Hero Talents) de "entry que no se pudo resolver".
+   * Confirmado real: TODOS los jugadores del roster auditado tienen
+   * exactamente UN nodo seleccionado de este tipo, sin spell, en un rango de
+   * ID estrecho y consistente por clase — no es dato faltante, es un nodo
+   * legítimo sin spellId. Nunca se le inventa un spellId; este set es lo que
+   * permite al resolver distinguirlo de un talento genuinamente sin resolver.
+   */
+  knownEntryIds: Set<number>;
 }
 
 /**
@@ -186,13 +199,20 @@ export async function fetchTalentSpellLookup(build: string): Promise<TalentSpell
   }
 
   const entryIdToSpellId = new Map<number, number>();
+  const knownEntryIds = new Set<number>();
   for (const row of entries.rows) {
     const entryId = optionalInt(row.ID);
+    if (entryId == null) continue;
+    // §E2.1: se registra COMO CONOCIDO independientemente de si resuelve a un
+    // spell — ver comentario de knownEntryIds en TalentSpellLookup. No
+    // condicionar esto a `definitionId != null`: un entry sin TraitDefinitionID
+    // sigue siendo un entry real del DB2 de este build.
+    knownEntryIds.add(entryId);
     const definitionId = optionalInt(row.TraitDefinitionID);
-    if (entryId == null || definitionId == null) continue;
+    if (definitionId == null) continue;
     const spellId = spellIdByDefinitionId.get(definitionId);
     if (spellId) entryIdToSpellId.set(entryId, spellId);
   }
 
-  return { build, entryIdToSpellId };
+  return { build, entryIdToSpellId, knownEntryIds };
 }

@@ -1,22 +1,10 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
+import { executePullEvaluationCommand, type PullContextCommandClient } from '../_shared/pull-evaluation-context-command.ts';
 
-// §"un ninja pull... también cuenta en la estadística de wipes... habría
-// que clasificarlo de otra manera para saberlo" (feedback real): mismo
-// patrón que set-wipe-call-status — analyze-report ya deja
-// pulls.ninja_pull_excluded en su valor por defecto (la heurística de
-// detectNinjaPull) al analizar el pull; esta función es el único sitio que
-// lo cambia después, siempre a mano y siempre explícito. Hace falta para
-// los dos sentidos del error: un ninja pull real que la heurística no cazó
-// (duración/enganche justo por encima del umbral), y un wipe corto de
-// verdad que la heurística marcó por error (ej. una mecánica de raid que
-// mata a casi todos casi a la vez en los primeros segundos).
-
-interface Body {
-  pullId: string;
-  excluded: boolean;
-}
+/** Adaptador legacy. Permite confirmar/restaurar cualquier pull, tenga o no señales. */
+interface Body { pullId: string; excluded: boolean }
 
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
@@ -25,34 +13,20 @@ Deno.serve(async (req: Request) => {
   if (guard instanceof Response) return guard;
 
   let body: Body;
-  try {
-    body = await req.json();
-  } catch {
-    return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
-  }
+  try { body = await req.json(); } catch { return jsonResponse({ ok: false, error: 'Body JSON inválido.' }, 400); }
   if (!body.pullId || typeof body.excluded !== 'boolean') {
-    return jsonResponse({ ok: false, error: 'pullId y excluded (boolean) son obligatorios' }, 400);
+    return jsonResponse({ ok: false, error: 'pullId y excluded (boolean) son obligatorios.' }, 400);
   }
 
-  const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-  );
-
-  // Solo tiene sentido tocar pulls donde de verdad se evaluó la heurística
-  // — evita activar ninja_pull_excluded en un pull sin ninja_pull_signals
-  // (no habría evidencia detrás de la exclusión).
-  const { data: pull, error: fetchError } = await supabase.from('pulls').select('id,ninja_pull_signals').eq('id', body.pullId).maybeSingle();
-  if (fetchError) return jsonResponse({ ok: false, error: fetchError.message }, 500);
-  if (!pull) return jsonResponse({ ok: false, error: `Pull ${body.pullId} no encontrado` }, 404);
-  if (!pull.ninja_pull_signals) return jsonResponse({ ok: false, error: 'Este pull no tiene una evaluación de ninja pull — nada que marcar/restaurar.' }, 400);
-
-  // updated_at: señal que consume roster-snapshot-cache.service.ts para
-  // saber que este pull cambió DESPUÉS de su análisis original — sin esto
-  // el snapshot cacheado del roster se queda desfasado indefinidamente (ver
-  // 20260828100000_pulls_updated_at_cache_invalidation.sql).
-  const { error } = await supabase.from('pulls').update({ ninja_pull_excluded: body.excluded, updated_at: new Date().toISOString() }).eq('id', body.pullId);
-  if (error) return jsonResponse({ ok: false, error: error.message }, 500);
-
-  return jsonResponse({ ok: true, pullId: body.pullId, excluded: body.excluded });
+  try {
+    const client = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    const action = body.excluded
+      ? { action: 'confirm_ninja' as const, reason: 'Compatibilidad set-ninja-pull-status: ninja confirmado.' }
+      : { action: 'mark_valid' as const, reason: 'Compatibilidad set-ninja-pull-status: intento válido confirmado.' };
+    const result = await executePullEvaluationCommand(client as unknown as PullContextCommandClient, body.pullId, action, guard.userId);
+    return jsonResponse({ ok: true, pullId: body.pullId, excluded: !result.context.evaluationEligible, context: result.context, reanalysisQueued: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return jsonResponse({ ok: false, error: message }, /no encontrado/i.test(message) ? 404 : 500);
+  }
 });

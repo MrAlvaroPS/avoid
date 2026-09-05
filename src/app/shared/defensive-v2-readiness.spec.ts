@@ -32,7 +32,7 @@ describe('defensive v2 readiness', () => {
     });
   });
 
-  it('keeps reporting disabled while backfill is partial', () => {
+  it('allows the atomic per-night infographic while global reliability waits for backfill', () => {
     expect(
       defensiveV2Capabilities({
         resolverEndpoint: true,
@@ -48,7 +48,7 @@ describe('defensive v2 readiness', () => {
       playerOverride: true,
       planManagement: true,
       evaluator: true,
-      infographic: false,
+      infographic: true,
       reliability: false,
     });
   });

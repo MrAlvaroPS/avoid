@@ -9,6 +9,7 @@ function player(overrides: Partial<PlayerReliability> = {}): PlayerReliability {
     breakdown: { mecanica: 90, defensiva: 80, preparacion: 100 },
     consistency: null,
     defensiveShadowComparison: null,
+    executionLedgerShadowComparison: null,
     latestGemCount: 3,
     latestGemmedSlotCount: 3,
     latestGemmableSlotCount: 3,

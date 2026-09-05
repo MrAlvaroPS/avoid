@@ -6,7 +6,17 @@ import { isConservativeScheduleFeasible } from './defensive-plan-solver.ts';
 // @ts-ignore Same cross-runtime boundary as above.
 import { computeDefensiveManagementScore } from './defensive-management-score.ts';
 
-export const DEFENSIVE_EXECUTION_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.2.0';
+// §2.4.0 (feedback real, 2026-09-03): corrige el sentinel "Environment"/
+// targetActorId -1 en observedCasts() (un auto-cast de Barkskin se
+// descartaba como si fuera de otro jugador), añade requirementLevel real
+// para ventanas sin plan (antes siempre 'recommended', ahora sale de
+// boss_mechanic_defensive_planning_view igual que el solver), hace viajar
+// peakValue hasta la card, y añade una salvaguarda: un cast propio no
+// explicado dentro de una ventana/secuencia letal nunca se traduce en un
+// fallo confirmado, degrada a incertidumbre. Cambia el resultado de
+// evaluateDefensiveExecution — filas 2.3.0 quedan fuera de una generación
+// v2 homogénea hasta reanalizarse, mismo criterio que el salto anterior.
+export const DEFENSIVE_EXECUTION_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.0';
 
 export type DefensiveExecutionState =
   | 'plan_covered'
@@ -17,6 +27,7 @@ export type DefensiveExecutionState =
   | 'plan_broken'
   | 'reminder_missed'
   | 'death_with_viable_cd'
+  | 'death_with_ready_cd'
   | 'no_feasible_alternative'
   | 'uncertain_data';
 
@@ -30,6 +41,7 @@ export type DefensiveEvaluationReason =
   | 'EARLY_CAST_CAUSED_MISS'
   | 'READY_NOT_CAST_IN_WINDOW'
   | 'DEATH_COUNTERFACTUAL_FEASIBLE'
+  | 'DEATH_READY_AT_END_ONLY'
   | 'NO_COUNTERFACTUAL_SCHEDULE'
   | 'TARGET_MISMATCH'
   | 'UNRESOLVED_BUILD_OR_RULE';
@@ -68,6 +80,25 @@ export interface EvaluationPressureWindow {
   priority: number;
   critical: boolean;
   mechanicId?: number | null;
+  coverageRequirement?:
+    | { kind: 'ANY_OF' }
+    | { kind: 'ALL_OF' }
+    | { kind: 'MIN_N'; count: number }
+    | { kind: 'LAYERED' };
+  /** §"buscarle la lógica... ahora que sabemos cuáles son las ventanas de
+   * daño... podemos saber qué daño era evitable, dónde se debía tirar un
+   * defensivo" (feedback real, 2026-09-03): mismo criterio que ya usa el
+   * solver (generate-defensive-plan/index.ts) contra
+   * boss_mechanic_defensive_planning_view — sin esto, evaluateUnplannedWindow
+   * trataba toda ventana sin plan como 'recommended' (peso 1) sin mirar si la
+   * mecánica real exige defensivo. undefined = sin clasificación resuelta,
+   * cae al valor por defecto de siempre.
+   */
+  requirementLevel?: 'required' | 'recommended' | 'optional';
+  /** Pico de daño real de la ventana (mismo dato que ya trae el sensor,
+   * defensive_pressure_windows_v2) — antes se perdía al construir esta
+   * ventana; sin él es imposible decir "era la mecánica de más daño". */
+  peakValue?: number;
 }
 
 export interface DefensiveExecutionEvaluationInput {
@@ -86,6 +117,10 @@ export interface DefensiveExecutionEvaluationInput {
   casts: ObservedDefensiveCast[];
   windows: EvaluationPressureWindow[];
   deathTimeMs?: number | null;
+  /** Inicio observado de la secuencia de daÃ±o previa a la muerte. Sin esta
+   * evidencia solo puede afirmarse disponibilidad al final, no respuesta
+   * factible durante la ventana letal. */
+  lethalWindowStartMs?: number | null;
   /** Wipe call: nada a partir de este instante forma parte del intento evaluable. */
   evaluationCutoffMs?: number | null;
 }
@@ -96,6 +131,7 @@ export interface DefensiveExecutionEvaluationEvent {
   atMs: number;
   coverageOutcome: 'covered' | 'uncovered' | 'not_applicable' | 'uncertain';
   adherenceOutcome: 'followed' | 'substituted' | 'held' | 'broken' | 'missed' | 'not_applicable' | 'uncertain';
+  managementOutcome: 'success' | 'failure' | 'neutral' | 'uncertain';
   requirementLevel?: 'required' | 'recommended' | 'optional';
   slotId?: string;
   windowId?: string;
@@ -109,6 +145,13 @@ export interface DefensiveExecutionEvaluationEvent {
   relatedFutureAtMs?: number;
   cooldownRemainingMs?: number;
   candidateSpellIds?: number[];
+  lethalWindowStartMs?: number;
+  /** Pico de daño real de la ventana que originó este evento — ver
+   * EvaluationPressureWindow.peakValue. undefined para eventos que no vienen
+   * de una ventana de presión (slots de plan, muertes). */
+  peakValue?: number;
+  causalGroupId?: string;
+  primaryPenalty?: boolean;
 }
 
 export interface DefensiveExecutionEvaluationResult {
@@ -121,6 +164,8 @@ export interface DefensiveExecutionEvaluationResult {
   solverVersion: string;
   evaluatorVersion: typeof DEFENSIVE_EXECUTION_EVALUATOR_VERSION;
   planRequiredCount: number;
+  requiredExactAdherenceCount: number;
+  requiredCoverageSuccessCount: number;
   planExecutedCount: number;
   criticalWindowCount: number;
   criticalCoveredCount: number;
@@ -255,6 +300,30 @@ function coveringCasts(
     .sort((left, right) => left.cast.timeMs - right.cast.timeMs || left.cast.spellId - right.cast.spellId);
 }
 
+// §"cuando decimos que es un 0 tiene que ser una comprobación 100% real de
+// que no ha usado ningún defensivo ante ningún daño" (feedback real,
+// 2026-09-03): coveringCasts() ya filtra por categoría/confidence/target —
+// si un cast real del jugador cae dentro de la ventana pero no encaja con
+// ninguno de esos filtros (el bug de "Environment" era un caso concreto;
+// puede haber otros: catálogo mal clasificado, confidence no fiable...),
+// eso NO es evidencia de que no hizo nada — es evidencia de que no se pudo
+// interpretar. Nunca se afirma un fallo confirmado sobre un hueco de
+// interpretación; se degrada a uncertain_data, igual que ya hace
+// evaluateDeath cuando el kit tiene una entrada no fiable.
+function hasUnexplainedOwnCast(
+  input: DefensiveExecutionEvaluationInput,
+  startMs: number,
+  endMs: number,
+): boolean {
+  return input.casts.some(
+    (cast) =>
+      cast.sourcePlayerKey === input.playerKey &&
+      (input.evaluationCutoffMs == null || cast.timeMs < input.evaluationCutoffMs) &&
+      cast.timeMs >= startMs &&
+      cast.timeMs <= endMs,
+  );
+}
+
 function uncertainEvent(atMs: number, details: Partial<DefensiveExecutionEvaluationEvent> = {}): DefensiveExecutionEvaluationEvent {
   return {
     state: 'uncertain_data',
@@ -262,6 +331,7 @@ function uncertainEvent(atMs: number, details: Partial<DefensiveExecutionEvaluat
     atMs,
     coverageOutcome: 'uncertain',
     adherenceOutcome: 'uncertain',
+    managementOutcome: 'uncertain',
     ...details,
   };
 }
@@ -303,6 +373,7 @@ function evaluateSlot(
       actualCastAtMs: planned.cast.timeMs,
       coverageOutcome: 'covered',
       adherenceOutcome: 'followed',
+      managementOutcome: 'success',
     };
   }
 
@@ -317,6 +388,7 @@ function evaluateSlot(
       actualCastAtMs: substitute.cast.timeMs,
       coverageOutcome: 'covered',
       adherenceOutcome: 'substituted',
+      managementOutcome: replay.feasible ? 'success' : 'failure',
       ...(replay.futureSlotId ? { relatedFutureSlotId: replay.futureSlotId } : {}),
       ...(replay.futureAtMs != null ? { relatedFutureAtMs: replay.futureAtMs } : {}),
     };
@@ -342,6 +414,7 @@ function evaluateSlot(
       actualCastAtMs: sameSpellInWindow.timeMs,
       coverageOutcome: 'uncovered',
       adherenceOutcome: 'broken',
+      managementOutcome: 'failure',
     };
   }
 
@@ -358,6 +431,7 @@ function evaluateSlot(
       reason: 'EARLY_CAST_CAUSED_MISS',
       coverageOutcome: 'uncovered',
       adherenceOutcome: 'broken',
+      managementOutcome: 'failure',
       actualSpellId: defensive.spellId,
       ...(lastCastAtMs != null ? { actualCastAtMs: lastCastAtMs } : {}),
       cooldownRemainingMs: state.cooldownRemainingMs,
@@ -369,6 +443,7 @@ function evaluateSlot(
     reason: 'READY_NOT_CAST_IN_WINDOW',
     coverageOutcome: 'uncovered',
     adherenceOutcome: 'missed',
+    managementOutcome: 'failure',
   };
 }
 
@@ -380,7 +455,8 @@ function evaluateUnplannedWindow(
     atMs: window.peakMs,
     windowId: window.id,
     abilityId: window.mechanicId ?? undefined,
-    requirementLevel: 'recommended' as const,
+    requirementLevel: window.requirementLevel ?? 'recommended',
+    ...(window.peakValue != null ? { peakValue: window.peakValue } : {}),
   };
   if (!trusted(input.dataConfidence) || (!input.solverStrictScoringEligible && input.mode !== 'no_plan')) {
     return uncertainEvent(window.peakMs, base);
@@ -399,6 +475,7 @@ function evaluateUnplannedWindow(
         actualCastAtMs: actualCoverage.cast.timeMs,
         coverageOutcome: 'covered',
         adherenceOutcome: 'not_applicable',
+        managementOutcome: 'success',
       };
     }
     return {
@@ -409,6 +486,7 @@ function evaluateUnplannedWindow(
       actualCastAtMs: actualCoverage.cast.timeMs,
       coverageOutcome: 'covered',
       adherenceOutcome: 'broken',
+      managementOutcome: 'failure',
       ...(replay.futureSlotId ? { relatedFutureSlotId: replay.futureSlotId } : {}),
       ...(replay.futureAtMs != null ? { relatedFutureAtMs: replay.futureAtMs } : {}),
     };
@@ -430,6 +508,10 @@ function evaluateUnplannedWindow(
   });
   const viable = locallyReady.filter((defensive) => counterfactual(input, defensive, window.peakMs, window.priority).feasible);
   if (viable.length) {
+    // "0 verificado": si hubo un cast propio real dentro de la ventana que
+    // coveringCasts() no reconoció como cobertura (categoría/confidence/
+    // target no encajaron), no se afirma "no hizo nada" — se degrada.
+    if (hasUnexplainedOwnCast(input, window.startMs, window.endMs)) return uncertainEvent(window.peakMs, base);
     return {
       ...base,
       state: 'missed_extra_opportunity',
@@ -437,6 +519,7 @@ function evaluateUnplannedWindow(
       candidateSpellIds: viable.map((defensive) => defensive.spellId),
       coverageOutcome: 'uncovered',
       adherenceOutcome: 'not_applicable',
+      managementOutcome: 'failure',
     };
   }
   if (locallyReady.length) {
@@ -448,6 +531,7 @@ function evaluateUnplannedWindow(
       candidateSpellIds: locallyReady.map((defensive) => defensive.spellId),
       coverageOutcome: 'uncovered',
       adherenceOutcome: 'held',
+      managementOutcome: 'neutral',
       ...(replay.futureSlotId ? { relatedFutureSlotId: replay.futureSlotId } : {}),
       ...(replay.futureAtMs != null ? { relatedFutureAtMs: replay.futureAtMs } : {}),
     };
@@ -459,6 +543,7 @@ function evaluateUnplannedWindow(
     reason: 'NO_COUNTERFACTUAL_SCHEDULE',
     coverageOutcome: 'uncovered',
     adherenceOutcome: 'not_applicable',
+    managementOutcome: 'neutral',
   };
 }
 
@@ -467,6 +552,15 @@ function evaluateDeath(input: DefensiveExecutionEvaluationInput, deathTimeMs: nu
   if (!trusted(input.dataConfidence) || (!input.solverStrictScoringEligible && input.mode !== 'no_plan')) {
     return uncertainEvent(deathTimeMs, base);
   }
+  const readyAt = (defensive: ResolvedDefensive, atMs: number): boolean => {
+    const casts = input.casts
+      .filter((cast) => cast.sourcePlayerKey === input.playerKey && cast.spellId === defensive.spellId)
+      .map((cast) => cast.timeMs);
+    return (
+      effectiveDefensiveStateAt(defensive, casts, atMs).status === 'available_unused' &&
+      counterfactual(input, defensive, atMs, 5).feasible
+    );
+  };
   const candidates = input.kit.filter((defensive) => {
     if (
       !defensive.eligible ||
@@ -474,22 +568,44 @@ function evaluateDeath(input: DefensiveExecutionEvaluationInput, deathTimeMs: nu
       defensive.category !== 'personal_defensive' ||
       defensive.targetingMode !== 'self'
     ) return false;
-    const casts = input.casts
-      .filter((cast) => cast.sourcePlayerKey === input.playerKey && cast.spellId === defensive.spellId)
-      .map((cast) => cast.timeMs);
-    return (
-      effectiveDefensiveStateAt(defensive, casts, deathTimeMs).status === 'available_unused' &&
-      counterfactual(input, defensive, deathTimeMs, 5).feasible
-    );
+    return readyAt(defensive, deathTimeMs);
   });
   if (candidates.length) {
+    const lethalWindowStartMs = input.lethalWindowStartMs;
+    const scoredLethalWindowStartMs =
+      lethalWindowStartMs != null && lethalWindowStartMs < deathTimeMs
+        ? lethalWindowStartMs
+        : null;
+    const windowCandidates =
+      scoredLethalWindowStartMs != null
+        ? candidates.filter((defensive) => readyAt(defensive, scoredLethalWindowStartMs))
+        : [];
+    if (!windowCandidates.length) {
+      return {
+        ...base,
+        state: 'death_with_ready_cd',
+        reason: 'DEATH_READY_AT_END_ONLY',
+        candidateSpellIds: candidates.map((defensive) => defensive.spellId),
+        coverageOutcome: 'uncovered',
+        adherenceOutcome: 'not_applicable',
+        managementOutcome: 'neutral',
+        ...(lethalWindowStartMs != null ? { lethalWindowStartMs } : {}),
+      };
+    }
+    // "0 verificado": un cast propio real dentro de la secuencia letal que
+    // no explique por qué ninguno de los candidatos estaba "on_cooldown" no
+    // se ignora — degrada a incertidumbre en vez de afirmar la muerte como
+    // fallo confirmado (mismo criterio que evaluateUnplannedWindow).
+    if (hasUnexplainedOwnCast(input, scoredLethalWindowStartMs!, deathTimeMs)) return uncertainEvent(deathTimeMs, base);
     return {
       ...base,
       state: 'death_with_viable_cd',
       reason: 'DEATH_COUNTERFACTUAL_FEASIBLE',
-      candidateSpellIds: candidates.map((defensive) => defensive.spellId),
+      candidateSpellIds: windowCandidates.map((defensive) => defensive.spellId),
       coverageOutcome: 'uncovered',
       adherenceOutcome: 'not_applicable',
+      managementOutcome: 'failure',
+      lethalWindowStartMs: scoredLethalWindowStartMs!,
     };
   }
   if (input.kit.some((defensive) => defensive.eligible && !trusted(defensive.confidence))) return uncertainEvent(deathTimeMs, base);
@@ -499,7 +615,50 @@ function evaluateDeath(input: DefensiveExecutionEvaluationInput, deathTimeMs: nu
     reason: 'NO_COUNTERFACTUAL_SCHEDULE',
     coverageOutcome: 'uncovered',
     adherenceOutcome: 'not_applicable',
+    managementOutcome: 'neutral',
   };
+}
+
+function withCausalPenaltyGroups(
+  sourceEvents: readonly DefensiveExecutionEvaluationEvent[],
+): DefensiveExecutionEvaluationEvent[] {
+  const events = sourceEvents.map((event) => ({ ...event }));
+  for (const substitution of events.filter(
+    (event) =>
+      event.reason === 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT' &&
+      event.relatedFutureSlotId != null,
+  )) {
+    const future = events.find((event) => event.slotId === substitution.relatedFutureSlotId);
+    if (!future) continue;
+    const causalGroupId = `defensive:${substitution.slotId ?? substitution.atMs}:${substitution.atMs}`;
+    substitution.causalGroupId = causalGroupId;
+    substitution.primaryPenalty = true;
+    future.causalGroupId = causalGroupId;
+    future.primaryPenalty = false;
+  }
+  for (const death of events.filter(
+    (event) => event.state === 'death_with_viable_cd' || event.state === 'death_with_ready_cd',
+  )) {
+    const deathCandidates = new Set(death.candidateSpellIds ?? []);
+    const anchor = [...events]
+      .filter((event) => event !== death && event.atMs <= death.atMs && death.atMs - event.atMs <= 5_000)
+      .filter((event) =>
+        ['missed_extra_opportunity', 'reminder_missed', 'plan_broken'].includes(event.state),
+      )
+      .filter((event) => {
+        const spellIds = [event.plannedSpellId, event.actualSpellId, ...(event.candidateSpellIds ?? [])]
+          .filter((spellId): spellId is number => spellId != null);
+        return spellIds.some((spellId) => deathCandidates.has(spellId));
+      })
+      .sort((left, right) => right.atMs - left.atMs)[0];
+    if (!anchor) continue;
+    const causalGroupId = `defensive:${anchor.slotId ?? anchor.windowId ?? anchor.atMs}:${anchor.atMs}`;
+    anchor.causalGroupId = causalGroupId;
+    anchor.primaryPenalty = true;
+    death.causalGroupId = causalGroupId;
+    death.primaryPenalty = false;
+  }
+  return events;
 }
 
 export function evaluateDefensiveExecution(input: DefensiveExecutionEvaluationInput): DefensiveExecutionEvaluationResult {
@@ -517,22 +676,36 @@ export function evaluateDefensiveExecution(input: DefensiveExecutionEvaluationIn
     input.deathTimeMs == null || (input.evaluationCutoffMs != null && input.deathTimeMs >= input.evaluationCutoffMs)
       ? []
       : [evaluateDeath(input, input.deathTimeMs)];
-  const events = [...slotEvents, ...windowEvents, ...deathEvents].sort(
+  const events = withCausalPenaltyGroups([...slotEvents, ...windowEvents, ...deathEvents]).sort(
     (left, right) => left.atMs - right.atMs || left.state.localeCompare(right.state) || (left.slotId ?? '').localeCompare(right.slotId ?? ''),
   );
 
   let criticalWindowCount = 0;
   let criticalCoveredCount = 0;
   for (const window of evaluableWindows.filter((candidate) => candidate.critical)) {
-    const overlappingSlot = assignedSlots.find(
+    const overlappingSlots = assignedSlots.filter(
       (slot) => slot.windowStartMs <= window.endMs && slot.windowEndMs >= window.startMs,
     );
-    const decision = overlappingSlot
-      ? slotEvents.find((event) => event.slotId === overlappingSlot.id)
-      : windowEvents.find((event) => event.windowId === window.id);
-    if (!decision || decision.state === 'uncertain_data' || decision.state === 'no_feasible_alternative' || decision.state === 'correct_hold') continue;
+    const decisions = overlappingSlots.length
+      ? overlappingSlots
+          .map((slot) => events.find((event) => event.slotId === slot.id))
+          .filter((event): event is DefensiveExecutionEvaluationEvent => Boolean(event))
+      : events.filter((event) => event.windowId === window.id);
+    if (!decisions.length || decisions.some((decision) => decision.state === 'uncertain_data')) continue;
+    if (overlappingSlots.length > 1 && !window.coverageRequirement) continue;
+    const evaluableDecisions = decisions.filter(
+      (decision) => decision.state !== 'no_feasible_alternative' && decision.state !== 'correct_hold',
+    );
+    if (!evaluableDecisions.length) continue;
     criticalWindowCount++;
-    if (decision.coverageOutcome === 'covered') criticalCoveredCount++;
+    const coveredCount = evaluableDecisions.filter((decision) => decision.coverageOutcome === 'covered').length;
+    const covered =
+      !window.coverageRequirement || window.coverageRequirement.kind === 'ANY_OF'
+        ? coveredCount >= 1
+        : window.coverageRequirement.kind === 'MIN_N'
+          ? coveredCount >= window.coverageRequirement.count
+          : coveredCount === evaluableDecisions.length;
+    if (covered) criticalCoveredCount++;
   }
   const requiredSlotIds = new Set(
     assignedSlots
@@ -540,11 +713,27 @@ export function evaluateDefensiveExecution(input: DefensiveExecutionEvaluationIn
       .filter((slot) => slotEvents.find((event) => event.slotId === slot.id)?.state !== 'uncertain_data')
       .map((slot) => slot.id),
   );
-  const planExecutedCount = slotEvents.filter((event) => event.slotId && requiredSlotIds.has(event.slotId) && event.state === 'plan_covered').length;
+  const requiredExactAdherenceCount = events.filter(
+    (event) => event.slotId && requiredSlotIds.has(event.slotId) && event.state === 'plan_covered',
+  ).length;
+  const requiredCoverageSuccessCount = events.filter(
+    (event) =>
+      event.slotId &&
+      requiredSlotIds.has(event.slotId) &&
+      event.coverageOutcome === 'covered',
+  ).length;
   const brokenSlotIds = new Set(
     events
-      .filter((event) => event.state === 'plan_broken')
-      .flatMap((event) => [event.slotId, event.relatedFutureSlotId])
+      .filter(
+        (event) =>
+          event.state === 'plan_broken' ||
+          event.reason === 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT',
+      )
+      .flatMap((event) =>
+        event.reason === 'SUBSTITUTE_CAUSED_FUTURE_CONFLICT'
+          ? [event.relatedFutureSlotId]
+          : [event.slotId, event.relatedFutureSlotId],
+      )
       .filter((slotId): slotId is string => Boolean(slotId)),
   );
   const management = computeDefensiveManagementScore(events);
@@ -559,7 +748,9 @@ export function evaluateDefensiveExecution(input: DefensiveExecutionEvaluationIn
     solverVersion: input.solverVersion,
     evaluatorVersion: DEFENSIVE_EXECUTION_EVALUATOR_VERSION,
     planRequiredCount: requiredSlotIds.size,
-    planExecutedCount,
+    planExecutedCount: requiredExactAdherenceCount,
+    requiredExactAdherenceCount,
+    requiredCoverageSuccessCount,
     criticalWindowCount,
     criticalCoveredCount,
     correctHoldCount: events.filter((event) => event.state === 'correct_hold').length,

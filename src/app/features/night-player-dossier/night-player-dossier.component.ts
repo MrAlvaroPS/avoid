@@ -21,6 +21,7 @@ import type { DeathCause, MechanicCategory } from '../../shared/models/domain';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
 import { errorMessage } from '../../shared/error-message.util';
 import { NightPlayerInfographicComponent } from './night-player-infographic.component';
+import { CombatEvaluationFeatureFlagsService } from '../../core/combat-evaluation-feature-flags.service';
 
 // §"preparar la vinculación de ese ID... con el dosier de ese raider, para
 // eventualmente automatizar enviar la infografía" (feedback real,
@@ -60,6 +61,7 @@ interface ExplanationContent {
 export class NightPlayerDossierComponent {
   private summaryService = inject(NightPlayerSummaryService);
   private edgeFunctions = inject(EdgeFunctionsService);
+  protected combatFlags = inject(CombatEvaluationFeatureFlagsService);
 
   reportCode = input.required<string>();
   playerName = input.required<string>();

@@ -53,6 +53,9 @@ export interface DraftSlot {
   buildFingerprintSnapshot?: string | null;
   notes?: string | null;
   rationale?: Record<string, unknown>;
+  /** false = ya cubierto por la duración de un cast anterior del mismo jugador+defensivo; ver defensive-plan-solver.ts. */
+  needsFreshCast?: boolean;
+  coveredByPriorCastAtMs?: number | null;
 }
 
 export interface CreateDraftRequest {
@@ -144,6 +147,8 @@ export function validateDefensivePlanDraft(body: CreateDraftRequest): string | n
     }
     if (slot.targetPlayerKey != null && !memberKeys.has(slot.targetPlayerKey)) return `Target desconocido en ${key}.`;
     if ((slot.triggerMode ?? 'time') === 'bossmod' && !positiveInteger(slot.bossmodSpellId)) return `bossmodSpellId inválido en ${key}.`;
+    if (slot.coveredByPriorCastAtMs != null && !nonNegativeInteger(slot.coveredByPriorCastAtMs)) return `coveredByPriorCastAtMs inválido en ${key}.`;
+    if ((slot.needsFreshCast ?? true) === false && !assigned) return `Un slot no cubierto no puede marcarse como needsFreshCast=false en ${key}.`;
     slotKeys.add(key);
   }
   return null;

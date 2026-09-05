@@ -21,15 +21,20 @@ import {
   type NightDefensiveDecision,
   type NightDeathRow,
   type NightMechanicDefensiveStat,
-  type NightMechanicFailRow,
   type NightMechanicPressureSummary,
   type NightPlayerSummary,
   type NightPressurePullSummary,
 } from '../../core/night-player-summary.service';
+import {
+  buildRaiderEvidenceProjection,
+  type RaiderEvidenceItem,
+  type RaiderPullTimelineCell,
+} from '../../core/raider-evidence-projection';
+import { buildRaiderInfographicViewModel } from '../../core/raider-infographic-view-model';
+import { CombatEvaluationFeatureFlagsService } from '../../core/combat-evaluation-feature-flags.service';
 import { DefensiveFeatureFlagsService } from '../../core/defensive-feature-flags.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
 import { errorMessage } from '../../shared/error-message.util';
-import type { MechanicCategory } from '../../shared/models/domain';
 import {
   classColor,
   classDisplayName,
@@ -38,6 +43,7 @@ import {
   mechanicCategoryMeta,
   rootCauseMeta,
 } from '../../shared/format.util';
+import { RaiderInfographicV3CanvasComponent } from './raider-infographic-v3-canvas.component';
 
 type ExportStatus =
   | 'idle'
@@ -49,35 +55,11 @@ type ExportStatus =
   | 'refreshing'
   | 'error';
 
-interface PlayerIssue {
-  key: string;
-  mechanicId: number;
-  mechanicName: string;
-  bossName: string;
-  difficulty: string;
-  category: MechanicCategory | null;
-  failCount: number;
-  deathCount: number;
-  totalDamage: number;
-  occurrences: { pullNumber: number; timeMs: number; kind: 'fallo' | 'muerte' }[];
-  resolution: string | null;
-  note: string | null;
-  availableDefensives: { spellId: number; name: string }[];
-}
-
-interface PlayerPriority {
-  title: string;
-  evidence: string;
-  action: string;
-  spellId: number | null;
-  kind: 'mechanic' | 'defensive' | 'consumable' | 'preparation';
-}
-
 interface PositiveSignal {
   label: string;
   value: string;
   detail: string;
-  kind: 'avoidance' | 'interrupt' | 'clean' | 'defensive' | 'credit';
+  kind: 'avoidance' | 'interrupt' | 'defensive' | 'credit';
 }
 
 // §"el hecho de no usar un defensivo debería ser penalización grande —
@@ -144,12 +126,13 @@ const MECH_CONTENT_WIDTH = SHEET_WIDTH - 2 * (78 + 26 + 30);
 @Component({
   selector: 'app-night-player-infographic',
   standalone: true,
-  imports: [DatePipe],
+  imports: [DatePipe, RaiderInfographicV3CanvasComponent],
   templateUrl: './night-player-infographic.component.html',
   encapsulation: ViewEncapsulation.None,
 })
 export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, OnDestroy {
   private edgeFunctions = inject(EdgeFunctionsService);
+  private combatFlags = inject(CombatEvaluationFeatureFlagsService);
   private defensiveFlags = inject(DefensiveFeatureFlagsService);
   private cdr = inject(ChangeDetectorRef);
 
@@ -168,6 +151,7 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   refreshRequested = output<void>();
 
   @ViewChild('sheet') private sheet?: ElementRef<HTMLElement>;
+  @ViewChild('pageTwoStart') private pageTwoStart?: ElementRef<HTMLElement>;
   @ViewChild('closeButton') private closeButton?: ElementRef<HTMLButtonElement>;
 
   readonly sheetWidth = SHEET_WIDTH;
@@ -205,8 +189,59 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   // ratio real cubiertas/cubribles con el mismo never_touched=0/mistimed=
   // crédito parcial/covered=ratio que ya vimos y arreglamos hoy. Reutilizarlo
   // aquí evita una segunda fórmula que pudiera divergir de la de Fiabilidad.
-  readonly defensiveManagementV2 = computed(() =>
-    this.defensiveFlags.enabled('defensiveInfographicV2') ? this.summary().defensiveManagementV2 : null,
+  // §"si no está listo el plan del MRT para mostrar podemos poner un toggle
+  // en su dosier para calcularlo en base al plan o... en base al uso real
+  // que haya hecho el jugador en los pulls como calculábamos antes...
+  // (pero mismo concepto)" (feedback real, 2026-09-03): v2 puede dar un
+  // managementScore=0 legítimo (p.ej. una noche con solo muertes de causa no
+  // verificable como única oportunidad puntuable) y las cards de coaching se
+  // quedan sin defensivos recomendados por diseño (ver raider-evidence-
+  // projection.ts). El fallback legacy (nightReliability.breakdown.defensiva,
+  // casts reales por defensivo) ya existe y ya se usa como `??` cuando v2 es
+  // null — este toggle simplemente fuerza esa rama a mano, sin inventar una
+  // fórmula nueva: cuando está activo, defensiveManagementV2() devuelve null
+  // y TODO lo que ya depende de "v2 ?? legacy" en este componente y en
+  // evidenceProjection()/v3ViewModel() cae automáticamente al mismo cálculo
+  // legacy que ya existía, solo que a demanda del oficial en vez de solo
+  // cuando el flag está apagado.
+  readonly preferObservedDefensives = signal(false);
+  readonly defensiveManagementV2 = computed(() => {
+    if (this.preferObservedDefensives()) return null;
+    return this.defensiveFlags.enabled('defensiveInfographicV2') ? this.summary().defensiveManagementV2 : null;
+  });
+  toggleDefensiveDataSource(): void {
+    this.preferObservedDefensives.update((prefer) => !prefer);
+  }
+  /** Solo tiene sentido ofrecer el toggle si de verdad hay una generación v2 de la que alejarse — si nunca la hubo, ambas ramas ya muestran lo mismo. */
+  readonly hasV2DefensiveData = computed(() => this.summary().defensiveManagementV2 != null);
+  readonly evidenceProjection = computed(() =>
+    buildRaiderEvidenceProjection(this.summary(), {
+      defensiveManagementV2: this.defensiveManagementV2(),
+    }),
+  );
+  readonly useV3Layout = computed(() => this.combatFlags.enabled('playerInfographicV3'));
+  readonly v3ViewModel = computed(() =>
+    buildRaiderInfographicViewModel(
+      this.summary(),
+      this.evidenceProjection(),
+      this.defensiveManagementV2(),
+    ),
+  );
+  readonly evidenceQualityTone = computed(() => {
+    const quality = this.evidenceProjection().quality;
+    return quality === 'high' ? 'success' : quality === 'partial' ? 'warning' : 'neutral';
+  });
+  readonly evidenceQualityLabel = computed(() => {
+    const quality = this.evidenceProjection().quality;
+    return quality === 'high' ? 'ALTA' : quality === 'partial' ? 'PARCIAL' : 'LIMITADA';
+  });
+  readonly evaluatedBossCount = computed(
+    () =>
+      new Set(
+        this.summary()
+          .pulls.filter((pull) => pull.pullScore != null)
+          .map((pull) => `${pull.bossId}|${pull.difficulty}`),
+      ).size,
   );
   readonly defensiveScore = computed(() =>
     this.defensiveManagementV2()?.managementScore ?? this.summary().nightReliability?.breakdown.defensiva ?? null,
@@ -214,10 +249,7 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   readonly defensiveHeroProgress = computed(() => {
     const v2 = this.defensiveManagementV2();
     if (!v2) return this.defensiveScore();
-    if (v2.managementScore != null) return v2.managementScore;
-    if (v2.planRequiredCount > 0) return (v2.planExecutedCount / v2.planRequiredCount) * 100;
-    if (v2.criticalWindowCount > 0) return (v2.criticalCoveredCount / v2.criticalWindowCount) * 100;
-    return null;
+    return v2.managementScore;
   });
   readonly defensiveTone = computed(() => {
     const v2 = this.defensiveManagementV2();
@@ -263,105 +295,7 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     ),
   );
 
-  readonly issues = computed<PlayerIssue[]>(() => {
-    const grouped = new Map<string, PlayerIssue>();
-    const addFail = (fail: NightMechanicFailRow): void => {
-      if (fail.mechanicId <= 0 || !this.isVerifiableName(fail.mechanicName)) return;
-      const key = `${fail.bossId}|${fail.difficulty}|${fail.mechanicId}`;
-      const issue = grouped.get(key) ?? this.newIssueFromFail(key, fail);
-      issue.failCount++;
-      issue.totalDamage += Math.max(0, fail.damageTaken);
-      issue.occurrences.push({ pullNumber: fail.pullNumber, timeMs: fail.timeMs, kind: 'fallo' });
-      grouped.set(key, issue);
-    };
-    const addDeath = (death: NightDeathRow): void => {
-      if (death.mechanicId == null || !this.isVerifiableName(death.mechanicName)) return;
-      const key = `${death.bossId}|${death.difficulty}|${death.mechanicId}`;
-      const issue = grouped.get(key) ?? this.newIssueFromDeath(key, death);
-      issue.deathCount++;
-      issue.occurrences.push({
-        pullNumber: death.pullNumber,
-        timeMs: death.timeMs,
-        kind: 'muerte',
-      });
-      issue.availableDefensives.push(...death.defensivesAvailable);
-      grouped.set(key, issue);
-    };
-    for (const fail of this.summary().mechanicFails) addFail(fail);
-    for (const death of this.verifiableDeaths()) addDeath(death);
-    return [...grouped.values()]
-      .map((issue) => ({
-        ...issue,
-        availableDefensives: [
-          ...new Map(issue.availableDefensives.map((d) => [d.spellId, d])).values(),
-        ],
-        occurrences: issue.occurrences.sort(
-          (a, b) => a.pullNumber - b.pullNumber || a.timeMs - b.timeMs,
-        ),
-      }))
-      .sort(
-        (a, b) =>
-          b.deathCount - a.deathCount || b.failCount - a.failCount || b.totalDamage - a.totalDamage,
-      );
-  });
-
-  readonly priorities = computed<PlayerPriority[]>(() => {
-    const priorities: PlayerPriority[] = [];
-    for (const issue of this.issues()) {
-      const occurrences = issue.occurrences
-        .slice(0, 4)
-        .map((row) => `#${row.pullNumber} ${formatDuration(row.timeMs)}`)
-        .join(' · ');
-      let action: string | null = issue.resolution;
-      if (!action && issue.availableDefensives.length) {
-        action = `En esa ventana tenías ${issue.availableDefensives.map((d) => d.name).join(' / ')} disponible sin usar: deja uno preasignado para la próxima exposición.`;
-      }
-      if (!action && issue.failCount + issue.deathCount >= 2) {
-        action = `Objetivo medible: cero repeticiones. Revisa en WCL ${occurrences} y fija la respuesta antes del siguiente pull.`;
-      }
-      if (!action) continue;
-      priorities.push({
-        title: issue.mechanicName,
-        evidence: `${issue.failCount} fallo${issue.failCount === 1 ? '' : 's'} · ${issue.deathCount} muerte${issue.deathCount === 1 ? '' : 's'} · ${issue.bossName} ${occurrences}`,
-        action,
-        spellId: issue.mechanicId,
-        kind: issue.availableDefensives.length ? 'defensive' : 'mechanic',
-      });
-      if (priorities.length === 3) break;
-    }
-
-    const execution = this.summary().execution;
-    if (
-      priorities.length < 4 &&
-      execution.emergencyConsumableOpportunities > execution.emergencyConsumableUses
-    ) {
-      priorities.push({
-        title: 'Piedra / poción de vida',
-        evidence: `${execution.emergencyConsumableUses}/${execution.emergencyConsumableOpportunities} muertes evaluables con consumible de emergencia registrado en el try.`,
-        action:
-          'Reserva piedra o poción para la siguiente ventana letal identificada; el objetivo es registrar respuesta en cada muerte con tiempo de reacción.',
-        spellId: null,
-        kind: 'consumable',
-      });
-    }
-
-    const prep = this.summary().startingPreparation;
-    const missingEnchants = prep
-      ? Math.max(0, prep.enchantableSlotCount - prep.enchantedSlotCount)
-      : 0;
-    const missingGems = prep ? Math.max(0, prep.gemmableSlotCount - prep.gemmedSlotCount) : 0;
-    if (priorities.length < 4 && (missingEnchants || missingGems)) {
-      priorities.push({
-        title: 'Preparación antes de entrar',
-        evidence: `${missingEnchants} enchant${missingEnchants === 1 ? '' : 's'} y ${missingGems} slot${missingGems === 1 ? '' : 's'} de gema sin cubrir en el primer pull.`,
-        action:
-          'Completa esos huecos antes de la próxima raid; la medición usa el primer pull y no penaliza equipo obtenido durante la noche.',
-        spellId: null,
-        kind: 'preparation',
-      });
-    }
-    return priorities.slice(0, 4);
-  });
+  readonly priorities = computed(() => this.evidenceProjection().coaching);
 
   readonly positiveSignals = computed<PositiveSignal[]>(() => {
     const result: PositiveSignal[] = [];
@@ -385,20 +319,16 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
         kind: 'interrupt',
       });
     }
-    if (execution.evaluatedPulls > 0) {
+    const defensiveV2 = this.defensiveManagementV2();
+    const safeDefensiveDecisions =
+      defensiveV2?.decisions.filter(
+        (decision) => decision.state === 'correct_hold' || decision.state === 'safe_extra_use',
+      ) ?? [];
+    if (safeDefensiveDecisions.length) {
       result.push({
-        label: 'Pulls limpios personales',
-        value: `${execution.cleanPulls}/${execution.evaluatedPulls}`,
-        detail: 'Sin fallo de responsabilidad individual ni muerte evaluable.',
-        kind: 'clean',
-      });
-    }
-    const defensive = this.summary().defensiveSummary;
-    if (defensive.pressurePulls > 0) {
-      result.push({
-        label: 'Respuesta defensiva',
-        value: `${defensive.pressurePullsWithCast}/${defensive.pressurePulls}`,
-        detail: 'Pulls con presión verificable y un defensivo registrado antes del wipe call.',
+        label: 'Decisiones defensivas correctas',
+        value: String(safeDefensiveDecisions.length),
+        detail: `${defensiveV2!.correctHoldCount} reservas respetadas · ${safeDefensiveDecisions.filter((decision) => decision.state === 'safe_extra_use').length} usos extra seguros.`,
         kind: 'defensive',
       });
     }
@@ -433,16 +363,29 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     return result;
   });
 
-  readonly pullRows = computed(() =>
-    this.summary()
-      .pulls.filter((pull) => pull.pullScore != null)
-      .map((pull) => ({
-        ...pull,
-        failCount: this.summary().mechanicFails.filter((fail) => fail.pullId === pull.pullId)
-          .length,
-        evaluatedDeath: this.scoredDeaths().find((death) => death.pullId === pull.pullId) ?? null,
-      })),
-  );
+  readonly pullTimelineGroups = computed(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        bossName: string;
+        difficulty: string;
+        cells: RaiderPullTimelineCell[];
+      }
+    >();
+    for (const cell of this.evidenceProjection().timeline) {
+      const key = `${cell.bossId}|${cell.difficulty}`;
+      const group = groups.get(key) ?? {
+        key,
+        bossName: cell.bossName,
+        difficulty: cell.difficulty,
+        cells: [],
+      };
+      group.cells.push(cell);
+      groups.set(key, group);
+    }
+    return [...groups.values()];
+  });
 
   /** §"siempre hay un motivo para usarlo" (feedback real, 2026-08-29): antes
    * mezclaba fallos no letales y muertes en una tabla cronológica de 8 filas
@@ -548,13 +491,15 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   defensiveDecisionLabel(decision: NightDefensiveDecision): string {
     const labels: Record<NightDefensiveDecision['state'], string> = {
       plan_covered: 'Plan cubierto',
-      covered_with_substitution: 'Sustitución válida',
+      covered_with_substitution:
+        decision.managementOutcome === 'failure' ? 'Sustitución con coste' : 'Sustitución válida',
       correct_hold: 'Hold correcto',
       safe_extra_use: 'Uso extra seguro',
       missed_extra_opportunity: 'Oportunidad factible',
       plan_broken: 'Reserva rota',
       reminder_missed: 'Reminder omitido',
       death_with_viable_cd: 'Muerte con alternativa',
+      death_with_ready_cd: 'CD disponible al morir',
       no_feasible_alternative: 'Sin alternativa factible',
       uncertain_data: 'Dato incierto',
     };
@@ -563,7 +508,8 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
 
   defensiveDecisionTone(decision: NightDefensiveDecision): 'success' | 'warning' | 'danger' | 'neutral' {
     if (decision.state === 'plan_broken' || decision.state === 'reminder_missed' || decision.state === 'death_with_viable_cd') return 'danger';
-    if (decision.state === 'missed_extra_opportunity' || decision.state === 'covered_with_substitution') return 'warning';
+    if (decision.state === 'missed_extra_opportunity' || decision.state === 'death_with_ready_cd') return 'warning';
+    if (decision.state === 'covered_with_substitution') return decision.managementOutcome === 'failure' ? 'danger' : 'warning';
     if (decision.state === 'correct_hold' || decision.state === 'safe_extra_use' || decision.state === 'plan_covered') return 'success';
     return 'neutral';
   }
@@ -588,7 +534,9 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
       case 'missed_extra_opportunity':
         return `Había una secuencia segura con ${decision.candidateSpellNames.join(' / ') || 'un defensivo disponible'} para cubrir ${mechanic}.`;
       case 'death_with_viable_cd':
-        return `La muerte tenía una alternativa globalmente viable: ${decision.candidateSpellNames.join(' / ') || 'un defensivo propio'}.`;
+        return `${decision.candidateSpellNames.join(' / ') || 'Un defensivo propio'} estuvo disponible durante la secuencia letal observada. Había una respuesta factible; no se afirma cuánto daño habría prevenido.`;
+      case 'death_with_ready_cd':
+        return `${decision.candidateSpellNames.join(' / ') || 'Un defensivo propio'} estaba disponible al morir, pero la evidencia no demuestra que hubiera podido prevenir la secuencia previa.`;
       case 'no_feasible_alternative':
         return `No había una secuencia defensiva mejor sin sacrificar la siguiente mecánica crítica.`;
       case 'plan_covered':
@@ -726,41 +674,62 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   // sin tocar). El punto de corte se mide ANTES de renderizar, contra el DOM
   // real (offsetTop no se ve afectado por el transform:scale() del preview,
   // a diferencia de getBoundingClientRect — no hace falta dividir por
-  // previewScale()): el punto medio entre el final visual de
-  // .iris-player-macro-group.mechanics y el principio de .defensives, así
-  // el corte cae siempre en el hueco entre ambas cards, nunca a mitad de una.
+  // previewScale()). La especificación mixta v3 exige un anchor explícito:
+  // Página 2 empieza en su cabecera repetida, sin inferir semántica por las
+  // clases del bloque anterior/siguiente.
   async sendToDiscord(): Promise<void> {
     const channelId = this.summary().discordChannel?.discordChannelId;
     if (!channelId) return;
     this.exportError.set(null);
     try {
-      const splitYCss = this.findMechanicsDefensivesSplitY();
       const { canvas, pixelRatio } = await this.renderFullCanvas();
+      const v3Pages = this.findV3ExportPages();
+      const splitYCss = v3Pages.length ? null : this.findPageSplitY();
       const date = this.summary().reportDate
         ? new Date(this.summary().reportDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })
         : this.summary().reportTitle;
       const baseContent = `Informe de combate de ${this.summary().playerName} · ${date}`;
       this.exportStatus.set('sendingDiscord');
 
-      if (splitYCss != null) {
+      if (v3Pages.length) {
+        for (const [index, page] of v3Pages.entries()) {
+          const top = Math.max(0, Math.round(page.top * pixelRatio));
+          const height = Math.min(canvas.height - top, Math.round(page.height * pixelRatio));
+          const pageCanvas = this.cropCanvas(canvas, 0, top, canvas.width, height);
+          const fitted = await this.fitCanvasToDiscordLimit(pageCanvas);
+          const suffix = v3Pages.length > 1 ? `-${index + 1}-v3` : '-v3';
+          await this.edgeFunctions.sendDiscordMessage({
+            channelId,
+            content:
+              v3Pages.length > 1
+                ? `${baseContent} · ${index + 1}/${v3Pages.length}${index ? ' — continuación de mecánicas' : ' — diagnóstico, coaching y defensivos'}`
+                : `${baseContent} · diagnóstico, coaching y defensivos`,
+            imageBase64: await this.blobToBase64(fitted.blob),
+            imageFilename: this.filename(fitted.extension, suffix),
+          });
+          if (index < v3Pages.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        }
+      } else if (splitYCss != null) {
         const splitYPx = Math.min(canvas.height - 1, Math.max(1, Math.round(splitYCss * pixelRatio)));
         const topCanvas = this.cropCanvas(canvas, 0, 0, canvas.width, splitYPx);
         const bottomCanvas = this.cropCanvas(canvas, 0, splitYPx, canvas.width, canvas.height - splitYPx);
         const part1 = await this.fitCanvasToDiscordLimit(topCanvas);
         await this.edgeFunctions.sendDiscordMessage({
           channelId,
-          content: `${baseContent} · 1/2 — mecánicas`,
+          content: `${baseContent} · 1/2 — diagnóstico y coaching`,
           imageBase64: await this.blobToBase64(part1.blob),
-          imageFilename: this.filename(part1.extension, '-1-mecanicas'),
+          imageFilename: this.filename(part1.extension, '-1-diagnostico-coaching'),
         });
         // Pausa corta para que lleguen en orden y separados, no como un burst.
         await new Promise((resolve) => setTimeout(resolve, 500));
         const part2 = await this.fitCanvasToDiscordLimit(bottomCanvas);
         await this.edgeFunctions.sendDiscordMessage({
           channelId,
-          content: `${baseContent} · 2/2 — defensivos`,
+          content: `${baseContent} · 2/2 — mecánicas y defensivos`,
           imageBase64: await this.blobToBase64(part2.blob),
-          imageFilename: this.filename(part2.extension, '-2-defensivos'),
+          imageFilename: this.filename(part2.extension, '-2-mecanicas-defensivos'),
         });
       } else {
         // Fallback defensivo: si algún día cambian esas clases y el corte ya
@@ -781,17 +750,35 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     }
   }
 
-  /** Punto medio (en CSS px del sheet, sin escalar) entre el final de la card de Mecánicas y el principio de la de Defensivos — null si no se encuentran (nunca fuerza un corte que no tiene sentido). */
-  private findMechanicsDefensivesSplitY(): number | null {
-    const sheetEl = this.sheet?.nativeElement;
-    if (!sheetEl) return null;
-    const mechanicsEl = sheetEl.querySelector<HTMLElement>('.iris-player-macro-group.mechanics');
-    const defensivesEl = sheetEl.querySelector<HTMLElement>('.iris-player-macro-group.defensives');
-    if (!mechanicsEl || !defensivesEl) return null;
-    const mechanicsBottom = mechanicsEl.offsetTop + mechanicsEl.offsetHeight;
-    const defensivesTop = defensivesEl.offsetTop;
-    if (defensivesTop <= mechanicsBottom) return null; // orden inesperado — no debería pasar, mejor no cortar que cortar mal
-    return (mechanicsBottom + defensivesTop) / 2;
+  /** Inicio explícito de Página 2 en CSS px del sheet, sin escalar. */
+  private findPageSplitY(): number | null {
+    const pageTwoStart = this.pageTwoStart?.nativeElement;
+    const sheet = this.sheet?.nativeElement;
+    if (!pageTwoStart || !sheet || !sheet.contains(pageTwoStart)) return null;
+    return pageTwoStart.offsetTop > 0 ? pageTwoStart.offsetTop : null;
+  }
+
+  /**
+   * La V3 pagina por spreads 4:3 completos. Cada bloque declara su frontera
+   * en el DOM para que Discord reciba una imagen legible por lámina, incluso
+   * cuando una noche con muchas mecánicas necesita continuación.
+   */
+  private findV3ExportPages(): { top: number; height: number }[] {
+    const sheet = this.sheet?.nativeElement;
+    if (!sheet || !this.useV3Layout()) return [];
+    return Array.from(sheet.querySelectorAll<HTMLElement>('[data-export-page]'))
+      .map((page) => {
+        let top = 0;
+        let current: HTMLElement | null = page;
+        while (current && current !== sheet) {
+          top += current.offsetTop;
+          current = current.offsetParent as HTMLElement | null;
+        }
+        return current === sheet && page.offsetHeight > 0
+          ? { top, height: page.offsetHeight }
+          : null;
+      })
+      .filter((page): page is { top: number; height: number } => page != null);
   }
 
   metricValue(value: number, unit: 'percent' | 'per10'): string {
@@ -808,22 +795,6 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
       notation: 'compact',
       maximumFractionDigits: 1,
     }).format(value);
-  }
-
-  pullScoreWidth(score: number | null): number {
-    return Math.max(2, Math.min(100, (score ?? 0) * 100));
-  }
-
-  pullTone(score: number | null): string {
-    if (score == null) return 'neutral';
-    return score < 0.5 ? 'danger' : score < 0.75 ? 'warning' : 'success';
-  }
-
-  occurrenceList(issue: PlayerIssue, limit = 5): string {
-    return issue.occurrences
-      .slice(0, limit)
-      .map((row) => `#${row.pullNumber} ${formatDuration(row.timeMs)}`)
-      .join(' · ');
   }
 
   defensiveTimingList(casts: { pullNumber: number; timeMs: number }[], limit = 8): string {
@@ -974,40 +945,29 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     return 'Sin piedra ni poción en respuesta a daño real en el try';
   }
 
-  private newIssueFromFail(key: string, fail: NightMechanicFailRow): PlayerIssue {
-    return {
-      key,
-      mechanicId: fail.mechanicId,
-      mechanicName: fail.mechanicName,
-      bossName: fail.bossName,
-      difficulty: fail.difficulty,
-      category: fail.category,
-      failCount: 0,
-      deathCount: 0,
-      totalDamage: 0,
-      occurrences: [],
-      resolution: fail.resolution,
-      note: fail.aiNote,
-      availableDefensives: [],
-    };
+  prioritySpellId(item: RaiderEvidenceItem): number | null {
+    return item.mechanicId ?? item.defensives[0]?.spellId ?? null;
   }
 
-  private newIssueFromDeath(key: string, death: NightDeathRow): PlayerIssue {
-    return {
-      key,
-      mechanicId: death.mechanicId!,
-      mechanicName: death.mechanicName!,
-      bossName: death.bossName,
-      difficulty: death.difficulty,
-      category: death.category,
-      failCount: 0,
-      deathCount: 0,
-      totalDamage: 0,
-      occurrences: [],
-      resolution: death.resolution,
-      note: death.aiNote,
-      availableDefensives: [],
+  priorityWhen(item: RaiderEvidenceItem): string {
+    const where = [item.bossName, item.difficulty].filter(Boolean).join(' · ');
+    const when =
+      item.pullNumber == null
+        ? ''
+        : `Pull #${item.pullNumber}${item.atMs == null ? '' : ` · ${formatDuration(item.atMs)}`}`;
+    return [where, when].filter(Boolean).join(' · ');
+  }
+
+  verdictLabel(item: RaiderEvidenceItem): string {
+    const labels: Record<RaiderEvidenceItem['verdict'], string> = {
+      success: 'Éxito',
+      confirmed_error: 'Error confirmado',
+      coaching: 'Coaching',
+      correct_hold: 'Correct hold',
+      context: 'Contexto',
+      no_verdict: 'Sin veredicto',
     };
+    return labels[item.verdict];
   }
 
   private isVerifiableName(name: string | null | undefined): name is string {
@@ -1148,8 +1108,10 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
 
   private async loadSpellIcons(): Promise<void> {
     const ids = new Set<number>();
-    for (const issue of this.issues()) ids.add(issue.mechanicId);
-    for (const priority of this.priorities()) if (priority.spellId) ids.add(priority.spellId);
+    for (const evidence of this.evidenceProjection().items) {
+      if (evidence.mechanicId) ids.add(evidence.mechanicId);
+      for (const defensive of evidence.defensives) ids.add(defensive.spellId);
+    }
     for (const cut of this.summary().interrupts) ids.add(cut.mechanicId);
     for (const spell of this.summary().defensiveSummary.spells) ids.add(spell.spellId);
     for (const death of this.verifiableDeaths())
@@ -1216,6 +1178,12 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
 
   private calculateFitScale(): number {
     const widthScale = (window.innerWidth - 36) / SHEET_WIDTH;
+    // §"debe ser dinámico... para que pueda haberlo si se necesita crecer"
+    // (feedback real, 2026-09-03): la altura de página V3 dejó de ser fija
+    // (2160px) — hoy solo hay un pliego por dosier (sin continuaciones
+    // reales todavía, ver raider-infographic-v3-canvas.component.ts), así
+    // que la misma altura medida (sheetHeight/scrollHeight, ya actualizada
+    // por el mismo ResizeObserver para ambos layouts) sirve también aquí.
     const heightScale = (window.innerHeight - 112) / this.sheetHeight();
     return Math.max(0.18, Math.min(1, widthScale, heightScale));
   }

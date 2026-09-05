@@ -10,6 +10,58 @@ export interface ObservedHitStat {
   instances: number;
 }
 
+export type MechanicPolicyStatus = 'missing' | 'base' | 'reviewed' | 'verified' | 'uncertain';
+
+export interface MechanicPolicySummary {
+  mechanicKey: string;
+  policyVersion: number;
+  confidence: 'verified' | 'inferred' | 'fallback' | 'uncertain';
+  updatedAt: string;
+  status: Exclude<MechanicPolicyStatus, 'missing'>;
+}
+
+export interface ManifestPolicyCoverage {
+  totalCandidates: number;
+  matchedPolicies: number;
+  missingPolicies: number;
+  basePolicies: number;
+  reviewedPolicies: number;
+  verifiedPolicies: number;
+  uncertainPolicies: number;
+  orphanedPolicies: number;
+  latestPolicyUpdatedAt: string | null;
+  policiesByMechanicKey: Map<string, MechanicPolicySummary>;
+}
+
+export interface MechanicCatalogSyncState {
+  lastSyncedAt: string;
+  syncMode: 'deep' | 'quick';
+  candidateCount: number;
+  referenceBundleCount: number;
+  mappingStatus: string | null;
+  referenceFetchError: string | null;
+  snapshotFetchError: string | null;
+}
+
+export function classifyMechanicPolicyStatus(
+  confidence: MechanicPolicySummary['confidence'],
+  policyVersion: number,
+): MechanicPolicySummary['status'] {
+  if (confidence === 'verified') return 'verified';
+  if (confidence === 'uncertain') return 'uncertain';
+  if (confidence === 'inferred' || policyVersion > 1) return 'reviewed';
+  return 'base';
+}
+
+export function isCandidateAutoClassified(
+  candidate: Pick<BossMechanicCandidateRow, 'category' | 'responsibility' | 'resolution' | 'ai_classification'>,
+): boolean {
+  return candidate.category != null &&
+    candidate.responsibility != null &&
+    Boolean(candidate.resolution?.trim()) &&
+    candidate.ai_classification != null;
+}
+
 @Injectable({ providedIn: 'root' })
 export class ManifestService {
   private supabase = inject(SupabaseService);
@@ -23,6 +75,79 @@ export class ManifestService {
       .order('name', { ascending: true });
     if (error) throw error;
     return (data ?? []) as BossMechanicCandidateRow[];
+  }
+
+  async getPolicyCoverage(
+    bossId: string,
+    difficulty: string,
+    candidates: Pick<BossMechanicCandidateRow, 'mechanic_key' | 'ability_id' | 'updated_at'>[],
+  ): Promise<ManifestPolicyCoverage> {
+    const policiesResult = await this.supabase.client
+      .from('boss_mechanic_policy')
+      .select('mechanic_key, policy_version, confidence, updated_at')
+      .eq('boss_id', bossId)
+      .eq('difficulty', difficulty);
+    if (policiesResult.error) throw policiesResult.error;
+
+    const candidateKeys = new Set(candidates.map((candidate) =>
+      candidate.mechanic_key?.trim() || `ability:${candidate.ability_id}`,
+    ));
+    const policiesByMechanicKey = new Map<string, MechanicPolicySummary>();
+    let orphanedPolicies = 0;
+    for (const row of (policiesResult.data ?? []) as {
+      mechanic_key: string;
+      policy_version: number;
+      confidence: MechanicPolicySummary['confidence'];
+      updated_at: string;
+    }[]) {
+      const status = classifyMechanicPolicyStatus(row.confidence, row.policy_version);
+      const policy = {
+        mechanicKey: row.mechanic_key,
+        policyVersion: row.policy_version,
+        confidence: row.confidence,
+        updatedAt: row.updated_at,
+        status,
+      } satisfies MechanicPolicySummary;
+      policiesByMechanicKey.set(row.mechanic_key, policy);
+      if (!candidateKeys.has(row.mechanic_key)) orphanedPolicies += 1;
+    }
+
+    const matched = [...policiesByMechanicKey.values()].filter((policy) => candidateKeys.has(policy.mechanicKey));
+    const latestPolicyUpdatedAt = matched
+      .map((policy) => policy.updatedAt)
+      .sort((left, right) => right.localeCompare(left))[0] ?? null;
+    return {
+      totalCandidates: candidateKeys.size,
+      matchedPolicies: matched.length,
+      missingPolicies: Math.max(0, candidateKeys.size - matched.length),
+      basePolicies: matched.filter((policy) => policy.status === 'base').length,
+      reviewedPolicies: matched.filter((policy) => policy.status === 'reviewed').length,
+      verifiedPolicies: matched.filter((policy) => policy.status === 'verified').length,
+      uncertainPolicies: matched.filter((policy) => policy.status === 'uncertain').length,
+      orphanedPolicies,
+      latestPolicyUpdatedAt,
+      policiesByMechanicKey,
+    };
+  }
+
+  async getCatalogSyncState(bossId: string, difficulty: string): Promise<MechanicCatalogSyncState | null> {
+    const { data, error } = await this.supabase.client
+      .from('boss_mechanic_catalog_sync_state')
+      .select('last_synced_at, sync_mode, candidate_count, reference_bundle_count, mapping_status, reference_fetch_error, snapshot_fetch_error')
+      .eq('boss_id', bossId)
+      .eq('difficulty', difficulty)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      lastSyncedAt: data.last_synced_at,
+      syncMode: data.sync_mode,
+      candidateCount: data.candidate_count,
+      referenceBundleCount: data.reference_bundle_count,
+      mappingStatus: data.mapping_status,
+      referenceFetchError: data.reference_fetch_error,
+      snapshotFetchError: data.snapshot_fetch_error,
+    } as MechanicCatalogSyncState;
   }
 
   /**

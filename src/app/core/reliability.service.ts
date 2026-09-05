@@ -37,9 +37,15 @@ import { mechanicScoreFor } from './pull-analysis.service';
 import { gearPreparationDetails } from '../shared/gear-preparation.util';
 import type { DeathCause, WclGearItem } from '../shared/models/domain';
 import { DefensiveFeatureFlagsService } from './defensive-feature-flags.service';
+import {
+  ExecutionLedgerService,
+  type ExecutionLedgerPullSummary,
+} from './execution-ledger.service';
+import { homogeneousDefensiveEvaluationGeneration } from '../shared/defensive-evaluation-generation';
 
-const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.2.0';
+const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.0';
 const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
+const REQUIRED_EXECUTION_LEDGER_VERSION = 'execution-ledger@1.0.0';
 
 const WINDOW_DAYS = 60; // "varias noches o semanas", no los 21 días de una versión anterior
 const HALF_LIFE_DAYS = 10; // un pull de hace 10 días pesa la mitad que uno de hoy
@@ -63,6 +69,8 @@ export interface PlayerReliability {
   consistency: PlayerConsistency | null;
   /** Comparación interna v1/v2 sobre los mismos pulls; no altera el score mientras el flag siga apagado. */
   defensiveShadowComparison: DefensiveReliabilityShadowComparison | null;
+  /** Comparación causal legacy/v3; informativa hasta activar reliabilityExecutionV3. */
+  executionLedgerShadowComparison: ExecutionLedgerShadowComparison | null;
   /** Snapshot de preparación al inicio de la última noche observada. */
   latestGemCount: number | null;
   latestGemmedSlotCount: number | null;
@@ -195,11 +203,16 @@ export interface ReliabilityInputRow {
   defensive_management_decision_count: number | null;
   defensive_required_count: number | null;
   defensive_required_success_count: number | null;
+  defensive_required_exact_adherence_count: number | null;
   defensive_broken_reservation_count: number | null;
   defensive_death_viable_cd_count: number | null;
   defensive_evaluation_confidence: string | null;
   defensive_evaluator_version: string | null;
   defensive_resolver_version: string | null;
+  defensive_solver_version: string | null;
+  defensive_game_build: string | null;
+  defensive_build_fingerprint: string | null;
+  defensive_evaluated_at: string | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -226,28 +239,87 @@ export interface DefensiveReliabilityShadowComparison {
   evaluatorVersions: string[];
 }
 
+export interface ExecutionLedgerShadowComparison {
+  legacyMechanicFailureCount: number;
+  ledgerMechanicFailureCount: number;
+  ledgerDefensiveFailureCount: number;
+  ledgerConsumableFailureCount: number;
+  primaryPenaltyCount: number;
+  mechanicFailureDelta: number;
+  comparablePullCount: number;
+  evaluatorVersions: string[];
+  versionsCompatible: boolean;
+}
+
+export function compareExecutionLedgerShadow(
+  rows: ReliabilityInputRow[],
+  summaries: ExecutionLedgerPullSummary[],
+): ExecutionLedgerShadowComparison | null {
+  const summaryByPullId = new Map(
+    summaries
+      .filter((summary) => summary.versions_homogeneous)
+      .map((summary) => [summary.pull_id, summary]),
+  );
+  const comparableRows = rows.filter((row) => summaryByPullId.has(row.pull_id));
+  if (!comparableRows.length) return null;
+
+  let legacyMechanicFailureCount = 0;
+  let ledgerMechanicFailureCount = 0;
+  let ledgerDefensiveFailureCount = 0;
+  let ledgerConsumableFailureCount = 0;
+  let primaryPenaltyCount = 0;
+  const evaluatorVersions = new Set<string>();
+  for (const row of comparableRows) {
+    const summary = summaryByPullId.get(row.pull_id)!;
+    legacyMechanicFailureCount +=
+      row.personal_mechanic_fail_count ??
+      Number(row.had_avoidable_damage || row.self_positioning_death);
+    ledgerMechanicFailureCount += summary.mechanic_failure_count;
+    ledgerDefensiveFailureCount += summary.defensive_failure_count;
+    ledgerConsumableFailureCount += summary.consumable_failure_count;
+    primaryPenaltyCount += summary.primary_penalty_count;
+    evaluatorVersions.add(summary.ledger_evaluator_version);
+  }
+  return {
+    legacyMechanicFailureCount,
+    ledgerMechanicFailureCount,
+    ledgerDefensiveFailureCount,
+    ledgerConsumableFailureCount,
+    primaryPenaltyCount,
+    mechanicFailureDelta: ledgerMechanicFailureCount - legacyMechanicFailureCount,
+    comparablePullCount: comparableRows.length,
+    evaluatorVersions: [...evaluatorVersions].sort(),
+    versionsCompatible:
+      evaluatorVersions.size === 1 && evaluatorVersions.has(REQUIRED_EXECUTION_LEDGER_VERSION),
+  };
+}
+
 export interface ReliabilityComputationOptions {
   defensiveV2Enabled?: boolean;
 }
 
-function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
+function v2DefensiveRowIsCompatible(row: ReliabilityInputRow): boolean {
   const score = row.defensive_management_score_v2;
   const decisionCount = row.defensive_management_decision_count;
   const requiredCount = row.defensive_required_count;
   const requiredSuccessCount = row.defensive_required_success_count;
+  const requiredExactAdherenceCount = row.defensive_required_exact_adherence_count;
   const brokenCount = row.defensive_broken_reservation_count;
   const deathCount = row.defensive_death_viable_cd_count;
   if (
-    score == null ||
-    !Number.isFinite(score) ||
-    score < 0 ||
-    score > 100 ||
     decisionCount == null ||
-    decisionCount < 1 ||
+    decisionCount < 0 ||
+    (decisionCount === 0 ? score != null : score == null) ||
+    (score != null && (!Number.isFinite(score) || score < 0 || score > 100)) ||
     requiredCount == null ||
+    requiredCount < 0 ||
     requiredSuccessCount == null ||
     requiredSuccessCount < 0 ||
     requiredSuccessCount > requiredCount ||
+    requiredExactAdherenceCount == null ||
+    requiredExactAdherenceCount < 0 ||
+    requiredExactAdherenceCount > requiredSuccessCount ||
+    requiredExactAdherenceCount > requiredCount ||
     brokenCount == null ||
     brokenCount < 0 ||
     deathCount == null ||
@@ -257,9 +329,15 @@ function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
     (row.defensive_evaluation_confidence !== 'verified' &&
       row.defensive_evaluation_confidence !== 'inferred')
   ) {
-    return null;
+    return false;
   }
-  return score / 100;
+  return true;
+}
+
+function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
+  return v2DefensiveRowIsCompatible(row) && row.defensive_management_score_v2 != null
+    ? row.defensive_management_score_v2 / 100
+    : null;
 }
 
 export interface PlayerConsistency {
@@ -288,6 +366,20 @@ export function computeReliabilityBreakdown(
   options: ReliabilityComputationOptions = {},
 ): ReliabilityBreakdown | null {
   if (!rows.length) return null;
+
+  const visibleV2Generation =
+    options.defensiveV2Enabled === true && rows.every(v2DefensiveRowIsCompatible)
+      ? homogeneousDefensiveEvaluationGeneration(
+          rows.map((row) => ({
+            evaluatorVersion: row.defensive_evaluator_version,
+            resolverVersion: row.defensive_resolver_version,
+            solverVersion: row.defensive_solver_version,
+            gameBuild: row.defensive_game_build,
+            buildFingerprint: row.defensive_build_fingerprint,
+          })),
+        )
+      : null;
+  const useVisibleV2Generation = visibleV2Generation != null;
 
   // §"el baremo de preparación deberia medir los primeros pulls no los
   // ultimos, porque si en mitad de la raid te toca un objeto y te lo
@@ -397,13 +489,13 @@ export function computeReliabilityBreakdown(
     const legacyDefensiveExecution =
       pullDefensiveWeight > 0 ? pullDefensiveSum / pullDefensiveWeight : null;
     const v2DefensiveExecution = reliableV2DefensiveScore(r);
-    const useV2ForPull = options.defensiveV2Enabled === true && v2DefensiveExecution != null;
+    const useV2ForPull = useVisibleV2Generation && v2DefensiveExecution != null;
     if (useV2ForPull) {
       // Selección atómica: si v2 es fiable, esta fila no aporta ninguna
       // señal defensiva legacy al score efectivo.
       defSum += v2DefensiveExecution * w;
       defWeight += w;
-    } else if (legacyDefensiveExecution != null) {
+    } else if (!useVisibleV2Generation && legacyDefensiveExecution != null) {
       // Conserva exactamente la ponderación legacy (muerte x2 + ventana x1)
       // cuando el flag está apagado o esta fila todavía no tiene backfill.
       defSum += pullDefensiveSum * w;
@@ -422,7 +514,9 @@ export function computeReliabilityBreakdown(
       prepWeight += w;
     }
     const mechanicExecution = mecScore * 100;
-    const selectedDefensiveExecution = useV2ForPull ? v2DefensiveExecution : legacyDefensiveExecution;
+    const selectedDefensiveExecution = useVisibleV2Generation
+      ? v2DefensiveExecution
+      : legacyDefensiveExecution;
     const defensiveExecution =
       selectedDefensiveExecution == null ? null : selectedDefensiveExecution * 100;
     pullExecution.push({
@@ -575,7 +669,7 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
 // propio por encima de WINDOW_RELIABILITY_COLUMNS, mismo motivo de siempre
 // (frontend puede llegar antes que la migración).
 const V2_RELIABILITY_COLUMNS =
-  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version, defensive_resolver_version';
+  'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_required_exact_adherence_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version, defensive_resolver_version, defensive_solver_version, defensive_game_build, defensive_build_fingerprint, defensive_evaluated_at';
 const UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count';
 const WINDOW_RELIABILITY_COLUMNS =
@@ -624,7 +718,7 @@ function isReliabilitySchemaTransitionError(
   return (
     error.code === '42703' ||
     error.code === 'PGRST204' ||
-    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count|defensive_management_score_v2|defensive_management_decision_count|defensive_required_count|defensive_required_success_count|defensive_broken_reservation_count|defensive_death_viable_cd_count|defensive_evaluation_confidence|defensive_evaluator_version|defensive_resolver_version/i.test(
+    /used_defensive_in_pull|defensive_use_opportunity|gemmed_slot_count|gemmable_slot_count|personal_mechanic_fail_count|report_code|pull_number|avoidable_mechanic_eligible_count|avoidable_mechanic_fail_count|defensive_window_coverable_count|defensive_window_covered_count|defensive_window_used_anything|unassigned_mechanic_success_count|defensive_management_score_v2|defensive_management_decision_count|defensive_required_count|defensive_required_success_count|defensive_required_exact_adherence_count|defensive_broken_reservation_count|defensive_death_viable_cd_count|defensive_evaluation_confidence|defensive_evaluator_version|defensive_resolver_version|defensive_solver_version|defensive_game_build|defensive_build_fingerprint|defensive_evaluated_at/i.test(
       message,
     )
   );
@@ -636,6 +730,16 @@ export class ReliabilityService {
   private wowauditRoster = inject(WowauditRosterService);
   private attendanceService = inject(AttendanceService);
   private defensiveFlags = inject(DefensiveFeatureFlagsService);
+  private executionLedger = inject(ExecutionLedgerService);
+
+  private async loadExecutionLedgerShadow(pullIds: string[]): Promise<ExecutionLedgerPullSummary[]> {
+    try {
+      return await this.executionLedger.listPullSummaries(pullIds);
+    } catch {
+      // La migración puede llegar después del frontend durante el rollout.
+      return [];
+    }
+  }
 
   private reliabilityComputationOptions(): ReliabilityComputationOptions {
     return {
@@ -758,6 +862,10 @@ export class ReliabilityService {
         schemaLevel === 'v2' && row.defensive_required_success_count != null
           ? Number(row.defensive_required_success_count)
           : null,
+      defensive_required_exact_adherence_count:
+        schemaLevel === 'v2' && row.defensive_required_exact_adherence_count != null
+          ? Number(row.defensive_required_exact_adherence_count)
+          : null,
       defensive_broken_reservation_count:
         schemaLevel === 'v2' && row.defensive_broken_reservation_count != null
           ? Number(row.defensive_broken_reservation_count)
@@ -772,6 +880,14 @@ export class ReliabilityService {
         schemaLevel === 'v2' ? (row.defensive_evaluator_version ?? null) : null,
       defensive_resolver_version:
         schemaLevel === 'v2' ? (row.defensive_resolver_version ?? null) : null,
+      defensive_solver_version:
+        schemaLevel === 'v2' ? (row.defensive_solver_version ?? null) : null,
+      defensive_game_build:
+        schemaLevel === 'v2' ? (row.defensive_game_build ?? null) : null,
+      defensive_build_fingerprint:
+        schemaLevel === 'v2' ? (row.defensive_build_fingerprint ?? null) : null,
+      defensive_evaluated_at:
+        schemaLevel === 'v2' ? (row.defensive_evaluated_at ?? null) : null,
       };
     });
   }
@@ -813,6 +929,9 @@ export class ReliabilityService {
         .catch(() => new Map<string, { attended: number; total: number; pct: number | null }>()),
     ]);
     const rosterByName = new Map(roster.map((r) => [r.name, r]));
+    const ledgerSummaries = await this.loadExecutionLedgerShadow(
+      [...new Set(data.map((row) => row.pull_id))],
+    );
 
     // El roster necesita poder explicar el score, no solo calcularlo. Estas
     // lecturas son best-effort y solo se hacen en la vista global: equipo
@@ -898,6 +1017,7 @@ export class ReliabilityService {
           bossNames,
           now,
           midpoint,
+          ledgerSummaries.filter((summary) => summary.player_name === playerName),
         ),
       );
     }
@@ -974,6 +1094,9 @@ export class ReliabilityService {
       evidenceRecords.map((record) => [`${record.player_name}|${record.pull_id}`, record]),
     );
     const evidencePullById = new Map(evidencePulls.map((pull) => [pull.id, pull]));
+    const ledgerSummaries = await this.loadExecutionLedgerShadow(
+      [...new Set(rows.map((row) => row.pull_id))],
+    );
 
     const now = Date.now();
     const midpoint = now - (WINDOW_DAYS / 2) * 86_400_000;
@@ -987,6 +1110,7 @@ export class ReliabilityService {
       bossNames,
       now,
       midpoint,
+      ledgerSummaries.filter((summary) => summary.player_name === playerName),
     );
   }
 
@@ -1006,6 +1130,7 @@ export class ReliabilityService {
     bossNames: Map<string, string>,
     now: number,
     midpoint: number,
+    ledgerSummaries: ExecutionLedgerPullSummary[] = [],
   ): PlayerReliability {
     // Para la pantalla operativa importa cómo llegó a la última noche,
     // no el objeto sin encantar que pudo equipar a mitad de raid. Se toma
@@ -1179,6 +1304,7 @@ export class ReliabilityService {
       breakdown: { mecanica, defensiva, preparacion },
       consistency: result?.consistency ?? null,
       defensiveShadowComparison: result?.defensiveShadowComparison ?? null,
+      executionLedgerShadowComparison: compareExecutionLedgerShadow(rows, ledgerSummaries),
       latestGemCount,
       latestGemmedSlotCount,
       latestGemmableSlotCount,

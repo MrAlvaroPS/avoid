@@ -16,6 +16,12 @@ import {
 } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
 import { NightPlayerSummaryCacheService } from './night-player-summary-cache.service';
+import { CombatEvaluationFeatureFlagsService } from './combat-evaluation-feature-flags.service';
+import {
+  ExecutionLedgerService,
+  type MechanicOffenseAudit,
+  type PreparationExecutionCheck,
+} from './execution-ledger.service';
 import {
   PULL_SCORE_FAIL_PENALTY,
   UNASSIGNED_MECHANIC_BONUS_CAP,
@@ -49,7 +55,13 @@ import { gearPreparationCounts } from '../shared/gear-preparation.util';
 import { withSupabaseRelationFallback } from '../shared/supabase-query.util';
 import { PERSONAL_RESPONSIBILITY_CATEGORIES, validAttemptOrdinal } from '../shared/pull-consistency.util';
 import { roleFromSpec } from '../shared/spec-role.util';
+import { errorMessage } from '../shared/error-message.util';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { computeDefensiveManagementScore } from '../../../supabase/functions/_shared/defensive-management-score';
+import { homogeneousDefensiveEvaluationGeneration } from '../shared/defensive-evaluation-generation';
+
+const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.0';
+const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
 
 export interface NightPullSummary {
   pullId: string;
@@ -235,7 +247,10 @@ export interface NightRepeatedPattern {
   instanceCount: number;
   distinctBossCount: number;
   bossNames: string[];
+  /** Solo si todas las instancias comparten dificultad; null si el patrón cruza dificultades esta noche. */
+  difficulty: string | null;
   aiNote: string | null;
+  resolution: string | null;
 }
 
 export interface NightGearSnapshot {
@@ -251,6 +266,9 @@ export interface NightGearSnapshot {
   gemmedSlotCount: number;
   gemmableSlotCount: number;
   gemCount: number;
+  preparationSource: 'legacy_wcl' | 'ledger_v3';
+  preparationLedgerVersion: string | null;
+  preparationEvaluatedAt: string | null;
 }
 
 export interface NightDefensiveCast {
@@ -309,14 +327,22 @@ export interface NightDefensiveDecision extends PlayerPullDefensiveEvaluationEve
   plannedSpellName: string | null;
   actualSpellName: string | null;
   candidateSpellNames: string[];
+  evaluationMode: PlayerPullDefensiveEvaluationRow['mode'];
+  planVersionId: string | null;
+  /** Misma fuente que mechanicFails/deaths (coachingFor) — null si la mecánica no tiene classificación revisada o no es identificable. */
+  mechanicDescription: string | null;
+  mechanicResolution: string | null;
 }
 
 /** Agregado exclusivamente de evaluations v2 completas y confiables. Null
  * significa rollout/tabla/backfill incompleto y obliga a la UI a usar legacy. */
 export interface NightDefensiveManagementV2 {
-  mode: 'plan' | 'optimal_no_plan';
+  mode: 'plan' | 'optimal_no_plan' | 'mixed';
   evaluatedPullCount: number;
   planRequiredCount: number;
+  requiredExactAdherenceCount: number;
+  requiredCoverageSuccessCount: number;
+  /** Alias legacy de requiredExactAdherenceCount. */
   planExecutedCount: number;
   criticalWindowCount: number;
   criticalCoveredCount: number;
@@ -326,8 +352,13 @@ export interface NightDefensiveManagementV2 {
   viableExtraCount: number;
   extraUsedCount: number;
   deathViableCdCount: number;
+  deathReadyCdCount: number;
   managementScore: number | null;
   evaluatorVersion: string;
+  resolverVersion: string;
+  solverVersion: string;
+  gameBuild: string;
+  buildFingerprint: string;
   dataConfidence: 'verified' | 'inferred';
   decisions: NightDefensiveDecision[];
 }
@@ -337,17 +368,38 @@ export function buildNightDefensiveManagementV2(input: {
   evaluations: PlayerPullDefensiveEvaluationRow[];
   spellNameById: ReadonlyMap<number, string>;
   mechanicNameById: ReadonlyMap<number, string>;
+  coachingFor?: (
+    pull: Pick<NightPullSummary, 'bossId' | 'difficulty'>,
+    mechanicName: string | null | undefined,
+  ) => MechanicCoaching;
 }): NightDefensiveManagementV2 | null {
   const evaluationsByPullId = new Map(input.evaluations.map((evaluation) => [evaluation.pull_id, evaluation]));
   const expectedPulls = input.pulls.filter((pull) => !pull.excludedFromStats);
   const selected = expectedPulls
     .map((pull) => evaluationsByPullId.get(pull.pullId))
     .filter((evaluation): evaluation is PlayerPullDefensiveEvaluationRow => Boolean(evaluation));
-  const evaluatorVersions = new Set(selected.map((evaluation) => evaluation.evaluator_version));
+  // §"es normal que una persona cambie de talentos según el boss" (feedback
+  // real, 2026-09-03): un respec entre pulls no invalida la lógica de
+  // evaluación de la noche (evaluator/resolver/solver/build siguen siendo
+  // los mismos), así que ya no exige un buildFingerprint único aquí. Esto
+  // es solo para el agregado que ve la infografía; Fiabilidad sigue
+  // exigiendo fingerprint homogéneo en reliability.service.ts.
+  const generation = homogeneousDefensiveEvaluationGeneration(
+    selected.map((evaluation) => ({
+      evaluatorVersion: evaluation.evaluator_version,
+      resolverVersion: evaluation.resolver_version,
+      solverVersion: evaluation.solver_version,
+      gameBuild: evaluation.game_build,
+      buildFingerprint: evaluation.build_fingerprint,
+    })),
+    { requireBuildFingerprint: false },
+  );
   if (
     expectedPulls.length === 0 ||
     selected.length !== expectedPulls.length ||
-    evaluatorVersions.size !== 1 ||
+    generation == null ||
+    generation.evaluatorVersion !== REQUIRED_DEFENSIVE_EVALUATOR_VERSION ||
+    generation.resolverVersion !== REQUIRED_DEFENSIVE_RESOLVER_VERSION ||
     selected.some((evaluation) => evaluation.data_confidence !== 'verified' && evaluation.data_confidence !== 'inferred')
   ) return null;
 
@@ -358,12 +410,13 @@ export function buildNightDefensiveManagementV2(input: {
     plan_broken: 1,
     reminder_missed: 2,
     covered_with_substitution: 3,
-    correct_hold: 4,
-    missed_extra_opportunity: 5,
-    safe_extra_use: 6,
-    no_feasible_alternative: 7,
-    uncertain_data: 8,
-    plan_covered: 9,
+    death_with_ready_cd: 4,
+    correct_hold: 5,
+    missed_extra_opportunity: 6,
+    safe_extra_use: 7,
+    no_feasible_alternative: 8,
+    uncertain_data: 9,
+    plan_covered: 10,
   };
   const decisions = selected
     .flatMap((evaluation) => {
@@ -371,33 +424,49 @@ export function buildNightDefensiveManagementV2(input: {
       if (!pull) return [];
       return (evaluation.events ?? [])
         .filter((event) => event.state !== 'plan_covered' && event.state !== 'uncertain_data')
-        .map((event): NightDefensiveDecision => ({
-          ...event,
-          pullId: evaluation.pull_id,
-          pullNumber: pull.pullNumber,
-          bossId: pull.bossId,
-          bossName: pull.bossName,
-          difficulty: pull.difficulty,
-          mechanicName: event.abilityId == null ? null : (input.mechanicNameById.get(event.abilityId) ?? null),
-          plannedSpellName: event.plannedSpellId == null ? null : (input.spellNameById.get(event.plannedSpellId) ?? null),
-          actualSpellName: event.actualSpellId == null ? null : (input.spellNameById.get(event.actualSpellId) ?? null),
-          candidateSpellNames: (event.candidateSpellIds ?? []).map((spellId) => input.spellNameById.get(spellId) ?? `#${spellId}`),
-        }));
+        .map((event): NightDefensiveDecision => {
+          const mechanicName = event.abilityId == null ? null : (input.mechanicNameById.get(event.abilityId) ?? null);
+          const coaching = input.coachingFor?.(pull, mechanicName) ?? { note: null, resolution: null };
+          return {
+            ...event,
+            pullId: evaluation.pull_id,
+            pullNumber: pull.pullNumber,
+            bossId: pull.bossId,
+            bossName: pull.bossName,
+            difficulty: pull.difficulty,
+            mechanicName,
+            plannedSpellName: event.plannedSpellId == null ? null : (input.spellNameById.get(event.plannedSpellId) ?? null),
+            actualSpellName: event.actualSpellId == null ? null : (input.spellNameById.get(event.actualSpellId) ?? null),
+            candidateSpellNames: (event.candidateSpellIds ?? []).map((spellId) => input.spellNameById.get(spellId) ?? `#${spellId}`),
+            evaluationMode: evaluation.mode,
+            planVersionId: evaluation.plan_version_id,
+            mechanicDescription: coaching.note,
+            mechanicResolution: coaching.resolution,
+          };
+        });
     })
     .sort(
       (left, right) =>
         decisionPriority[left.state] - decisionPriority[right.state] ||
         (pullOrderById.get(left.pullId) ?? Number.MAX_SAFE_INTEGER) - (pullOrderById.get(right.pullId) ?? Number.MAX_SAFE_INTEGER) ||
         left.atMs - right.atMs,
-    )
-    .slice(0, 5);
+    );
   const sum = (pick: (evaluation: PlayerPullDefensiveEvaluationRow) => number): number =>
     selected.reduce((total, evaluation) => total + pick(evaluation), 0);
+  const allEvents = selected.flatMap((evaluation) => evaluation.events ?? []);
+  const management = computeDefensiveManagementScore(allEvents);
+  const requiredEvents = allEvents.filter((event) => event.requirementLevel === 'required');
+  const requiredExactAdherenceCount = requiredEvents.filter((event) => event.state === 'plan_covered').length;
+  const requiredCoverageSuccessCount = requiredEvents.filter((event) => event.coverageOutcome === 'covered').length;
+  const hasPlan = selected.some((evaluation) => evaluation.mode !== 'no_plan');
+  const hasNoPlan = selected.some((evaluation) => evaluation.mode === 'no_plan');
   return {
-    mode: selected.some((evaluation) => evaluation.mode !== 'no_plan') ? 'plan' : 'optimal_no_plan',
+    mode: hasPlan && hasNoPlan ? 'mixed' : hasPlan ? 'plan' : 'optimal_no_plan',
     evaluatedPullCount: selected.length,
     planRequiredCount: sum((evaluation) => evaluation.plan_required_count),
-    planExecutedCount: sum((evaluation) => evaluation.plan_executed_count),
+    requiredExactAdherenceCount,
+    requiredCoverageSuccessCount,
+    planExecutedCount: requiredExactAdherenceCount,
     criticalWindowCount: sum((evaluation) => evaluation.critical_window_count),
     criticalCoveredCount: sum((evaluation) => evaluation.critical_covered_count),
     correctHoldCount: sum((evaluation) => evaluation.correct_hold_count),
@@ -406,8 +475,13 @@ export function buildNightDefensiveManagementV2(input: {
     viableExtraCount: sum((evaluation) => evaluation.viable_extra_count),
     extraUsedCount: sum((evaluation) => evaluation.extra_used_count),
     deathViableCdCount: sum((evaluation) => evaluation.death_viable_cd_count),
-    managementScore: null,
-    evaluatorVersion: [...evaluatorVersions][0],
+    deathReadyCdCount: allEvents.filter((event) => event.state === 'death_with_ready_cd').length,
+    managementScore: management.score,
+    evaluatorVersion: generation.evaluatorVersion,
+    resolverVersion: generation.resolverVersion,
+    solverVersion: generation.solverVersion,
+    gameBuild: generation.gameBuild,
+    buildFingerprint: generation.buildFingerprint,
     dataConfidence: selected.some((evaluation) => evaluation.data_confidence === 'inferred') ? 'inferred' : 'verified',
     decisions,
   };
@@ -461,6 +535,10 @@ export interface NightMechanicPressureSummary {
   totalCount: number;
   /** Solo defensivos no-emergencia — mismo criterio que el resto de esta sección (ver evaluateWindowCoverage). */
   defensives: NightMechanicDefensiveStat[];
+  /** Nota descriptiva de la clasificación revisada (boss+dificultad+mecánica) — misma fuente que ya usan mechanicFails/deaths, ver coachingFor(). */
+  aiNote: string | null;
+  /** Resolución revisada en Ajustes para este boss+dificultad exactos. */
+  resolution: string | null;
 }
 
 /**
@@ -609,6 +687,8 @@ export interface NightPlayerSummary {
   totalMechanicFails: number;
   deaths: NightDeathRow[];
   mechanicFails: NightMechanicFailRow[];
+  /** Evidencia v3 para auditoría; nunca sustituye mechanicFails mientras el rollout siga en shadow. */
+  mechanicOffensesV3: MechanicOffenseAudit[];
   interrupts: NightInterruptRow[];
   /** §"la raid debe hacerlo... no marca a nadie a propósito" (feedback real,
    * 2026-08-29): mecánicas sin asignación fija (huevos, orbes, ítems) que
@@ -748,6 +828,8 @@ export class NightPlayerSummaryService {
   private reliability = inject(ReliabilityService);
   private wowauditRoster = inject(WowauditRosterService);
   private summaryCache = inject(NightPlayerSummaryCacheService);
+  private combatFlags = inject(CombatEvaluationFeatureFlagsService);
+  private executionLedger = inject(ExecutionLedgerService);
 
   /**
    * §"no todos los días tenemos raid... tiene sentido que actualice una
@@ -1516,25 +1598,38 @@ export class NightPlayerSummaryService {
       entry.count++;
     }
     const repeatedPatterns: NightRepeatedPattern[] = [...byMechanic.entries()]
-      .map(([mechanicName, e]) => ({
-        mechanicName,
-        mechanicId: e.mechanicId,
-        category: e.category,
-        instanceCount: e.count,
-        distinctBossCount: e.bosses.size,
-        bossNames: [...e.bosses],
-        // El patrón puede cruzar bosses/dificultades. Solo reutilizamos una
-        // nota si todas las instancias verificables que lo forman coinciden;
-        // mezclar la resolución de otro ámbito sería peor que no mostrarla.
-        aiNote: (() => {
-          const notes = new Set(
-            [...evaluatedDeaths, ...mechanicFails]
-              .filter((row) => row.mechanicName === mechanicName && row.aiNote)
-              .map((row) => row.aiNote as string),
-          );
-          return notes.size === 1 ? [...notes][0] : null;
-        })(),
-      }))
+      .map(([mechanicName, e]) => {
+        // §"poner solo lo de la dificultad actual que está evaluando esa
+        // noche, no que ponga comentarios de otras dificultades" (feedback
+        // real, 2026-09-03): el patrón puede cruzar bosses (eso es su
+        // propósito), pero una nota/resolución de catálogo que en realidad
+        // describe varias dificultades a la vez (p. ej. "en Mythic X, en
+        // Normal Y" en un único texto) no debe mostrarse cuando la noche
+        // mezcla dificultades del mismo mecanismo — el texto sería correcto
+        // pero hablaría de una dificultad que no se jugó esa parte.
+        const rowsForMechanic = [...evaluatedDeaths, ...mechanicFails].filter(
+          (row) => row.mechanicName === mechanicName,
+        );
+        const difficulties = new Set(rowsForMechanic.map((row) => row.difficulty));
+        const singleDifficulty = difficulties.size === 1;
+        const notes = new Set(
+          rowsForMechanic.filter((row) => row.aiNote).map((row) => row.aiNote as string),
+        );
+        const resolutions = new Set(
+          rowsForMechanic.filter((row) => row.resolution).map((row) => row.resolution as string),
+        );
+        return {
+          mechanicName,
+          mechanicId: e.mechanicId,
+          category: e.category,
+          instanceCount: e.count,
+          distinctBossCount: e.bosses.size,
+          bossNames: [...e.bosses],
+          difficulty: singleDifficulty ? [...difficulties][0] : null,
+          aiNote: singleDifficulty && notes.size === 1 ? [...notes][0] : null,
+          resolution: singleDifficulty && resolutions.size === 1 ? [...resolutions][0] : null,
+        };
+      })
       .filter((p) => p.instanceCount >= 2) // un fallo suelto no es un "patrón" de la noche
       .sort((a, b) => b.instanceCount - a.instanceCount);
 
@@ -1547,8 +1642,44 @@ export class NightPlayerSummaryService {
       lastPull && lastRecord ? this.buildGearSnapshot(lastPull, lastRecord) : null;
     const firstPull = pulls[0] ?? null;
     const firstRecord = firstPull ? recordByPullId.get(firstPull.pullId) : null;
-    const startingPreparation =
+    let startingPreparation =
       firstPull && firstRecord ? this.buildGearSnapshot(firstPull, firstRecord) : null;
+    if (startingPreparation && firstPull && this.combatFlags.enabled('playerInfographicV3')) {
+      const checks = await this.executionLedger
+        .listPreparationChecks(firstPull.pullId, playerName)
+        .catch((caught) => {
+          console.warn(
+            `[NightPlayerSummary] Preparación v3 degradada para ${playerName} en pull ${firstPull.pullId}: ${errorMessage(caught)}`,
+          );
+          return [] as PreparationExecutionCheck[];
+        });
+      const byType = new Map(checks.map((check) => [check.event_type, check]));
+      const enchant = byType.get('enchant_check');
+      const gem = byType.get('gem_check');
+      const enchantedSlotCount = enchant?.evidence.completed_slots;
+      const enchantableSlotCount = enchant?.evidence.eligible_slots;
+      const gemmedSlotCount = gem?.evidence.completed_slots;
+      const gemmableSlotCount = gem?.evidence.eligible_slots;
+      if (
+        enchant?.confidence === 'verified' &&
+        gem?.confidence === 'verified' &&
+        typeof enchantedSlotCount === 'number' && Number.isInteger(enchantedSlotCount) &&
+        typeof enchantableSlotCount === 'number' && Number.isInteger(enchantableSlotCount) &&
+        typeof gemmedSlotCount === 'number' && Number.isInteger(gemmedSlotCount) &&
+        typeof gemmableSlotCount === 'number' && Number.isInteger(gemmableSlotCount)
+      ) {
+        startingPreparation = {
+          ...startingPreparation,
+          enchantedSlotCount,
+          enchantableSlotCount,
+          gemmedSlotCount,
+          gemmableSlotCount,
+          preparationSource: 'ledger_v3',
+          preparationLedgerVersion: enchant.ledger_evaluator_version,
+          preparationEvaluatedAt: enchant.evaluated_at,
+        };
+      }
+    }
 
     // Casts defensivos con timing exacto. Igual que la vista SQL de
     // fiabilidad: un ninja pull no aporta evidencia y nada posterior al
@@ -1684,6 +1815,7 @@ export class NightPlayerSummaryService {
       pulls,
       evaluableWindowsForPull,
       (pullId, atMs) => playerRole !== 'Tank' && allTanksDeadAt(pullId, atMs),
+      coachingFor,
     );
     const defensiveSummary: NightDefensiveSummary = {
       totalCasts: defensiveCasts.length,
@@ -1721,6 +1853,8 @@ export class NightPlayerSummaryService {
       evaluations: defensiveEvaluations,
       spellNameById,
       mechanicNameById,
+      coachingFor: (pull, mechanicName) =>
+        coachingFor({ boss_id: pull.bossId, difficulty: pull.difficulty }, mechanicName),
     });
 
     const avoidableEligible = reliabilityInputRows.reduce(
@@ -1766,6 +1900,16 @@ export class NightPlayerSummaryService {
     };
 
     const rosterEntry = roster.find((r) => r.name === playerName) ?? null;
+    const mechanicOffensesV3 = this.combatFlags.enabled('playerInfographicV3')
+      ? await this.executionLedger
+          .listMechanicOffenseAudits(pullIds, playerName)
+          .catch((caught) => {
+            console.warn(
+              `[NightPlayerSummary] Evidencia mecánica v3 degradada para ${playerName}: ${errorMessage(caught)}`,
+            );
+            return [] as MechanicOffenseAudit[];
+          })
+      : [];
 
     // §"preparar la vinculación de ese ID... con el dosier de ese raider"
     // (feedback real, 2026-08-28): no puede ir en el Promise.all de arriba —
@@ -1818,6 +1962,7 @@ export class NightPlayerSummaryService {
       totalMechanicFails: mechanicFails.length,
       deaths,
       mechanicFails,
+      mechanicOffensesV3,
       interrupts,
       unassignedMechanicCredits,
       repeatedPatterns,
@@ -1949,6 +2094,10 @@ export class NightPlayerSummaryService {
     // pico — ver el comentario junto a allTanksDeadAt más arriba para el
     // barrido empírico que descartó una exclusión más amplia.
     isNoTankMeleeArtifact: (pullId: string, atMs: number) => boolean,
+    coachingFor: (
+      pull: Pick<PullRowLite, 'boss_id' | 'difficulty'>,
+      mechanicName: string | null | undefined,
+    ) => MechanicCoaching,
   ): Promise<NightMechanicPressureSummary[]> {
     interface Group {
       mechanicId: number;
@@ -2042,6 +2191,10 @@ export class NightPlayerSummaryService {
         const occurrences = group.occurrences.sort(
           (a, b) => a.pullNumber - b.pullNumber || a.timeMs - b.timeMs,
         );
+        const coaching = coachingFor(
+          { boss_id: group.bossId, difficulty: group.difficulty },
+          group.mechanicName,
+        );
         return {
           mechanicId: group.mechanicId,
           mechanicName: group.mechanicName,
@@ -2050,6 +2203,8 @@ export class NightPlayerSummaryService {
           difficulty: group.difficulty,
           timingPattern,
           occurrences,
+          aiNote: coaching.note,
+          resolution: coaching.resolution,
           coveredCount: occurrences.filter((o) => o.covered).length,
           totalCount: occurrences.length,
           defensives: [...group.defensiveStats.entries()]
@@ -2211,6 +2366,9 @@ export class NightPlayerSummaryService {
       gear: items
         .map((item, slot) => ({ slot, itemId: item?.id ?? 0, itemLevel: item?.itemLevel ?? 0 }))
         .filter((g) => g.itemId > 0),
+      preparationSource: 'legacy_wcl',
+      preparationLedgerVersion: null,
+      preparationEvaluatedAt: null,
       ...preparation,
     };
   }
