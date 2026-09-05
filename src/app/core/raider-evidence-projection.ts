@@ -412,6 +412,76 @@ function canonicalDecisiveNames(
     .join(' / ');
 }
 
+interface CanonicalMechanicCoachingMetadata {
+  mechanicName: string;
+  description: string | null;
+  resolution: string | null;
+}
+
+function canonicalMechanicMetadataKey(bossId: string, difficulty: string, abilityId: number): string {
+  return `${bossId}|${difficulty}|${abilityId}`;
+}
+
+/**
+ * Bridge de PRESENTACIÓN, no de scoring. v7 sigue siendo la única autoridad para decidir si el episodio es
+ * missed_ready/missed_due_to_mistime y qué spell es decisivo. Para poder volver a enseñar coaching útil se
+ * reutiliza la metadata descriptiva ya resuelta en el resumen de la noche por identidad exacta
+ * boss+dificultad+abilityId. No hay join por proximidad temporal, ni se usa `covered/coverable/options` para
+ * alterar el verdict. El orden de autoridad es: metadata ya presente en el episodio canónico > breakdown
+ * descriptivo de mecánicas > fallos/muertes exactos de esa misma ability.
+ */
+function buildCanonicalMechanicCoachingMetadata(
+  summary: NightPlayerSummary,
+): ReadonlyMap<string, CanonicalMechanicCoachingMetadata> {
+  const map = new Map<string, CanonicalMechanicCoachingMetadata>();
+  const upsert = (
+    bossId: string,
+    difficulty: string,
+    abilityId: number,
+    mechanicName: string | null | undefined,
+    description: string | null | undefined,
+    resolution: string | null | undefined,
+  ) => {
+    if (!mechanicName) return;
+    const key = canonicalMechanicMetadataKey(bossId, difficulty, abilityId);
+    const current = map.get(key);
+    map.set(key, {
+      mechanicName: current?.mechanicName ?? mechanicName,
+      description: current?.description ?? description ?? null,
+      resolution: current?.resolution ?? resolution ?? null,
+    });
+  };
+
+  for (const row of summary.defensiveSummary?.mechanicPressureBreakdown ?? []) {
+    upsert(row.bossId, row.difficulty, row.mechanicId, row.mechanicName, row.aiNote, row.resolution);
+  }
+  for (const row of summary.mechanicFails ?? []) {
+    upsert(row.bossId, row.difficulty, row.mechanicId, row.mechanicName, row.aiNote, row.resolution);
+  }
+  for (const row of summary.deaths ?? []) {
+    if (row.mechanicId == null || !row.mechanicName) continue;
+    upsert(row.bossId, row.difficulty, row.mechanicId, row.mechanicName, row.aiNote, row.resolution);
+  }
+  return map;
+}
+
+function enrichCanonicalEpisodeForCoaching(
+  episode: CanonicalDefensiveEpisodeView,
+  metadata: ReadonlyMap<string, CanonicalMechanicCoachingMetadata>,
+): CanonicalDefensiveEpisodeView {
+  if (episode.dominantAbilityGameId == null) return episode;
+  const fallback = metadata.get(
+    canonicalMechanicMetadataKey(episode.bossId, episode.difficulty, episode.dominantAbilityGameId),
+  );
+  if (!fallback) return episode;
+  return {
+    ...episode,
+    mechanicName: episode.mechanicName ?? fallback.mechanicName,
+    mechanicDescription: episode.mechanicDescription ?? fallback.description,
+    mechanicResolution: episode.mechanicResolution ?? fallback.resolution,
+  };
+}
+
 /** Copy humano para los dos únicos responseVerdict que generan coaching accionable (§76 — nunca mostrar
  * covered_verified/missed_ready/uncertain/etc. en crudo al raider). El texto se limita a proyectar el verdict
  * y sus decisiveSpellIds ya persistidos; no reinterpreta candidates ni crea una segunda decisión. */
@@ -422,7 +492,8 @@ function canonicalDefensiveItem(
   const mechanic = episode.mechanicName ?? 'esta ventana defensiva';
   const isMistimed = episode.responseVerdict === 'missed_due_to_mistime';
   const decisiveNames = canonicalDecisiveNames(episode, spellNameById);
-  const title = isMistimed ? 'Mal timing demostrado' : 'CD disponible sin cubrir';
+  const baseTitle = isMistimed ? 'Mal timing demostrado' : 'CD disponible sin cubrir';
+  const title = episode.mechanicName ? `${episode.mechanicName} · ${baseTitle}` : baseTitle;
   const observation = isMistimed
     ? decisiveNames
       ? `El uso de ${decisiveNames} no mantuvo cobertura en el momento decisivo de ${mechanic}.`
@@ -434,7 +505,7 @@ function canonicalDefensiveItem(
       : episode.usageEngaged
         ? `Usaste algo durante ${mechanic}, pero ninguna acción cubrió la ventana; había un cooldown listo sin usar.`
         : `Había un cooldown listo para ${mechanic} y no se usó.`;
-  const whyItMatters = isMistimed
+  const defensiveEvidence = isMistimed
     ? decisiveNames
       ? `IRIS vinculó el fallo de timing a ${decisiveNames}; el veredicto procede de la evidencia temporal canónica de este episodio.`
       : 'IRIS demostró un fallo de timing defensivo en esta ventana mediante la evidencia temporal canónica del episodio.'
@@ -455,6 +526,19 @@ function canonicalDefensiveItem(
     : decisiveNames
       ? `No dejes ${decisiveNames} disponible sin usar en esta oportunidad.`
       : 'No dejes el cooldown listo sin usar.';
+
+  const mechanicDescription = episode.mechanicDescription?.trim() || null;
+  const mechanicResolution = episode.mechanicResolution?.trim() || null;
+  // En una card defensiva, "Qué sabemos" debe explicar la mecánica cuando existe metadata revisada, no repetir
+  // por cuarta vez el estado del cooldown. Si no hay nota pero sí resolución, se publica como conocimiento
+  // revisado; la franja "Cómo resolver" pasa entonces a la acción defensiva personal para evitar duplicarla.
+  const whyItMatters = mechanicDescription
+    ? mechanicDescription
+    : mechanicResolution
+      ? `La resolución revisada de ${mechanic} es: ${mechanicResolution}`
+      : defensiveEvidence;
+  const resolutionText = mechanicDescription && mechanicResolution ? mechanicResolution : action;
+
   return {
     id: `defensive|canonical|${episode.episodeId}`,
     kind: 'defensive',
@@ -475,8 +559,11 @@ function canonicalDefensiveItem(
     whyItMatters,
     action,
     preventionKey,
-    mechanicDescription: episode.mechanicDescription,
-    resolutionText: episode.mechanicResolution,
+    // En v3 el texto descriptivo ya se proyecta en "Qué sabemos"; dejarlo también bajo el nombre del boss
+    // duplicaría exactamente el mismo copy dentro de la misma card. La metadata original permanece en
+    // summary.canonicalDefensive.episodes para cualquier drill-down posterior.
+    mechanicDescription: null,
+    resolutionText,
     defensives: canonicalEpisodeDefensives(episode, spellNameById),
     confidence: episode.confidence === 'verified' ? 'verified' : episode.confidence === 'inferred' ? 'inferred' : 'uncertain',
     occurrences: [{ pullId: episode.pullId, pullNumber: episode.pullNumber, atMs: episode.peakMs }],
@@ -578,6 +665,43 @@ function compareEvidence(left: RaiderEvidenceItem, right: RaiderEvidenceItem): n
   );
 }
 
+/**
+ * La portada de coaching tiene cuatro huecos. Una familia de error muy abundante (p. ej. 15 missed_ready)
+ * no debe expulsar toda la información mecánica/preparación si existen otros hallazgos accionables. Se
+ * conserva el ranking global y solo se reserva espacio editorial: hasta dos huecos para hallazgos no defensivos
+ * cuando los hay. Si solo existe uno, se muestran 3 defensivas + ese hallazgo; si no existe ninguno, pueden
+ * mostrarse las 4 defensivas. Esto NO cambia puntuaciones, verdicts ni `items`, solo qué cuatro cards se imprimen.
+ */
+export function selectCoachingItems(actionable: RaiderEvidenceItem[], limit = 4): RaiderEvidenceItem[] {
+  if (limit <= 0 || actionable.length === 0) return [];
+  if (actionable.length <= limit) return actionable.slice();
+
+  const nonDefensiveCount = actionable.filter((item) => item.kind !== 'defensive').length;
+  const reservedNonDefensive = Math.min(2, nonDefensiveCount, limit);
+  const maxDefensive = Math.max(0, limit - reservedNonDefensive);
+  const selected: RaiderEvidenceItem[] = [];
+  const selectedIds = new Set<string>();
+  let defensiveCount = 0;
+
+  for (const item of actionable) {
+    if (selected.length >= limit) break;
+    if (item.kind === 'defensive' && defensiveCount >= maxDefensive) continue;
+    selected.push(item);
+    selectedIds.add(item.id);
+    if (item.kind === 'defensive') defensiveCount++;
+  }
+
+  if (selected.length < limit) {
+    for (const item of actionable) {
+      if (selected.length >= limit) break;
+      if (selectedIds.has(item.id)) continue;
+      selected.push(item);
+      selectedIds.add(item.id);
+    }
+  }
+  return selected;
+}
+
 export function buildRaiderEvidenceProjection(
   summary: NightPlayerSummary,
   options: RaiderEvidenceProjectionOptions = {},
@@ -594,10 +718,12 @@ export function buildRaiderEvidenceProjection(
   const v2DeathPulls = new Set<string>();
 
   if (canonical) {
+    const mechanicMetadata = buildCanonicalMechanicCoachingMetadata(summary);
     for (const episode of canonical.episodes) {
       if (episode.responseVerdict !== 'missed_ready' && episode.responseVerdict !== 'missed_due_to_mistime') continue;
       if (!evaluatedPullIds.has(episode.pullId)) continue;
-      items.push(canonicalDefensiveItem(episode, spellNameById));
+      const enrichedEpisode = enrichCanonicalEpisodeForCoaching(episode, mechanicMetadata);
+      items.push(canonicalDefensiveItem(enrichedEpisode, spellNameById));
     }
   } else if (v2) {
     const byEpisode = new Map<string, NightDefensiveDecision>();
@@ -844,12 +970,9 @@ export function buildRaiderEvidenceProjection(
       (item.verdict === 'no_verdict' && item.kind === 'defensive'),
   );
   // §"solo aparecen 3 cards y creo que caben 4 (o 5)" (feedback real,
-  // 2026-09-03): subido a 4 — el lienzo es de altura fija con recorte
-  // (.iris-v3-page { overflow: hidden }), así que el view-model añade una
-  // densidad compacta (coachingDensity) para las cards en vez de asumir que
-  // el hueco libre ya alcanza sin más. additionalCoachingCount sigue
-  // reflejando lo que queda fuera de estas 4.
-  const coaching = actionable.slice(0, 4);
+  // 2026-09-03): cuatro huecos fijos, pero la selección es ahora diversa: una sola familia defensiva no puede
+  // expulsar toda la mecánica/preparación accionable. selectCoachingItems no toca verdicts ni scoring.
+  const coaching = selectCoachingItems(actionable, 4);
   const uncertainVisible = coaching.some((item) => item.confidence === 'uncertain');
   // §Frontend cutover: la v3 canvas nunca pasa v2, así que "high" no puede seguir dependiendo solo de su
   // presencia — canonicalStrong exige cobertura completa (state='available'), no solo "hay canonicalDefensive".
