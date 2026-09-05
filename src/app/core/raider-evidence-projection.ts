@@ -367,38 +367,94 @@ function defensivePriority(decision: NightDefensiveDecision): number {
   return 6;
 }
 
-/** Nombres de los spellIds citados por un episodio canónico — §26: coveredBySpellId es solo el ganador
- * representativo determinista, nunca "el único que cubrió"; para mostrar lo usado se recorre usedSpellIds
- * completo. Sin catálogo de nombres disponible aquí más allá de spellNameById (casts WCL reales, no V2), el
- * fallback es `#id`, mismo patrón que cleanSpellName ya usa para V2. */
-function canonicalUsedDefensives(
+/**
+ * Proyección de spells canónicos para coaching. El evaluator ya decidió qué spells sostienen el veredicto:
+ * - missed_ready -> decisiveSpellIds son el/los recursos cuya disponibilidad probada crea el fallo.
+ * - missed_due_to_mistime -> decisiveSpellIds son los recursos vinculados al fallo temporal.
+ *
+ * Nunca volvemos a elegir candidatos mirando `available_unused` ni a recalcular el verdict en frontend. Los
+ * `usedSpellIds` se conservan como contexto, pero si un mismo spell es decisivo en missed_ready prevalece la
+ * etiqueta "available_unused" para no publicar dos chips contradictorios del mismo recurso.
+ */
+function canonicalEpisodeDefensives(
   episode: CanonicalDefensiveEpisodeView,
   spellNameById: ReadonlyMap<number, string> | undefined,
 ): RaiderEvidenceDefensive[] {
-  return episode.usedSpellIds.map((spellId) => ({
-    spellId,
-    name: safeSpellName(spellNameById?.get(spellId) ?? `#${spellId}`),
-    status: 'used' as const,
-  }));
+  const rows: RaiderEvidenceDefensive[] = [];
+  const decisive = new Set(episode.decisiveSpellIds);
+  const decisiveStatus = episode.responseVerdict === 'missed_ready' ? 'available_unused' : 'used';
+
+  for (const spellId of episode.decisiveSpellIds) {
+    rows.push({
+      spellId,
+      name: safeSpellName(spellNameById?.get(spellId) ?? `#${spellId}`),
+      status: decisiveStatus,
+    });
+  }
+  for (const spellId of episode.usedSpellIds) {
+    if (decisive.has(spellId)) continue;
+    rows.push({
+      spellId,
+      name: safeSpellName(spellNameById?.get(spellId) ?? `#${spellId}`),
+      status: 'used',
+    });
+  }
+  return [...new Map(rows.map((row) => [`${row.spellId}|${row.status}`, row])).values()];
+}
+
+function canonicalDecisiveNames(
+  episode: CanonicalDefensiveEpisodeView,
+  spellNameById: ReadonlyMap<number, string> | undefined,
+): string | null {
+  if (!episode.decisiveSpellIds.length) return null;
+  return episode.decisiveSpellIds
+    .map((spellId) => safeSpellName(spellNameById?.get(spellId) ?? `#${spellId}`))
+    .join(' / ');
 }
 
 /** Copy humano para los dos únicos responseVerdict que generan coaching accionable (§76 — nunca mostrar
- * covered_verified/missed_ready/uncertain/etc. en crudo al raider). */
+ * covered_verified/missed_ready/uncertain/etc. en crudo al raider). El texto se limita a proyectar el verdict
+ * y sus decisiveSpellIds ya persistidos; no reinterpreta candidates ni crea una segunda decisión. */
 function canonicalDefensiveItem(
   episode: CanonicalDefensiveEpisodeView,
   spellNameById: ReadonlyMap<number, string> | undefined,
 ): RaiderEvidenceItem {
   const mechanic = episode.mechanicName ?? 'esta ventana defensiva';
   const isMistimed = episode.responseVerdict === 'missed_due_to_mistime';
+  const decisiveNames = canonicalDecisiveNames(episode, spellNameById);
   const title = isMistimed ? 'Mal timing demostrado' : 'CD disponible sin cubrir';
   const observation = isMistimed
-    ? `El uso previo de tu defensivo demostrablemente no llegó a cubrir ${mechanic}.`
-    : episode.usageEngaged
-      ? `Usaste algo durante ${mechanic}, pero ninguna acción cubrió la ventana; tenías un cooldown listo sin usar.`
-      : `Tenías un cooldown listo para ${mechanic} y no se usó.`;
+    ? decisiveNames
+      ? `El uso de ${decisiveNames} no mantuvo cobertura en el momento decisivo de ${mechanic}.`
+      : `El uso previo de tu defensivo demostrablemente no llegó a cubrir ${mechanic}.`
+    : decisiveNames
+      ? episode.usageEngaged
+        ? `Hubo uso defensivo durante ${mechanic}, pero la ventana quedó sin cobertura; ${decisiveNames} fue la respuesta que IRIS confirmó disponible en el momento decisivo.`
+        : `${decisiveNames} estaba disponible como respuesta válida para ${mechanic}, pero la ventana quedó sin cobertura.`
+      : episode.usageEngaged
+        ? `Usaste algo durante ${mechanic}, pero ninguna acción cubrió la ventana; había un cooldown listo sin usar.`
+        : `Había un cooldown listo para ${mechanic} y no se usó.`;
+  const whyItMatters = isMistimed
+    ? decisiveNames
+      ? `IRIS vinculó el fallo de timing a ${decisiveNames}; el veredicto procede de la evidencia temporal canónica de este episodio.`
+      : 'IRIS demostró un fallo de timing defensivo en esta ventana mediante la evidencia temporal canónica del episodio.'
+    : decisiveNames
+      ? `IRIS verificó que ${decisiveNames} era una respuesta aplicable y estaba disponible en el momento evaluado; esa evidencia sostiene este fallo.`
+      : 'IRIS verificó una respuesta defensiva aplicable y disponible en el momento evaluado; esa evidencia sostiene este fallo.';
   const action = isMistimed
-    ? `Ajusta el timing de tu defensivo para que siga activo cuando llegue ${mechanic}.`
-    : `Ejecuta tu cooldown en cuanto veas venir ${mechanic}; estaba disponible y no se usó.`;
+    ? decisiveNames
+      ? `Ajusta el timing de ${decisiveNames} para que su efecto coincida con la ventana de ${mechanic}.`
+      : `Ajusta el timing de tu defensivo para que siga activo cuando llegue ${mechanic}.`
+    : decisiveNames
+      ? `Usa ${decisiveNames} como respuesta a ${mechanic}; IRIS lo identificó como disponible y aplicable en esta oportunidad.`
+      : `Ejecuta tu cooldown como respuesta a ${mechanic}; estaba disponible y no se usó.`;
+  const preventionKey = isMistimed
+    ? decisiveNames
+      ? `Alinea ${decisiveNames} con el momento decisivo de la ventana.`
+      : 'Guarda margen de timing antes del impacto.'
+    : decisiveNames
+      ? `No dejes ${decisiveNames} disponible sin usar en esta oportunidad.`
+      : 'No dejes el cooldown listo sin usar.';
   return {
     id: `defensive|canonical|${episode.episodeId}`,
     kind: 'defensive',
@@ -416,12 +472,12 @@ function canonicalDefensiveItem(
     verdict: 'confirmed_error',
     reasonCode: episode.responseVerdict === 'missed_ready' ? 'DEFENSIVE_READY_NOT_USED' : 'DEFENSIVE_MISTIMED',
     observation,
-    whyItMatters: null,
+    whyItMatters,
     action,
-    preventionKey: isMistimed ? 'Guarda margen de timing antes del impacto.' : 'No dejes el cooldown listo sin usar.',
+    preventionKey,
     mechanicDescription: episode.mechanicDescription,
     resolutionText: episode.mechanicResolution,
-    defensives: canonicalUsedDefensives(episode, spellNameById),
+    defensives: canonicalEpisodeDefensives(episode, spellNameById),
     confidence: episode.confidence === 'verified' ? 'verified' : episode.confidence === 'inferred' ? 'inferred' : 'uncertain',
     occurrences: [{ pullId: episode.pullId, pullNumber: episode.pullNumber, atMs: episode.peakMs }],
     provenance: [
