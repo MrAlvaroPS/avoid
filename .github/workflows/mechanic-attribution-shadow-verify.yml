@@ -88,6 +88,8 @@ jobs:
         run: npm run verify:causal-schema
 
       - name: Verify causal runtime
+        env:
+          DENO_NODE_MODULES_DIR: auto
         run: npm run verify:causal-runtime
 
       - name: Angular build
