@@ -111,13 +111,27 @@ export function defensiveScoreabilityViolationsV6(
   }));
 }
 
-/** Invariant used by the Shadow runner: a same-pull WCL self-cast is positive acquisition evidence. */
+/**
+ * Invariant used by the Shadow runner: a stable active same-pull WCL self-cast
+ * is positive acquisition evidence. Runtime-conditioned replacements/variants
+ * are deliberately excluded here for the exact same reason they are excluded
+ * by computeDemonstratedPersistentCastSpellIds(): observing the runtime spell
+ * proves that runtime state occurred, not that the static build owns that
+ * identity persistently.
+ */
 export function observedSelfCastAcquisitionViolationsV6(
   resolvedDefensives: readonly ResolvedDefensive[],
   liveSpellIds: readonly number[],
 ): DefensiveScoreabilityViolation[] {
   const live = new Set(liveSpellIds);
   return resolvedDefensives
-    .filter((r) => live.has(r.spellId) && r.semanticStatus === 'verified' && r.buildPresence !== 'present')
+    .filter((r) =>
+      live.has(r.spellId) &&
+      r.semanticStatus === 'verified' &&
+      r.activationMode === 'active' &&
+      Array.isArray(r.unresolvedRuntimeRules) &&
+      r.unresolvedRuntimeRules.length === 0 &&
+      r.buildPresence !== 'present'
+    )
     .map((r) => ({ spellId: r.spellId, error: `same-pull WCL cast observed but buildPresence=${r.buildPresence}` }));
 }
