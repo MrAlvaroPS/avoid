@@ -1,9 +1,13 @@
 import { defensiveSemanticError } from './defensive-classification-semantics.ts';
 import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
-import type { ResolvedDefensive } from './effective-defensives.ts';
+import {
+  EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
+  EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION,
+  type ResolvedDefensive,
+} from './effective-defensives.ts';
 
-export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V6 = 'effective-defensives@2.3.0';
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V6 = 'effective-defensive-semantics@1.5.0';
+export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V6 = EFFECTIVE_DEFENSIVE_RESOLVER_VERSION;
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V6 = EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION;
 export const DEFENSIVE_EPISODE_EVALUATOR_VERSION_V6 = 'episode-evaluator@6';
 
 export interface ObservedCastEvidenceV6 {
