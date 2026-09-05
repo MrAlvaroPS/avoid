@@ -24,6 +24,8 @@ import type {
   PullEvidenceRef,
 } from '../shared/models/night-player-audit';
 
+export type NightPlayerDefensiveResponseVerdict = ResponseVerdict;
+
 export type NightPlayerDefensiveAuditIntegrity =
   | 'complete'
   | 'partial'
@@ -43,7 +45,7 @@ export interface NightPlayerDefensiveEpisodeAudit {
   dominantAbilityGameId: number | null;
   usageEngaged: boolean;
   usageEvaluable: boolean;
-  responseVerdict: ResponseVerdict;
+  responseVerdict: NightPlayerDefensiveResponseVerdict;
   responseReason: string;
   responseEvaluable: boolean;
   covered: boolean;
@@ -61,7 +63,7 @@ export interface NightPlayerDefensiveEpisodeAudit {
 export interface NightPlayerUnresolvedDefensiveEpisode {
   episodeId: string;
   pullId: string;
-  responseVerdict: ResponseVerdict;
+  responseVerdict: NightPlayerDefensiveResponseVerdict;
   reason: string;
 }
 
@@ -210,7 +212,7 @@ export function buildNightPlayerDefensiveAudit(args: {
   summary: CanonicalDefensiveSummary;
 }): NightPlayerDefensiveAudit {
   const { reportCode, playerName, ledger, summary } = args;
-  const integrityIssues = [...summary.integrityIssues];
+  const integrityIssues = [...ledger.integrityIssues, ...summary.integrityIssues];
   const rowByPullId = new Map(ledger.rows.map((row) => [row.pull.pullId, row]));
   const episodes: NightPlayerDefensiveEpisodeAudit[] = [];
   const unresolvedEpisodes: NightPlayerUnresolvedDefensiveEpisode[] = [];
@@ -231,6 +233,13 @@ export function buildNightPlayerDefensiveAudit(args: {
     }
   }
 
+  episodes.sort(
+    (left, right) =>
+      left.pull.fightId - right.pull.fightId ||
+      left.peakMs - right.peakMs ||
+      left.episodeId.localeCompare(right.episodeId),
+  );
+
   if (unresolvedEpisodes.length) {
     integrityIssues.push(
       `${unresolvedEpisodes.length} episodio(s) defensivo(s) canónicos no tienen una referencia de pull auditable; los KPI no se recalculan, pero su evidencia no puede deep-linkearse desde esta superficie.`,
@@ -238,7 +247,10 @@ export function buildNightPlayerDefensiveAudit(args: {
   }
 
   const sourceVersion = canonicalSourceVersion(summary.generation);
-  const scopePullIds = ledger.rows.map((row) => row.pull.pullId);
+  const scopePullIds = [
+    ...ledger.rows.map((row) => row.pull.pullId),
+    ...ledger.excludedParticipatedPulls.map((row) => row.pullId),
+  ];
   const scope = { reportCode, playerName, pullIds: scopePullIds } as const;
   const coverage = { expected: summary.coverage.expectedPulls, observed: summary.coverage.evaluatedPulls };
 
@@ -270,11 +282,7 @@ export function buildNightPlayerDefensiveAudit(args: {
     id: 'defensive.usage',
     label: 'Uso defensivo',
     value: summary.usage.score,
-    status: claimStatus(
-      summary.state,
-      summary.usage.status === 'available',
-      usageEvidenceComplete,
-    ),
+    status: claimStatus(summary.state, summary.usage.status === 'available', usageEvidenceComplete),
     scope,
     definition:
       'Episodios defensivos evaluables en los que el jugador se implicó defensivamente. Un episodio cuenta como máximo una vez.',
