@@ -27,8 +27,10 @@ export type MechanicAttributionSource =
   | 'unsupported_personal_category';
 
 export interface MechanicAttributionInput {
-  category: string | null | undefined;
-  responsibility: string | null | undefined;
+  /** Opcional porque fixtures y noches históricas pueden no traer todavía el campo. */
+  category?: string | null;
+  /** Opcional porque responsibility se materializó después que category. */
+  responsibility?: string | null;
 }
 
 export interface MechanicAttributionDecision {
