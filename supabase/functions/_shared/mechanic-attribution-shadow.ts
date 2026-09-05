@@ -30,7 +30,7 @@ export const MECHANIC_ATTRIBUTION_SHADOW_REASONS = [
   'ROLE_RESPONSIBILITY_ONLY',
   'NO_PUNITIVE_SCOPE',
   'DIRECT_PERSONAL_AVOIDABLE_GROUND',
-  'SINGLE_PERSONAL_TARGET',
+  'PERSONAL_TARGET_REQUIRES_RESPONSE_EVIDENCE',
   'ASSIGNED_PLAYER_VERIFIED',
   'ASSIGNMENT_NOT_MATERIALIZED',
   'MULTI_ACTOR_PERSONAL_FAMILY_REQUIRES_OWNERSHIP',
@@ -167,8 +167,10 @@ function decision(
  * It is non-punitive and monotonic relative to Attribution Safety v1:
  * - role/raid responsibility may be classified but never assigned to a player;
  * - spread/soak remain unresolved without carrier/participation evidence;
- * - explicit personal avoidable-ground and a single personal target can be
- *   verified because the same player is already a Safety-v1 candidate;
+ * - personal-target remains unresolved until its required response can be
+ *   proved (being selected/hit is not itself proof of failure);
+ * - explicit personal avoidable-ground may verify only actors already allowed
+ *   by Safety v1;
  * - no output can create a new player accusation.
  */
 export function evaluateMechanicAttributionShadow(
@@ -375,13 +377,13 @@ export function evaluateMechanicAttributionShadow(
     );
   }
 
-  if (input.category === 'personal-target' && safetyV1Players.length === 1) {
+  if (input.category === 'personal-target') {
     return decision(
-      'verified',
-      'SINGLE_PERSONAL_TARGET',
+      'unresolved',
+      'PERSONAL_TARGET_REQUIRES_RESPONSE_EVIDENCE',
+      [],
       safetyV1Players,
-      safetyV1Players,
-      combinedConfidence,
+      'uncertain',
       semanticEvidence,
     );
   }
