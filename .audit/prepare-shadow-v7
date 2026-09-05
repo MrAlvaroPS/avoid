@@ -1,0 +1,1 @@
+Derive the v7 immutable runner from the reviewed v6 runner with only evaluator-version and predecessor changes.
