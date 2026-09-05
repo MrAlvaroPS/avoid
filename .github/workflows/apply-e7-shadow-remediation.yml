@@ -27,6 +27,9 @@ jobs:
       - name: Targeted regression tests
         run: npx vitest run src/app/shared/effective-defensives.spec.ts src/app/shared/defensive-episode-evaluator.spec.ts
 
+      - name: Enable Deno nodeModules auto mode for verifier
+        run: printf '{"nodeModulesDir":"auto"}\n' > deno.json
+
       - name: Canonical defensive contract checks
         run: |
           npm run verify:defensive-contract
@@ -57,6 +60,7 @@ jobs:
 
       - name: Commit integrated patch
         run: |
+          rm -f deno.json
           rm -f scripts/apply-e7-shadow-remediation.py
           rm -f scripts/apply-e7-shadow-remediation-v2.py
           rm -f .github/workflows/apply-e7-shadow-remediation.yml
