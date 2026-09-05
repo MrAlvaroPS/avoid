@@ -1,29 +1,7 @@
 // §E4 (iris-defensive-canonicalization-v1-plan.md — Episode Evaluator,
-// "TIMING: remove the mechanism heuristic"): hasta E3.6 la ventana temporal
-// de un candidato se decidía mirando `mechanisms` ("sustain" → 3s de gracia
-// tras el episodio, cualquier otra cosa → el cast debía caer dentro del
-// propio tramo). Eso es un atajo, no el contrato real — `ResolvedDefensive.
-// applicability.timingRelation` (defensive-applicability.ts) YA es la fuente
-// de verdad de cuándo un defensivo puede cubrir daño (before_or_during /
-// after_damage / either / continuous_state / unknown), puesta ahí desde v10
-// de classify-defensives. Este módulo es el evaluador temporal PURO y único
-// que la sustituye.
-//
-// Deliberadamente separa TRES preguntas que el contrato viejo colapsaba en
-// un único booleano:
-//  - engagement: ¿hubo una activación real del jugador en la ventana de
-//    decisión/efecto relevante? Una aura observada demuestra cobertura, pero
-//    NO inventa Usage si no puede vincularse a un cast del mismo jugador.
-//  - opportunity: ¿pudo este defensivo, en principio, ser una oportunidad
-//    legítima para este episodio, solo por su relación temporal? (no mira
-//    ningún cast concreto).
-//  - castCoverage: ¿el/los cast(s) o el estado observado demuestran cobertura
-//    de ESTE episodio? Cobertura observada y activación son claims distintos.
-//
-// Nunca fabrica certeza: sin duración conocida, sin intervalo de efecto
-// observado, o con timingRelation null/unknown, degrada a 'unknown' en vez
-// de adivinar — la falsa incertidumbre es aceptable en shadow, un falso
-// missed_ready/covered_verified no lo es.
+// "TIMING: remove the mechanism heuristic"): este módulo es el evaluador
+// temporal puro y único. Separa activación, oportunidad y cobertura para no
+// convertir una señal parcial en una certeza causal.
 
 import type { TimingRelation } from './defensive-applicability.ts';
 
@@ -48,17 +26,12 @@ export interface TemporalEpisodeWindow {
 }
 
 export interface TemporalCoverageInput {
-  /** ResolvedDefensive.applicability?.timingRelation — null cuando no hay applicability en absoluto. */
   timingRelation: TimingRelation | null;
   effectiveDurationMs: number | null;
-  /** Timestamps de cast de ESTE spell — no se asume ordenado ni deduplicado, ver normalizeCastTimestamps. */
   castsForSpellMs: readonly number[];
   episode: TemporalEpisodeWindow;
-  /** Timestamps de daño crudo que realmente pertenecen al episodio. after_damage se ancla a estos hits, no al borde agregado del episodio. */
   damageTimestampsMs?: readonly number[];
-  /** Política explícita del Episode Evaluator (§5.2) — persistida como evidencia, nunca un magic number oculto. */
   afterDamageResponseWindowMs: number;
-  /** Cutoff de evaluación (wipe call) — la ventana de gracia reactiva nunca se extiende más allá de esto. null = sin cutoff conocido. */
   evaluationEndMs: number | null;
   observedActiveIntervals?: readonly ObservedEffectInterval[];
 }
@@ -78,10 +51,13 @@ interface CoreResult {
   evidence?: Record<string, unknown>;
 }
 
-/** Normaliza timestamps de cast UNA vez antes de cualquier evaluación de disponibilidad/causalidad (§9). */
 export function normalizeCastTimestamps(timestamps: readonly number[]): number[] {
   const finite = timestamps.filter((t) => Number.isFinite(t));
   return [...new Set(finite)].sort((a, b) => a - b);
+}
+
+function intervalCoversTimestamp(interval: ObservedEffectInterval, timestampMs: number): boolean {
+  return timestampMs >= interval.startMs && (interval.endMs == null || timestampMs <= interval.endMs);
 }
 
 function intervalCoveringPeak(
@@ -89,16 +65,9 @@ function intervalCoveringPeak(
   peakMs: number,
 ): ObservedEffectInterval | null {
   if (!intervals?.length) return null;
-  return intervals.find((interval) => peakMs >= interval.startMs && (interval.endMs == null || peakMs <= interval.endMs)) ?? null;
+  return intervals.find((interval) => intervalCoversTimestamp(interval, peakMs)) ?? null;
 }
 
-/**
- * A Buffs interval is coverage evidence, not automatically activation evidence.
- * We credit Usage from an observed interval only when a same-spell player cast
- * can be associated with the aura application. This prevents derived/passive
- * auras (e.g. Shield of Vengeance-like effects) from becoming phantom button
- * presses while preserving Barrier/Bear Form when WCL also reports their cast.
- */
 function castsEstablishingInterval(
   casts: readonly number[],
   interval: ObservedEffectInterval,
@@ -112,7 +81,23 @@ function castsEstablishingInterval(
   return normalized.filter((t) => t <= interval.startMs && t + effectiveDurationMs >= interval.startMs);
 }
 
-/** §5.1 — proactivo: coverage demostrada cuando el efecto está activo en el pico. */
+/**
+ * Relaciona un cast con la trayectoria de aura observada. Además del apply
+ * tolerado, un cast puede ocurrir dentro de un intervalo ya abierto (refresh).
+ * Si WCL demuestra que ese intervalo terminó antes del pico, esa evidencia
+ * negativa es más fuerte que la duración máxima teórica del tooltip.
+ */
+function observedIntervalsForCast(
+  intervals: readonly ObservedEffectInterval[],
+  castMs: number,
+): ObservedEffectInterval[] {
+  const applyToleranceMs = 1500;
+  return intervals.filter((interval) =>
+    castMs >= interval.startMs - applyToleranceMs &&
+    (interval.endMs == null || castMs <= interval.endMs + applyToleranceMs)
+  );
+}
+
 function beforeOrDuring(input: TemporalCoverageInput): CoreResult {
   const observedInterval = intervalCoveringPeak(input.observedActiveIntervals, input.episode.peakMs);
   if (observedInterval) {
@@ -133,7 +118,8 @@ function beforeOrDuring(input: TemporalCoverageInput): CoreResult {
 
   const lookbackMs = input.effectiveDurationMs ?? 0;
   const lowerBound = input.episode.startMs - lookbackMs;
-  const relevantCasts = input.castsForSpellMs.filter((t) => t <= input.episode.endMs && t >= lowerBound);
+  const relevantCasts = normalizeCastTimestamps(input.castsForSpellMs)
+    .filter((t) => t <= input.episode.endMs && t >= lowerBound);
   if (!relevantCasts.length) {
     return {
       engagement: false,
@@ -142,6 +128,7 @@ function beforeOrDuring(input: TemporalCoverageInput): CoreResult {
       evidence: { activationProvenance: 'none' satisfies ActivationProvenance },
     };
   }
+
   const prePeakCasts = relevantCasts.filter((t) => t <= input.episode.peakMs);
   if (!prePeakCasts.length) {
     return {
@@ -159,18 +146,98 @@ function beforeOrDuring(input: TemporalCoverageInput): CoreResult {
       evidence: { activationProvenance: 'player_cast' satisfies ActivationProvenance, relevantCasts },
     };
   }
-  const covered = prePeakCasts.some((t) => t + input.effectiveDurationMs! >= input.episode.peakMs);
+
+  const theoreticallyCoveringCasts = prePeakCasts.filter(
+    (t) => t + input.effectiveDurationMs! >= input.episode.peakMs,
+  );
+  if (!theoreticallyCoveringCasts.length) {
+    return {
+      engagement: true,
+      castCoverage: 'no',
+      reason: 'El cast expiró (según su duración efectiva) antes del pico.',
+      evidence: {
+        activationProvenance: 'player_cast' satisfies ActivationProvenance,
+        relevantCasts,
+        prePeakCasts,
+      },
+    };
+  }
+
+  const observedIntervals = input.observedActiveIntervals ?? [];
+  if (observedIntervals.length) {
+    const contradictedCasts: number[] = [];
+    const unresolvedCasts: number[] = [];
+
+    for (const castMs of theoreticallyCoveringCasts) {
+      const associated = observedIntervalsForCast(observedIntervals, castMs);
+      if (associated.some((interval) => intervalCoversTimestamp(interval, input.episode.peakMs))) {
+        return {
+          engagement: true,
+          castCoverage: 'yes',
+          reason: 'La trayectoria de aura observada asociada al cast demuestra el efecto activo en el pico.',
+          evidence: {
+            activationProvenance: 'player_cast_and_observed_aura' satisfies ActivationProvenance,
+            relevantCasts,
+            prePeakCasts,
+            theoreticallyCoveringCasts,
+            observedIntervals: associated,
+          },
+        };
+      }
+
+      if (associated.length && associated.every((interval) => interval.endMs != null && interval.endMs < input.episode.peakMs)) {
+        contradictedCasts.push(castMs);
+      } else {
+        unresolvedCasts.push(castMs);
+      }
+    }
+
+    if (!unresolvedCasts.length) {
+      return {
+        engagement: true,
+        castCoverage: 'no',
+        reason: 'WCL demuestra que el efecto observado terminó antes del pico; la duración máxima teórica no puede resucitarlo.',
+        evidence: {
+          activationProvenance: 'player_cast' satisfies ActivationProvenance,
+          relevantCasts,
+          prePeakCasts,
+          theoreticallyCoveringCasts,
+          contradictedCasts,
+          observedActiveIntervals: observedIntervals,
+          observedNegativePrecedence: true,
+        },
+      };
+    }
+
+    return {
+      engagement: true,
+      castCoverage: 'unknown',
+      reason: 'Existe evidencia de aura observada para este spell, pero no permite vincular todos los casts teóricamente cubrientes; se evita fabricar cobertura por duración máxima.',
+      evidence: {
+        activationProvenance: 'player_cast' satisfies ActivationProvenance,
+        relevantCasts,
+        prePeakCasts,
+        theoreticallyCoveringCasts,
+        contradictedCasts,
+        unresolvedCasts,
+        observedActiveIntervals: observedIntervals,
+      },
+    };
+  }
+
   return {
     engagement: true,
-    castCoverage: covered ? 'yes' : 'no',
-    reason: covered
-      ? 'El cast, sumada su duración efectiva, sigue activo en el pico.'
-      : 'El cast expiró (según su duración efectiva) antes del pico.',
-    evidence: { activationProvenance: 'player_cast' satisfies ActivationProvenance, relevantCasts, prePeakCasts },
+    castCoverage: 'yes',
+    reason: 'Sin trayectoria de aura observada que lo contradiga, el cast y su duración efectiva conocida cubren el pico.',
+    evidence: {
+      activationProvenance: 'player_cast' satisfies ActivationProvenance,
+      relevantCasts,
+      prePeakCasts,
+      theoreticallyCoveringCasts,
+    },
   };
 }
 
-/** §5.2 — reactivo: ventana explícita y versionada tras el daño, nunca un heurístico por nombre de mechanism. */
 function afterDamage(input: TemporalCoverageInput): CoreResult {
   const cutoff = input.evaluationEndMs ?? Number.POSITIVE_INFINITY;
   const damageTimestamps = normalizeCastTimestamps(input.damageTimestampsMs ?? []);
@@ -198,7 +265,6 @@ function afterDamage(input: TemporalCoverageInput): CoreResult {
     };
   }
 
-  // Compatibility fallback for pure callers/tests that do not have raw hits.
   const windowEndMs = Math.min(
     input.episode.endMs + input.afterDamageResponseWindowMs,
     cutoff,
@@ -220,7 +286,6 @@ function afterDamage(input: TemporalCoverageInput): CoreResult {
   };
 }
 
-/** §5.3 — cualquiera de las dos rutas basta; nunca exige ambas. */
 function either(input: TemporalCoverageInput): CoreResult {
   const proactive = beforeOrDuring(input);
   const reactive = afterDamage(input);
@@ -237,7 +302,6 @@ function either(input: TemporalCoverageInput): CoreResult {
   };
 }
 
-/** §5.4 — continuous state: aura puede demostrar cobertura; Usage exige activación vinculable. */
 function continuousState(input: TemporalCoverageInput): CoreResult {
   const observedInterval = intervalCoveringPeak(input.observedActiveIntervals, input.episode.peakMs);
   if (observedInterval) {
@@ -268,7 +332,6 @@ function continuousState(input: TemporalCoverageInput): CoreResult {
   };
 }
 
-/** §5.5 — un cast real puede acreditar Uso, pero el timing nunca se adivina. */
 function unknownRelation(input: TemporalCoverageInput): CoreResult {
   const relevantCasts = input.castsForSpellMs.filter((t) => t >= input.episode.startMs && t <= input.episode.endMs);
   return {
@@ -282,7 +345,6 @@ function unknownRelation(input: TemporalCoverageInput): CoreResult {
   };
 }
 
-/** Evaluador temporal puro único. */
 export function evaluateTemporalCoverage(input: TemporalCoverageInput): TemporalCoverageResult {
   let opportunity: TemporalTriState;
   let core: CoreResult;
