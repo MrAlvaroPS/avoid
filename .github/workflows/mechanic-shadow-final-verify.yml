@@ -1,0 +1,33 @@
+name: Verify canonical mechanic shadow final
+on:
+  push:
+    branches:
+      - feature/mechanic-attribution-canonical-shadow-v1
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm ci
+      - name: Focused mechanic tests
+        run: >-
+          npx vitest run
+          src/app/shared/mechanic-attribution.spec.ts
+          src/app/shared/mechanic-attribution-shadow.spec.ts
+          src/app/shared/mechanic-event-attribution.spec.ts
+          src/app/shared/mechanic-event-materialization.spec.ts
+          src/app/shared/mechanic-occurrence-event-resolver.spec.ts
+          src/app/shared/mechanic-occurrence-ownership.spec.ts
+          src/app/shared/pull-consistency.util.spec.ts
+      - run: npm run verify:causal-schema
+      - run: npm run verify:causal-runtime
+      - run: npm run build
