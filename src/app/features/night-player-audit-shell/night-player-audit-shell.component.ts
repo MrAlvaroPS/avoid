@@ -5,6 +5,7 @@ import {
   type NightPlayerClaimId,
 } from '../../shared/night-player-claim-registry';
 import type { AuditSourceKind } from '../../shared/models/night-player-audit';
+import { NightPlayerPullLedgerComponent } from './night-player-pull-ledger.component';
 
 interface ProvenanceRow {
   id: NightPlayerClaimId;
@@ -50,7 +51,7 @@ const SOURCE_META: Record<AuditSourceKind, SourceMeta> = {
 @Component({
   selector: 'app-night-player-audit-shell',
   standalone: true,
-  imports: [RouterLink],
+  imports: [RouterLink, NightPlayerPullLedgerComponent],
   templateUrl: './night-player-audit-shell.component.html',
   styleUrl: './night-player-audit-shell.component.scss',
 })
