@@ -26,6 +26,8 @@ const ingestionRecoveryMigration = '20260902160000_pull_ingestion_recovery.sql';
 const ingestionRecoverySql = readFileSync(join(migrationDir, ingestionRecoveryMigration), 'utf8');
 const ingestionHardeningMigration = '20260903070000_harden_pull_ingestion_recovery.sql';
 const ingestionHardeningSql = readFileSync(join(migrationDir, ingestionHardeningMigration), 'utf8');
+const mechanicAttributionShadowMigration = '20260905233000_mechanic_attribution_canonical_shadow_v1.sql';
+const mechanicAttributionShadowSql = readFileSync(join(migrationDir, mechanicAttributionShadowMigration), 'utf8');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -67,8 +69,20 @@ assert(occurrenceSql.includes('occurrence_index integer not null check (occurren
 assert(occurrenceSql.includes("check (not penalty_eligible or confidence in ('verified', 'inferred'))"), 'Responsibility permite penalizar confianza no fiable.');
 assert(occurrenceSql.includes("check (relationship <> 'collateral_victim' or not penalty_eligible)"), 'Una víctima colateral podría quedar penalizada.');
 
+assert(mechanicAttributionShadowSql.includes('create table if not exists mechanic_attribution_shadow_evaluations'), 'El shadow canónico no crea su tabla aditiva.');
+assert(mechanicAttributionShadowSql.includes('alter table mechanic_attribution_shadow_evaluations enable row level security'), 'El shadow canónico no activa RLS.');
+assert(mechanicAttributionShadowSql.includes('on mechanic_attribution_shadow_evaluations for select using (is_officer())'), 'El shadow canónico no limita lectura a officers.');
+assert(mechanicAttributionShadowSql.includes('cardinality(new_accusation_players) = 0'), 'El schema shadow no impide crear acusaciones nuevas.');
+assert(mechanicAttributionShadowSql.includes('with (security_invoker = true)'), 'La vista de reporte shadow no respeta RLS del invocador.');
+const attributionShadowEvaluator = readFileSync(join(root, 'supabase', 'functions', 'evaluate-mechanic-attribution-shadow', 'index.ts'), 'utf8');
+assert(attributionShadowEvaluator.includes('MECHANIC_ATTRIBUTION_SHADOW_VERSION'), 'El evaluator shadow no persiste versión explícita.');
+assert(attributionShadowEvaluator.includes('newAccusationCount !== 0'), 'El evaluator shadow no aplica el gate runtime de cero acusaciones nuevas.');
+
+
 const occurrenceEvaluator = readFileSync(join(root, 'supabase', 'functions', 'evaluate-mechanic-occurrences', 'index.ts'), 'utf8');
-assert(/occurrence_index:\s*1\b/.test(occurrenceEvaluator), 'El evaluator debe usar un occurrence_index positivo.');
+assert(occurrenceEvaluator.includes('resolveEventBackedMechanicOccurrences'), 'Occurrences siguen usando el placeholder y no el resolver event-backed.');
+assert(occurrenceEvaluator.includes('EVENT_BACKED_OCCURRENCE_RESOLVER_VERSION'), 'Occurrences no persisten identidad explícita del resolver v2.');
+assert(occurrenceEvaluator.includes(".from('applicable_pull_mechanic_events')"), 'Occurrences v2 no parten de eventos reales aplicables del pull.');
 assert(
   occurrenceEvaluator.includes("onConflict: 'pull_id,mechanic_key,occurrence_index,occurrence_resolver_version'"),
   'El UPSERT de occurrences no coincide con el unique versionado de M13.',
