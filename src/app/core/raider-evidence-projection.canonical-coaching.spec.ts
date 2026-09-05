@@ -205,7 +205,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
     expect(item?.mechanicDescription).toBeNull();
   });
 
-  it('si hay resolución revisada pero no nota, no repite Barkskin: usa la resolución como conocimiento y la acción personal en Cómo resolver', () => {
+  it('si hay resolución revisada pero no nota, mantiene la táctica en Cómo resolver y no la sustituye por el defensivo', () => {
     const projection = buildRaiderEvidenceProjection(
       summary({
         defensiveSummary: {
@@ -235,10 +235,11 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
 
     const item = projection.items.find((row) => row.id === 'defensive|canonical|episode-1');
     expect(item?.mechanicName).toBe('Plague Froth');
-    expect(item?.whyItMatters).toContain('La resolución revisada de Plague Froth');
-    expect(item?.whyItMatters).toContain('Los objetivos se separan');
-    expect(item?.resolutionText).toContain('Usa Barkskin como respuesta a Plague Froth');
-    expect(item?.preventionKey).toContain('Barkskin');
+    expect(item?.whyItMatters).toContain('Plague Froth tiene una resolución táctica revisada');
+  expect(item?.whyItMatters).toContain('Los objetivos se separan');
+  expect(item?.resolutionText).toBe('Los objetivos se separan y orientan las líneas lejos de la raid.');
+  expect(item?.resolutionText).not.toContain('Barkskin');
+  expect(item?.preventionKey).toContain('Barkskin');
   });
 
   it('no hace fallback por nombre/timing si boss+dificultad+abilityId no coinciden exactamente', () => {
@@ -322,6 +323,41 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
     expect(projection.coaching.filter((item) => item.kind === 'mechanic')).toHaveLength(2);
     expect(projection.additionalCoachingCount).toBe(2);
   });
+
+  it('en una card puramente mecánica combina contexto + impacto y genera prevención desde la resolución revisada', () => {
+  const projection = buildRaiderEvidenceProjection(
+    summary({
+      mechanicFails: [
+        {
+          pullId: 'pull-1',
+          bossId: 'boss-1',
+          bossName: 'The Coiled Altar',
+          difficulty: 'Heroic',
+          pullNumber: 1,
+          mechanicName: 'Axegrinder',
+          mechanicId: 900010,
+          category: 'avoidable-ground',
+          outcome: 'fail',
+          timeMs: 69_000,
+          damageTaken: 1_417_944,
+          aiNote: 'Axegrinder lanza hachas que recorren la sala y se evitan por posicionamiento.',
+          comparisonSource: 'fixed_threshold',
+          comparisonPercentile: null,
+          resolution: 'Esquiva los puntos de impacto y no cruces la trayectoria de las hachas que recorren la sala.',
+        },
+      ],
+    }),
+    { defensiveManagementV2: null, canonicalDefensive: canonical([]) },
+  );
+
+  const item = projection.items.find((row) => row.id === 'mechanic|boss-1|Heroic|900010');
+  expect(item?.defensives).toEqual([]);
+  expect(item?.whyItMatters).toContain('Axegrinder lanza hachas');
+  expect(item?.whyItMatters).toContain('1.417.944 de daño');
+  expect(item?.resolutionText).toContain('Esquiva los puntos de impacto');
+  expect(item?.preventionKey).toContain('Esquiva los puntos de impacto');
+  expect(item?.preventionKey).not.toBe('—');
+});
 
   it('permite cuatro cards defensivas si realmente no existe otro coaching accionable', () => {
     const episodes = [1, 2, 3, 4, 5].map((index) =>

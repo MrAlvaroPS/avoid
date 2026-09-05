@@ -482,6 +482,23 @@ function enrichCanonicalEpisodeForCoaching(
   };
 }
 
+/** Compacta copy revisado sin cambiar su significado: solo normaliza espacios y corta en un límite visual. */
+function compactCoachingText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  const candidate = normalized.slice(0, maxLength + 1);
+  const wordBoundary = candidate.lastIndexOf(' ');
+  const cutAt = wordBoundary >= Math.floor(maxLength * 0.65) ? wordBoundary : maxLength;
+  return `${candidate.slice(0, cutAt).replace(/[,:;\s]+$/, '')}…`;
+}
+
+/** "Prevención clave" deriva solo de la primera instrucción ya revisada de `resolution`. */
+function preventionFromResolution(resolution: string): string {
+  const normalized = resolution.replace(/\s+/g, ' ').trim();
+  const firstSentence = normalized.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? normalized;
+  return compactCoachingText(firstSentence, 110);
+}
+
 /** Copy humano para los dos únicos responseVerdict que generan coaching accionable (§76 — nunca mostrar
  * covered_verified/missed_ready/uncertain/etc. en crudo al raider). El texto se limita a proyectar el verdict
  * y sus decisiveSpellIds ya persistidos; no reinterpreta candidates ni crea una segunda decisión. */
@@ -529,15 +546,15 @@ function canonicalDefensiveItem(
 
   const mechanicDescription = episode.mechanicDescription?.trim() || null;
   const mechanicResolution = episode.mechanicResolution?.trim() || null;
-  // En una card defensiva, "Qué sabemos" debe explicar la mecánica cuando existe metadata revisada, no repetir
-  // por cuarta vez el estado del cooldown. Si no hay nota pero sí resolución, se publica como conocimiento
-  // revisado; la franja "Cómo resolver" pasa entonces a la acción defensiva personal para evitar duplicarla.
+  // Contrato visual estable: "Qué sabemos" aporta contexto; "Cómo resolver" SIEMPRE conserva la
+  // resolución táctica revisada cuando existe. La acción defensiva personal solo ocupa "Cómo resolver"
+  // cuando no tenemos una resolución de mecánica publicable.
   const whyItMatters = mechanicDescription
     ? mechanicDescription
     : mechanicResolution
-      ? `La resolución revisada de ${mechanic} es: ${mechanicResolution}`
+      ? `${mechanic} tiene una resolución táctica revisada: ${compactCoachingText(mechanicResolution, 145)}`
       : defensiveEvidence;
-  const resolutionText = mechanicDescription && mechanicResolution ? mechanicResolution : action;
+  const resolutionText = mechanicResolution ?? action;
 
   return {
     id: `defensive|canonical|${episode.episodeId}`,
@@ -600,6 +617,15 @@ function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] 
     // publica si todas las instancias verificables coinciden.
     const aiNotes = [...new Set(group.map((row) => row.aiNote).filter((value): value is string => !!value))];
     const totalDamage = group.reduce((sum, row) => sum + Math.max(0, row.damageTaken), 0);
+  const mechanicContext = aiNotes.length === 1 ? aiNotes[0].trim() : null;
+  const quantitativeEvidence =
+    totalDamage > 0
+      ? `${Math.round(totalDamage).toLocaleString('es-ES')} de daño registrado en ${group.length} exposición${
+          group.length === 1 ? '' : 'es'
+        }.`
+      : `${group.length} exposición${group.length === 1 ? '' : 'es'} verificable${
+          group.length === 1 ? '' : 's'
+        }.`;
     return {
       id: `mechanic|${key}`,
       kind: 'mechanic',
@@ -617,19 +643,12 @@ function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] 
       observation: `${group.length} incidencia${group.length === 1 ? '' : 's'} registrada${
         group.length === 1 ? '' : 's'
       } en ${first.bossName}.`,
-      whyItMatters:
-        totalDamage > 0
-          ? `${Math.round(totalDamage).toLocaleString('es-ES')} de daño registrado en ${group.length} exposición${
-              group.length === 1 ? '' : 'es'
-            }.`
-          : `${group.length} exposición${group.length === 1 ? '' : 'es'} verificable${
-              group.length === 1 ? '' : 's'
-            }.` ,
-      action: resolutions.length === 1 ? resolutions[0] : null,
-      // Sin una segunda formulación independiente de la resolución de
-      // mecánica ya mostrada en "Corrección práctica"; repetirla no sería
-      // una síntesis nueva. La franja de la card muestra "—" aquí.
-      preventionKey: null,
+      whyItMatters: mechanicContext
+      ? `${compactCoachingText(mechanicContext, 135)} · ${quantitativeEvidence}`
+      : quantitativeEvidence,
+    action: resolutions.length === 1 ? resolutions[0] : null,
+    // No inventa una segunda táctica: condensa la primera instrucción de la resolución revisada.
+    preventionKey: resolutions.length === 1 ? preventionFromResolution(resolutions[0]) : null,
       mechanicDescription: aiNotes.length === 1 ? aiNotes[0] : null,
       resolutionText: resolutions.length === 1 ? resolutions[0] : null,
       defensives: [],
