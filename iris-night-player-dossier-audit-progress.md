@@ -85,7 +85,7 @@ before opening the PR, so no CI-only change remains in the final diff.
 
 ## Phase 1B — auditable dossier shell and provenance presentation
 
-Status: IMPLEMENTED ON CHILD BRANCH / VALIDATION IN PROGRESS.
+Status: IMPLEMENTED AND VALIDATED ON CHILD BRANCH.
 
 Child branch: `feature/dossier-audit-p1b-shell`.
 Target integration branch: `feature/dossier-audit-p1-contracts`.
@@ -123,10 +123,24 @@ Explicitly NOT included in Phase 1B:
 
 ### Validation
 
-A temporary branch trigger was added to the existing `E7 READY validation`
-workflow only to execute the same full repository gate used for Phase 1A. Run
-`33992104276` validates the Phase 1B application code. The temporary trigger
-must be removed before the child PR is considered final.
+GitHub Actions run `33992104276` on commit
+`d846d7b7d8eedf81395466dd11f742990ad404ba`: PASS.
+
+Executed successfully:
+
+- existing E7 defensive regression suite;
+- `npm run verify:defensive-contract`;
+- `npm run verify:causal-schema`;
+- `npm run verify:causal-runtime`;
+- `npm run build` including compilation of the new standalone component,
+  template and route;
+- Deno checks for the canonical defensive evaluator/ledger/evidence/shadow
+  modules covered by the permanent E7 workflow.
+
+The only commit after the validated application snapshot before finalization was
+progress documentation plus removal of the temporary branch trigger. The
+workflow was restored to its original branch list, so no CI-only change remains
+in the final Phase 1B diff.
 
 ## Next gate
 
