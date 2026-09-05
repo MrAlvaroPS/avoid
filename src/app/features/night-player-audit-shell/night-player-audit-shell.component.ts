@@ -9,6 +9,7 @@ import { NightPlayerPullLedgerComponent } from './night-player-pull-ledger.compo
 import { NightPlayerDefensiveAuditComponent } from './night-player-defensive-audit.component';
 import { NightPlayerMechanicDeathAuditComponent } from './night-player-mechanic-death-audit.component';
 import { NightPlayerCausalOperatorComponent } from './night-player-causal-operator.component';
+import { NightPlayerCausalAcceptanceComponent } from './night-player-causal-acceptance.component';
 
 interface ProvenanceRow {
   id: NightPlayerClaimId;
@@ -60,6 +61,7 @@ const SOURCE_META: Record<AuditSourceKind, SourceMeta> = {
     NightPlayerDefensiveAuditComponent,
     NightPlayerMechanicDeathAuditComponent,
     NightPlayerCausalOperatorComponent,
+    NightPlayerCausalAcceptanceComponent,
   ],
   templateUrl: './night-player-audit-shell.component.html',
   styleUrl: './night-player-audit-shell.component.scss',
