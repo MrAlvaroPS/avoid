@@ -86,12 +86,18 @@ function trustedIdentityConfidence(
   aliasConfidence: EvaluationConfidence | null,
   policyConfidence: EvaluationConfidence,
 ): EvaluationConfidence {
-  // The source event outcome is still derived by analyze-report. Even when the
-  // alias/policy are verified, v2 deliberately caps occurrence confidence at
-  // inferred until each mechanic family has a dedicated causal evaluator.
+  // The source event outcome is still derived by analyze-report, so v2 never
+  // elevates a generic event-backed occurrence beyond inferred.
+  //
+  // Active ability aliases are used only as deterministic identity transport
+  // (boss+difficulty+ability_id -> mechanic_key). Existing production aliases
+  // were bootstrapped as source=legacy/confidence=fallback, but the DB already
+  // enforces a single active ability mapping in scope. Treating that provenance
+  // label as semantic proof would make the shadow corpus empty. We therefore
+  // retain the alias confidence in evidence but let the policy confidence own
+  // semantic trust. An actually uncertain alias still fails closed.
   if (
     aliasConfidence === 'uncertain' ||
-    aliasConfidence === 'fallback' ||
     policyConfidence === 'uncertain' ||
     policyConfidence === 'fallback'
   ) {
