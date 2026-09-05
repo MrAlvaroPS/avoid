@@ -69,6 +69,14 @@ jobs:
           needle = "  'evaluate-mechanic-occurrences',\n"
           if "'evaluate-mechanic-attribution-shadow'" not in runtime:
               runtime = runtime.replace(needle, needle + "  'evaluate-mechanic-attribution-shadow',\n", 1)
+          runtime = runtime.replace(
+              "['deno', 'check', `supabase/functions/${functionName}/index.ts`]",
+              "['deno', 'check', '--node-modules-dir=auto', `supabase/functions/${functionName}/index.ts`]",
+          )
+          runtime = runtime.replace(
+              "['deno', 'test', testPath]",
+              "['deno', 'test', '--node-modules-dir=auto', testPath]",
+          )
           runtime_path.write_text(runtime)
           PY
 
@@ -88,8 +96,6 @@ jobs:
         run: npm run verify:causal-schema
 
       - name: Verify causal runtime
-        env:
-          DENO_NODE_MODULES_DIR: auto
         run: npm run verify:causal-runtime
 
       - name: Angular build
