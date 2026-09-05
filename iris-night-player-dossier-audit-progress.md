@@ -30,8 +30,10 @@ reconstruct every numerator and denominator.
 - PR #14 is the draft umbrella PR from that integration branch to
   `fix/defensive-catalog-discovery-v5`.
 - New implementation blocks are developed in child branches and reviewed via
-  PRs whose base is `feature/dossier-audit-p1-contracts`. The umbrella PR is not
-  promoted until the accumulated dossier work has been audited end-to-end.
+  PRs whose base is `feature/dossier-audit-p1-contracts`. Validated child PRs
+  may be merged into the integration branch so subsequent phases share one
+  coherent baseline; the umbrella PR remains Draft until the accumulated
+  dossier work has been audited end-to-end.
 
 ## Phase 1A — contractual foundation
 
@@ -85,23 +87,22 @@ before opening the PR, so no CI-only change remains in the final diff.
 
 ## Phase 1B — auditable dossier shell and provenance presentation
 
-Status: IMPLEMENTED AND VALIDATED ON CHILD BRANCH.
+Status: IMPLEMENTED, VALIDATED AND MERGED INTO INTEGRATION BRANCH.
 
 Child branch: `feature/dossier-audit-p1b-shell`.
+PR: #16.
+Integration merge commit: `1342e27b2fcc28247278267bde0aa637195cad6e`.
 Target integration branch: `feature/dossier-audit-p1-contracts`.
 
 Included:
 
 - new standalone `NightPlayerAuditShellComponent`;
-- a global, explicit data-integrity state that currently reports the truthful
-  migration state: contractual structure exists, runtime claims are not yet
-  connected;
+- a global, explicit data-integrity state;
 - provenance drawer backed only by `NIGHT_PLAYER_CLAIM_REGISTRY`, clearly
   labelled as contractual ownership rather than runtime evidence;
 - source-kind legend for WCL direct, IRIS canonical, IRIS derived, catalog and
   AI interpretation;
-- visible fail-closed messaging: the shell does not manufacture metrics while
-  the corresponding canonical owner/read-model is not connected;
+- visible fail-closed messaging;
 - phase navigation placeholders that make later domains visibly unavailable
   instead of silently projecting legacy values;
 - isolated officer-only route
@@ -137,14 +138,119 @@ Executed successfully:
 - Deno checks for the canonical defensive evaluator/ledger/evidence/shadow
   modules covered by the permanent E7 workflow.
 
-The only commit after the validated application snapshot before finalization was
-progress documentation plus removal of the temporary branch trigger. The
-workflow was restored to its original branch list, so no CI-only change remains
-in the final Phase 1B diff.
+The temporary branch trigger used only to execute this validation was removed
+before the child PR was finalized.
+
+## Phase 2 — auditable Pull Ledger
+
+Status: IMPLEMENTED AND VALIDATED ON CHILD BRANCH.
+
+Child branch: `feature/dossier-audit-p2-pull-ledger`.
+Target integration branch: `feature/dossier-audit-p1-contracts`.
+Baseline: Phase 1B integration merge `1342e27b2fcc28247278267bde0aa637195cad6e`.
+
+### Canonical population and identity rules
+
+The ledger does not derive its own scoring population.
+
+- report pulls come from `pulls` for the exact `report_code`;
+- player participation requires an actual `player_pull_records` row for that
+  player and pull;
+- boss-local numbering reuses `validAttemptOrdinal` over **all valid pulls** in
+  the same `boss_id + difficulty` group, not only the pulls in which the player
+  participated;
+- benching a player on one attempt therefore does not renumber later attempts;
+- `fightId` is only an external WCL locator and never replaces the human pull
+  identity;
+- participated ninja pulls remain visible as excluded context but receive no
+  fabricated boss-local ordinal and do not enter the evaluable ledger.
+
+### Read projection implemented
+
+`NightPlayerPullLedgerService` reads only the facts required by Phase 2:
+
+- `pulls` identity/result/duration/exclusion facts;
+- `report_encounters.fight_id + boss_name`;
+- `player_pull_records` participation and WCL parse facts.
+
+It projects one `NightPlayerPullLedgerRow` per valid participated pull with:
+
+- canonical human label `Boss Name · Pull #N`;
+- exact WCL fight deep-link via the Phase 1 helper;
+- participation claim;
+- boss-local identity claim;
+- result claim from `wipe_pct`;
+- duration claim from `duration_ms`;
+- WCL parse claim from `world_rank_percent`;
+- per-row integrity state and evidence refs.
+
+The expanded audit surface exposes definition, status, formula/source version,
+internal pull id, WCL locator and evidence references rather than only the
+rendered value.
+
+### Fail-closed behavior
+
+- missing `world_rank_percent` => `value=null`, `status=not_evaluable`, rendered
+  as N/D; never 0;
+- missing `wipe_pct` => result N/D; the UI does not silently assume wipe;
+- missing duration => duration N/D;
+- unresolved boss-local identity => the pull is preserved in contextual
+  exclusions rather than assigned a guessed number;
+- duplicate player-pull records, orphan records and missing encounter labels
+  generate explicit integrity issues;
+- later domains are presented only as pending their approved phase, not filled
+  from legacy scoring.
+
+### Explicitly NOT included in Phase 2
+
+- no `pullScore` or `scoreBreakdown` reuse;
+- no legacy defensive miss fields or pressure-window scoring;
+- no Defensive v7 read/cutover;
+- no mechanics or death evaluation;
+- no Execution score;
+- no Reliability score;
+- no gear/talent projection;
+- no AI;
+- no schema or migration changes;
+- no change to the stable legacy dossier route.
+
+### Regression coverage
+
+`night-player-pull-ledger.service.spec.ts` covers:
+
+- only real participated pulls enter the ledger;
+- boss-local ordinal remains based on all valid attempts even when the player
+  was bench for an intermediate pull;
+- boss changes reset the ordinal independently;
+- ninja pulls are contextual exclusions and do not consume an ordinal;
+- missing parse is N/D rather than zero;
+- exact WCL fight URL and row evidence are reconstructible.
+
+### Validation
+
+GitHub Actions run `33992666948` on commit
+`66a5923f3186b6cb417a122a37082f381636571e`: PASS.
+
+Executed successfully:
+
+- Phase 2 Pull Ledger Vitest suite;
+- Phase 1 audit contract regression suite;
+- existing E7 defensive regression suites;
+- `npm run verify:defensive-contract`;
+- `npm run verify:causal-schema`;
+- `npm run verify:causal-runtime`;
+- `npm run build`, including the Pull Ledger service/component/templates;
+- Deno checks for the canonical defensive evaluator/ledger/evidence/shadow
+  modules covered by the permanent E7 workflow.
+
+The temporary Phase 2 workflow trigger and the extra CI-only test-list entries
+were removed after the successful run, so they are not part of the final Phase 2
+diff.
 
 ## Next gate
 
-Phase 2: Pull Ledger. It may start only after Phase 1B is reviewed and accepted
-into the integration branch. The ledger must use the existing boss-local pull
-identity and canonical participated-pull population; it must not recreate pull
-numbering or scoring filters in the frontend.
+Phase 3: full Defensive v7 audit. The dossier must not expose canonical
+Usage/Response/Management from a shadow-only runner. Phase 3 remains gated on a
+permanent, published canonical defensive generation/read-model that can be
+selected explicitly and fail closed when unavailable, without fallback to
+legacy defensive scoring.
