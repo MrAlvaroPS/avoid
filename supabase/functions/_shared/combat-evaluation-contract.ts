@@ -7,7 +7,8 @@
 
 export const COMBAT_EVALUATION_CONTRACT_VERSION = 'combat-evaluation-contract@1.0.0';
 export const PULL_CONTEXT_RESOLVER_VERSION = 'pull-evaluation-context@1.0.0';
-export const OCCURRENCE_RESOLVER_VERSION = 'mechanic-occurrence-resolver@1.0.0';
+/** v2 is the first event-backed occurrence resolver; v1 was placeholder/not_evaluable only. */
+export const OCCURRENCE_RESOLVER_VERSION = 'mechanic-occurrence-resolver@2.0.0';
 export const EXECUTION_LEDGER_VERSION = 'execution-ledger@1.0.0';
 
 export const EVALUATION_CONFIDENCES = ['verified', 'inferred', 'fallback', 'uncertain'] as const;
@@ -272,4 +273,3 @@ export interface PlayerExecutionEventRow {
   createdAt: string;
   evaluatedAt: string;
 }
-
