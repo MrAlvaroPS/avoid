@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildNightPlayerMechanicDeathAudit,
   type CombatBackfillJobFact,
+  type CombatEvaluationJobType,
   type DeathLedgerFact,
   type MechanicOffenseFact,
 } from './night-player-mechanic-death-audit.service';
@@ -106,13 +107,34 @@ function ledger(rows = [pullRow('p1', 10, 1), pullRow('p2', 11, 2)]): NightPlaye
   };
 }
 
-function job(pullId: string, status: CombatBackfillJobFact['status'] = 'done'): CombatBackfillJobFact {
+function job(
+  pullId: string,
+  status: CombatBackfillJobFact['status'] = 'done',
+  updatedAt = '2026-09-05T20:00:00Z',
+): CombatBackfillJobFact {
   return {
     pull_id: pullId,
+    job_type: 'full_execution_backfill',
     status,
     stage_progress: status === 'done' ? { occurrences: 4, responsibilityEdges: 7, ledgerEvents: 20 } : {},
     last_error: status === 'error' ? 'fixture failure' : null,
-    updated_at: '2026-09-05T20:00:00Z',
+    updated_at: updatedAt,
+  };
+}
+
+function invalidation(
+  pullId: string,
+  jobType: Exclude<CombatEvaluationJobType, 'full_execution_backfill'> = 'pull_context',
+  status: CombatBackfillJobFact['status'] = 'done',
+  updatedAt = '2026-09-05T20:05:00Z',
+): CombatBackfillJobFact {
+  return {
+    pull_id: pullId,
+    job_type: jobType,
+    status,
+    stage_progress: {},
+    last_error: status === 'error' ? 'fixture invalidation failure' : null,
+    updated_at: updatedAt,
   };
 }
 
@@ -197,6 +219,22 @@ describe('NightPlayerMechanicDeathAudit · canonical materialization gate', () =
     expect(result.totalDeaths.value).toBe(0);
     expect(result.actionableMechanicIncidents.status).toBe('canonical');
     expect(result.totalDeaths.status).toBe('canonical');
+  });
+
+  it('rechaza un backfill done si una invalidación causal posterior lo ha dejado obsoleto', () => {
+    const result = build({
+      jobs: [
+        job('p1', 'done', '2026-09-05T20:00:00Z'),
+        invalidation('p1', 'pull_context', 'done', '2026-09-05T20:05:00Z'),
+        job('p2'),
+      ],
+    });
+
+    expect(result.materializationState).toBe('partial');
+    expect(result.coverage.completedPulls).toBe(1);
+    expect(result.coverage.pendingPulls).toBe(1);
+    expect(result.actionableMechanicIncidents.value).toBeNull();
+    expect(result.integrityIssues.some((issue) => issue.includes('invalidación causal más reciente'))).toBe(true);
   });
 
   it('proyecta ofensa atribuible y muerte desde el ledger con evidencia reconstruible', () => {
