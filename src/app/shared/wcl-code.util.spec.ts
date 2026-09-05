@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { extractReportCode, wclFightUrl, wclReportUrl } from './wcl-code.util';
 
 describe('wcl-code util', () => {
