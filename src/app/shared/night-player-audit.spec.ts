@@ -1,3 +1,4 @@
+import { describe, expect, it } from 'vitest';
 import { NIGHT_PLAYER_CLAIM_REGISTRY, nightPlayerClaimOwner, type NightPlayerClaimId } from './night-player-claim-registry';
 import { pullEvidenceKey, pullEvidenceLabel, pullWclLabel } from './pull-evidence.util';
 import type { AuditClaim, PullEvidenceRef } from './models/night-player-audit';
