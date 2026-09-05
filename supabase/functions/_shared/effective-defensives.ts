@@ -33,7 +33,7 @@ import {
   type ValidatedSpecSemanticProfile,
 } from './defensive-semantic-payload-validation.ts';
 
-export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.2.0';
+export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.3.0';
 // §Paso C (iris-defensive-canonicalization-v1-plan.md §5): resolución
 // SEMÁNTICA (usageRole/mechanisms/membership) versionada por separado del
 // resolver de TIMING de arriba, a propósito. Bump del resolver de timing ya
@@ -83,7 +83,7 @@ export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.2.0'
 // comportamiento observable real en isDefensiveKitMember/
 // createsMissableOpportunity para cualquier caller que ya pasara
 // demonstratedPersistentCastSpellIds junto con allTalentSpellIds.
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.4.0';
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.5.0';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 // §E1 — presencia real en ESTE build, independiente de "elegible ahora mismo"
