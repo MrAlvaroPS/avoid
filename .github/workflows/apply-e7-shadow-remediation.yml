@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
 
       - name: Apply focused E7 codemod
-        run: python3 scripts/apply-e7-shadow-remediation.py
+        run: python3 scripts/apply-e7-shadow-remediation-v2.py
 
       - name: Install Node dependencies
         run: npm ci
@@ -58,6 +58,7 @@ jobs:
       - name: Commit integrated patch
         run: |
           rm -f scripts/apply-e7-shadow-remediation.py
+          rm -f scripts/apply-e7-shadow-remediation-v2.py
           rm -f .github/workflows/apply-e7-shadow-remediation.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
