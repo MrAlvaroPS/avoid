@@ -8,6 +8,7 @@ import type { AuditSourceKind } from '../../shared/models/night-player-audit';
 import { NightPlayerPullLedgerComponent } from './night-player-pull-ledger.component';
 import { NightPlayerDefensiveAuditComponent } from './night-player-defensive-audit.component';
 import { NightPlayerMechanicDeathAuditComponent } from './night-player-mechanic-death-audit.component';
+import { NightPlayerCausalOperatorComponent } from './night-player-causal-operator.component';
 
 interface ProvenanceRow {
   id: NightPlayerClaimId;
@@ -58,6 +59,7 @@ const SOURCE_META: Record<AuditSourceKind, SourceMeta> = {
     NightPlayerPullLedgerComponent,
     NightPlayerDefensiveAuditComponent,
     NightPlayerMechanicDeathAuditComponent,
+    NightPlayerCausalOperatorComponent,
   ],
   templateUrl: './night-player-audit-shell.component.html',
   styleUrl: './night-player-audit-shell.component.scss',
@@ -67,6 +69,7 @@ export class NightPlayerAuditShellComponent {
   playerName = input.required<string>();
 
   provenanceOpen = signal(false);
+  causalRefreshToken = signal(0);
 
   protected readonly sourceKinds: readonly AuditSourceKind[] = [
     'wcl',
@@ -89,6 +92,10 @@ export class NightPlayerAuditShellComponent {
   }));
 
   protected readonly sourceMeta = SOURCE_META;
+
+  protected refreshCausalAudit(): void {
+    this.causalRefreshToken.update((value) => value + 1);
+  }
 
   openProvenance(): void {
     this.provenanceOpen.set(true);

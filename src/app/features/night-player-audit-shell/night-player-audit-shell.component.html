@@ -30,12 +30,12 @@
     <div class="integrity-icon" aria-hidden="true">i</div>
     <div class="integrity-copy">
       <p class="integrity-kicker">Estado de datos</p>
-      <h2 id="integrity-title">Pull Ledger y Defensive v7 conectados; Fase 4 ya audita readiness causal sin fallback</h2>
+      <h2 id="integrity-title">Fase 4 conectada al pipeline causal; el cutover sigue condicionado al E2E</h2>
       <p>
-        Mecánicas y muertes ya tienen owner causal explícito, pero sus totales solo se publican cuando
-        todos los pulls válidos participados tienen <code>full_execution_backfill=done</code>. Mientras
-        el pipeline no esté materializado, la sección muestra el blocker y conserva N/D en lugar de
-        reutilizar <code>mechanicFails</code>, <code>NightDeathRow</code> o cualquier otro dato legacy.
+        Mecánicas y muertes consumen únicamente causal v3. Fase 4B añade una puerta officer para
+        encolar y procesar la cola causal existente sin conceder el RPC <code>service_role</code> al
+        navegador. Los totales siguen gobernados por el gate de Fase 4A: hasta cobertura fresca y
+        homogénea, N/D antes que un cero o una atribución legacy.
       </p>
     </div>
     <div class="integrity-count" title="Claims registrados en el catálogo de ownership">
@@ -58,7 +58,7 @@
           <p class="card-kicker">Fundación de auditoría</p>
           <h2>Una sola verdad, visible y reconstruible</h2>
         </div>
-        <span class="ready-badge">Fases 1–3 + gate F4</span>
+        <span class="ready-badge">Fases 1–3 + F4 causal</span>
       </div>
 
       <div class="foundation-grid">
@@ -91,15 +91,15 @@
 
     <aside class="next-card">
       <p class="card-kicker">Gate operativo actual</p>
-      <h2>Completar materialización causal de Fase 4</h2>
+      <h2>Aceptar materialización causal de Fase 4</h2>
       <p>
-        Antes de entrar en Fase 5 hay que ejecutar y aceptar el E2E causal: occurrences,
-        responsibility edges y <code>full_execution_backfill</code> deben quedar completos y
-        homogéneos sobre un corpus real. El dosier ya está preparado para consumirlos cuando existan.
+        El código ya dispone de un operador explícito sobre la cola existente. El siguiente criterio
+        no es “que haya filas”, sino demostrar sobre corpus real occurrences → responsibility edges →
+        ledger, versiones homogéneas y atribuciones compatibles con el safety baseline.
       </p>
       <div class="next-rule">
         <span>Regla activa</span>
-        <strong>No avanzar fase con un gate runtime abierto</strong>
+        <strong>No avanzar a Fase 5 sin E2E aceptado</strong>
       </div>
     </aside>
   </section>
@@ -114,9 +114,16 @@
     [playerName]="playerName()"
   />
 
+  <app-night-player-causal-operator
+    [reportCode]="reportCode()"
+    [playerName]="playerName()"
+    (changed)="refreshCausalAudit()"
+  />
+
   <app-night-player-mechanic-death-audit
     [reportCode]="reportCode()"
     [playerName]="playerName()"
+    [refreshToken]="causalRefreshToken()"
   />
 </main>
 

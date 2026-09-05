@@ -21,6 +21,8 @@ export class NightPlayerMechanicDeathAuditComponent {
 
   reportCode = input.required<string>();
   playerName = input.required<string>();
+  /** Incrementado por el operador 4B tras cambiar/procesar la cola causal. */
+  refreshToken = input(0);
 
   protected readonly data = signal<NightPlayerMechanicDeathAudit | null>(null);
   protected readonly loading = signal(true);
@@ -31,7 +33,10 @@ export class NightPlayerMechanicDeathAuditComponent {
 
   constructor() {
     effect(() => {
-      void this.load(this.reportCode(), this.playerName());
+      const reportCode = this.reportCode();
+      const playerName = this.playerName();
+      this.refreshToken();
+      void this.load(reportCode, playerName);
     });
   }
 
