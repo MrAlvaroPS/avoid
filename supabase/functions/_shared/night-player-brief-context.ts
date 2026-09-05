@@ -1,5 +1,6 @@
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2';
 import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './statistical-exclusions.ts';
+import { isPunitivePersonalMechanicEvent } from './mechanic-attribution.ts';
 
 // §"meter en el dosier de un jugador... la consulta de IA... teniendo en
 // cuenta el dossier y ese jugador concreto" (feedback real, 2026-08-24).
@@ -9,11 +10,6 @@ import { isDeathExcludedFromStatistics, isMechanicExcludedByWipeCall } from './s
 // los dos runtimes no comparten módulos. Cruce por NOMBRE de mecánica, no
 // por ability_id (mismo motivo de siempre: el id del manifiesto casi nunca
 // coincide con el real de WCL).
-
-// Mismo criterio que PERSONAL_RESPONSIBILITY_CATEGORIES de
-// pull-analysis.service.ts (Angular) — repetido aquí porque Deno no importa
-// ese módulo. Si cambia uno, cambia el otro.
-const PERSONAL_RESPONSIBILITY_CATEGORIES = new Set(['avoidable-ground', 'spread', 'soak', 'personal-target']);
 
 export interface NightPlayerBriefDeath {
   bossName: string;
@@ -93,7 +89,7 @@ export async function buildNightPlayerBriefContext(
     supabase.from('player_pull_records').select('*').in('pull_id', pullIds).eq('player_name', playerName),
     supabase
       .from('applicable_pull_mechanic_events')
-      .select('pull_id, ability_id, mechanic_name, category, outcome, trigger_time_ms')
+      .select('pull_id, ability_id, mechanic_name, category, responsibility, outcome, trigger_time_ms')
       .in('pull_id', pullIds)
       .neq('outcome', 'clean')
       .contains('players_hit_names', [playerName]),
@@ -153,12 +149,21 @@ export async function buildNightPlayerBriefContext(
     })
     .sort((a, b) => a.pullNumber - b.pullNumber);
 
-  const mechEvents = ((mechEventsData ?? []) as { pull_id: string; ability_id: number; mechanic_name: string; category: string | null; outcome: string; trigger_time_ms: number }[]).filter((event) => {
+  type BriefMechanicEvent = {
+    pull_id: string;
+    ability_id: number;
+    mechanic_name: string;
+    category: string | null;
+    responsibility: string | null;
+    outcome: string;
+    trigger_time_ms: number;
+  };
+  const mechEvents = ((mechEventsData ?? []) as BriefMechanicEvent[]).filter((event) => {
     const pull = pullById.get(event.pull_id);
     return pull != null && !isMechanicExcludedByWipeCall(pull, event.trigger_time_ms);
   });
   const mechanicFails: NightPlayerBriefMechanicFail[] = mechEvents
-    .filter((ev) => ev.category == null || PERSONAL_RESPONSIBILITY_CATEGORIES.has(ev.category))
+    .filter((ev) => isPunitivePersonalMechanicEvent(ev))
     .filter((event) => !evaluatedDeathRecords.some((record) => record.pull_id === event.pull_id && record.death_cause!.mechanicId === event.ability_id && Math.abs(record.death_cause!.timeMs - event.trigger_time_ms) <= 4000))
     .map((ev) => {
       const pull = pullById.get(ev.pull_id)!;
