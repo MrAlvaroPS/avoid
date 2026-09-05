@@ -16,6 +16,7 @@ jobs:
         with:
           deno-version: v2.x
       - run: npm ci
+      - run: deno install --allow-scripts
       - run: npx vitest run supabase/functions/_shared/defensive-episode-verdict.e7-low-confidence.spec.ts
       - run: npm run verify:defensive-contract
       - run: npm run verify:causal-schema
