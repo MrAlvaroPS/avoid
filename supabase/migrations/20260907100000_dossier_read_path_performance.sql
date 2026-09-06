@@ -11,7 +11,7 @@
 -- This migration is deliberately semantics-preserving:
 --   * it does NOT change scoring, attribution, candidate policy or UI data;
 --   * it materializes only the tiny observed identity key set used by the
---     existing EXISTS predicate and maintains exact counts per pull;
+--     existing EXISTS predicate, exactly per pull;
 --   * applicable_boss_mechanics_candidates keeps the same predicate, replacing
 --     only the repeated historical scan with an indexed key lookup;
 --   * supporting indexes match the concrete dossier/infographic read paths.
@@ -31,10 +31,9 @@ create index if not exists pull_mechanic_observation_keys_scope_idx
 comment on table public.pull_mechanic_observation_keys is
   'Exact compact projection of observed pull_mechanic_events identities per pull. The scope index answers boss+difficulty+mechanic observation without rescanning the event history.';
 comment on column public.pull_mechanic_observation_keys.event_count is
-  'Number of backing pull_mechanic_events for this pull+normalized mechanic. Exact counts keep replay/delete/update operations free of stale observed keys.';
+  'Number of backing pull_mechanic_events for this pull+normalized mechanic. Recomputed for touched pulls after event mutations/replays.';
 
--- Initial exact projection. ON CONFLICT makes the migration retry-safe without
--- deleting any pre-existing helper rows.
+-- Initial exact projection.
 insert into public.pull_mechanic_observation_keys (
   pull_id,
   boss_id,
@@ -58,17 +57,28 @@ do update set
   difficulty = excluded.difficulty,
   event_count = excluded.event_count;
 
--- Keep the helper exact for normal ingestion and for the atomic historical
--- replay primitive (DELETE + bulk INSERT). Transition tables aggregate an
--- entire statement, avoiding a trigger/function call for every event row.
-create or replace function public.sync_pull_mechanic_observation_keys_insert()
-returns trigger
+-- Recompute only touched pulls from canonical rows. This is intentionally
+-- simpler than increment/decrement bookkeeping: replay does DELETE+INSERT in
+-- one transaction, classification updates remain exact, and stale keys cannot
+-- survive a rename/removal. pull_mechanic_events_pull_idx bounds this work to
+-- the affected pull(s), never the full history.
+create or replace function public.refresh_pull_mechanic_observation_keys(
+  p_pull_ids uuid[]
+)
+returns void
 language plpgsql
 security definer
 set search_path = public
 as $$
 begin
-  insert into public.pull_mechanic_observation_keys as observation (
+  if p_pull_ids is null or cardinality(p_pull_ids) = 0 then
+    return;
+  end if;
+
+  delete from public.pull_mechanic_observation_keys
+   where pull_id = any (p_pull_ids);
+
+  insert into public.pull_mechanic_observation_keys (
     pull_id,
     boss_id,
     difficulty,
@@ -81,16 +91,25 @@ begin
     p.difficulty,
     lower(btrim(e.mechanic_name)),
     count(*)::bigint
-  from new_rows e
+  from public.pull_mechanic_events e
   join public.pulls p on p.id = e.pull_id
-  where e.mechanic_name is not null
-  group by p.id, p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
-  on conflict (pull_id, normalized_name)
-  do update set
-    boss_id = excluded.boss_id,
-    difficulty = excluded.difficulty,
-    event_count = observation.event_count + excluded.event_count;
+  where e.pull_id = any (p_pull_ids)
+    and e.mechanic_name is not null
+  group by p.id, p.boss_id, p.difficulty, lower(btrim(e.mechanic_name));
+end;
+$$;
 
+create or replace function public.sync_pull_mechanic_observation_keys_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_pull_ids uuid[];
+begin
+  select array_agg(distinct pull_id) into v_pull_ids from new_rows;
+  perform public.refresh_pull_mechanic_observation_keys(v_pull_ids);
   return null;
 end;
 $$;
@@ -101,39 +120,11 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_pull_ids uuid[];
 begin
-  -- Delete keys whose full per-pull population disappeared first, so the
-  -- positive-count constraint is never transiently violated.
-  with removed as (
-    select
-      e.pull_id,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from old_rows e
-    where e.mechanic_name is not null
-    group by e.pull_id, lower(btrim(e.mechanic_name))
-  )
-  delete from public.pull_mechanic_observation_keys observation
-  using removed
-  where observation.pull_id = removed.pull_id
-    and observation.normalized_name = removed.normalized_name
-    and observation.event_count <= removed.removed_count;
-
-  with removed as (
-    select
-      e.pull_id,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from old_rows e
-    where e.mechanic_name is not null
-    group by e.pull_id, lower(btrim(e.mechanic_name))
-  )
-  update public.pull_mechanic_observation_keys observation
-     set event_count = observation.event_count - removed.removed_count
-    from removed
-   where observation.pull_id = removed.pull_id
-     and observation.normalized_name = removed.normalized_name;
-
+  select array_agg(distinct pull_id) into v_pull_ids from old_rows;
+  perform public.refresh_pull_mechanic_observation_keys(v_pull_ids);
   return null;
 end;
 $$;
@@ -144,77 +135,17 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_pull_ids uuid[];
 begin
-  -- Most pull_mechanic_events UPDATEs only change classification fields. Do
-  -- nothing unless the identity-bearing pull/name actually changed.
-  with changed_old as (
-    select o.*
-    from old_rows o
-    join new_rows n on n.id = o.id
-    where o.pull_id is distinct from n.pull_id
-       or o.mechanic_name is distinct from n.mechanic_name
-  ), removed as (
-    select
-      e.pull_id,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from changed_old e
-    where e.mechanic_name is not null
-    group by e.pull_id, lower(btrim(e.mechanic_name))
-  )
-  delete from public.pull_mechanic_observation_keys observation
-  using removed
-  where observation.pull_id = removed.pull_id
-    and observation.normalized_name = removed.normalized_name
-    and observation.event_count <= removed.removed_count;
-
-  with changed_old as (
-    select o.*
-    from old_rows o
-    join new_rows n on n.id = o.id
-    where o.pull_id is distinct from n.pull_id
-       or o.mechanic_name is distinct from n.mechanic_name
-  ), removed as (
-    select
-      e.pull_id,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from changed_old e
-    where e.mechanic_name is not null
-    group by e.pull_id, lower(btrim(e.mechanic_name))
-  )
-  update public.pull_mechanic_observation_keys observation
-     set event_count = observation.event_count - removed.removed_count
-    from removed
-   where observation.pull_id = removed.pull_id
-     and observation.normalized_name = removed.normalized_name;
-
-  insert into public.pull_mechanic_observation_keys as observation (
-    pull_id,
-    boss_id,
-    difficulty,
-    normalized_name,
-    event_count
-  )
-  select
-    p.id,
-    p.boss_id,
-    p.difficulty,
-    lower(btrim(n.mechanic_name)),
-    count(*)::bigint
-  from new_rows n
-  join old_rows o on o.id = n.id
-  join public.pulls p on p.id = n.pull_id
-  where (o.pull_id is distinct from n.pull_id
-      or o.mechanic_name is distinct from n.mechanic_name)
-    and n.mechanic_name is not null
-  group by p.id, p.boss_id, p.difficulty, lower(btrim(n.mechanic_name))
-  on conflict (pull_id, normalized_name)
-  do update set
-    boss_id = excluded.boss_id,
-    difficulty = excluded.difficulty,
-    event_count = observation.event_count + excluded.event_count;
-
+  select array_agg(distinct pull_id)
+    into v_pull_ids
+    from (
+      select pull_id from old_rows
+      union
+      select pull_id from new_rows
+    ) touched;
+  perform public.refresh_pull_mechanic_observation_keys(v_pull_ids);
   return null;
 end;
 $$;
@@ -238,7 +169,7 @@ referencing old table as old_rows new table as new_rows
 for each statement execute function public.sync_pull_mechanic_observation_keys_update();
 
 -- A pull's boss/difficulty is identity and normally immutable, but keep the
--- projection correct if recovery tooling ever repairs that scope in place.
+-- compact projection correct if recovery tooling ever repairs that scope.
 create or replace function public.sync_pull_mechanic_observation_keys_pull_update()
 returns trigger
 language plpgsql
@@ -246,12 +177,10 @@ security definer
 set search_path = public
 as $$
 begin
-  update public.pull_mechanic_observation_keys observation
+  update public.pull_mechanic_observation_keys
      set boss_id = new.boss_id,
          difficulty = new.difficulty
-   where observation.pull_id = new.id
-     and (old.boss_id is distinct from new.boss_id
-       or old.difficulty is distinct from new.difficulty);
+   where pull_id = new.id;
   return new;
 end;
 $$;
@@ -326,9 +255,10 @@ create index if not exists pull_mechanic_events_players_hit_names_gin_idx
 create index if not exists boss_mechanics_candidates_scope_normalized_name_idx
   on public.boss_mechanics_candidates (boss_id, difficulty, lower(btrim(name)));
 
--- The applicability views are security_invoker=true, so officers need SELECT
--- on the helper just as they already need SELECT on the underlying source
--- tables. No writes are exposed to clients; maintenance is trigger-owned.
+-- Match the current source-table access contract: the existing mechanic
+-- tables grant SELECT to anon/authenticated but RLS exposes rows only when
+-- is_officer() is true. applicable_* are security_invoker views, so the helper
+-- must preserve that distinction (RLS-filtered result, not permission error).
 alter table public.pull_mechanic_observation_keys enable row level security;
 
 drop policy if exists "pull_mechanic_observation_keys: officers read"
@@ -336,13 +266,13 @@ drop policy if exists "pull_mechanic_observation_keys: officers read"
 create policy "pull_mechanic_observation_keys: officers read"
   on public.pull_mechanic_observation_keys
   for select
-  to authenticated
+  to public
   using (is_officer());
 
 revoke all on public.pull_mechanic_observation_keys from anon, authenticated;
-grant select on public.pull_mechanic_observation_keys to authenticated;
-grant select on public.pull_mechanic_observation_keys to service_role;
+grant select on public.pull_mechanic_observation_keys to anon, authenticated, service_role;
 
+revoke all on function public.refresh_pull_mechanic_observation_keys(uuid[]) from public, anon, authenticated;
 revoke all on function public.sync_pull_mechanic_observation_keys_insert() from public, anon, authenticated;
 revoke all on function public.sync_pull_mechanic_observation_keys_delete() from public, anon, authenticated;
 revoke all on function public.sync_pull_mechanic_observation_keys_update() from public, anon, authenticated;
