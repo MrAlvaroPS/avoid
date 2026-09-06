@@ -1,35 +1,30 @@
 <div class="raid-session">
-  <div class="sticky-raid-context" [class.has-pulls]="hasPulls()" [class.has-context]="hasReportLoaded()">
+  <!-- §pasada UX/UI (2026-09-06): esta cabecera ya no es dueña del contexto
+       de la noche — eso vive en el sidebar del workspace (noche, fecha,
+       selector, Raid/Informe). Aquí solo quedan controles y datos propios
+       de la OPERATIVA de Raid: actualizar/seguimiento en vivo, y el picker
+       de boss/pull. Ya no es sticky — el único elemento persistente al
+       hacer scroll es el sidebar. -->
+  <div class="raid-controls" [class.has-context]="hasReportLoaded()">
     @if (hasReportLoaded()) {
-      <section class="report-context" aria-label="Report activo">
-        <div class="report-identity">
-          <span class="mode-pill" [class.live]="autoRefresh()">
-            <i aria-hidden="true"></i>{{ reportModeLabel() }}
-          </span>
-          <div class="report-copy" [attr.title]="'Código de report (WCL): ' + currentReportCode()">
-            <strong>{{ currentReportTitle() }}</strong>
-            @if (currentReportDateTime(); as date) { <span>{{ date }}</span> }
-          </div>
-        </div>
-        <div class="report-actions">
-          @if (importProgress(); as progressText) {
-            <span class="sync-status">{{ progressText }}</span>
-          } @else if (lastCheckedAt(); as checkedAt) {
-            <span class="sync-status">Comprobado {{ checkedAt }}</span>
-          }
-          <button type="button" class="context-button" [disabled]="importing()" (click)="onImport()">
-            {{ importing() ? 'Actualizando…' : 'Actualizar' }}
-          </button>
-          <button type="button" class="context-button live-button" [class.active]="autoRefresh()" (click)="toggleAutoRefresh()">
-            {{ autoRefresh() ? '● En directo · 18s' : 'Iniciar seguimiento' }}
-          </button>
-          <a class="context-link" [routerLink]="['/report', currentReportCode()]">Informe</a>
-          <button type="button" class="context-button subtle" (click)="toggleReportLoader()">Cambiar report</button>
-          @if (recentReports().length) {
-            <button type="button" class="context-button subtle" (click)="toggleRecentPicker()">Otra noche</button>
-          }
-        </div>
-      </section>
+      <div class="raid-actions-row">
+        @if (importProgress(); as progressText) {
+          <span class="sync-status">{{ progressText }}</span>
+        } @else if (lastCheckedAt(); as checkedAt) {
+          <span class="sync-status">Comprobado {{ checkedAt }}</span>
+        }
+        <button type="button" class="context-button" [disabled]="importing()" (click)="onImport()">
+          {{ importing() ? 'Actualizando…' : 'Actualizar' }}
+        </button>
+        <button
+          type="button"
+          class="context-button live-button"
+          [class.active]="autoRefresh()"
+          (click)="toggleAutoRefresh()"
+        >
+          {{ autoRefresh() ? '● En directo · 18s' : 'Iniciar seguimiento' }}
+        </button>
+      </div>
     }
 
     @if (hasPulls()) {
@@ -62,7 +57,11 @@
                   [class.selected]="pull.id === selectedPullId()"
                   [class.is-kill]="pull.kill"
                   [class.is-ninja-pull]="pull.ninja_pull_excluded"
-                  [attr.title]="pull.ninja_pull_excluded ? 'Ninja pull: permanece visible para auditoría, pero no cuenta como intento ni entra en deltas, rachas o progreso.' : 'Intento válido dentro de esta noche'"
+                  [attr.title]="
+                    pull.ninja_pull_excluded
+                      ? 'Ninja pull: permanece visible para auditoría, pero no cuenta como intento ni entra en deltas, rachas o progreso.'
+                      : 'Intento válido dentro de esta noche'
+                  "
                   (click)="selectPull(pull)"
                 >
                   <span class="pull-name">{{ pullLabel(pull, group) }}</span>
@@ -70,7 +69,13 @@
                 </button>
               </li>
             }
-            <li><a class="pull-chip history-link" [routerLink]="['/boss', group.pulls[0].boss_id, group.difficulty]">Histórico del boss →</a></li>
+            <li>
+              <a
+                class="pull-chip history-link"
+                [routerLink]="['/boss', group.pulls[0].boss_id, group.difficulty]"
+                >Histórico del boss →</a
+              >
+            </li>
           </ol>
         }
       </nav>
@@ -80,8 +85,14 @@
   @if (!hasReportLoaded() || showReportLoader()) {
     <form class="import-panel" (submit)="$event.preventDefault(); onImport()">
       <div>
-        <span class="import-eyebrow">{{ hasReportLoaded() ? 'Cambiar contexto' : 'Abrir una raid' }}</span>
-        <strong>{{ hasReportLoaded() ? 'Carga otro report de Warcraft Logs' : 'Pega un report de Warcraft Logs para empezar' }}</strong>
+        <span class="import-eyebrow">{{
+          hasReportLoaded() ? 'Cambiar contexto' : 'Abrir una raid'
+        }}</span>
+        <strong>{{
+          hasReportLoaded()
+            ? 'Carga otro report de Warcraft Logs'
+            : 'Pega un report de Warcraft Logs para empezar'
+        }}</strong>
       </div>
       <div class="import-controls">
         <input
@@ -92,14 +103,27 @@
           (input)="reportCodeInput.set($any($event.target).value)"
           [disabled]="importing()"
         />
-        <button type="submit" class="import-btn" [disabled]="importing() || !reportCodeInput().trim()">
+        <button
+          type="submit"
+          class="import-btn"
+          [disabled]="importing() || !reportCodeInput().trim()"
+        >
           {{ importing() ? 'Importando…' : 'Cargar report' }}
         </button>
         @if (recentReports().length) {
-          <button type="button" class="recent-toggle" (click)="toggleRecentPicker()">Elegir otra noche</button>
+          <button type="button" class="recent-toggle" (click)="toggleRecentPicker()">
+            Elegir otra noche
+          </button>
         }
         @if (hasReportLoaded()) {
-          <button type="button" class="close-loader" (click)="showReportLoader.set(false)" aria-label="Cerrar selector">×</button>
+          <button
+            type="button"
+            class="close-loader"
+            (click)="showReportLoader.set(false)"
+            aria-label="Cerrar selector"
+          >
+            ×
+          </button>
         }
       </div>
     </form>
@@ -111,22 +135,29 @@
         <button type="button" class="recent-item" (click)="loadFromHistory(item.report.code)">
           <span class="recent-date tabular">{{ reportDateLabel(item.report.start_time) }}</span>
           <span class="recent-title">{{ item.report.title || 'Report de raid' }}</span>
-          @if (item.bossesAttempted.length) { <span class="recent-bosses">{{ item.bossesAttempted.join(', ') }}</span> }
+          @if (item.bossesAttempted.length) {
+            <span class="recent-bosses">{{ item.bossesAttempted.join(', ') }}</span>
+          }
         </button>
       }
     </div>
   }
 
-  @if (error(); as e) { <p class="error" role="alert">{{ e }}</p> }
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
 
   @if (duplicateWarning(); as dupCode) {
     <p class="duplicate-warning" role="alert">
-      ⚠ Este report puede duplicar la misma noche que <strong class="tabular">{{ dupCode }}</strong>. Mantener ambos duplicaría intentos, muertes y mecánicas; revísalo en Histórico.
+      ⚠ Este report puede duplicar la misma noche que <strong class="tabular">{{ dupCode }}</strong
+      >. Mantener ambos duplicaría intentos, muertes y mecánicas; revísalo en Histórico.
     </p>
   }
 
   @if (hasPulls()) {
-    @if (selectedPullId(); as id) { <app-live-pull [pullId]="id" /> }
+    @if (selectedPullId(); as id) {
+      <app-live-pull [pullId]="id" />
+    }
 
     @if (nightSummary(); as summary) {
       <!-- §"no hace falta que esté todo a la vista de primer golpe" (feedback
@@ -138,24 +169,47 @@
         <summary>
           <span>
             <b>Resumen y dossiers de la noche</b>
-            <small>{{ summary.bossesAttempted }} bosses · {{ summary.totalKills }} kills · {{ summary.totalWipes }} wipes · {{ nightPlayers().length }} jugadores</small>
+            <small
+              >{{ summary.bossesAttempted }} bosses · {{ summary.totalKills }} kills ·
+              {{ summary.totalWipes }} wipes · {{ nightPlayers().length }} jugadores</small
+            >
           </span>
           <span aria-hidden="true">⌄</span>
         </summary>
         <div class="night-summary">
           <div class="night-summary-stats">
-            <span class="night-stat"><strong class="tabular">{{ summary.bossesAttempted }}</strong> bosses</span>
-            <span class="night-stat"><strong class="tabular">{{ summary.totalKills }}</strong> kills</span>
-            <span class="night-stat"><strong class="tabular">{{ summary.totalWipes }}</strong> wipes</span>
-            <span class="night-stat"><strong class="tabular">{{ formatDuration(summary.totalDurationMs) }}</strong> en combate</span>
+            <span class="night-stat"
+              ><strong class="tabular">{{ summary.bossesAttempted }}</strong> bosses</span
+            >
+            <span class="night-stat"
+              ><strong class="tabular">{{ summary.totalKills }}</strong> kills</span
+            >
+            <span class="night-stat"
+              ><strong class="tabular">{{ summary.totalWipes }}</strong> wipes</span
+            >
+            <span class="night-stat"
+              ><strong class="tabular">{{ formatDuration(summary.totalDurationMs) }}</strong> en
+              combate</span
+            >
             @if (summary.hardestGroup; as hardest) {
-              <span class="night-stat night-hardest">Más costoso: {{ hardest.bossName }} · {{ hardest.attemptCount - hardest.killCount }} wipes</span>
+              <span class="night-stat night-hardest"
+                >Más costoso: {{ hardest.bossName }} ·
+                {{ hardest.attemptCount - hardest.killCount }} wipes</span
+              >
             }
           </div>
           <div class="night-summary-actions">
-            <a class="report-link-btn" [routerLink]="['/report', currentReportCode()]">Ver informe completo →</a>
+            <a class="report-link-btn" [routerLink]="['/report', currentReportCode()]"
+              >Ver informe completo →</a
+            >
             <button type="button" class="copy-night-btn" (click)="copyNightSummary()">
-              {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar resumen' }}
+              {{
+                copyStatus() === 'copied'
+                  ? '✓ Copiado'
+                  : copyStatus() === 'error'
+                    ? 'No se pudo copiar'
+                    : 'Copiar resumen'
+              }}
             </button>
           </div>
         </div>
@@ -165,7 +219,10 @@
             <span class="night-players-label">Dossiers</span>
             <div class="night-players-chips">
               @for (player of nightPlayers(); track player.name) {
-                <a class="player-chip" [routerLink]="['/report', currentReportCode(), 'player', player.name]">
+                <a
+                  class="player-chip"
+                  [routerLink]="['/report', currentReportCode(), 'player', player.name]"
+                >
                   <app-class-icon [wclClass]="player.className" />{{ player.name }}
                 </a>
               }
@@ -175,6 +232,9 @@
       </details>
     }
   } @else if (!importing()) {
-    <app-empty-panel icon="📋" message="Carga un report reciente o pega un código de WCL para empezar." />
+    <app-empty-panel
+      icon="📋"
+      message="Carga un report reciente o pega un código de WCL para empezar."
+    />
   }
 </div>

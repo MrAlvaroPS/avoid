@@ -1,0 +1,109 @@
+<div class="night-selector">
+  <button type="button" class="selector-back" (click)="closed.emit()">← Volver</button>
+  <h2 class="selector-title">Elegir noche</h2>
+
+  <input
+    class="selector-search"
+    type="search"
+    placeholder="Buscar por fecha, título o código…"
+    [value]="search()"
+    (input)="onSearchInput($any($event.target).value)"
+  />
+
+  <div class="selector-import">
+    @if (!showImportForm()) {
+      <button type="button" class="import-toggle" (click)="showImportForm.set(true)">
+        + Importar log de Warcraft Logs
+      </button>
+    } @else {
+      <form class="import-form" (submit)="$event.preventDefault(); onImport()">
+        <input
+          class="import-input tabular"
+          type="text"
+          placeholder="Código o URL de WCL"
+          [value]="importInput()"
+          (input)="importInput.set($any($event.target).value)"
+          [disabled]="importing()"
+        />
+        <button type="submit" class="import-btn" [disabled]="importing() || !importInput().trim()">
+          {{ importing() ? 'Importando…' : 'Importar' }}
+        </button>
+      </form>
+      @if (importProgress(); as p) {
+        <span class="import-status">{{ p }}</span>
+      }
+      @if (importError(); as e) {
+        <p class="import-error" role="alert">{{ e }}</p>
+      }
+      @if (duplicateWarning(); as dup) {
+        <p class="import-duplicate" role="alert">⚠ Puede duplicar la misma noche que {{ dup }}.</p>
+      }
+    }
+  </div>
+
+  <div class="selector-results">
+    @if (needsFullList()) {
+      @if (allReportsLoading()) {
+        <p class="selector-status">Cargando…</p>
+      } @else if (allReportsError(); as e) {
+        <p class="selector-error" role="alert">{{ e }}</p>
+      } @else if (monthGroups(); as groups) {
+        @if (groups.length) {
+          @for (group of groups; track group.key) {
+            <div class="month-group">
+              <span class="month-label">{{ group.label }}</span>
+              @for (item of group.items; track item.report.code) {
+                <a
+                  class="report-row"
+                  [routerLink]="['/report', item.report.code, 'raid']"
+                  (click)="onRowClick($event, item.report.code)"
+                >
+                  <span class="report-date tabular">{{
+                    reportDateLabel(item.report.start_time)
+                  }}</span>
+                  <span class="report-title">{{ item.report.title || 'Report de raid' }}</span>
+                </a>
+              }
+            </div>
+          }
+        } @else {
+          <p class="selector-empty">Todavía no hay ninguna noche importada.</p>
+        }
+      } @else if (flatResults().length) {
+        @for (item of flatResults(); track item.report.code) {
+          <a
+            class="report-row"
+            [routerLink]="['/report', item.report.code, 'raid']"
+            (click)="onRowClick($event, item.report.code)"
+          >
+            <span class="report-date tabular">{{ reportDateLabel(item.report.start_time) }}</span>
+            <span class="report-title">{{ item.report.title || 'Report de raid' }}</span>
+          </a>
+        }
+      } @else {
+        <p class="selector-empty">Ningún resultado para «{{ search() }}».</p>
+      }
+    } @else {
+      <span class="results-label">Recientes</span>
+      @if (recentLoading()) {
+        <p class="selector-status">Cargando…</p>
+      } @else if (recentError(); as e) {
+        <p class="selector-error" role="alert">{{ e }}</p>
+      } @else if (recentReports().length) {
+        @for (item of recentReports(); track item.report.code) {
+          <a
+            class="report-row"
+            [routerLink]="['/report', item.report.code, 'raid']"
+            (click)="onRowClick($event, item.report.code)"
+          >
+            <span class="report-date tabular">{{ reportDateLabel(item.report.start_time) }}</span>
+            <span class="report-title">{{ item.report.title || 'Report de raid' }}</span>
+          </a>
+        }
+        <button type="button" class="show-all-btn" (click)="toggleShowAll()">Ver todas</button>
+      } @else {
+        <p class="selector-empty">Todavía no hay ninguna noche importada.</p>
+      }
+    }
+  </div>
+</div>

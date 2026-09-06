@@ -1,0 +1,117 @@
+<aside class="report-sidebar" aria-label="Noche activa">
+  @if (selectorOpen()) {
+    <app-report-night-selector (closed)="selectorOpen.set(false)" />
+  } @else {
+    @if (playerMissingNotice(); as notice) {
+      <div class="player-missing-notice" role="status">
+        <span>{{ notice }}</span>
+        <button type="button" (click)="dismissPlayerMissingNotice()" aria-label="Cerrar aviso">
+          ×
+        </button>
+      </div>
+    }
+
+    <button
+      type="button"
+      class="night-header"
+      (click)="selectorOpen.set(true)"
+      aria-label="Cambiar de noche"
+    >
+      @if (workspace.loading() && !workspace.report()) {
+        <div class="night-header-skeleton" aria-hidden="true">
+          <div class="skeleton-line skeleton-line-title"></div>
+          <div class="skeleton-line skeleton-line-date"></div>
+        </div>
+      } @else if (workspace.error(); as e) {
+        <span class="night-error" role="alert">{{ e }}</span>
+        <span class="night-error-link">Cambiar noche</span>
+      } @else if (workspace.report(); as report) {
+        <div class="night-title-row">
+          <strong class="night-title">{{
+            report.title.trim() || report.zone_name || 'Raid'
+          }}</strong>
+          <span class="night-chevron" aria-hidden="true">▾</span>
+        </div>
+        <span class="night-date">{{ reportDateLabel(report.start_time) }}</span>
+      }
+    </button>
+
+    @if (workspace.reportCode(); as code) {
+      <nav class="workspace-views" aria-label="Vistas de la noche">
+        <span class="views-label">Vistas</span>
+        <a
+          [routerLink]="['/report', code, 'raid']"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: true }"
+          >Raid</a
+        >
+        <a
+          [routerLink]="['/report', code]"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: true }"
+          >Informe</a
+        >
+      </nav>
+
+      <section class="workspace-participants" aria-label="Jugadores de la noche">
+        <div class="participants-header">
+          <span class="participants-label">Jugadores</span>
+          <span class="participants-count">{{ workspace.participants().length }}</span>
+        </div>
+
+        @if (workspace.participants().length) {
+          <input
+            class="participants-search"
+            type="search"
+            placeholder="Buscar jugador…"
+            [value]="search()"
+            (input)="search.set($any($event.target).value)"
+          />
+
+          <div class="participants-list">
+            @if (filteredGroups().length) {
+              @for (group of filteredGroups(); track group.key) {
+                <section class="role-group">
+                  <header class="role-group-header">
+                    <span class="role-group-label">{{ group.label }}</span>
+                    <span class="role-group-count">{{ group.count }}</span>
+                  </header>
+                  <!-- §pasada UX/UI (2026-09-06): Role → Class → Player se
+                       sigue respetando en el ORDEN (la clase solo ordena y
+                       agrupa quién queda junto a quién) — pero ya no se
+                       renderiza una cabecera de clase, para no gastar una
+                       línea entera por cada clase presente. El icono de
+                       clase, en el propio chip, ya identifica de qué clase
+                       es cada jugador. -->
+                  <div class="role-group-chips">
+                    @for (cls of group.classes; track cls.className ?? '') {
+                      @for (player of cls.players; track player.name) {
+                        <a
+                          class="participant-chip"
+                          [class.active]="activePlayerName() === player.name"
+                          [routerLink]="['/report', code, 'player', player.name]"
+                        >
+                          <app-class-icon [wclClass]="player.className" />
+                          <span class="participant-name">{{ player.name }}</span>
+                          @if (player.rank === 'Trial') {
+                            <span class="participant-badge">Trial</span>
+                          } @else if (player.rank === null) {
+                            <span class="participant-badge">Sin roster</span>
+                          }
+                        </a>
+                      }
+                    }
+                  </div>
+                </section>
+              }
+            } @else {
+              <p class="participants-empty">Ningún jugador coincide con «{{ search() }}».</p>
+            }
+          </div>
+        } @else {
+          <p class="participants-empty">Sin participantes registrados para esta noche.</p>
+        }
+      </section>
+    }
+  }
+</aside>

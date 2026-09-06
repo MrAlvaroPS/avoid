@@ -4,13 +4,15 @@
   <p class="loading">Cargando dosier…</p>
 } @else if (data(); as d) {
   <div class="dossier">
-    <a [routerLink]="['/']" [queryParams]="{ report: d.reportCode }" class="back-link">← Volver a la raid</a>
+    <a [routerLink]="['/report', d.reportCode, 'raid']" class="back-link">← Volver a la raid</a>
 
     <header class="page-header">
       @if (d.roster?.avatarUrl) {
         <img class="avatar" [src]="d.roster!.avatarUrl" [alt]="d.playerName" />
       } @else {
-        <div class="avatar avatar-placeholder"><app-role-icon [role]="d.roster?.role ?? null" /></div>
+        <div class="avatar avatar-placeholder">
+          <app-role-icon [role]="d.roster?.role ?? null" />
+        </div>
       }
       <div class="header-text">
         <h1>
@@ -36,15 +38,36 @@
       </div>
       <div class="header-actions">
         @if (discordChannelUrl(); as channelUrl) {
-          <button type="button" class="copy-btn discord-send-btn" [disabled]="sendToDiscordStatus() === 'sending'" (click)="sendSummaryToDiscord()">
-            {{ sendToDiscordStatus() === 'sending' ? 'Enviando…' : sendToDiscordStatus() === 'sent' ? '✓ Enviado' : 'Enviar a su canal →' }}
+          <button
+            type="button"
+            class="copy-btn discord-send-btn"
+            [disabled]="sendToDiscordStatus() === 'sending'"
+            (click)="sendSummaryToDiscord()"
+          >
+            {{
+              sendToDiscordStatus() === 'sending'
+                ? 'Enviando…'
+                : sendToDiscordStatus() === 'sent'
+                  ? '✓ Enviado'
+                  : 'Enviar a su canal →'
+            }}
           </button>
         }
-        <button type="button" class="copy-btn infographic-open-btn" (click)="infographicOpen.set(true)">
+        <button
+          type="button"
+          class="copy-btn infographic-open-btn"
+          (click)="infographicOpen.set(true)"
+        >
           Infografía del jugador · 4.6K
         </button>
         <button type="button" class="copy-btn" (click)="copySummary()">
-          {{ copyStatus() === 'copied' ? '✓ Copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord →' }}
+          {{
+            copyStatus() === 'copied'
+              ? '✓ Copiado'
+              : copyStatus() === 'error'
+                ? 'No se pudo copiar'
+                : 'Copiar para Discord →'
+          }}
         </button>
         <!-- §"no tenemos un force refresh en ningún lado... también hay que
              tenerlo en el dosier de jugador" (feedback real, 2026-08-31):
@@ -54,16 +77,33 @@
              load()/refreshInfographic() llaman al mismo summaryService.load
              con forceRefresh), así que el botón real tiene que estar aquí,
              visible sin ningún paso previo. -->
-        <button type="button" class="copy-btn" [disabled]="refreshingInfographic()" (click)="refreshInfographic()" title="Reanaliza cada pull de esta noche contra el catálogo actual (defensivos, mecánicas...) y recalcula el dosier entero, saltándose el caché.">
+        <button
+          type="button"
+          class="copy-btn"
+          [disabled]="refreshingInfographic()"
+          (click)="refreshInfographic()"
+          title="Reanaliza cada pull de esta noche contra el catálogo actual (defensivos, mecánicas...) y recalcula el dosier entero, saltándose el caché."
+        >
           @if (refreshingInfographic()) {
-            @if (recalculateProgress(); as p) { Reanalizando pulls… {{ p.done }}/{{ p.total }} } @else { Recalculando… }
+            @if (recalculateProgress(); as p) {
+              Reanalizando pulls… {{ p.done }}/{{ p.total }}
+            } @else {
+              Recalculando…
+            }
           } @else {
             🔄 Recalcular dosier
           }
         </button>
         @if (discordChannelUrl(); as channelUrl) {
           <div class="header-actions-footnote">
-            <a [href]="channelUrl" target="_blank" rel="noopener" class="discord-channel-link" title="Abrir el canal privado de este raider en Discord">🔗 Ver canal</a>
+            <a
+              [href]="channelUrl"
+              target="_blank"
+              rel="noopener"
+              class="discord-channel-link"
+              title="Abrir el canal privado de este raider en Discord"
+              >🔗 Ver canal</a
+            >
             @if (sendToDiscordError(); as e) {
               <span class="discord-send-error">{{ e }}</span>
             }
@@ -84,11 +124,18 @@
          ejecutaste hoy (tarjeta propia) / cuán fiable eres (las dos
          ventanas juntas bajo un techo). -->
     <div class="meta-strip">
-      <span><strong class="tabular">{{ d.pulls.length }}</strong> pulls</span>
+      <span
+        ><strong class="tabular">{{ d.pulls.length }}</strong> pulls</span
+      >
       <span class="meta-dot">·</span>
-      <span><strong class="tabular tone-danger">{{ d.totalDeaths }}</strong> muertes</span>
+      <span
+        ><strong class="tabular tone-danger">{{ d.totalDeaths }}</strong> muertes</span
+      >
       <span class="meta-dot">·</span>
-      <span><strong class="tabular tone-warning">{{ d.totalMechanicFails }}</strong> mecánicas falladas</span>
+      <span
+        ><strong class="tabular tone-warning">{{ d.totalMechanicFails }}</strong> mecánicas
+        falladas</span
+      >
     </div>
 
     <div class="score-grid">
@@ -100,32 +147,74 @@
       @if (d.nightScore != null) {
         <div class="score-card">
           <span class="eyebrow">Ejecución de esta noche</span>
-          <button type="button" class="score-trigger" (click)="openExplanation(nightScoreExplanation(d.nightScore, d.pulls, d.nightDefensiveConsistency))">
-            <span class="stat-value tabular" [class]="'tone-' + nightScoreTone(d.nightScore)">{{ formatPct(d.nightScore * 100) }}</span>
+          <button
+            type="button"
+            class="score-trigger"
+            (click)="
+              openExplanation(
+                nightScoreExplanation(d.nightScore, d.pulls, d.nightDefensiveConsistency)
+              )
+            "
+          >
+            <span class="stat-value tabular" [class]="'tone-' + nightScoreTone(d.nightScore)">{{
+              formatPct(d.nightScore * 100)
+            }}</span>
             <span class="stat-label">puntuación de la noche</span>
           </button>
-          <p class="score-card-note">Mecánica (70%) + consumibles al morir (30%) × cuánto sobreviviste, por pull ponderada por duración — y ×{{ formatPct(d.nightDefensiveConsistency.multiplier * 100) }} si hubo pulls sin ningún defensivo disponible usado.</p>
+          <p class="score-card-note">
+            Mecánica (70%) + consumibles al morir (30%) × cuánto sobreviviste, por pull ponderada
+            por duración — y ×{{ formatPct(d.nightDefensiveConsistency.multiplier * 100) }} si hubo
+            pulls sin ningún defensivo disponible usado.
+          </p>
         </div>
       }
       @if (d.reliability || d.nightReliability) {
         <div class="score-card">
           <span class="eyebrow">Fiabilidad</span>
-          <p class="score-card-note">Mecánica + defensiva + preparación (solo si falta algo — ir completo es la línea base, no suma) — misma fórmula, dos ventanas de tiempo. La asistencia se enseña aparte (ver el desglose) y no puntúa aquí.</p>
+          <p class="score-card-note">
+            Mecánica + defensiva + preparación (solo si falta algo — ir completo es la línea base,
+            no suma) — misma fórmula, dos ventanas de tiempo. La asistencia se enseña aparte (ver el
+            desglose) y no puntúa aquí.
+          </p>
           <div class="badge-pair">
             @if (d.reliability; as rel) {
-              <button type="button" class="score-trigger badge-trigger" (click)="openExplanation(reliabilityWindowExplanation(rel))">
-                <span class="reliability-badge" [class]="'tone-' + reliabilityTone()">{{ rel.overall }}</span>
+              <button
+                type="button"
+                class="score-trigger badge-trigger"
+                (click)="openExplanation(reliabilityWindowExplanation(rel))"
+              >
+                <span class="reliability-badge" [class]="'tone-' + reliabilityTone()">{{
+                  rel.overall
+                }}</span>
                 <span class="stat-label">60 días</span>
               </button>
             }
             @if (d.reliability && d.nightReliability) {
-              <svg class="badge-arrow" width="20" height="12" viewBox="0 0 20 12" fill="none" aria-hidden="true">
-                <path d="M1 6H18M18 6L13 1M18 6L13 11" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+              <svg
+                class="badge-arrow"
+                width="20"
+                height="12"
+                viewBox="0 0 20 12"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M1 6H18M18 6L13 1M18 6L13 11"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
               </svg>
             }
             @if (d.nightReliability; as nr) {
-              <button type="button" class="score-trigger badge-trigger" (click)="openExplanation(nightReliabilityExplanation(nr))">
-                <span class="reliability-badge" [class]="'tone-' + nightReliabilityTone()">{{ nr.overall }}</span>
+              <button
+                type="button"
+                class="score-trigger badge-trigger"
+                (click)="openExplanation(nightReliabilityExplanation(nr))"
+              >
+                <span class="reliability-badge" [class]="'tone-' + nightReliabilityTone()">{{
+                  nr.overall
+                }}</span>
                 <span class="stat-label">esta noche</span>
               </button>
             }
@@ -157,7 +246,9 @@
           @for (p of d.repeatedPatterns; track p.mechanicName) {
             <li>
               @if (p.mechanicId) {
-                <app-wowhead-link type="spell" [id]="p.mechanicId"><strong>{{ p.mechanicName }}</strong></app-wowhead-link>
+                <app-wowhead-link type="spell" [id]="p.mechanicId"
+                  ><strong>{{ p.mechanicName }}</strong></app-wowhead-link
+                >
               } @else {
                 <strong>{{ p.mechanicName }}</strong>
               }
@@ -165,7 +256,10 @@
               @if (categoryMeta(p.category); as meta) {
                 <span class="cat-tag">{{ meta.short }}</span>
               }
-              — {{ p.instanceCount }} veces en {{ p.distinctBossCount }} boss{{ p.distinctBossCount === 1 ? '' : 'es' }} distinto{{ p.distinctBossCount === 1 ? '' : 's' }}
+              — {{ p.instanceCount }} veces en {{ p.distinctBossCount }} boss{{
+                p.distinctBossCount === 1 ? '' : 'es'
+              }}
+              distinto{{ p.distinctBossCount === 1 ? '' : 's' }}
               <span class="meta">({{ p.bossNames.join(', ') }})</span>
             </li>
           }
@@ -207,13 +301,25 @@
               <tr [class.row-excluded]="p.excludedFromStats">
                 <td class="death-col">
                   @if (p.died) {
-                    <span [title]="p.scoreBreakdown.defensiveMissKind === 'death' ? 'Murió con un defensivo de su catálogo libre y sin usar — penalización adicional en la puntuación.' : 'Muerte evaluable'">
+                    <span
+                      [title]="
+                        p.scoreBreakdown.defensiveMissKind === 'death'
+                          ? 'Murió con un defensivo de su catálogo libre y sin usar — penalización adicional en la puntuación.'
+                          : 'Muerte evaluable'
+                      "
+                    >
                       {{ p.scoreBreakdown.defensiveMissKind === 'death' ? '💀⚠' : '💀' }}
                     </span>
                   } @else if (p.scoreBreakdown.defensiveMissKind === 'never_touched') {
-                    <span title="Ventana de presión real con el catálogo libre y CERO defensivos lanzados en todo el intento — penalización adicional en la puntuación.">⚠</span>
+                    <span
+                      title="Ventana de presión real con el catálogo libre y CERO defensivos lanzados en todo el intento — penalización adicional en la puntuación."
+                      >⚠</span
+                    >
                   } @else if (p.scoreBreakdown.defensiveMissKind === 'mistimed') {
-                    <span title="Sí lanzó defensivos en el pull, pero no en la ventana de presión real — penalización ligera, ver el detalle de la puntuación para dónde y por qué.">⏱</span>
+                    <span
+                      title="Sí lanzó defensivos en el pull, pero no en la ventana de presión real — penalización ligera, ver el detalle de la puntuación para dónde y por qué."
+                      >⏱</span
+                    >
                   }
                 </td>
                 <td class="cell-boss">
@@ -228,23 +334,46 @@
                     <span class="result-pill result-wipe">Wipe {{ formatPct(p.wipePct) }}</span>
                   }
                   @if (p.excludedReason === 'ninja_pull') {
-                    <span class="cat-tag cat-tag-wipecall" title="Duración muy corta y casi nadie de la raid llegó a entrar en combate, o al boss apenas le bajó la vida — probable enganche accidental, no un intento real.">NINJA PULL</span>
+                    <span
+                      class="cat-tag cat-tag-wipecall"
+                      title="Duración muy corta y casi nadie de la raid llegó a entrar en combate, o al boss apenas le bajó la vida — probable enganche accidental, no un intento real."
+                      >NINJA PULL</span
+                    >
                   } @else if (p.hadWipeCall) {
-                    <span class="cat-tag cat-tag-wipecall" title="Este jugador murió dentro del cluster de wipe call — su muerte no cuenta como evaluable, pero el resto del pull (mecánicas de antes, otros jugadores) sí.">WIPE CALL</span>
+                    <span
+                      class="cat-tag cat-tag-wipecall"
+                      title="Este jugador murió dentro del cluster de wipe call — su muerte no cuenta como evaluable, pero el resto del pull (mecánicas de antes, otros jugadores) sí."
+                      >WIPE CALL</span
+                    >
                   }
                 </td>
                 <td class="tabular align-right">{{ formatDuration(p.durationMs) }}</td>
                 <td class="tabular align-right">
                   @if (p.pullScore != null) {
-                    <button type="button" class="score-trigger" (click)="openExplanation(pullScoreExplanation(p, p.pullScore, d.mechanicFails))">
-                      <span [class]="'tone-' + nightScoreTone(p.pullScore)">{{ formatPct(p.pullScore * 100) }}</span>
+                    <button
+                      type="button"
+                      class="score-trigger"
+                      (click)="
+                        openExplanation(pullScoreExplanation(p, p.pullScore, d.mechanicFails))
+                      "
+                    >
+                      <span [class]="'tone-' + nightScoreTone(p.pullScore)">{{
+                        formatPct(p.pullScore * 100)
+                      }}</span>
                     </button>
                   } @else {
                     <span class="meta">No evaluable</span>
                   }
                 </td>
                 <td class="align-right">
-                  <a class="external-tool-link" [href]="wowAnalyzerUrl(d.reportCode, p.fightId, d.playerName)" target="_blank" rel="noopener" title="Analizar rotación en la instancia local de WoWAnalyzer">Rotación ↗</a>
+                  <a
+                    class="external-tool-link"
+                    [href]="wowAnalyzerUrl(d.reportCode, p.fightId, d.playerName)"
+                    target="_blank"
+                    rel="noopener"
+                    title="Analizar rotación en la instancia local de WoWAnalyzer"
+                    >Rotación ↗</a
+                  >
                 </td>
               </tr>
             }
@@ -267,17 +396,23 @@
                 <th>Mecánica</th>
                 <th>Causa</th>
                 <th>¿Defensivo disponible?</th>
-                <th title="¿Usó una piedra de brujo o poción de vida en algún momento del try?">¿Poción/piedra en el try?</th>
+                <th title="¿Usó una piedra de brujo o poción de vida en algún momento del try?">
+                  ¿Poción/piedra en el try?
+                </th>
               </tr>
             </thead>
             <tbody>
               @for (death of d.deaths; track death.pullId) {
                 <tr [class.row-wipecall]="death.isWipeCall || death.statisticalExclusionReason">
-                  <td class="cell-boss">{{ death.bossName }} <span class="meta">#{{ death.pullNumber }}</span></td>
+                  <td class="cell-boss">
+                    {{ death.bossName }} <span class="meta">#{{ death.pullNumber }}</span>
+                  </td>
                   <td class="tabular align-right">{{ formatDuration(death.timeMs) }}</td>
                   <td class="cell-mechanic">
                     @if (death.mechanicId) {
-                      <app-wowhead-link type="spell" [id]="death.mechanicId">{{ mechanicDisplayName(death.mechanicName) }}</app-wowhead-link>
+                      <app-wowhead-link type="spell" [id]="death.mechanicId">{{
+                        mechanicDisplayName(death.mechanicName)
+                      }}</app-wowhead-link>
                     } @else {
                       {{ mechanicDisplayName(death.mechanicName) }}
                     }
@@ -286,20 +421,39 @@
                       <span class="cat-tag">{{ meta.short }}</span>
                     }
                     @if (death.isWipeCall) {
-                      <span class="cat-tag cat-tag-wipecall" title="Excluida de fiabilidad — cluster de wipe call confirmado">WIPE CALL</span>
+                      <span
+                        class="cat-tag cat-tag-wipecall"
+                        title="Excluida de fiabilidad — cluster de wipe call confirmado"
+                        >WIPE CALL</span
+                      >
                     }
                     @if (death.statisticalExclusionReason === 'boss_melee_on_non_tank') {
-                      <span class="cat-tag cat-tag-wipecall" title="Melee del boss sobre un no-tank tras perder el control del boss. Solo se menciona; no evalúa al objetivo.">TANKS CAÍDOS · NO EVALUABLE</span>
+                      <span
+                        class="cat-tag cat-tag-wipecall"
+                        title="Melee del boss sobre un no-tank tras perder el control del boss. Solo se menciona; no evalúa al objetivo."
+                        >TANKS CAÍDOS · NO EVALUABLE</span
+                      >
                     }
                   </td>
-                  <td>{{ death.statisticalExclusionReason === 'boss_melee_on_non_tank' ? 'Boss sin tank operativo' : rootCauseLabel(death.rootCause, death.category) }}</td>
+                  <td>
+                    {{
+                      death.statisticalExclusionReason === 'boss_melee_on_non_tank'
+                        ? 'Boss sin tank operativo'
+                        : rootCauseLabel(death.rootCause, death.category)
+                    }}
+                  </td>
                   <td [class.tone-danger]="death.defensivesAvailable.length > 0">
                     @if (death.statisticalExclusionReason || death.isWipeCall) {
                       <span class="meta">No evaluable</span>
                     } @else if (death.defensivesAvailable.length) {
                       <div class="defensive-icons">
                         @for (def of death.defensivesAvailable; track def.spellId) {
-                          <app-wowhead-link type="spell" [id]="def.spellId" class="icon-only" [attr.title]="def.name" />
+                          <app-wowhead-link
+                            type="spell"
+                            [id]="def.spellId"
+                            class="icon-only"
+                            [attr.title]="def.name"
+                          />
                         }
                       </div>
                     } @else {
@@ -308,7 +462,13 @@
                   </td>
                   <td>
                     @if (death.usedHealthstoneInPull || death.usedHealthPotionInPull) {
-                      {{ death.usedHealthstoneInPull && death.usedHealthPotionInPull ? 'Piedra + poción' : death.usedHealthstoneInPull ? 'Piedra de brujo' : 'Poción de vida' }}
+                      {{
+                        death.usedHealthstoneInPull && death.usedHealthPotionInPull
+                          ? 'Piedra + poción'
+                          : death.usedHealthstoneInPull
+                            ? 'Piedra de brujo'
+                            : 'Poción de vida'
+                      }}
                     } @else {
                       <span class="meta">No</span>
                     }
@@ -324,7 +484,10 @@
     <section class="widget" aria-labelledby="fails-heading">
       <h2 id="fails-heading" class="widget-heading">Mecánicas falladas sin morir</h2>
       @if (!d.mechanicFails.length) {
-        <app-empty-panel icon="✓" message="Sin mecánicas de responsabilidad individual falladas esta noche." />
+        <app-empty-panel
+          icon="✓"
+          message="Sin mecánicas de responsabilidad individual falladas esta noche."
+        />
       } @else {
         <div class="table-wrap">
           <table>
@@ -339,9 +502,13 @@
             <tbody>
               @for (fail of d.mechanicFails; track fail.pullId + fail.mechanicName) {
                 <tr>
-                  <td class="cell-boss">{{ fail.bossName }} <span class="meta">#{{ fail.pullNumber }}</span></td>
+                  <td class="cell-boss">
+                    {{ fail.bossName }} <span class="meta">#{{ fail.pullNumber }}</span>
+                  </td>
                   <td class="cell-mechanic">
-                    <app-wowhead-link type="spell" [id]="fail.mechanicId">{{ fail.mechanicName }}</app-wowhead-link>
+                    <app-wowhead-link type="spell" [id]="fail.mechanicId">{{
+                      fail.mechanicName
+                    }}</app-wowhead-link>
                     <app-mechanic-info-icon [note]="fail.aiNote" />
                     @if (categoryMeta(fail.category); as meta) {
                       <span class="cat-tag">{{ meta.short }}</span>
@@ -349,7 +516,10 @@
                       <span class="cat-tag cat-tag-unknown">SIN CLASIFICAR</span>
                     }
                     <!-- §"muestra el percentil + fuente" (feedback real, 2026-08-27) -->
-                    @if (comparisonLabel(fail.comparisonSource, fail.comparisonPercentile); as label) {
+                    @if (
+                      comparisonLabel(fail.comparisonSource, fail.comparisonPercentile);
+                      as label
+                    ) {
                       <small class="meta comparison-label">{{ label }}</small>
                     }
                   </td>
@@ -377,12 +547,27 @@
               </tr>
             </thead>
             <tbody>
-              @for (offense of d.mechanicOffensesV3; track offense.pull_id + offense.mechanic_key + offense.occurrence_index + offense.reason_code) {
+              @for (
+                offense of d.mechanicOffensesV3;
+                track offense.pull_id +
+                  offense.mechanic_key +
+                  offense.occurrence_index +
+                  offense.reason_code
+              ) {
                 <tr>
-                  <td>{{ offense.mechanic_key }} <span class="meta">#{{ offense.occurrence_index }}</span></td>
+                  <td>
+                    {{ offense.mechanic_key }}
+                    <span class="meta">#{{ offense.occurrence_index }}</span>
+                  </td>
                   <td>{{ offense.relationship }}</td>
                   <td>{{ offense.reason_code }}</td>
-                  <td>{{ offense.confidence }} <span class="meta">v{{ offense.policy_version ?? '—' }} · {{ offense.ledger_evaluator_version }}</span></td>
+                  <td>
+                    {{ offense.confidence }}
+                    <span class="meta"
+                      >v{{ offense.policy_version ?? '—' }} ·
+                      {{ offense.ledger_evaluator_version }}</span
+                    >
+                  </td>
                 </tr>
               }
             </tbody>
@@ -399,7 +584,10 @@
     <section class="widget" aria-labelledby="interrupts-heading">
       <h2 id="interrupts-heading" class="widget-heading">Interrupciones conseguidas</h2>
       @if (!d.interrupts.length) {
-        <app-empty-panel icon="—" message="Sin interrupciones registradas a su nombre esta noche." />
+        <app-empty-panel
+          icon="—"
+          message="Sin interrupciones registradas a su nombre esta noche."
+        />
       } @else {
         <div class="table-wrap">
           <table>
@@ -413,9 +601,13 @@
             <tbody>
               @for (cut of d.interrupts; track cut.pullId + cut.mechanicName + cut.timeMs) {
                 <tr>
-                  <td class="cell-boss">{{ cut.bossName }} <span class="meta">#{{ cut.pullNumber }}</span></td>
+                  <td class="cell-boss">
+                    {{ cut.bossName }} <span class="meta">#{{ cut.pullNumber }}</span>
+                  </td>
                   <td class="cell-mechanic">
-                    <app-wowhead-link type="spell" [id]="cut.mechanicId">{{ cut.mechanicName }}</app-wowhead-link>
+                    <app-wowhead-link type="spell" [id]="cut.mechanicId">{{
+                      cut.mechanicName
+                    }}</app-wowhead-link>
                     <app-mechanic-info-icon [note]="cut.aiNote" />
                   </td>
                   <td class="tabular align-right">{{ formatDuration(cut.timeMs) }}</td>
@@ -429,9 +621,17 @@
 
     @if (d.gearSnapshot; as g) {
       <section class="widget" aria-labelledby="gear-heading">
-        <h2 id="gear-heading" class="widget-heading">Equipo — al terminar {{ g.bossName }} (#{{ g.fromPullNumber }})</h2>
+        <h2 id="gear-heading" class="widget-heading">
+          Equipo — al terminar {{ g.bossName }} (#{{ g.fromPullNumber }})
+        </h2>
         <p class="gear-sub">
-          {{ g.spec ? g.spec + ' ' : '' }}{{ g.class ?? '—' }} · {{ g.enchantedSlotCount }}/{{ g.enchantableSlotCount }} enchants · {{ g.gemmedSlotCount }}/{{ g.gemmableSlotCount }} slots con gema ({{ g.gemCount }} gema{{ g.gemCount === 1 ? '' : 's' }} total{{ g.gemCount === 1 ? '' : 'es' }})
+          {{ g.spec ? g.spec + ' ' : '' }}{{ g.class ?? '—' }} · {{ g.enchantedSlotCount }}/{{
+            g.enchantableSlotCount
+          }}
+          enchants · {{ g.gemmedSlotCount }}/{{ g.gemmableSlotCount }} slots con gema ({{
+            g.gemCount
+          }}
+          gema{{ g.gemCount === 1 ? '' : 's' }} total{{ g.gemCount === 1 ? '' : 'es' }})
         </p>
         <div class="gear-columns">
           <div class="detail-block">
@@ -454,7 +654,12 @@
             @if (g.gear.length) {
               <div class="icon-chips">
                 @for (item of g.gear; track item.slot) {
-                  <app-wowhead-link type="item" [id]="item.itemId" class="icon-only" [attr.title]="'ilvl ' + item.itemLevel" />
+                  <app-wowhead-link
+                    type="item"
+                    [id]="item.itemId"
+                    class="icon-only"
+                    [attr.title]="'ilvl ' + item.itemLevel"
+                  />
                 }
               </div>
             } @else {
@@ -469,10 +674,16 @@
       <section class="widget preparation-entry" aria-labelledby="preparation-entry-heading">
         <h2 id="preparation-entry-heading" class="widget-heading">Preparación al entrar a raid</h2>
         <p class="gear-sub">
-          Pull #{{ prep.fromPullNumber }} · {{ prep.enchantedSlotCount }}/{{ prep.enchantableSlotCount }} enchants · {{ prep.gemmedSlotCount }}/{{ prep.gemmableSlotCount }} slots con gema
+          Pull #{{ prep.fromPullNumber }} · {{ prep.enchantedSlotCount }}/{{
+            prep.enchantableSlotCount
+          }}
+          enchants · {{ prep.gemmedSlotCount }}/{{ prep.gemmableSlotCount }} slots con gema
         </p>
         @if (prep.preparationSource === 'ledger_v3') {
-          <p class="meta">Verificado por ledger v3 · {{ prep.preparationLedgerVersion }} · {{ prep.preparationEvaluatedAt | date:'short' }}</p>
+          <p class="meta">
+            Verificado por ledger v3 · {{ prep.preparationLedgerVersion }} ·
+            {{ prep.preparationEvaluatedAt | date: 'short' }}
+          </p>
         } @else {
           <p class="meta">Snapshot de Warcraft Logs; los checks v3 no estaban completos.</p>
         }
@@ -486,8 +697,16 @@
        la página — ver explanationModal en el componente. -->
   @if (explanationModal(); as modal) {
     <div class="modal-backdrop" (click)="closeExplanation()">
-      <div class="modal-panel" role="dialog" aria-modal="true" [attr.aria-label]="modal.title" (click)="$event.stopPropagation()">
-        <button type="button" class="modal-close" (click)="closeExplanation()" aria-label="Cerrar">✕</button>
+      <div
+        class="modal-panel"
+        role="dialog"
+        aria-modal="true"
+        [attr.aria-label]="modal.title"
+        (click)="$event.stopPropagation()"
+      >
+        <button type="button" class="modal-close" (click)="closeExplanation()" aria-label="Cerrar">
+          ✕
+        </button>
         <h3>{{ modal.title }}</h3>
         @for (line of modal.lines; track line) {
           <p>{{ line }}</p>
@@ -508,7 +727,9 @@
           <ul class="modal-item-list modal-mechanic-list">
             @for (fail of modal.mechanics; track fail.pullId + fail.mechanicName) {
               <li>
-                <app-wowhead-link type="spell" [id]="fail.mechanicId">{{ fail.mechanicName }}</app-wowhead-link>
+                <app-wowhead-link type="spell" [id]="fail.mechanicId">{{
+                  fail.mechanicName
+                }}</app-wowhead-link>
                 <app-mechanic-info-icon [note]="fail.aiNote" />
                 @if (categoryMeta(fail.category); as meta) {
                   <span class="cat-tag">{{ meta.short }}</span>

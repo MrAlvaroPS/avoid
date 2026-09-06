@@ -1,0 +1,134 @@
+// Colocar en: src/app/features/report-workspace/report-sidebar.component.ts
+// PR2 del plan IRIS (Report Workspace): cabecera de la noche + selector
+// Raid/Informe. PR3 añade el navegador de jugadores (Role → Class → Player,
+// búsqueda local, jugador activo derivado de la ruta). PR4 añade el
+// selector de noches (§8 del spec): pulsar la cabecera cambia TEMPORALMENTE
+// el sidebar a modo selección — `selectorOpen` es estado puramente de UI
+// (qué se enseña en el sidebar AHORA MISMO), no una identidad de report
+// paralela: la noche activa de verdad sigue siendo únicamente
+// workspace.reportCode(), y elegir otra navega (ver ReportNightSelectorComponent).
+// §14/§41: el sidebar es navegación, nunca un dashboard (nada de score/
+// muertes/% defensivo/mecánicas aquí).
+import { Component, computed, effect, inject, signal, untracked } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
+import {
+  ActivatedRoute,
+  NavigationEnd,
+  Router,
+  RouterLink,
+  RouterLinkActive,
+} from '@angular/router';
+import { filter, map } from 'rxjs';
+import { ReportWorkspaceService } from '../../core/report-workspace.service';
+import { ClassIconComponent } from '../../shared/class-icon.component';
+import {
+  filterParticipantGroups,
+  groupParticipantsForSidebar,
+} from './report-participant-grouping.util';
+import { ReportNightSelectorComponent } from './report-night-selector.component';
+
+@Component({
+  selector: 'app-report-sidebar',
+  standalone: true,
+  imports: [RouterLink, RouterLinkActive, ClassIconComponent, ReportNightSelectorComponent],
+  templateUrl: './report-sidebar.component.html',
+  styleUrl: './report-sidebar.component.scss',
+})
+export class ReportSidebarComponent {
+  /** §8 del spec: modo selección temporal — nunca "qué noche está activa" (eso sigue siendo solo workspace.reportCode()). */
+  protected selectorOpen = signal(false);
+
+  // Mismo ReportWorkspaceService que provee el ReportWorkspaceComponent
+  // padre (component-scoped, ver report-workspace.service.ts) — este
+  // sidebar nunca abre su propio report, solo lee el que ya está activo.
+  protected workspace = inject(ReportWorkspaceService);
+
+  private router = inject(Router);
+  // El ActivatedRoute que llega aquí por inyección es el de
+  // ReportWorkspaceComponent (report/:reportCode) — este sidebar no es un
+  // componente enrutado, hereda el injector de su padre. `.firstChild` es la
+  // ruta hija ACTIVA (raid | '' | player/:playerName) sea cual sea el
+  // router-outlet que la pinte, así que sirve para derivar "qué jugador está
+  // abierto" sin guardar ese dato en ningún sitio nuevo (§PR3: nada de
+  // selectedPlayer en ReportWorkspaceService).
+  private route = inject(ActivatedRoute);
+
+  /**
+   * §bug real encontrado (2026-09-06, verificado en navegador autenticado:
+   * "Cannot read properties of undefined (reading 'paramMap')" al construir
+   * este componente): ActivatedRoute.snapshot es un campo SIN asignar en el
+   * constructor de la clase (ver ActivatedRoute en @angular/router) — un
+   * nodo hijo puede ya existir en .children (firstChild da un objeto real)
+   * mientras su .snapshot todavía no se ha comprometido, si ese nodo hijo
+   * se activa/confirma DESPUÉS de que este componente (hermano del
+   * router-outlet dentro de ReportWorkspaceComponent, no él mismo enrutado)
+   * termine de construirse. `?.` extra tras `.snapshot` — nunca se inventa
+   * un jugador, simplemente "todavía no lo sé" se trata igual que "no hay
+   * jugador", y el propio NavigationEnd de abajo lo corrige en cuanto la
+   * navegación termina de verdad.
+   */
+  private currentPlayerName(): string | null {
+    return this.route.firstChild?.snapshot?.paramMap.get('playerName') ?? null;
+  }
+
+  // Mismo patrón que app.ts (isIsolatedPage): toSignal + NavigationEnd +
+  // un valor inicial calculado igual, para que el primer render ya sea
+  // correcto y el back/forward del navegador (que también dispara
+  // NavigationEnd) lo mantenga así.
+  protected activePlayerName = toSignal(
+    this.router.events.pipe(
+      filter((e): e is NavigationEnd => e instanceof NavigationEnd),
+      map(() => this.currentPlayerName()),
+    ),
+    { initialValue: this.currentPlayerName() },
+  );
+
+  protected search = signal('');
+
+  private groups = computed(() => groupParticipantsForSidebar(this.workspace.participants()));
+  protected filteredGroups = computed(() => filterParticipantGroups(this.groups(), this.search()));
+
+  /**
+   * §PR5 del plan (Entrega 5: "conservación de contexto entre noches",
+   * §26 del spec): cuando el cambio de noche NO pudo preservar el Dosier
+   * (el jugador no participó en la noche nueva), ReportNightSelectorComponent
+   * navega con ?playerMissing=NOMBRE en vez de guardar nada en
+   * ReportWorkspaceService — el router sigue siendo la única fuente de
+   * verdad, esto solo lo LEE. Se captura una vez, se limpia de la URL
+   * inmediatamente (§45/§46: la URL debe quedar canónica, sin parámetros
+   * transitorios) y el aviso vive de ahí en adelante solo en este signal
+   * local, con auto-cierre.
+   */
+  private playerMissingParam = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
+  });
+  protected playerMissingNotice = signal<string | null>(null);
+
+  constructor() {
+    effect(() => {
+      const name = this.playerMissingParam().get('playerMissing');
+      if (!name) return;
+      untracked(() => {
+        this.playerMissingNotice.set(`${name} no participó en esta noche.`);
+        void this.router.navigate([], {
+          queryParams: { playerMissing: null },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
+        setTimeout(() => this.playerMissingNotice.set(null), 6000);
+      });
+    });
+  }
+
+  dismissPlayerMissingNotice(): void {
+    this.playerMissingNotice.set(null);
+  }
+
+  reportDateLabel(startTime: number): string {
+    return new Date(startTime).toLocaleDateString('es-ES', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+  }
+}

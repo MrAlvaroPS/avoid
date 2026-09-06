@@ -1,0 +1,352 @@
+// §39 del spec / pasada UX/UI (2026-09-06): ancho 280px, solo escritorio por
+// ahora. Superficie con gradiente + card-border, no una caja nueva
+// reinventada. Cabecera de la noche + Vistas + buscador se quedan FUERA del
+// scroll (altura fija, `height` en vez de `max-height` para que el hijo
+// flex:1 sepa cuánto espacio le queda de verdad); el scroll vive solo en
+// .workspace-participants — con los chips compactos de esta pasada, esa
+// zona debería necesitar scroll mucho menos que antes.
+.report-sidebar {
+  position: sticky;
+  top: 66px; // 56px de .top-nav (app.scss) + el mismo margen que usaba la cabecera de Raid
+  flex: 0 0 280px;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: calc(100dvh - 66px);
+  overflow: hidden;
+  border-right: 1px solid var(--card-border);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
+}
+
+// §PR5 (§26 del spec): aviso pequeño y no bloqueante cuando el cambio de
+// noche no pudo preservar el Dosier — nunca ocupa toda la pantalla, se
+// autocierra solo (ver report-sidebar.component.ts) y también se puede
+// cerrar a mano.
+.player-missing-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--card-border);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-size: 11px;
+
+  button {
+    flex-shrink: 0;
+    padding: 0 2px;
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    &:hover {
+      color: var(--text);
+    }
+  }
+}
+
+// La cabecera es un <button> clicable (abre el selector de noches, §8 del
+// spec) — reset de los estilos de botón nativo para que siga leyéndose como
+// cabecera, no como control de formulario. El chevron + hover sutil dan la
+// affordance de "esto se puede pulsar" (§12 de la pasada UX/UI).
+.night-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--card-border);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+  &:hover .night-chevron {
+    color: var(--accent);
+  }
+}
+
+.night-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.night-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.night-chevron {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.night-date {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.night-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+// Ya no es un <a> propio — la cabecera entera es el botón que abre el
+// selector (ver .night-header más arriba), esto es solo el texto que invita a pulsarla.
+.night-error-link {
+  align-self: flex-start;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.night-header-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+// §43 del spec: al cambiar de report se mantiene la noche seleccionada y se
+// enseña un skeleton, en vez de vaciar bruscamente toda la interfaz.
+.skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.skeleton-line-title {
+  width: 70%;
+  height: 14px;
+}
+.skeleton-line-date {
+  width: 45%;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+// §13 de la pasada UX/UI: zona muy compacta — el activo se distingue por
+// fondo suave, sin parecer un botón grande.
+.workspace-views {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px 10px;
+}
+
+.views-label {
+  padding: 4px 8px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.workspace-views a {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  &.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+}
+
+// La única sección que crece con el tamaño del roster — todo lo de arriba
+// (cabecera + Vistas) tiene altura fija, esta se lleva el resto. Scrollbar
+// fina y oscura (§11 de la pasada UX/UI) — nada de la barra blanca por
+// defecto del navegador.
+.workspace-participants {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--card-border);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-bright) transparent;
+
+  &::-webkit-scrollbar {
+    width: 7px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: var(--border-bright);
+    border-radius: 999px;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-soft);
+  }
+}
+
+.participants-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 6px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.participants-count {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+// §10 de la pasada UX/UI: compacto, sin peso visual de formulario.
+.participants-search {
+  margin: 0 10px 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 11.5px;
+
+  &::placeholder {
+    color: var(--text-faint);
+  }
+  &:focus-visible {
+    border-color: var(--accent);
+  }
+}
+
+.participants-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+
+.participants-empty {
+  margin: 4px 14px 12px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.role-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.role-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+}
+
+.role-group-label {
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.role-group-count {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+// §5-9 de la pasada UX/UI: el navegador de jugadores ya no es un árbol
+// (Role → Class-header → Player en su propia fila) — es una fila de chips
+// que envuelve. Role → Class → Player se sigue respetando en el ORDEN (la
+// clase agrupa/ordena), pero no se dibuja una cabecera de clase — el icono
+// de cada chip ya identifica la clase. No usar width:100% en el chip: el
+// ancho depende del contenido para que quepan varios por fila.
+.role-group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 14px;
+}
+
+.participant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+
+  &:hover {
+    border-color: var(--border-bright);
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  // §9 del spec: el jugador activo se distingue de un vistazo, sin fondo
+  // exagerado — borde + fondo suave, mismo lenguaje que .workspace-views a.active.
+  &.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+}
+
+.participant-name {
+  overflow: hidden;
+  max-width: 130px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.participant-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 8.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}

@@ -6,6 +6,11 @@ import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import type { PullRow, ReportEncounterRow, ReportRow } from '../shared/models/domain';
 import { STANDARD_DIFFICULTY_IDS, WCL_DIFFICULTY_NAME_BY_ID } from '../shared/format.util';
+import type { RaidRole } from '../shared/role-icon.component';
+import {
+  resolveNightPlayerIdentity,
+  type PlayerPullSpecObservation,
+} from './night-player-identity.util';
 
 export interface PullListItem extends PullRow {
   bossName: string;
@@ -31,9 +36,29 @@ export interface KnownBoss {
   blizzardZoneId: number | null;
 }
 
+/** Compartido por listAllReports/listRecentReports — mismo join en memoria, distinto alcance de la consulta. */
+function joinReportsWithBosses(
+  reports: ReportRow[],
+  encounters: { report_code: string; boss_name: string }[],
+): { report: ReportRow; bossesAttempted: string[] }[] {
+  const bossesByReport = new Map<string, Set<string>>();
+  for (const e of encounters) {
+    if (!bossesByReport.has(e.report_code)) bossesByReport.set(e.report_code, new Set());
+    bossesByReport.get(e.report_code)!.add(e.boss_name);
+  }
+  return reports.map((report) => ({
+    report,
+    bossesAttempted: [...(bossesByReport.get(report.code) ?? [])],
+  }));
+}
+
 export interface NightPlayerListItem {
   name: string;
   className: string | null;
+  spec: string | null;
+  /** Rol observado ESTA noche (ver night-player-identity.util.ts) — nunca el
+   * de wowaudit_roster, ese fallback vive en ReportParticipantsService. */
+  role: RaidRole;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -41,7 +66,11 @@ export class ReportsService {
   private supabase = inject(SupabaseService);
 
   async getReport(code: string): Promise<ReportRow | null> {
-    const { data, error } = await this.supabase.client.from('reports').select('*').eq('code', code).maybeSingle();
+    const { data, error } = await this.supabase.client
+      .from('reports')
+      .select('*')
+      .eq('code', code)
+      .maybeSingle();
     if (error) throw error;
     return data as ReportRow | null;
   }
@@ -59,52 +88,118 @@ export class ReportsService {
   /** Pulls de un report, con el nombre real del boss (join en memoria contra report_encounters, misma tabla que ya trae kill/boss_name). */
   async listPulls(code: string): Promise<PullListItem[]> {
     const [{ data: pulls, error: pullsErr }, encounters] = await Promise.all([
-      this.supabase.client.from('pulls').select('*').eq('report_code', code).order('fight_id', { ascending: true }),
+      this.supabase.client
+        .from('pulls')
+        .select('*')
+        .eq('report_code', code)
+        .order('fight_id', { ascending: true }),
       this.listEncounters(code),
     ]);
     if (pullsErr) throw pullsErr;
     const byFightId = new Map(encounters.map((e) => [e.fight_id, e]));
     return ((pulls ?? []) as PullRow[]).map((p) => {
       const enc = byFightId.get(p.fight_id);
-      return { ...p, bossName: enc?.boss_name ?? `Boss ${p.boss_id}`, kill: enc?.kill ?? p.wipe_pct === 0 };
+      return {
+        ...p,
+        bossName: enc?.boss_name ?? `Boss ${p.boss_id}`,
+        kill: enc?.kill ?? p.wipe_pct === 0,
+      };
     });
   }
 
-  /** §"un dosier de personaje de una noche concreta": quién participó en algún pull de este report — la lista de entrada al dosier por jugador desde el resumen de la noche. */
+  /**
+   * §"un dosier de personaje de una noche concreta": quién participó en
+   * algún pull de este report — la lista de entrada al dosier por jugador
+   * desde el resumen de la noche, y la base del Report Workspace (§33/§35
+   * del plan IRIS). class/spec/role responden a "cómo jugó ESTA noche", no
+   * a un valor cualquiera de la primera fila que llegue — ver
+   * resolveNightPlayerIdentity para el porqué (un jugador puede cambiar de
+   * spec durante la noche).
+   */
   async listNightPlayers(code: string): Promise<NightPlayerListItem[]> {
-    const { data: pulls, error: pullsErr } = await this.supabase.client.from('pulls').select('id').eq('report_code', code);
+    const { data: pullRows, error: pullsErr } = await this.supabase.client
+      .from('pulls')
+      .select('id,fight_id')
+      .eq('report_code', code)
+      .order('fight_id', { ascending: true });
     if (pullsErr) throw pullsErr;
-    const pullIds = (pulls ?? []).map((p) => (p as { id: string }).id);
-    if (!pullIds.length) return [];
-    const { data, error } = await this.supabase.client.from('player_pull_records').select('player_name,class').in('pull_id', pullIds);
+    const orderedPullIds = ((pullRows ?? []) as { id: string; fight_id: number }[]).map(
+      (p) => p.id,
+    );
+    if (!orderedPullIds.length) return [];
+    const orderIndexByPullId = new Map(orderedPullIds.map((id, index) => [id, index]));
+
+    const { data, error } = await this.supabase.client
+      .from('player_pull_records')
+      .select('player_name,class,spec,pull_id')
+      .in('pull_id', orderedPullIds);
     if (error) throw error;
-    const byName = new Map<string, string | null>();
-    for (const row of (data ?? []) as { player_name: string; class: string | null }[]) {
-      if (!byName.has(row.player_name) || (!byName.get(row.player_name) && row.class)) byName.set(row.player_name, row.class);
+
+    const observationsByName = new Map<string, PlayerPullSpecObservation[]>();
+    for (const row of (data ?? []) as {
+      player_name: string;
+      class: string | null;
+      spec: string | null;
+      pull_id: string;
+    }[]) {
+      const orderIndex = orderIndexByPullId.get(row.pull_id) ?? -1;
+      const list = observationsByName.get(row.player_name);
+      const observation: PlayerPullSpecObservation = {
+        className: row.class,
+        spec: row.spec,
+        orderIndex,
+      };
+      if (list) list.push(observation);
+      else observationsByName.set(row.player_name, [observation]);
     }
-    return [...byName.entries()]
-      .map(([name, className]) => ({ name, className }))
+
+    return [...observationsByName.entries()]
+      .map(([name, observations]) => ({ name, ...resolveNightPlayerIdentity(observations) }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** Catálogo de reports para el navegador de histórico (§16: "history/ -- navegador de raids/pulls pasados"). */
   async listAllReports(): Promise<{ report: ReportRow; bossesAttempted: string[] }[]> {
-    const [{ data: reports, error: reportsErr }, { data: encounters, error: encountersErr }] = await Promise.all([
-      this.supabase.client.from('reports').select('*').order('start_time', { ascending: false }),
-      this.supabase.client.from('report_encounters').select('report_code,boss_name'),
-    ]);
+    const [{ data: reports, error: reportsErr }, { data: encounters, error: encountersErr }] =
+      await Promise.all([
+        this.supabase.client.from('reports').select('*').order('start_time', { ascending: false }),
+        this.supabase.client.from('report_encounters').select('report_code,boss_name'),
+      ]);
     if (reportsErr) throw reportsErr;
     if (encountersErr) throw encountersErr;
+    return joinReportsWithBosses(
+      (reports ?? []) as ReportRow[],
+      (encounters ?? []) as { report_code: string; boss_name: string }[],
+    );
+  }
 
-    const bossesByReport = new Map<string, Set<string>>();
-    for (const e of (encounters ?? []) as { report_code: string; boss_name: string }[]) {
-      if (!bossesByReport.has(e.report_code)) bossesByReport.set(e.report_code, new Set());
-      bossesByReport.get(e.report_code)!.add(e.boss_name);
-    }
-    return ((reports ?? []) as ReportRow[]).map((report) => ({
-      report,
-      bossesAttempted: [...(bossesByReport.get(report.code) ?? [])],
-    }));
+  /**
+   * §PR4 del plan IRIS (Report Workspace): versión ligera de listAllReports()
+   * para el selector de noches del sidebar — "Recientes" no necesita cargar
+   * TODA la tabla de reports ni TODOS los report_encounters para enseñar
+   * solo las últimas `limit` noches; el `.in(codes)` sobre encounters queda
+   * acotado a esos pocos reports, no a toda la temporada.
+   */
+  async listRecentReports(
+    limit: number,
+  ): Promise<{ report: ReportRow; bossesAttempted: string[] }[]> {
+    const { data: reports, error: reportsErr } = await this.supabase.client
+      .from('reports')
+      .select('*')
+      .order('start_time', { ascending: false })
+      .limit(limit);
+    if (reportsErr) throw reportsErr;
+    const codes = ((reports ?? []) as ReportRow[]).map((r) => r.code);
+    if (!codes.length) return [];
+    const { data: encounters, error: encountersErr } = await this.supabase.client
+      .from('report_encounters')
+      .select('report_code,boss_name')
+      .in('report_code', codes);
+    if (encountersErr) throw encountersErr;
+    return joinReportsWithBosses(
+      reports as ReportRow[],
+      (encounters ?? []) as { report_code: string; boss_name: string }[],
+    );
   }
 
   /** Todos los bosses vistos alguna vez en algún report sincronizado — alimenta el desplegable del manifiesto (§5, tarea manual #1) sin teclear nada. */
@@ -119,7 +214,9 @@ export class ReportsService {
         .from('known_raid_bosses')
         .select('encounter_id,boss_name,order_index,journal_encounter_id,blizzard_zone_id')
         .order('order_index', { ascending: true }),
-      this.supabase.client.from('report_encounters').select('encounter_id,boss_name,wcl_difficulty_id'),
+      this.supabase.client
+        .from('report_encounters')
+        .select('encounter_id,boss_name,wcl_difficulty_id'),
     ]);
     if (catalogRes.error) throw catalogRes.error;
     if (encountersRes.error) throw encountersRes.error;
@@ -142,7 +239,10 @@ export class ReportsService {
         blizzardZoneId: row.blizzard_zone_id,
       });
     }
-    for (const row of (encountersRes.data ?? []) as Pick<ReportEncounterRow, 'encounter_id' | 'boss_name' | 'wcl_difficulty_id'>[]) {
+    for (const row of (encountersRes.data ?? []) as Pick<
+      ReportEncounterRow,
+      'encounter_id' | 'boss_name' | 'wcl_difficulty_id'
+    >[]) {
       let entry = byEncounter.get(row.encounter_id);
       if (!entry) {
         entry = {
@@ -161,7 +261,9 @@ export class ReportsService {
         entry.difficulties.push(row.wcl_difficulty_id);
       }
     }
-    return [...byEncounter.values()].sort((a, b) => (a.orderIndex ?? 99) - (b.orderIndex ?? 99) || a.bossName.localeCompare(b.bossName));
+    return [...byEncounter.values()].sort(
+      (a, b) => (a.orderIndex ?? 99) - (b.orderIndex ?? 99) || a.bossName.localeCompare(b.bossName),
+    );
   }
 
   // §"quitar la card de progreso de temporada de portada y ponerlo en la
@@ -176,15 +278,24 @@ export class ReportsService {
   // devuelven las dificultades con AL MENOS un pull real (ni LFR ni Mythic
   // tenían ninguno en real todavía) — así el hueco aparece solo se cuando
   // de verdad se empieza a intentar, no como un "0/8" permanente sin dato.
-  async getSeasonProgress(): Promise<{ total: number; byDifficulty: { difficulty: string; killed: number }[] }> {
+  async getSeasonProgress(): Promise<{
+    total: number;
+    byDifficulty: { difficulty: string; killed: number }[];
+  }> {
     const [bossesRes, pullsRes] = await Promise.all([
       this.supabase.client.from('known_raid_bosses').select('encounter_id'),
       this.supabase.client.from('pulls').select('boss_id,difficulty,wipe_pct'),
     ]);
     if (bossesRes.error) throw bossesRes.error;
     if (pullsRes.error) throw pullsRes.error;
-    const total = new Set((bossesRes.data ?? []).map((r) => String((r as { encounter_id: number }).encounter_id))).size;
-    const pulls = (pullsRes.data ?? []) as { boss_id: string; difficulty: string; wipe_pct: number | null }[];
+    const total = new Set(
+      (bossesRes.data ?? []).map((r) => String((r as { encounter_id: number }).encounter_id)),
+    ).size;
+    const pulls = (pullsRes.data ?? []) as {
+      boss_id: string;
+      difficulty: string;
+      wipe_pct: number | null;
+    }[];
     const seenDifficulties = new Set<string>();
     const killedByDifficulty = new Map<string, Set<string>>();
     for (const p of pulls) {
