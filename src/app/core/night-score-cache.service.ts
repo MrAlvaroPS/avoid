@@ -27,7 +27,13 @@ import { SupabaseService } from './supabase.service';
 // mismo fingerprint de siempre: acotado a los pulls de ESTE report). Bump de
 // versión porque el shape cambia — una entrada v1 vieja (solo nightScore)
 // no debe leerse como si ya trajera los campos nuevos.
-const STORAGE_PREFIX = 'avoid:night-scores:v2:';
+// v3 (2026-09-07): un fallo transitorio de una de las cargas por jugador se
+// convertía en cuatro null y se persistía junto al fingerprint válido del
+// report. Después, aunque Supabase se recuperase, la tabla seguía enseñando
+// "—" como si fuese ausencia real de dato. Se invalida cualquier snapshot
+// v2 creado bajo ese comportamiento; el caller v3 solo escribe cuando el
+// lote terminó sin errores.
+const STORAGE_PREFIX = 'avoid:night-scores:v3:';
 
 export interface CachedNightAttendanceStats {
   /** Ejecución de esta noche — night-player-summary.service.ts: nightScore (0-1). */
