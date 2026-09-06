@@ -7,23 +7,16 @@
   padding: 18px 20px 28px;
 }
 
-.sticky-raid-context {
-  position: sticky;
-  top: 66px;
-  z-index: 8;
+// §pasada UX/UI (2026-09-06): ya NO es sticky — el único elemento que sigue
+// al usuario en scroll es el sidebar del workspace (report-sidebar.component.scss).
+// Antes se llamaba .sticky-raid-context y llevaba nombre/fecha/selector de
+// noche/Informe — todo eso vive ahora solo en el sidebar, esto es
+// exclusivamente controles + picker de boss/pull, operativa de Raid.
+.raid-controls {
   display: flex;
   flex-direction: column;
   gap: 0;
-  pointer-events: none;
 
-  > * { pointer-events: auto; }
-
-  // §"cards descuadradas" (feedback real, 2026-08-28): report-context y
-  // pull-picker eran dos tarjetas flotantes separadas por un hueco — mismo
-  // fondo/borde/sombra cada una, así que se leían como "dos cajas" en vez de
-  // "un bloque de contexto". Ahora el fondo vive en el contenedor y las
-  // secciones de dentro son transparentes con un divisor fino entre ellas
-  // (ver .pull-picker más abajo) — un único bloque, no una pila de cajas.
   // Guardado tras &.has-context: sin report cargado este div no envuelve
   // nada (el import-panel vive fuera) — sin la guarda sería una caja
   // fantasma con sombra y sin contenido.
@@ -46,65 +39,35 @@
   backdrop-filter: blur(14px);
 }
 
-.report-context {
+// §pasada UX/UI: nivel 1 de la cabecera de Raid — solo Actualizar +
+// seguimiento en vivo (el estado "en directo"/"revisión" vive DENTRO del
+// propio botón de seguimiento, ver .live-button más abajo — nada de una
+// pill de estado grande compitiendo por atención).
+.raid-actions-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 9px 12px;
+  gap: 6px;
+  padding: 7px 10px;
+  flex-wrap: wrap;
 }
 
-.report-identity,
-.report-actions,
 .import-controls {
   display: flex;
   align-items: center;
   min-width: 0;
+  gap: 8px;
 }
 
-.report-identity { gap: 10px; }
-.report-actions { justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
-
-.mode-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--neutral-soft);
-  color: var(--text-muted);
-  font-size: 9.5px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-
-  i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); }
-  &.live { background: var(--success-soft); color: var(--success); }
-  &.live i { background: var(--success); box-shadow: 0 0 0 4px rgba(95, 191, 130, 0.1); }
+.sync-status {
+  color: var(--text-faint);
+  font-size: 10.5px;
+  white-space: nowrap;
 }
-
-.report-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  // §"el hash del report como subtítulo es puro ruido" (feedback real,
-  // 2026-08-28): el código de WCL ya no se lee en línea — sigue accesible
-  // al pasar el ratón (title) para copiarlo/depurar, sin competir por
-  // atención con el título en la primera lectura.
-  cursor: help;
-
-  strong { overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-  span { overflow: hidden; color: var(--text-faint); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
-}
-
-.sync-status { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
 
 .context-button,
-.context-link,
 .recent-toggle,
 .close-loader {
-  padding: 7px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--card-border);
   border-radius: 7px;
   background: var(--surface-2);
@@ -115,13 +78,22 @@
   white-space: nowrap;
   cursor: pointer;
 
-  &:hover:not(:disabled) { border-color: var(--border-bright); background: var(--surface-hover); color: var(--text); }
-  &:disabled { opacity: 0.5; cursor: default; }
+  &:hover:not(:disabled) {
+    border-color: var(--border-bright);
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
 }
 
-.context-link { color: var(--accent); }
-.context-button.subtle { background: transparent; }
-.live-button.active { border-color: rgba(95, 191, 130, 0.35); background: var(--success-soft); color: var(--success); }
+.live-button.active {
+  border-color: rgba(95, 191, 130, 0.35);
+  background: var(--success-soft);
+  color: var(--success);
+}
 
 .import-panel {
   display: grid;
@@ -130,8 +102,13 @@
   gap: 18px;
   padding: 16px;
 
-  > div:first-child { display: flex; flex-direction: column; }
-  strong { font-size: 13px; }
+  > div:first-child {
+    display: flex;
+    flex-direction: column;
+  }
+  strong {
+    font-size: 13px;
+  }
 }
 
 .import-eyebrow {
@@ -141,8 +118,6 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-
-.import-controls { gap: 8px; }
 
 .code-input {
   flex: 1;
@@ -154,8 +129,12 @@
   color: var(--text);
   font-size: 12px;
 
-  &::placeholder { color: var(--text-faint); }
-  &:focus-visible { border-color: var(--accent); }
+  &::placeholder {
+    color: var(--text-faint);
+  }
+  &:focus-visible {
+    border-color: var(--accent);
+  }
 }
 
 .import-btn {
@@ -168,10 +147,18 @@
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
-  &:disabled { opacity: 0.5; cursor: default; }
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
 }
 
-.close-loader { padding-inline: 10px; background: transparent; font-size: 17px; line-height: 1; }
+.close-loader {
+  padding-inline: 10px;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1;
+}
 
 .recent-picker {
   display: flex;
@@ -194,24 +181,45 @@
   color: var(--text);
   text-align: left;
   cursor: pointer;
-  &:hover { background: var(--surface-hover); }
+  &:hover {
+    background: var(--surface-hover);
+  }
 }
-.recent-date { color: var(--text-faint); font-size: 11px; }
-.recent-title { overflow: hidden; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.recent-bosses { overflow: hidden; color: var(--text-faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.recent-date {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.recent-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-bosses {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .pull-picker {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 8px 10px;
-  // Divisor entre report-context y pull-picker ahora que comparten un único
-  // fondo (ver .sticky-raid-context.has-context) — mismo patrón que ya usa
+  gap: 5px;
+  padding: 6px 10px 8px;
+  // Divisor entre las acciones y el picker ahora que comparten un único
+  // fondo (ver .raid-controls.has-context) — mismo patrón que ya usa
   // .night-summary dentro de .night-review.
   border-top: 1px solid var(--card-border);
 }
 
-.boss-pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.boss-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
 
 // §"la parte que lista los bosses es un poco confusa" (feedback real,
 // 2026-08-28): antes las 8 píldoras eran visualmente idénticas salvo por
@@ -226,7 +234,7 @@
   display: flex;
   align-items: baseline;
   gap: 5px;
-  padding: 4px 8px;
+  padding: 3px 7px;
   border: 1px solid var(--card-border);
   border-bottom: 2px solid var(--text-faint);
   border-radius: 999px;
@@ -234,30 +242,60 @@
   color: inherit;
   cursor: pointer;
 
-  &:hover { background: var(--surface-hover); }
-  &.pill-killed { border-bottom-color: var(--chart-positive); }
-  &.pill-pending { border-bottom-color: var(--warning); }
+  &:hover {
+    background: var(--surface-hover);
+  }
+  &.pill-killed {
+    border-bottom-color: var(--chart-positive);
+  }
+  &.pill-pending {
+    border-bottom-color: var(--warning);
+  }
 
   &.active {
     border-color: var(--border-bright);
     background: linear-gradient(135deg, var(--accent-solid), var(--accent-deep));
 
-    .boss-pill-name { color: #fff; }
-    .boss-pill-diff { background: rgba(255, 255, 255, 0.22); color: #fff; }
-    .boss-pill-summary { color: rgba(255, 255, 255, 0.78); }
+    .boss-pill-name {
+      color: #fff;
+    }
+    .boss-pill-diff {
+      background: rgba(255, 255, 255, 0.22);
+      color: #fff;
+    }
+    .boss-pill-summary {
+      color: rgba(255, 255, 255, 0.78);
+    }
   }
 }
-.boss-pill-name { color: var(--text); font-size: 11.5px; font-weight: 700; white-space: nowrap; }
-.boss-pill-diff { padding: 1px 4px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 8.5px; font-weight: 700; text-transform: uppercase; }
-.boss-pill-summary { color: var(--text-faint); font-size: 9.5px; white-space: nowrap; }
+.boss-pill-name {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.boss-pill-diff {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 8.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.boss-pill-summary {
+  color: var(--text-faint);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
 
 .pull-chip-row {
   display: flex;
-  gap: 7px;
+  gap: 6px;
   overflow-x: auto;
   overflow-y: hidden;
   margin: 0;
-  padding: 5px 0 0;
+  padding: 4px 0 0;
   border-top: 1px solid var(--surface-2);
   list-style: none;
 }
@@ -266,8 +304,8 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  min-height: 42px;
-  padding: 6px 10px;
+  min-height: 36px;
+  padding: 5px 9px;
   border: 0;
   border-bottom: 3px solid var(--danger);
   border-radius: 7px 7px 0 0;
@@ -277,18 +315,48 @@
   text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
-  &.is-kill { border-bottom-color: var(--chart-positive); }
-  &.is-ninja-pull { border-bottom: 3px dashed var(--text-muted); opacity: 0.62; }
-  &.selected { background: var(--surface-hover); box-shadow: inset 0 0 0 1px var(--accent); }
+  &.is-kill {
+    border-bottom-color: var(--chart-positive);
+  }
+  &.is-ninja-pull {
+    border-bottom: 3px dashed var(--text-muted);
+    opacity: 0.62;
+  }
+  &.selected {
+    background: var(--surface-hover);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
 }
-.pull-name { font-size: 11.5px; font-weight: 800; }
-.pull-sub { color: var(--text-muted); font-size: 9.5px; }
-.history-link { justify-content: center; border: 1px dashed var(--border-bright); color: var(--accent); font-size: 11px; font-weight: 700; }
+.pull-name {
+  font-size: 11.5px;
+  font-weight: 800;
+}
+.pull-sub {
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+.history-link {
+  justify-content: center;
+  border: 1px dashed var(--border-bright);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
 
 .error,
-.duplicate-warning { margin: 0; font-size: 12px; }
-.error { color: var(--danger); }
-.duplicate-warning { padding: 10px 12px; border: 1px solid var(--warning); border-radius: var(--radius-sm); background: var(--warning-soft); }
+.duplicate-warning {
+  margin: 0;
+  font-size: 12px;
+}
+.error {
+  color: var(--danger);
+}
+.duplicate-warning {
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+}
 
 .night-review {
   overflow: hidden;
@@ -303,10 +371,21 @@
     cursor: pointer;
     list-style: none;
   }
-  summary::-webkit-details-marker { display: none; }
-  summary > span:first-child { display: flex; flex-direction: column; }
-  summary b { color: var(--text); font-size: 12.5px; }
-  summary small { color: var(--text-faint); font-size: 10.5px; }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary > span:first-child {
+    display: flex;
+    flex-direction: column;
+  }
+  summary b {
+    color: var(--text);
+    font-size: 12.5px;
+  }
+  summary small {
+    color: var(--text-faint);
+    font-size: 10.5px;
+  }
 }
 
 .night-summary {
@@ -317,11 +396,25 @@
   padding: 11px 14px;
   border-top: 1px solid var(--card-border);
 }
-.night-summary-stats, .night-summary-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
-.night-stat { color: var(--text-muted); font-size: 11.5px; }
-.night-stat strong { color: var(--text); }
-.night-hardest { color: var(--warning); }
-.report-link-btn, .copy-night-btn {
+.night-summary-stats,
+.night-summary-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+.night-stat {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.night-stat strong {
+  color: var(--text);
+}
+.night-hardest {
+  color: var(--warning);
+}
+.report-link-btn,
+.copy-night-btn {
   padding: 6px 10px;
   border: 1px solid var(--card-border);
   border-radius: 7px;
@@ -332,7 +425,9 @@
   text-decoration: none;
   cursor: pointer;
 }
-.report-link-btn { color: var(--accent); }
+.report-link-btn {
+  color: var(--accent);
+}
 
 .night-players {
   display: flex;
@@ -340,8 +435,19 @@
   gap: 12px;
   padding: 10px 14px 14px;
 }
-.night-players-label { padding-top: 3px; color: var(--text-faint); font-size: 9.5px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; }
-.night-players-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.night-players-label {
+  padding-top: 3px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.night-players-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
 .player-chip {
   display: inline-flex;
   align-items: center;
@@ -353,21 +459,36 @@
   color: var(--text-muted);
   font-size: 10.5px;
   text-decoration: none;
-  &:hover { border-color: var(--accent); color: var(--accent); }
+  &:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
 }
 
 @media (max-width: 1080px) {
-  .sticky-raid-context { position: static; }
-  .report-context, .import-panel { grid-template-columns: 1fr; align-items: flex-start; }
-  .report-context { flex-direction: column; }
-  .report-actions { justify-content: flex-start; }
+  .import-panel {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
 }
 
 @media (max-width: 700px) {
-  .raid-session { padding: 10px; }
-  .import-controls, .night-summary, .night-players { align-items: stretch; flex-direction: column; }
-  .code-input { width: 100%; }
-  .recent-item { grid-template-columns: 86px 1fr; }
-  .recent-bosses { grid-column: 1 / -1; }
-  .mode-pill { display: none; }
+  .raid-session {
+    padding: 10px;
+  }
+  .import-controls,
+  .night-summary,
+  .night-players {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .code-input {
+    width: 100%;
+  }
+  .recent-item {
+    grid-template-columns: 86px 1fr;
+  }
+  .recent-bosses {
+    grid-column: 1 / -1;
+  }
 }

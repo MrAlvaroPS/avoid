@@ -1,10 +1,5 @@
 <div class="editor-container">
-  <button 
-    class="open-editor-btn"
-    (click)="openEditor()"
-    [disabled]="isSaving()">
-    ⚙️ Editor de contexto
-  </button>
+  <button class="open-editor-btn" (click)="openEditor()" [disabled]="isSaving()">⚙ Contexto</button>
 
   <div class="modal" [class.open]="isOpen()">
     <div class="modal-content">
@@ -15,9 +10,7 @@
 
       <div class="modal-body">
         <!-- Error display -->
-        <div class="error-message" *ngIf="error()">
-          ⚠️ {{ error() }}
-        </div>
+        <div class="error-message" *ngIf="error()">⚠️ {{ error() }}</div>
 
         <!-- Current status -->
         <div class="status-section">
@@ -35,7 +28,8 @@
               <span *ngIf="context().wipeCallVerified" class="verified-badge">✓ Verificado</span>
             </p>
             <p *ngIf="!context().wipeCallAtMs && context().wipeCallSource !== 'none'">
-              <strong>Candidato de wipe:</strong> {{ formatSeconds(getWipeCallCandidateBoundaryMs() / 1000) }}
+              <strong>Candidato de wipe:</strong>
+              {{ formatSeconds(getWipeCallCandidateBoundaryMs() / 1000) }}
             </p>
           </div>
         </div>
@@ -48,13 +42,14 @@
           <div class="form-group">
             <label>
               Inicio del intervalo evaluable (segundos)
-              <input 
-                type="number" 
-                [value]="evaluationStartSec()" 
+              <input
+                type="number"
+                [value]="evaluationStartSec()"
                 (input)="evaluationStartSec.set($any($event.target).valueAsNumber)"
                 min="0"
                 [max]="evaluationEndSec()"
-                [disabled]="isSaving()">
+                [disabled]="isSaving()"
+              />
             </label>
             <small>{{ formatSeconds(evaluationStartSec()) }}</small>
           </div>
@@ -62,13 +57,14 @@
           <div class="form-group">
             <label>
               Fin del intervalo evaluable (segundos)
-              <input 
-                type="number" 
-                [value]="evaluationEndSec()" 
+              <input
+                type="number"
+                [value]="evaluationEndSec()"
                 (input)="evaluationEndSec.set($any($event.target).valueAsNumber)"
                 min="0"
                 [max]="durationMs() / 1000"
-                [disabled]="isSaving()">
+                [disabled]="isSaving()"
+              />
             </label>
             <small>{{ formatSeconds(evaluationEndSec()) }}</small>
           </div>
@@ -77,25 +73,31 @@
           <div class="form-group">
             <label>
               Límite de wipe (segundos, opcional)
-              <input 
-                type="number" 
-                [value]="wipeCallAtSec() ?? ''" 
-                (input)="wipeCallAtSec.set($any($event.target).value ? $any($event.target).valueAsNumber : null)"
+              <input
+                type="number"
+                [value]="wipeCallAtSec() ?? ''"
+                (input)="
+                  wipeCallAtSec.set(
+                    $any($event.target).value ? $any($event.target).valueAsNumber : null
+                  )
+                "
                 min="0"
                 [max]="evaluationEndSec()"
                 placeholder="Dejar en blanco para sin wipe"
-                [disabled]="isSaving()">
+                [disabled]="isSaving()"
+              />
             </label>
             <small *ngIf="wipeCallAtSec() != null">{{ formatSeconds(wipeCallAtSec()!) }}</small>
           </div>
 
           <div class="form-group checkbox">
             <label>
-              <input 
-                type="checkbox" 
-                [checked]="wipeBoundaryVerified()" 
+              <input
+                type="checkbox"
+                [checked]="wipeBoundaryVerified()"
                 (change)="wipeBoundaryVerified.set($any($event.target).checked)"
-                [disabled]="isSaving()">
+                [disabled]="isSaving()"
+              />
               Wipe verificado/manual
             </label>
           </div>
@@ -103,11 +105,12 @@
           <!-- Ninja status -->
           <div class="form-group checkbox">
             <label>
-              <input 
-                type="checkbox" 
-                [checked]="ninjaConfirmed()" 
+              <input
+                type="checkbox"
+                [checked]="ninjaConfirmed()"
                 (change)="ninjaConfirmed.set($any($event.target).checked)"
-                [disabled]="isSaving()">
+                [disabled]="isSaving()"
+              />
               Confirmar como ninja pull
             </label>
           </div>
@@ -116,38 +119,38 @@
           <div class="form-group">
             <label>
               Razón del cambio (requerida)
-              <textarea 
-                [value]="overrideReason()" 
+              <textarea
+                [value]="overrideReason()"
                 (input)="onOverrideReasonInput($event)"
                 placeholder="Explicación para la auditoría"
                 [disabled]="isSaving()"
-                rows="3"></textarea>
+                rows="3"
+              ></textarea>
             </label>
           </div>
 
           <!-- Change summary -->
-          <div class="change-summary">
-            <strong>Resumen:</strong> {{ formatContextChange() }}
-          </div>
+          <div class="change-summary"><strong>Resumen:</strong> {{ formatContextChange() }}</div>
         </div>
       </div>
 
       <div class="modal-footer">
-        <button 
-          class="cancel-btn"
-          (click)="closeEditor()"
-          [disabled]="isSaving()">
-          Cancelar
-        </button>
-        <button 
+        <button class="cancel-btn" (click)="closeEditor()" [disabled]="isSaving()">Cancelar</button>
+        <button
           class="save-btn"
           (click)="saveOverride()"
-          [disabled]="isSaving() || !overrideReason().trim()">
+          [disabled]="isSaving() || !overrideReason().trim()"
+        >
           {{ isSaving() ? 'Guardando...' : 'Guardar cambios' }}
         </button>
       </div>
     </div>
   </div>
 
-  <div class="modal-backdrop" *ngIf="isOpen()" (click)="closeEditor()" [class.open]="isOpen()"></div>
+  <div
+    class="modal-backdrop"
+    *ngIf="isOpen()"
+    (click)="closeEditor()"
+    [class.open]="isOpen()"
+  ></div>
 </div>

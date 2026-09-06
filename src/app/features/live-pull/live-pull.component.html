@@ -4,29 +4,36 @@
   <p class="loading">Cargando pull…</p>
 } @else if (detail(); as d) {
   <div class="live-pull">
-    <app-pull-header
-      [encounterName]="d.header.encounterName"
-      [difficulty]="d.header.difficulty"
-      [attemptNumber]="d.header.attemptNumber"
-      [rawPullNumber]="d.header.rawPullNumber"
-      [durationLabel]="d.header.durationLabel"
-      [bossHpRemainingPct]="d.header.bossHpRemainingPct"
-      [result]="d.header.result"
-      [attemptComparison]="d.attemptComparison"
-      [phaseLabel]="d.header.phaseLabel"
-    />
-
-    @if (d.useEvaluationContextV2) {
-      @if (d.evaluationContext; as context) {
-        @if (auth.officerStatus() === 'officer') {
-          <app-pull-evaluation-context-editor
-            [pullId]="d.pullId"
-            [durationMs]="d.header.durationMs ?? 0"
-            [context]="context"
-            (contextChanged)="onWipeCallStatusChanged()"
-          />
+    <!-- §pasada UX/UI (2026-09-06): el editor de contexto ya no flota solo
+         debajo del header — es una acción administrativa SECUNDARIA del
+         pull, alineada junto a él, no compitiendo con el contenido. -->
+    <div class="pull-header-row">
+      <app-pull-header
+        [encounterName]="d.header.encounterName"
+        [difficulty]="d.header.difficulty"
+        [attemptNumber]="d.header.attemptNumber"
+        [rawPullNumber]="d.header.rawPullNumber"
+        [durationLabel]="d.header.durationLabel"
+        [bossHpRemainingPct]="d.header.bossHpRemainingPct"
+        [result]="d.header.result"
+        [attemptComparison]="d.attemptComparison"
+        [phaseLabel]="d.header.phaseLabel"
+      />
+      @if (d.useEvaluationContextV2) {
+        @if (d.evaluationContext; as context) {
+          @if (auth.officerStatus() === 'officer') {
+            <app-pull-evaluation-context-editor
+              [pullId]="d.pullId"
+              [durationMs]="d.header.durationMs ?? 0"
+              [context]="context"
+              (contextChanged)="onWipeCallStatusChanged()"
+            />
+          }
         }
       }
+    </div>
+
+    @if (d.useEvaluationContextV2) {
       <app-wipe-call-banner
         [pullId]="d.pullId"
         [confidence]="d.wipeCall?.confidence ?? 0"
@@ -56,12 +63,21 @@
         />
       }
       @if (d.ninjaPull; as np) {
-        <app-ninja-pull-banner [pullId]="d.pullId" [excluded]="np.excluded" [signals]="np.signals" (statusChanged)="onNinjaPullStatusChanged()" />
+        <app-ninja-pull-banner
+          [pullId]="d.pullId"
+          [excluded]="np.excluded"
+          [signals]="np.signals"
+          (statusChanged)="onNinjaPullStatusChanged()"
+        />
       }
     }
 
     <div class="overview-grid">
-      <app-metrics-row [metrics]="d.metrics" [loading]="loading()" (provenanceRequested)="activeProvenance.set($event)" />
+      <app-metrics-row
+        [metrics]="d.metrics"
+        [loading]="loading()"
+        (provenanceRequested)="activeProvenance.set($event)"
+      />
       @if (d.progressTrend.length) {
         <section class="widget trend-widget" aria-labelledby="trend-heading">
           <div class="widget-title-row">
@@ -91,17 +107,46 @@
         </div>
         <span>
           @if (d.header.result === 'kill') {
-            Se mantiene cerrado para no distraer del resultado — el detalle sigue aquí cuando lo quieras.
+            Se mantiene cerrado para no distraer del resultado — el detalle sigue aquí cuando lo
+            quieras.
           } @else {
             Se mantiene cerrado para no competir con las decisiones del siguiente pull.
           }
         </span>
       </div>
       <div class="detail-tabs" role="tablist" aria-label="Diagnóstico detallado del pull">
-        <button type="button" [class.active]="detailPanel() === 'ai'" [attr.aria-expanded]="detailPanel() === 'ai'" (click)="toggleDetailPanel('ai')">Análisis IA</button>
-        <button type="button" [class.active]="detailPanel() === 'players'" [attr.aria-expanded]="detailPanel() === 'players'" (click)="toggleDetailPanel('players')">Jugadores · {{ d.playerStats.length }}</button>
-        <button type="button" [class.active]="detailPanel() === 'timeline'" [attr.aria-expanded]="detailPanel() === 'timeline'" (click)="toggleDetailPanel('timeline')">Timeline</button>
-        <button type="button" [class.active]="detailPanel() === 'data'" [attr.aria-expanded]="detailPanel() === 'data'" (click)="toggleDetailPanel('data')">Datos y benchmarks</button>
+        <button
+          type="button"
+          [class.active]="detailPanel() === 'ai'"
+          [attr.aria-expanded]="detailPanel() === 'ai'"
+          (click)="toggleDetailPanel('ai')"
+        >
+          Análisis IA
+        </button>
+        <button
+          type="button"
+          [class.active]="detailPanel() === 'players'"
+          [attr.aria-expanded]="detailPanel() === 'players'"
+          (click)="toggleDetailPanel('players')"
+        >
+          Jugadores · {{ d.playerStats.length }}
+        </button>
+        <button
+          type="button"
+          [class.active]="detailPanel() === 'timeline'"
+          [attr.aria-expanded]="detailPanel() === 'timeline'"
+          (click)="toggleDetailPanel('timeline')"
+        >
+          Timeline
+        </button>
+        <button
+          type="button"
+          [class.active]="detailPanel() === 'data'"
+          [attr.aria-expanded]="detailPanel() === 'data'"
+          (click)="toggleDetailPanel('data')"
+        >
+          Datos y benchmarks
+        </button>
       </div>
 
       @if (detailPanel() === 'ai') {
@@ -124,7 +169,10 @@
       } @else if (detailPanel() === 'timeline') {
         <section class="detail-panel widget timeline-panel" aria-labelledby="timeline-heading">
           <h3 id="timeline-heading" class="widget-heading">Línea temporal completa</h3>
-          <p class="panel-note">Incluye casts limpios para auditoría. Las decisiones prioritarias están resumidas arriba.</p>
+          <p class="panel-note">
+            Incluye casts limpios para auditoría. Las decisiones prioritarias están resumidas
+            arriba.
+          </p>
           <app-mechanic-swimlane
             [chips]="d.timeline"
             [background]="d.backgroundMechanics"
@@ -141,17 +189,37 @@
           <section class="widget" aria-labelledby="catdonut-heading">
             <h3 id="catdonut-heading" class="widget-heading">Todos los casts por categoría</h3>
             <p class="panel-note">Describe la composición del encuentro, no el número de fallos.</p>
-            <app-donut-chart [segments]="d.mechanicCategoryBreakdown" centerLabel="casts" (segmentSelected)="onDonutSegmentSelected($event, 'pull_mechanic_events agrupado por categoría')" />
+            <app-donut-chart
+              [segments]="d.mechanicCategoryBreakdown"
+              centerLabel="casts"
+              (segmentSelected)="
+                onDonutSegmentSelected($event, 'pull_mechanic_events agrupado por categoría')
+              "
+            />
           </section>
           <section class="widget" aria-labelledby="defdonut-heading">
             <h3 id="defdonut-heading" class="widget-heading">Opciones defensivas al morir</h3>
-            <p class="panel-note">El total cuenta opciones de cooldown evaluadas, no muertes ni jugadores.</p>
-            <app-donut-chart [segments]="d.defensiveStatusBreakdown" centerLabel="opciones" (segmentSelected)="onDonutSegmentSelected($event, 'defensiveOptions de cada muerte agrupado por estado')" />
+            <p class="panel-note">
+              El total cuenta opciones de cooldown evaluadas, no muertes ni jugadores.
+            </p>
+            <app-donut-chart
+              [segments]="d.defensiveStatusBreakdown"
+              centerLabel="opciones"
+              (segmentSelected)="
+                onDonutSegmentSelected(
+                  $event,
+                  'defensiveOptions de cada muerte agrupado por estado'
+                )
+              "
+            />
           </section>
         </div>
       }
     </section>
   </div>
 
-  <app-provenance-drawer [entry]="activeProvenance()" (closeRequested)="activeProvenance.set(null)" />
+  <app-provenance-drawer
+    [entry]="activeProvenance()"
+    (closeRequested)="activeProvenance.set(null)"
+  />
 }

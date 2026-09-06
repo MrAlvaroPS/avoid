@@ -1,14 +1,13 @@
-// §39 del spec: ancho 260-290px, solo escritorio por ahora. Misma familia
-// visual que .sticky-raid-context/.import-panel (raid-session.component.scss)
-// — superficie con gradiente + card-border, no una caja nueva reinventada.
-// §PR3: pensado para listas largas desde el principio — un roster real
-// puede tener 20+ jugadores repartidos en muchas clases. Cabecera de la
-// noche + Vistas se quedan FUERA del scroll (altura fija, `height` en vez de
-// `max-height` para que el hijo flex:1 sepa cuánto espacio le queda de
-// verdad); el scroll vive solo en .workspace-participants.
+// §39 del spec / pasada UX/UI (2026-09-06): ancho 280px, solo escritorio por
+// ahora. Superficie con gradiente + card-border, no una caja nueva
+// reinventada. Cabecera de la noche + Vistas + buscador se quedan FUERA del
+// scroll (altura fija, `height` en vez de `max-height` para que el hijo
+// flex:1 sepa cuánto espacio le queda de verdad); el scroll vive solo en
+// .workspace-participants — con los chips compactos de esta pasada, esa
+// zona debería necesitar scroll mucho menos que antes.
 .report-sidebar {
   position: sticky;
-  top: 66px; // 56px de .top-nav (app.scss) + el mismo margen que usa .sticky-raid-context
+  top: 66px; // 56px de .top-nav (app.scss) + el mismo margen que usaba la cabecera de Raid
   flex: 0 0 280px;
   width: 280px;
   display: flex;
@@ -50,15 +49,16 @@
   }
 }
 
-// §PR4: la cabecera es ahora un <button> clicable (abre el selector de
-// noches, §8 del spec) — reset de los estilos de botón nativo para que siga
-// leyéndose como cabecera, no como control de formulario.
+// La cabecera es un <button> clicable (abre el selector de noches, §8 del
+// spec) — reset de los estilos de botón nativo para que siga leyéndose como
+// cabecera, no como control de formulario. El chevron + hover sutil dan la
+// affordance de "esto se puede pulsar" (§12 de la pasada UX/UI).
 .night-header {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   width: 100%;
-  padding: 16px 18px;
+  padding: 14px 16px;
   border: 0;
   border-bottom: 1px solid var(--card-border);
   background: transparent;
@@ -69,6 +69,16 @@
   &:hover {
     background: var(--surface-hover);
   }
+  &:hover .night-chevron {
+    color: var(--accent);
+  }
+}
+
+.night-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 
 .night-title {
@@ -78,6 +88,12 @@
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.night-chevron {
+  flex-shrink: 0;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 .night-date {
@@ -91,7 +107,7 @@
   font-size: 12px;
 }
 
-// §PR4: ya no es un <a> propio — la cabecera entera es el botón que abre el
+// Ya no es un <a> propio — la cabecera entera es el botón que abre el
 // selector (ver .night-header más arriba), esto es solo el texto que invita a pulsarla.
 .night-error-link {
   align-self: flex-start;
@@ -132,11 +148,13 @@
   }
 }
 
+// §13 de la pasada UX/UI: zona muy compacta — el activo se distingue por
+// fondo suave, sin parecer un botón grande.
 .workspace-views {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 10px 10px 16px;
+  padding: 8px 10px 10px;
 }
 
 .views-label {
@@ -149,7 +167,7 @@
 }
 
 .workspace-views a {
-  padding: 8px 10px;
+  padding: 6px 10px;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   font-size: 12.5px;
@@ -166,8 +184,10 @@
   }
 }
 
-// §PR3: la única sección que crece con el tamaño del roster — todo lo de
-// arriba (cabecera + Vistas) tiene altura fija, esta se lleva el resto.
+// La única sección que crece con el tamaño del roster — todo lo de arriba
+// (cabecera + Vistas) tiene altura fija, esta se lleva el resto. Scrollbar
+// fina y oscura (§11 de la pasada UX/UI) — nada de la barra blanca por
+// defecto del navegador.
 .workspace-participants {
   display: flex;
   flex-direction: column;
@@ -175,6 +195,22 @@
   min-height: 0;
   overflow-y: auto;
   border-top: 1px solid var(--card-border);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-bright) transparent;
+
+  &::-webkit-scrollbar {
+    width: 7px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: var(--border-bright);
+    border-radius: 999px;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-soft);
+  }
 }
 
 .participants-header {
@@ -198,14 +234,15 @@
   font-weight: 700;
 }
 
+// §10 de la pasada UX/UI: compacto, sin peso visual de formulario.
 .participants-search {
   margin: 0 10px 8px;
-  padding: 7px 10px;
+  padding: 6px 9px;
   border: 1px solid var(--card-border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text);
-  font-size: 12px;
+  font-size: 11.5px;
 
   &::placeholder {
     color: var(--text-faint);
@@ -218,7 +255,7 @@
 .participants-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 12px;
   padding-bottom: 12px;
 }
 
@@ -228,11 +265,17 @@
   font-size: 11.5px;
 }
 
+.role-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .role-group-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 14px 3px;
+  padding: 0 14px;
 }
 
 .role-group-label {
@@ -249,57 +292,61 @@
   font-weight: 700;
 }
 
-.class-group-header {
+// §5-9 de la pasada UX/UI: el navegador de jugadores ya no es un árbol
+// (Role → Class-header → Player en su propia fila) — es una fila de chips
+// que envuelve. Role → Class → Player se sigue respetando en el ORDEN (la
+// clase agrupa/ordena), pero no se dibuja una cabecera de clase — el icono
+// de cada chip ya identifica la clase. No usar width:100% en el chip: el
+// ancho depende del contenido para que quepan varios por fila.
+.role-group-chips {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 14px;
-  color: var(--text-muted);
-  font-size: 10.5px;
-  font-weight: 700;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 0 14px;
 }
 
-.class-unknown {
-  color: var(--text-faint);
-  font-style: italic;
-}
-
-.participant-row {
-  display: flex;
+.participant-chip {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 14px 6px 22px; // sangría extra — cuelga de la cabecera de clase
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: var(--surface-2);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
   text-decoration: none;
+  white-space: nowrap;
 
   &:hover {
+    border-color: var(--border-bright);
     background: var(--surface-hover);
     color: var(--text);
   }
-  // §20 del spec: barra lateral + fondo — jugador activo se distingue sin
-  // decoración excesiva, mismo lenguaje que .workspace-views a.active.
+  // §9 del spec: el jugador activo se distingue de un vistazo, sin fondo
+  // exagerado — borde + fondo suave, mismo lenguaje que .workspace-views a.active.
   &.active {
+    border-color: var(--accent);
     background: var(--accent-soft);
     color: var(--accent);
-    box-shadow: inset 3px 0 0 var(--accent);
   }
 }
 
 .participant-name {
   overflow: hidden;
+  max-width: 130px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .participant-badge {
   flex-shrink: 0;
-  padding: 1px 6px;
+  padding: 1px 5px;
   border-radius: 999px;
   background: var(--warning-soft);
   color: var(--warning);
-  font-size: 9px;
+  font-size: 8.5px;
   font-weight: 700;
   text-transform: uppercase;
 }
