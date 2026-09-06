@@ -4,6 +4,7 @@ const functions = [
   'analyze-report',
   'set-pull-evaluation-context',
   'evaluate-mechanic-occurrences',
+  'evaluate-mechanic-attribution-shadow',
   'compute-responsibility-edges',
   'evaluate-defensive-execution',
   'materialize-execution-ledger',
@@ -20,7 +21,7 @@ const functions = [
 for (const functionName of functions) {
   const result = spawnSync(
     'npx',
-    ['deno', 'check', `supabase/functions/${functionName}/index.ts`],
+    ['deno', 'check', '--node-modules-dir=auto', `supabase/functions/${functionName}/index.ts`],
     { stdio: 'inherit', shell: process.platform === 'win32' },
   );
   if (result.error) console.error(result.error.message);
@@ -35,7 +36,7 @@ const tests = [
 for (const testPath of tests) {
   const result = spawnSync(
     'npx',
-    ['deno', 'test', testPath],
+    ['deno', 'test', '--node-modules-dir=auto', testPath],
     { stdio: 'inherit', shell: process.platform === 'win32' },
   );
   if (result.error) console.error(result.error.message);
