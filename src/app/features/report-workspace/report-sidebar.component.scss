@@ -1,6 +1,11 @@
 // §39 del spec: ancho 260-290px, solo escritorio por ahora. Misma familia
 // visual que .sticky-raid-context/.import-panel (raid-session.component.scss)
 // — superficie con gradiente + card-border, no una caja nueva reinventada.
+// §PR3: pensado para listas largas desde el principio — un roster real
+// puede tener 20+ jugadores repartidos en muchas clases. Cabecera de la
+// noche + Vistas se quedan FUERA del scroll (altura fija, `height` en vez de
+// `max-height` para que el hijo flex:1 sepa cuánto espacio le queda de
+// verdad); el scroll vive solo en .workspace-participants.
 .report-sidebar {
   position: sticky;
   top: 66px; // 56px de .top-nav (app.scss) + el mismo margen que usa .sticky-raid-context
@@ -9,8 +14,8 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  max-height: calc(100dvh - 66px);
-  overflow-y: auto;
+  height: calc(100dvh - 66px);
+  overflow: hidden;
   border-right: 1px solid var(--card-border);
   background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
 }
@@ -118,4 +123,142 @@
     background: var(--accent-soft);
     color: var(--accent);
   }
+}
+
+// §PR3: la única sección que crece con el tamaño del roster — todo lo de
+// arriba (cabecera + Vistas) tiene altura fija, esta se lleva el resto.
+.workspace-participants {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--card-border);
+}
+
+.participants-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 6px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.participants-count {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.participants-search {
+  margin: 0 10px 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+
+  &::placeholder {
+    color: var(--text-faint);
+  }
+  &:focus-visible {
+    border-color: var(--accent);
+  }
+}
+
+.participants-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 12px;
+}
+
+.participants-empty {
+  margin: 4px 14px 12px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.role-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 3px;
+}
+
+.role-group-label {
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.role-group-count {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.class-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.class-unknown {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.participant-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px 6px 22px; // sangría extra — cuelga de la cabecera de clase
+  color: var(--text-muted);
+  font-size: 12px;
+  text-decoration: none;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  // §20 del spec: barra lateral + fondo — jugador activo se distingue sin
+  // decoración excesiva, mismo lenguaje que .workspace-views a.active.
+  &.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+}
+
+.participant-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.participant-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
 }

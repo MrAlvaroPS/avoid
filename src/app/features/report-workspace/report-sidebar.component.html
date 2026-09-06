@@ -30,5 +30,65 @@
         >Informe</a
       >
     </nav>
+
+    <section class="workspace-participants" aria-label="Jugadores de la noche">
+      <div class="participants-header">
+        <span class="participants-label">Jugadores</span>
+        <span class="participants-count">{{ workspace.participants().length }}</span>
+      </div>
+
+      @if (workspace.participants().length) {
+        <input
+          class="participants-search"
+          type="search"
+          placeholder="Buscar jugador…"
+          [value]="search()"
+          (input)="search.set($any($event.target).value)"
+        />
+
+        <div class="participants-list">
+          @if (filteredGroups().length) {
+            @for (group of filteredGroups(); track group.key) {
+              <section class="role-group">
+                <header class="role-group-header">
+                  <span class="role-group-label">{{ group.label }}</span>
+                  <span class="role-group-count">{{ group.count }}</span>
+                </header>
+                @for (cls of group.classes; track cls.className ?? '') {
+                  <div class="class-group">
+                    <div class="class-group-header">
+                      @if (cls.className) {
+                        <app-class-icon [wclClass]="cls.className" />
+                        <span>{{ cls.className }}</span>
+                      } @else {
+                        <span class="class-unknown">Clase desconocida</span>
+                      }
+                    </div>
+                    @for (player of cls.players; track player.name) {
+                      <a
+                        class="participant-row"
+                        [class.active]="activePlayerName() === player.name"
+                        [routerLink]="['/report', code, 'player', player.name]"
+                      >
+                        <span class="participant-name">{{ player.name }}</span>
+                        @if (player.rank === 'Trial') {
+                          <span class="participant-badge">Trial</span>
+                        } @else if (player.rank === null) {
+                          <span class="participant-badge">Sin roster</span>
+                        }
+                      </a>
+                    }
+                  </div>
+                }
+              </section>
+            }
+          } @else {
+            <p class="participants-empty">Ningún jugador coincide con «{{ search() }}».</p>
+          }
+        </div>
+      } @else {
+        <p class="participants-empty">Sin participantes registrados para esta noche.</p>
+      }
+    </section>
   }
 </aside>
