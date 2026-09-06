@@ -21,6 +21,9 @@ class FakeQuery implements PromiseLike<{ data: unknown; error: null }> {
   in(): this {
     return this;
   }
+  limit(): this {
+    return this;
+  }
   then<T1, T2 = never>(
     onfulfilled?: ((value: { data: unknown; error: null }) => T1 | PromiseLike<T1>) | null,
     onrejected?: ((reason: unknown) => T2 | PromiseLike<T2>) | null,
@@ -92,6 +95,39 @@ describe('ReportsService.listNightPlayers · resolución report-scoped (PR1)', (
 
     expect(result).toEqual([
       { name: 'Mechavalec', className: 'Warrior', spec: 'Arms', role: 'Melee' },
+    ]);
+  });
+});
+
+describe('ReportsService.listRecentReports · acceso rápido para el selector de noches (PR4)', () => {
+  it('sin reports, devuelve una lista vacía sin consultar report_encounters', async () => {
+    const service = buildService({ reports: [] });
+
+    const result = await service.listRecentReports(8);
+
+    expect(result).toEqual([]);
+  });
+
+  it('junta cada report con los bosses vistos SOLO en esos reports (no en toda la temporada)', async () => {
+    const service = buildService({
+      reports: [
+        { code: 'B', title: 'Noche B', start_time: 2 },
+        { code: 'A', title: 'Noche A', start_time: 1 },
+      ],
+      report_encounters: [
+        { report_code: 'B', boss_name: 'Nexus-King' },
+        { report_code: 'A', boss_name: 'Plexus Sentinel' },
+      ],
+    });
+
+    const result = await service.listRecentReports(8);
+
+    expect(result).toEqual([
+      { report: { code: 'B', title: 'Noche B', start_time: 2 }, bossesAttempted: ['Nexus-King'] },
+      {
+        report: { code: 'A', title: 'Noche A', start_time: 1 },
+        bossesAttempted: ['Plexus Sentinel'],
+      },
     ]);
   });
 });

@@ -1,94 +1,103 @@
 <aside class="report-sidebar" aria-label="Noche activa">
-  <section class="night-header">
-    @if (workspace.loading() && !workspace.report()) {
-      <div class="night-header-skeleton" aria-hidden="true">
-        <div class="skeleton-line skeleton-line-title"></div>
-        <div class="skeleton-line skeleton-line-date"></div>
-      </div>
-    } @else if (workspace.error(); as e) {
-      <p class="night-error" role="alert">{{ e }}</p>
-      <a class="night-error-link" routerLink="/">Cambiar noche</a>
-    } @else if (workspace.report(); as report) {
-      <strong class="night-title">{{ report.title.trim() || report.zone_name || 'Raid' }}</strong>
-      <span class="night-date">{{ reportDateLabel(report.start_time) }}</span>
-    }
-  </section>
+  @if (selectorOpen()) {
+    <app-report-night-selector (closed)="selectorOpen.set(false)" />
+  } @else {
+    <button
+      type="button"
+      class="night-header"
+      (click)="selectorOpen.set(true)"
+      aria-label="Cambiar de noche"
+    >
+      @if (workspace.loading() && !workspace.report()) {
+        <div class="night-header-skeleton" aria-hidden="true">
+          <div class="skeleton-line skeleton-line-title"></div>
+          <div class="skeleton-line skeleton-line-date"></div>
+        </div>
+      } @else if (workspace.error(); as e) {
+        <span class="night-error" role="alert">{{ e }}</span>
+        <span class="night-error-link">Cambiar noche</span>
+      } @else if (workspace.report(); as report) {
+        <strong class="night-title">{{ report.title.trim() || report.zone_name || 'Raid' }}</strong>
+        <span class="night-date">{{ reportDateLabel(report.start_time) }}</span>
+      }
+    </button>
 
-  @if (workspace.reportCode(); as code) {
-    <nav class="workspace-views" aria-label="Vistas de la noche">
-      <span class="views-label">Vistas</span>
-      <a
-        [routerLink]="['/report', code, 'raid']"
-        routerLinkActive="active"
-        [routerLinkActiveOptions]="{ exact: true }"
-        >Raid</a
-      >
-      <a
-        [routerLink]="['/report', code]"
-        routerLinkActive="active"
-        [routerLinkActiveOptions]="{ exact: true }"
-        >Informe</a
-      >
-    </nav>
+    @if (workspace.reportCode(); as code) {
+      <nav class="workspace-views" aria-label="Vistas de la noche">
+        <span class="views-label">Vistas</span>
+        <a
+          [routerLink]="['/report', code, 'raid']"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: true }"
+          >Raid</a
+        >
+        <a
+          [routerLink]="['/report', code]"
+          routerLinkActive="active"
+          [routerLinkActiveOptions]="{ exact: true }"
+          >Informe</a
+        >
+      </nav>
 
-    <section class="workspace-participants" aria-label="Jugadores de la noche">
-      <div class="participants-header">
-        <span class="participants-label">Jugadores</span>
-        <span class="participants-count">{{ workspace.participants().length }}</span>
-      </div>
+      <section class="workspace-participants" aria-label="Jugadores de la noche">
+        <div class="participants-header">
+          <span class="participants-label">Jugadores</span>
+          <span class="participants-count">{{ workspace.participants().length }}</span>
+        </div>
 
-      @if (workspace.participants().length) {
-        <input
-          class="participants-search"
-          type="search"
-          placeholder="Buscar jugador…"
-          [value]="search()"
-          (input)="search.set($any($event.target).value)"
-        />
+        @if (workspace.participants().length) {
+          <input
+            class="participants-search"
+            type="search"
+            placeholder="Buscar jugador…"
+            [value]="search()"
+            (input)="search.set($any($event.target).value)"
+          />
 
-        <div class="participants-list">
-          @if (filteredGroups().length) {
-            @for (group of filteredGroups(); track group.key) {
-              <section class="role-group">
-                <header class="role-group-header">
-                  <span class="role-group-label">{{ group.label }}</span>
-                  <span class="role-group-count">{{ group.count }}</span>
-                </header>
-                @for (cls of group.classes; track cls.className ?? '') {
-                  <div class="class-group">
-                    <div class="class-group-header">
-                      @if (cls.className) {
-                        <app-class-icon [wclClass]="cls.className" />
-                        <span>{{ cls.className }}</span>
-                      } @else {
-                        <span class="class-unknown">Clase desconocida</span>
+          <div class="participants-list">
+            @if (filteredGroups().length) {
+              @for (group of filteredGroups(); track group.key) {
+                <section class="role-group">
+                  <header class="role-group-header">
+                    <span class="role-group-label">{{ group.label }}</span>
+                    <span class="role-group-count">{{ group.count }}</span>
+                  </header>
+                  @for (cls of group.classes; track cls.className ?? '') {
+                    <div class="class-group">
+                      <div class="class-group-header">
+                        @if (cls.className) {
+                          <app-class-icon [wclClass]="cls.className" />
+                          <span>{{ cls.className }}</span>
+                        } @else {
+                          <span class="class-unknown">Clase desconocida</span>
+                        }
+                      </div>
+                      @for (player of cls.players; track player.name) {
+                        <a
+                          class="participant-row"
+                          [class.active]="activePlayerName() === player.name"
+                          [routerLink]="['/report', code, 'player', player.name]"
+                        >
+                          <span class="participant-name">{{ player.name }}</span>
+                          @if (player.rank === 'Trial') {
+                            <span class="participant-badge">Trial</span>
+                          } @else if (player.rank === null) {
+                            <span class="participant-badge">Sin roster</span>
+                          }
+                        </a>
                       }
                     </div>
-                    @for (player of cls.players; track player.name) {
-                      <a
-                        class="participant-row"
-                        [class.active]="activePlayerName() === player.name"
-                        [routerLink]="['/report', code, 'player', player.name]"
-                      >
-                        <span class="participant-name">{{ player.name }}</span>
-                        @if (player.rank === 'Trial') {
-                          <span class="participant-badge">Trial</span>
-                        } @else if (player.rank === null) {
-                          <span class="participant-badge">Sin roster</span>
-                        }
-                      </a>
-                    }
-                  </div>
-                }
-              </section>
+                  }
+                </section>
+              }
+            } @else {
+              <p class="participants-empty">Ningún jugador coincide con «{{ search() }}».</p>
             }
-          } @else {
-            <p class="participants-empty">Ningún jugador coincide con «{{ search() }}».</p>
-          }
-        </div>
-      } @else {
-        <p class="participants-empty">Sin participantes registrados para esta noche.</p>
-      }
-    </section>
+          </div>
+        } @else {
+          <p class="participants-empty">Sin participantes registrados para esta noche.</p>
+        }
+      </section>
+    }
   }
 </aside>

@@ -36,6 +36,22 @@ export interface KnownBoss {
   blizzardZoneId: number | null;
 }
 
+/** Compartido por listAllReports/listRecentReports — mismo join en memoria, distinto alcance de la consulta. */
+function joinReportsWithBosses(
+  reports: ReportRow[],
+  encounters: { report_code: string; boss_name: string }[],
+): { report: ReportRow; bossesAttempted: string[] }[] {
+  const bossesByReport = new Map<string, Set<string>>();
+  for (const e of encounters) {
+    if (!bossesByReport.has(e.report_code)) bossesByReport.set(e.report_code, new Set());
+    bossesByReport.get(e.report_code)!.add(e.boss_name);
+  }
+  return reports.map((report) => ({
+    report,
+    bossesAttempted: [...(bossesByReport.get(report.code) ?? [])],
+  }));
+}
+
 export interface NightPlayerListItem {
   name: string;
   className: string | null;
@@ -151,16 +167,39 @@ export class ReportsService {
       ]);
     if (reportsErr) throw reportsErr;
     if (encountersErr) throw encountersErr;
+    return joinReportsWithBosses(
+      (reports ?? []) as ReportRow[],
+      (encounters ?? []) as { report_code: string; boss_name: string }[],
+    );
+  }
 
-    const bossesByReport = new Map<string, Set<string>>();
-    for (const e of (encounters ?? []) as { report_code: string; boss_name: string }[]) {
-      if (!bossesByReport.has(e.report_code)) bossesByReport.set(e.report_code, new Set());
-      bossesByReport.get(e.report_code)!.add(e.boss_name);
-    }
-    return ((reports ?? []) as ReportRow[]).map((report) => ({
-      report,
-      bossesAttempted: [...(bossesByReport.get(report.code) ?? [])],
-    }));
+  /**
+   * §PR4 del plan IRIS (Report Workspace): versión ligera de listAllReports()
+   * para el selector de noches del sidebar — "Recientes" no necesita cargar
+   * TODA la tabla de reports ni TODOS los report_encounters para enseñar
+   * solo las últimas `limit` noches; el `.in(codes)` sobre encounters queda
+   * acotado a esos pocos reports, no a toda la temporada.
+   */
+  async listRecentReports(
+    limit: number,
+  ): Promise<{ report: ReportRow; bossesAttempted: string[] }[]> {
+    const { data: reports, error: reportsErr } = await this.supabase.client
+      .from('reports')
+      .select('*')
+      .order('start_time', { ascending: false })
+      .limit(limit);
+    if (reportsErr) throw reportsErr;
+    const codes = ((reports ?? []) as ReportRow[]).map((r) => r.code);
+    if (!codes.length) return [];
+    const { data: encounters, error: encountersErr } = await this.supabase.client
+      .from('report_encounters')
+      .select('report_code,boss_name')
+      .in('report_code', codes);
+    if (encountersErr) throw encountersErr;
+    return joinReportsWithBosses(
+      reports as ReportRow[],
+      (encounters ?? []) as { report_code: string; boss_name: string }[],
+    );
   }
 
   /** Todos los bosses vistos alguna vez en algún report sincronizado — alimenta el desplegable del manifiesto (§5, tarea manual #1) sin teclear nada. */

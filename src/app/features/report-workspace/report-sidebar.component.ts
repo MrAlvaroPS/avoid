@@ -1,9 +1,14 @@
 // Colocar en: src/app/features/report-workspace/report-sidebar.component.ts
 // PR2 del plan IRIS (Report Workspace): cabecera de la noche + selector
 // Raid/Informe. PR3 añade el navegador de jugadores (Role → Class → Player,
-// búsqueda local, jugador activo derivado de la ruta) — §14/§41: el sidebar
-// es navegación, nunca un dashboard (nada de score/muertes/% defensivo/
-// mecánicas aquí).
+// búsqueda local, jugador activo derivado de la ruta). PR4 añade el
+// selector de noches (§8 del spec): pulsar la cabecera cambia TEMPORALMENTE
+// el sidebar a modo selección — `selectorOpen` es estado puramente de UI
+// (qué se enseña en el sidebar AHORA MISMO), no una identidad de report
+// paralela: la noche activa de verdad sigue siendo únicamente
+// workspace.reportCode(), y elegir otra navega (ver ReportNightSelectorComponent).
+// §14/§41: el sidebar es navegación, nunca un dashboard (nada de score/
+// muertes/% defensivo/mecánicas aquí).
 import { Component, computed, inject, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import {
@@ -20,15 +25,19 @@ import {
   filterParticipantGroups,
   groupParticipantsForSidebar,
 } from './report-participant-grouping.util';
+import { ReportNightSelectorComponent } from './report-night-selector.component';
 
 @Component({
   selector: 'app-report-sidebar',
   standalone: true,
-  imports: [RouterLink, RouterLinkActive, ClassIconComponent],
+  imports: [RouterLink, RouterLinkActive, ClassIconComponent, ReportNightSelectorComponent],
   templateUrl: './report-sidebar.component.html',
   styleUrl: './report-sidebar.component.scss',
 })
 export class ReportSidebarComponent {
+  /** §8 del spec: modo selección temporal — nunca "qué noche está activa" (eso sigue siendo solo workspace.reportCode()). */
+  protected selectorOpen = signal(false);
+
   // Mismo ReportWorkspaceService que provee el ReportWorkspaceComponent
   // padre (component-scoped, ver report-workspace.service.ts) — este
   // sidebar nunca abre su propio report, solo lee el que ya está activo.
