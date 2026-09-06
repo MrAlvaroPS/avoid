@@ -12,6 +12,27 @@
 // mostrar — ReportWorkspaceService.open() lo trata como error, y
 // RaidSessionComponent.loadExisting ya se degradaba a enseñar el panel de
 // importar antes de este PR).
+//
+// §regla explícita (2026-09-06, revisión post-bug): raid-live-session.util.ts
+// persiste UN solo objeto ({reportCode, autoRefreshOn, lastActivityAt}) bajo
+// avoid.currentReportCode, pero representa DOS cosas distintas a propósito
+// separadas: (1) "qué report vio esta pestaña por última vez" (navegación —
+// lo que este guard usa) y (2) "¿seguía en directo, y cuándo hubo actividad
+// real?" (negocio de Raid — lo que RaidSessionComponent.bootstrapReport usa
+// para decidir si reanuda "En directo"). Este guard SOLO lee el campo
+// reportCode; nunca lee ni razona sobre autoRefreshOn/lastActivityAt, y
+// nunca decide si el seguimiento en vivo se reanuda — esa decisión sigue
+// siendo exclusiva de RaidSessionComponent. No cambiar este guard para que
+// tenga en cuenta el estado en vivo sin revisar antes esa separación.
+//
+// §gap conocido, no resuelto aquí: RaidSessionComponent.persistSession()
+// solo se invoca desde runAnalyze() — o sea, solo cuando de verdad se
+// importa/reanaliza un report. Si el usuario solo VE un report ya analizado
+// (navegando por el sidebar sin disparar un reanálisis), reportCode no se
+// actualiza — este guard seguiría redirigiendo a la última noche
+// REANALIZADA, no a la última VISTA. No lo he tocado porque toca la
+// persistencia de Raid, que el usuario ha pedido explícitamente no acoplar
+// sin una regla acordada primero.
 import { inject } from '@angular/core';
 import { Router, type CanActivateFn } from '@angular/router';
 import { readStoredSession } from './raid-live-session.util';
