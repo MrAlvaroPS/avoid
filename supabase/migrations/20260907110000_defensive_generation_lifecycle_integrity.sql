@@ -1,21 +1,15 @@
 -- IRIS canonical defensives: production lifecycle + completeness invariants.
 --
--- Root cause fixed here:
--- the first published episode-evaluator@7 generation was an empirical two-log
--- corpus. `defensive_generation_pointer` is global, but nothing in the database
--- proved that a generation covered the full population consumed by product.
--- New reports therefore had valid V2 facts but zero rows in the published
--- canonical generation.
+-- Root cause fixed here: the first published episode-evaluator@7 generation
+-- was an empirical two-report corpus, while defensive_generation_pointer is
+-- global. Nothing in the DB proved that a generation covered the full player
+-- population later consumed by product. New reports therefore had valid V2
+-- facts but zero canonical rows.
 --
--- This migration makes the contract executable:
---   1. one canonical definition of an evaluator-eligible player/pull;
---   2. an exact published expected-population view for readers;
---   3. copy-on-write generation refresh (published rows remain immutable);
---   4. completeness + ledger-key validation before publication;
---   5. triggers that make an incomplete/manual publication impossible;
---   6. execution-ledger read views expose only the currently published
---      defensive generation (plus future non-generation/other-domain rows),
---      so historical immutable generations cannot duplicate shadow counts.
+-- The invariant after this migration is executable, not documentary:
+-- build, publication validation and frontend coverage use one eligibility
+-- contract; published generations are immutable; refresh is copy-on-write;
+-- and neither status nor pointer can be moved to an incomplete generation.
 
 create or replace view canonical_defensive_eligible_player_pulls
 with (security_invoker = true) as
@@ -36,8 +30,7 @@ where r.game_build is not null
   and jsonb_typeof(r.talent_build) = 'array';
 
 comment on view canonical_defensive_eligible_player_pulls is
-  'Canonical player/pull population with the minimum inputs required by the episode evaluator. A generation additionally filters this set by its exact game_build. This is the single eligibility contract used by build, publication validation and frontend coverage.';
-
+  'Single canonical player/pull eligibility contract for the episode evaluator. A generation additionally filters by its exact game_build.';
 revoke all on canonical_defensive_eligible_player_pulls from anon;
 grant select on canonical_defensive_eligible_player_pulls to authenticated;
 
@@ -56,22 +49,18 @@ select
 from defensive_generation_pointer ptr
 join defensive_generations g on g.id = ptr.published_generation_id
 join canonical_defensive_eligible_player_pulls e on e.game_build = g.game_build
-where ptr.id = true
-  and g.status = 'published';
+where ptr.id = true and g.status = 'published';
 
 comment on view published_defensive_expected_player_pulls is
-  'Exact player/pull population expected from the currently published defensive generation. Frontend readers use this instead of raw canonical_scored_pulls, preventing false partial/incompatible states for rows the evaluator cannot evaluate.';
-
+  'Exact player/pull population expected from the currently published defensive generation.';
 revoke all on published_defensive_expected_player_pulls from anon;
 grant select on published_defensive_expected_player_pulls to authenticated;
 
--- There must never be two mutable builders or two product-visible generations.
 create unique index if not exists defensive_generations_single_building_idx
   on defensive_generations ((status)) where status = 'building';
 create unique index if not exists defensive_generations_single_published_idx
   on defensive_generations ((status)) where status = 'published';
 
--- Helper: all expected ledger dedupe keys for safe staging rows in one generation.
 create or replace function defensive_generation_expected_ledger_keys(p_generation_id uuid)
 returns table (
   pull_id uuid,
@@ -100,10 +89,7 @@ as $$
       and s.semantic_resolver_version = g.semantic_resolver_version
       and s.resolver_version = g.resolver_version
   ), episodes as (
-    select
-      s.pull_id,
-      s.player_name,
-      ep.value as episode
+    select s.pull_id, s.player_name, ep.value as episode
     from safe_rows s
     cross join lateral jsonb_array_elements(s.episodes) ep(value)
   )
@@ -125,7 +111,6 @@ as $$
     and nullif(episode ->> 'planAssignmentId', '') is not null
     and nullif(episode ->> 'planVerdict', '') is not null;
 $$;
-
 revoke all on function defensive_generation_expected_ledger_keys(uuid) from public, anon, authenticated;
 grant execute on function defensive_generation_expected_ledger_keys(uuid) to service_role;
 
@@ -151,9 +136,7 @@ declare
   orphan_ledger_events integer := 0;
 begin
   select * into g from defensive_generations where id = p_generation_id;
-  if not found then
-    raise exception 'Unknown defensive generation %', p_generation_id;
-  end if;
+  if not found then raise exception 'Unknown defensive generation %', p_generation_id; end if;
   if g.evaluator_version is null or g.episode_version is null then
     raise exception 'Generation % has no evaluator/episode version', p_generation_id;
   end if;
@@ -180,8 +163,7 @@ begin
   from canonical_defensive_eligible_player_pulls e
   where e.game_build = g.game_build
     and not exists (
-      select 1
-      from player_pull_defensive_episode_evaluations s
+      select 1 from player_pull_defensive_episode_evaluations s
       where s.defensive_generation_id = g.id
         and s.pull_id = e.pull_id
         and s.player_name = e.player_name
@@ -195,8 +177,7 @@ begin
   from player_pull_defensive_episode_evaluations s
   where s.defensive_generation_id = g.id
     and not exists (
-      select 1
-      from canonical_defensive_eligible_player_pulls e
+      select 1 from canonical_defensive_eligible_player_pulls e
       where e.pull_id = s.pull_id
         and e.player_name = s.player_name
         and e.game_build = g.game_build
@@ -228,8 +209,7 @@ begin
   select count(*) into missing_ledger_events
   from defensive_generation_expected_ledger_keys(g.id) k
   where not exists (
-    select 1
-    from player_execution_events e
+    select 1 from player_execution_events e
     where e.defensive_generation_id = g.id
       and e.pull_id = k.pull_id
       and e.player_name = k.player_name
@@ -242,8 +222,7 @@ begin
     and e.domain = 'defensive'
     and (e.event_type like 'defensive_episode_%' or e.event_type like 'defensive_plan_%')
     and not exists (
-      select 1
-      from defensive_generation_expected_ledger_keys(g.id) k
+      select 1 from defensive_generation_expected_ledger_keys(g.id) k
       where k.pull_id = e.pull_id
         and k.player_name = e.player_name
         and k.deduplication_key = e.deduplication_key
@@ -273,7 +252,6 @@ begin
   );
 end;
 $$;
-
 revoke all on function defensive_generation_coverage(uuid) from public, anon, authenticated;
 grant execute on function defensive_generation_coverage(uuid) to service_role;
 
@@ -284,8 +262,7 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
-declare
-  coverage jsonb;
+declare coverage jsonb;
 begin
   coverage := defensive_generation_coverage(p_generation_id);
   if coalesce((coverage ->> 'complete')::boolean, false) is not true then
@@ -294,16 +271,9 @@ begin
   return coverage;
 end;
 $$;
-
 revoke all on function assert_defensive_generation_complete(uuid) from public, anon, authenticated;
 grant execute on function assert_defensive_generation_complete(uuid) to service_role;
 
--- Start/reuse the one BUILDING generation. When the product contract is
--- unchanged, immutable rows/events from the published generation are cloned
--- into the child. `p_report_code` is deliberately not cloned so a manual
--- refresh of an existing report recomputes that report instead of preserving
--- stale facts. New reports are absent from the parent and therefore naturally
--- become the only missing pulls.
 create or replace function begin_defensive_generation_refresh(
   p_game_build text,
   p_semantic_version text,
@@ -327,11 +297,7 @@ declare
 begin
   perform pg_advisory_xact_lock(hashtext('iris:defensive-generation-refresh'));
 
-  select id into existing_id
-  from defensive_generations
-  where status = 'building'
-  limit 1;
-
+  select id into existing_id from defensive_generations where status = 'building' limit 1;
   if existing_id is not null then
     if not exists (
       select 1 from defensive_generations g
@@ -345,35 +311,46 @@ begin
     ) then
       raise exception 'A different defensive generation is already building: %', existing_id;
     end if;
+
+    -- If a second request asks to refresh an already-cloned report while the
+    -- same child is still building, force those rows back into the missing
+    -- set. This makes concurrent/manual report refreshes deterministic.
+    if p_report_code is not null then
+      delete from player_execution_events pe
+      where pe.defensive_generation_id = existing_id
+        and pe.domain = 'defensive'
+        and exists (
+          select 1 from canonical_defensive_eligible_player_pulls x
+          where x.pull_id = pe.pull_id
+            and x.player_name = pe.player_name
+            and x.report_code = p_report_code
+            and x.game_build = p_game_build
+        );
+      delete from player_pull_defensive_episode_evaluations s
+      where s.defensive_generation_id = existing_id
+        and exists (
+          select 1 from canonical_defensive_eligible_player_pulls x
+          where x.pull_id = s.pull_id
+            and x.player_name = s.player_name
+            and x.report_code = p_report_code
+            and x.game_build = p_game_build
+        );
+    end if;
     return existing_id;
   end if;
 
   select ptr.published_generation_id into parent_id
-  from defensive_generation_pointer ptr
-  where ptr.id = true
-  for update;
-
+  from defensive_generation_pointer ptr where ptr.id = true for update;
   if parent_id is not null then
     select * into parent from defensive_generations where id = parent_id;
   end if;
 
   insert into defensive_generations (
-    status,
-    semantic_version,
-    resolver_version,
-    semantic_resolver_version,
-    episode_version,
-    evaluator_version,
-    game_build,
-    notes
+    status, semantic_version, resolver_version, semantic_resolver_version,
+    episode_version, evaluator_version, game_build, notes
   ) values (
-    'building',
-    p_semantic_version,
-    p_resolver_version,
-    p_semantic_resolver_version,
-    p_episode_version,
-    p_evaluator_version,
-    p_game_build,
+    'building', p_semantic_version, p_resolver_version, p_semantic_resolver_version,
+    p_episode_version, p_evaluator_version, p_game_build,
     jsonb_build_object(
       'kind', 'canonical_defensive_production_refresh',
       'startedAt', now(),
@@ -388,10 +365,8 @@ begin
         'evaluatorVersion', p_evaluator_version
       )
     )::text
-  )
-  returning id into child_id;
+  ) returning id into child_id;
 
-  -- Clone only when every semantic/version dimension is identical.
   if parent_id is not null
      and parent.status = 'published'
      and parent.game_build = p_game_build
@@ -402,30 +377,14 @@ begin
      and parent.evaluator_version = p_evaluator_version then
 
     insert into player_pull_defensive_episode_evaluations (
-      defensive_generation_id,
-      pull_id,
-      player_name,
-      episode_evaluator_version,
-      semantic_version,
-      semantic_resolver_version,
-      resolver_version,
-      build_fingerprint,
-      data_confidence,
-      episodes,
-      evaluated_at
+      defensive_generation_id, pull_id, player_name, episode_evaluator_version,
+      semantic_version, semantic_resolver_version, resolver_version,
+      build_fingerprint, data_confidence, episodes, evaluated_at
     )
     select
-      child_id,
-      s.pull_id,
-      s.player_name,
-      s.episode_evaluator_version,
-      s.semantic_version,
-      s.semantic_resolver_version,
-      s.resolver_version,
-      s.build_fingerprint,
-      s.data_confidence,
-      s.episodes,
-      s.evaluated_at
+      child_id, s.pull_id, s.player_name, s.episode_evaluator_version,
+      s.semantic_version, s.semantic_resolver_version, s.resolver_version,
+      s.build_fingerprint, s.data_confidence, s.episodes, s.evaluated_at
     from player_pull_defensive_episode_evaluations s
     join canonical_defensive_eligible_player_pulls e
       on e.pull_id = s.pull_id
@@ -448,64 +407,25 @@ begin
       and e.domain = 'defensive'
       and (p_report_code is null or x.report_code <> p_report_code)
       and e.deduplication_key not like parent_id::text || ':%';
-
     if bad_parent_keys <> 0 then
       raise exception 'Published defensive ledger has % non-canonical dedupe keys; clone aborted', bad_parent_keys;
     end if;
 
     insert into player_execution_events (
-      pull_id,
-      boss_id,
-      difficulty,
-      player_name,
-      occurrence_id,
-      causal_group_id,
-      timestamp_ms,
-      domain,
-      event_type,
-      verdict,
-      reason_code,
-      credit_eligible,
-      penalty_eligible,
-      primary_penalty,
-      severity,
-      priority,
-      confidence,
-      evidence,
-      policy_version,
-      context_resolver_version,
-      occurrence_resolver_version,
-      ledger_evaluator_version,
-      deduplication_key,
-      evaluated_at,
-      defensive_generation_id
+      pull_id, boss_id, difficulty, player_name, occurrence_id, causal_group_id,
+      timestamp_ms, domain, event_type, verdict, reason_code, credit_eligible,
+      penalty_eligible, primary_penalty, severity, priority, confidence, evidence,
+      policy_version, context_resolver_version, occurrence_resolver_version,
+      ledger_evaluator_version, deduplication_key, evaluated_at, defensive_generation_id
     )
     select
-      e.pull_id,
-      e.boss_id,
-      e.difficulty,
-      e.player_name,
-      e.occurrence_id,
-      e.causal_group_id,
-      e.timestamp_ms,
-      e.domain,
-      e.event_type,
-      e.verdict,
-      e.reason_code,
-      e.credit_eligible,
-      e.penalty_eligible,
-      e.primary_penalty,
-      e.severity,
-      e.priority,
-      e.confidence,
-      e.evidence,
-      e.policy_version,
-      e.context_resolver_version,
-      e.occurrence_resolver_version,
+      e.pull_id, e.boss_id, e.difficulty, e.player_name, e.occurrence_id, e.causal_group_id,
+      e.timestamp_ms, e.domain, e.event_type, e.verdict, e.reason_code, e.credit_eligible,
+      e.penalty_eligible, e.primary_penalty, e.severity, e.priority, e.confidence, e.evidence,
+      e.policy_version, e.context_resolver_version, e.occurrence_resolver_version,
       e.ledger_evaluator_version,
       child_id::text || substring(e.deduplication_key from length(parent_id::text) + 1),
-      e.evaluated_at,
-      child_id
+      e.evaluated_at, child_id
     from player_execution_events e
     join canonical_defensive_eligible_player_pulls x
       on x.pull_id = e.pull_id
@@ -519,13 +439,9 @@ begin
   return child_id;
 end;
 $$;
-
 revoke all on function begin_defensive_generation_refresh(text,text,text,text,text,text,text) from public, anon, authenticated;
 grant execute on function begin_defensive_generation_refresh(text,text,text,text,text,text,text) to service_role;
 
--- A pull is pending not only when staging is missing, but also when a staged
--- episode is missing its ledger event. This makes retries self-healing even if
--- an earlier worker stopped between the staging upsert and ledger upsert.
 create or replace function next_missing_defensive_generation_pull(p_generation_id uuid)
 returns table (
   pull_id uuid,
@@ -541,12 +457,9 @@ security definer
 set search_path = public, pg_temp
 as $$
   with g as (
-    select * from defensive_generations
-    where id = p_generation_id and status = 'building'
+    select * from defensive_generations where id = p_generation_id and status = 'building'
   ), expected as (
-    select e.*
-    from canonical_defensive_eligible_player_pulls e
-    join g on e.game_build = g.game_build
+    select e.* from canonical_defensive_eligible_player_pulls e join g on e.game_build = g.game_build
   ), per_pull as (
     select
       e.pull_id,
@@ -586,40 +499,25 @@ as $$
   order by p.report_code, p.fight_id, p.pull_id
   limit 1;
 $$;
-
 revoke all on function next_missing_defensive_generation_pull(uuid) from public, anon, authenticated;
 grant execute on function next_missing_defensive_generation_pull(uuid) to service_role;
 
--- Called by a retry before rebuilding one pull. The generation is still
--- private/building, so deleting its partial rows cannot affect product reads.
-create or replace function reset_building_defensive_generation_pull(
-  p_generation_id uuid,
-  p_pull_id uuid
-)
+create or replace function reset_building_defensive_generation_pull(p_generation_id uuid, p_pull_id uuid)
 returns void
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
 begin
-  if not exists (
-    select 1 from defensive_generations
-    where id = p_generation_id and status = 'building'
-  ) then
+  if not exists (select 1 from defensive_generations where id = p_generation_id and status = 'building') then
     raise exception 'Generation % is not building', p_generation_id;
   end if;
-
   delete from player_execution_events
-  where defensive_generation_id = p_generation_id
-    and pull_id = p_pull_id
-    and domain = 'defensive';
-
+  where defensive_generation_id = p_generation_id and pull_id = p_pull_id and domain = 'defensive';
   delete from player_pull_defensive_episode_evaluations
-  where defensive_generation_id = p_generation_id
-    and pull_id = p_pull_id;
+  where defensive_generation_id = p_generation_id and pull_id = p_pull_id;
 end;
 $$;
-
 revoke all on function reset_building_defensive_generation_pull(uuid,uuid) from public, anon, authenticated;
 grant execute on function reset_building_defensive_generation_pull(uuid,uuid) to service_role;
 
@@ -629,51 +527,32 @@ language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-declare
-  current_id uuid;
-  coverage jsonb;
+declare current_id uuid; coverage jsonb;
 begin
   perform pg_advisory_xact_lock(hashtext('iris:defensive-generation-refresh'));
-
   select published_generation_id into current_id
-  from defensive_generation_pointer
-  where id = true
-  for update;
-
+  from defensive_generation_pointer where id = true for update;
   if not exists (
-    select 1 from defensive_generations
-    where id = p_generation_id and status in ('building', 'ready')
+    select 1 from defensive_generations where id = p_generation_id and status in ('building', 'ready')
   ) then
     raise exception 'Generation % is not publishable from its current status', p_generation_id;
   end if;
-
   coverage := assert_defensive_generation_complete(p_generation_id);
-
   update defensive_generations
   set status = 'superseded', superseded_at = now()
   where id = current_id and current_id is distinct from p_generation_id;
-
   update defensive_generations
-  set status = 'published',
-      ready_at = coalesce(ready_at, now()),
-      published_at = coalesce(published_at, now())
+  set status = 'published', ready_at = coalesce(ready_at, now()), published_at = coalesce(published_at, now())
   where id = p_generation_id;
-
   update defensive_generation_pointer
-  set published_generation_id = p_generation_id,
-      updated_at = now()
+  set published_generation_id = p_generation_id, updated_at = now()
   where id = true;
-
   return coverage || jsonb_build_object('published', true, 'previousGenerationId', current_id);
 end;
 $$;
-
 revoke all on function publish_complete_defensive_generation(uuid) from public, anon, authenticated;
 grant execute on function publish_complete_defensive_generation(uuid) to service_role;
 
--- Database-level guard: even a manual UPDATE cannot repeat the original
--- incident. A generation may become PUBLISHED only after the same exhaustive
--- check used by the official publication function.
 create or replace function guard_defensive_generation_publication()
 returns trigger
 language plpgsql
@@ -687,7 +566,6 @@ begin
   return new;
 end;
 $$;
-
 drop trigger if exists defensive_generation_publication_guard on defensive_generations;
 create trigger defensive_generation_publication_guard
 before update of status on defensive_generations
@@ -703,8 +581,7 @@ begin
   if new.published_generation_id is not null
      and new.published_generation_id is distinct from old.published_generation_id then
     if not exists (
-      select 1 from defensive_generations
-      where id = new.published_generation_id and status = 'published'
+      select 1 from defensive_generations where id = new.published_generation_id and status = 'published'
     ) then
       raise exception 'Pointer target % is not PUBLISHED', new.published_generation_id;
     end if;
@@ -713,30 +590,31 @@ begin
   return new;
 end;
 $$;
-
 drop trigger if exists defensive_generation_pointer_guard on defensive_generation_pointer;
 create trigger defensive_generation_pointer_guard
 before update of published_generation_id on defensive_generation_pointer
 for each row execute function guard_defensive_generation_pointer();
 
--- Published/superseded staging and canonical ledger rows are immutable facts.
 create or replace function guard_defensive_generation_fact_mutation()
 returns trigger
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-declare
-  gid uuid;
-  state text;
+declare gid uuid; state text;
 begin
-  gid := coalesce(new.defensive_generation_id, old.defensive_generation_id);
-  if gid is null then return coalesce(new, old); end if;
-  select status into state from defensive_generations where id = gid;
-  if state in ('ready', 'published', 'superseded') then
-    raise exception 'Defensive generation % is immutable in status %', gid, state;
+  if tg_op = 'DELETE' then
+    gid := old.defensive_generation_id;
+  else
+    gid := new.defensive_generation_id;
   end if;
-  return coalesce(new, old);
+  if gid is not null then
+    select status into state from defensive_generations where id = gid;
+    if state in ('ready', 'published', 'superseded') then
+      raise exception 'Defensive generation % is immutable in status %', gid, state;
+    end if;
+  end if;
+  if tg_op = 'DELETE' then return old; else return new; end if;
 end;
 $$;
 
@@ -748,13 +626,10 @@ for each row execute function guard_defensive_generation_fact_mutation();
 drop trigger if exists defensive_ledger_immutability on player_execution_events;
 create trigger defensive_ledger_immutability
 before insert or update or delete on player_execution_events
-for each row
-when (coalesce(new.defensive_generation_id, old.defensive_generation_id) is not null)
-execute function guard_defensive_generation_fact_mutation();
+for each row execute function guard_defensive_generation_fact_mutation();
 
--- Ledger readers must never aggregate immutable historical generations
--- together. Preserve any future non-generation event rows, but expose only
--- canonical defensive events from the singleton published pointer.
+-- Historical immutable generations remain in the ledger for audit, but product
+-- summaries must expose only the singleton published defensive generation.
 create or replace view player_pull_execution_summary_v3 as
 select
   e.pull_id,
@@ -792,9 +667,7 @@ select
   count(*) filter (where e.defensive_generation_id is not null and e.event_type like 'defensive_plan_%' and e.penalty_eligible)::integer as defensive_plan_failure_count
 from player_execution_events e
 where e.defensive_generation_id is null
-   or e.defensive_generation_id = (
-     select published_generation_id from defensive_generation_pointer where id = true
-   )
+   or e.defensive_generation_id = (select published_generation_id from defensive_generation_pointer where id = true)
 group by e.pull_id, e.boss_id, e.difficulty, e.player_name, e.ledger_evaluator_version, e.defensive_generation_id;
 
 create or replace view night_player_execution_summary_v3 as
@@ -829,9 +702,7 @@ select
 from player_execution_events e
 join pulls p on p.id = e.pull_id
 where e.defensive_generation_id is null
-   or e.defensive_generation_id = (
-     select published_generation_id from defensive_generation_pointer where id = true
-   )
+   or e.defensive_generation_id = (select published_generation_id from defensive_generation_pointer where id = true)
 group by p.report_code, e.player_name, e.defensive_generation_id;
 
 notify pgrst, 'reload schema';
