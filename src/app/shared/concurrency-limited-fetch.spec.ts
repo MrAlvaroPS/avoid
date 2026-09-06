@@ -11,6 +11,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function flushMicrotasks(): Promise<void> {
+  // Releasing a raw fetch resumes: raw fetch -> limiter finally/release ->
+  // next queued wrapper. A few ticks make the assertions independent of the
+  // exact promise continuation ordering used by Node/jsdom.
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+}
+
 describe('createConcurrencyLimitedFetch', () => {
   it('caps matching requests while preserving their FIFO start order', async () => {
     const gates = Array.from({ length: 5 }, () => deferred<Response>());
@@ -39,25 +46,21 @@ describe('createConcurrencyLimitedFetch', () => {
       limitedFetch(`https://example.supabase.co/rest/v1/pulls?i=${i}`),
     );
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(started).toEqual([0, 1]);
     expect(maxActive).toBe(2);
 
     gates[0].resolve(new Response(null, { status: 200 }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(started).toEqual([0, 1, 2]);
 
     gates[1].resolve(new Response(null, { status: 200 }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(started).toEqual([0, 1, 2, 3]);
 
     gates[2].resolve(new Response(null, { status: 200 }));
     gates[3].resolve(new Response(null, { status: 200 }));
-    await Promise.resolve();
-    await Promise.resolve();
+    await flushMicrotasks();
     expect(started).toEqual([0, 1, 2, 3, 4]);
 
     gates[4].resolve(new Response(null, { status: 200 }));
@@ -81,10 +84,7 @@ describe('createConcurrencyLimitedFetch', () => {
     });
 
     const rest = limitedFetch('https://example.supabase.co/rest/v1/pulls');
-    // acquire() resolves asynchronously even when a slot is immediately
-    // available; let the matching request enter rawFetch before exercising
-    // the bypass path so the assertion checks only the intended behaviour.
-    await Promise.resolve();
+    await flushMicrotasks();
     const functions = limitedFetch('https://example.supabase.co/functions/v1/analyze-report');
 
     await functions;
@@ -119,6 +119,7 @@ describe('createConcurrencyLimitedFetch', () => {
 
     controller.abort();
     await expect(aborted).rejects.toMatchObject({ name: 'AbortError' });
+    await flushMicrotasks();
     expect(started).toEqual(['https://example.test/first']);
 
     firstGate.resolve(new Response(null, { status: 200 }));
