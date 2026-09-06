@@ -23,6 +23,11 @@ import { errorMessage } from '../_shared/error-message.ts';
 // uno cualquiera que alguien haya podido colar como channelId — así esta
 // función nunca puede usarse para publicar fuera del guild de Avoid.
 const DISCORD_API = 'https://discord.com/api/v10';
+// §Feature "Enviar + explicación" (encargo 2026-09-06): mismo límite estándar que ya respeta el frontend en
+// raider-discord-explanation.ts (DISCORD_EXPLANATION_BODY_BUDGET, con margen) — este backend no debe depender
+// de que el frontend siempre acierte; si algún día un caller nuevo manda `content` sin pasar por ese builder,
+// debe fallar aquí con un 400 claro en vez de dejar que Discord lo descubra con un 400/500 remoto (§20).
+const DISCORD_CONTENT_MAX_LENGTH = 2000;
 
 // §"Si Discord tuviese cupo o limites, hará alguna clase de waiting para
 // terminar de enviarlo" (feedback real, 2026-08-29, para el envío masivo de
@@ -67,6 +72,12 @@ Deno.serve(async (req: Request) => {
   }
   if (!body.channelId) return jsonResponse({ ok: false, error: 'channelId es obligatorio' }, 400);
   if (!body.content?.trim() && !body.imageBase64) return jsonResponse({ ok: false, error: 'Hace falta content o imageBase64' }, 400);
+  if (body.content != null && body.content.length > DISCORD_CONTENT_MAX_LENGTH) {
+    return jsonResponse(
+      { ok: false, error: `content supera el límite de Discord (${body.content.length}/${DISCORD_CONTENT_MAX_LENGTH} caracteres)` },
+      400,
+    );
+  }
 
   const botToken = Deno.env.get('DISCORD_BOT_TOKEN');
   const allowedGuildId = Deno.env.get('DISCORD_GUILD_ID');
@@ -89,7 +100,10 @@ Deno.serve(async (req: Request) => {
     let sendRes: Response;
     if (body.imageBase64) {
       const form = new FormData();
-      form.append('payload_json', JSON.stringify({ content: body.content ?? '' }));
+      // §19 del encargo "Enviar + explicación": una mecánica/nota accidental con @everyone/@aquí/un rol no
+      // debe generar ping — mejora genérica, aplica a cualquier envío con imagen, no solo al nuevo mensaje de
+      // explicación (que además nunca lleva imagen, ver más abajo).
+      form.append('payload_json', JSON.stringify({ content: body.content ?? '', allowed_mentions: { parse: [] } }));
       const bytes = Uint8Array.from(atob(body.imageBase64), (c) => c.charCodeAt(0));
       // §"Discord devolvió HTTP 413" (feedback real, 2026-08-27): esto
       // estaba hardcodeado a image/png sin mirar el nombre real, así que un
@@ -111,7 +125,7 @@ Deno.serve(async (req: Request) => {
       sendRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${body.channelId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body.content }),
+        body: JSON.stringify({ content: body.content, allowed_mentions: { parse: [] } }),
       });
     }
     if (!sendRes.ok) {

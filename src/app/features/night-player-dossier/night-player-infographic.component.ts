@@ -31,6 +31,7 @@ import {
   type RaiderPullTimelineCell,
 } from '../../core/raider-evidence-projection';
 import { buildRaiderInfographicViewModel } from '../../core/raider-infographic-view-model';
+import { buildRaiderDiscordExplanation } from '../../core/raider-discord-explanation';
 import { CombatEvaluationFeatureFlagsService } from '../../core/combat-evaluation-feature-flags.service';
 import { DefensiveFeatureFlagsService } from '../../core/defensive-feature-flags.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
@@ -52,6 +53,12 @@ type ExportStatus =
   | 'downloaded'
   | 'sendingDiscord'
   | 'sentDiscord'
+  // §Feature "Enviar + explicación" (2026-09-06): segundo paso del envío combinado — la infografía ya se
+  // rasterizó/envió, ahora se construye/envía el mensaje de texto con spoiler (ver sendToDiscordWithExplanation).
+  | 'sendingExplanation'
+  // §22 del encargo: fallo PARCIAL — la infografía sí llegó, solo falló el mensaje de explicación. Nunca se
+  // colapsa en 'error' (eso ocultaría que el raider ya tiene su informe visual en el canal).
+  | 'sentDiscordExplanationFailed'
   | 'refreshing'
   | 'error';
 
@@ -463,6 +470,10 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
 
   private statusTimer: ReturnType<typeof setTimeout> | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  // §22 del encargo: si el mensaje de explicación falla DESPUÉS de que la infografía ya se entregó, el
+  // siguiente clic de "Enviar + explicación" reintenta SOLO el texto — nunca reenvía las imágenes ya
+  // entregadas. null = no hay ningún envío de explicación pendiente de reintento para este canal.
+  private pendingExplanationRetry: { channelId: string; content: string } | null = null;
 
   formatDuration = formatDuration;
   formatPct = formatPct;
@@ -666,71 +677,126 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
     if (!channelId) return;
     this.exportError.set(null);
     try {
-      const { canvas, pixelRatio } = await this.renderFullCanvas();
-      const v3Pages = this.findV3ExportPages();
-      const splitYCss = v3Pages.length ? null : this.findPageSplitY();
-      const date = this.summary().reportDate
-        ? new Date(this.summary().reportDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })
-        : this.summary().reportTitle;
-      const baseContent = `Informe de combate de ${this.summary().playerName} · ${date}`;
-      this.exportStatus.set('sendingDiscord');
-
-      if (v3Pages.length) {
-        for (const [index, page] of v3Pages.entries()) {
-          const top = Math.max(0, Math.round(page.top * pixelRatio));
-          const height = Math.min(canvas.height - top, Math.round(page.height * pixelRatio));
-          const pageCanvas = this.cropCanvas(canvas, 0, top, canvas.width, height);
-          const fitted = await this.fitCanvasToDiscordLimit(pageCanvas);
-          const suffix = v3Pages.length > 1 ? `-${index + 1}-v3` : '-v3';
-          await this.edgeFunctions.sendDiscordMessage({
-            channelId,
-            content:
-              v3Pages.length > 1
-                ? `${baseContent} · ${index + 1}/${v3Pages.length}${index ? ' — continuación de mecánicas' : ' — diagnóstico, coaching y defensivos'}`
-                : `${baseContent} · diagnóstico, coaching y defensivos`,
-            imageBase64: await this.blobToBase64(fitted.blob),
-            imageFilename: this.filename(fitted.extension, suffix),
-          });
-          if (index < v3Pages.length - 1) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          }
-        }
-      } else if (splitYCss != null) {
-        const splitYPx = Math.min(canvas.height - 1, Math.max(1, Math.round(splitYCss * pixelRatio)));
-        const topCanvas = this.cropCanvas(canvas, 0, 0, canvas.width, splitYPx);
-        const bottomCanvas = this.cropCanvas(canvas, 0, splitYPx, canvas.width, canvas.height - splitYPx);
-        const part1 = await this.fitCanvasToDiscordLimit(topCanvas);
-        await this.edgeFunctions.sendDiscordMessage({
-          channelId,
-          content: `${baseContent} · 1/2 — diagnóstico y coaching`,
-          imageBase64: await this.blobToBase64(part1.blob),
-          imageFilename: this.filename(part1.extension, '-1-diagnostico-coaching'),
-        });
-        // Pausa corta para que lleguen en orden y separados, no como un burst.
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        const part2 = await this.fitCanvasToDiscordLimit(bottomCanvas);
-        await this.edgeFunctions.sendDiscordMessage({
-          channelId,
-          content: `${baseContent} · 2/2 — mecánicas y defensivos`,
-          imageBase64: await this.blobToBase64(part2.blob),
-          imageFilename: this.filename(part2.extension, '-2-mecanicas-defensivos'),
-        });
-      } else {
-        // Fallback defensivo: si algún día cambian esas clases y el corte ya
-        // no se puede localizar, se manda entera en un único mensaje en vez
-        // de fallar el envío por completo.
-        const whole = await this.fitCanvasToDiscordLimit(canvas);
-        await this.edgeFunctions.sendDiscordMessage({
-          channelId,
-          content: baseContent,
-          imageBase64: await this.blobToBase64(whole.blob),
-          imageFilename: this.filename(whole.extension),
-        });
-      }
+      await this.sendInfographicImages(channelId);
       this.setStatus('sentDiscord');
     } catch (err) {
       this.exportError.set(errorMessage(err));
       this.setStatus('error');
+    }
+  }
+
+  // §Feature "Enviar + explicación" (encargo 2026-09-06): mismo pipeline de envío de imágenes que
+  // sendToDiscord() de siempre — este método NO decide éxito/error final, eso lo hace cada llamador (§21: "no
+  // duplicar sendToDiscord() entero" — el botón antiguo sigue siendo sendToDiscord()→includeExplanation=false
+  // en espíritu, reutilizando este cuerpo tal cual).
+  private async sendInfographicImages(channelId: string): Promise<void> {
+    const { canvas, pixelRatio } = await this.renderFullCanvas();
+    const v3Pages = this.findV3ExportPages();
+    const splitYCss = v3Pages.length ? null : this.findPageSplitY();
+    const date = this.summary().reportDate
+      ? new Date(this.summary().reportDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })
+      : this.summary().reportTitle;
+    const baseContent = `Informe de combate de ${this.summary().playerName} · ${date}`;
+    this.exportStatus.set('sendingDiscord');
+
+    if (v3Pages.length) {
+      for (const [index, page] of v3Pages.entries()) {
+        const top = Math.max(0, Math.round(page.top * pixelRatio));
+        const height = Math.min(canvas.height - top, Math.round(page.height * pixelRatio));
+        const pageCanvas = this.cropCanvas(canvas, 0, top, canvas.width, height);
+        const fitted = await this.fitCanvasToDiscordLimit(pageCanvas);
+        const suffix = v3Pages.length > 1 ? `-${index + 1}-v3` : '-v3';
+        await this.edgeFunctions.sendDiscordMessage({
+          channelId,
+          content:
+            v3Pages.length > 1
+              ? `${baseContent} · ${index + 1}/${v3Pages.length}${index ? ' — continuación de mecánicas' : ' — diagnóstico, coaching y defensivos'}`
+              : `${baseContent} · diagnóstico, coaching y defensivos`,
+          imageBase64: await this.blobToBase64(fitted.blob),
+          imageFilename: this.filename(fitted.extension, suffix),
+        });
+        if (index < v3Pages.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+    } else if (splitYCss != null) {
+      const splitYPx = Math.min(canvas.height - 1, Math.max(1, Math.round(splitYCss * pixelRatio)));
+      const topCanvas = this.cropCanvas(canvas, 0, 0, canvas.width, splitYPx);
+      const bottomCanvas = this.cropCanvas(canvas, 0, splitYPx, canvas.width, canvas.height - splitYPx);
+      const part1 = await this.fitCanvasToDiscordLimit(topCanvas);
+      await this.edgeFunctions.sendDiscordMessage({
+        channelId,
+        content: `${baseContent} · 1/2 — diagnóstico y coaching`,
+        imageBase64: await this.blobToBase64(part1.blob),
+        imageFilename: this.filename(part1.extension, '-1-diagnostico-coaching'),
+      });
+      // Pausa corta para que lleguen en orden y separados, no como un burst.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const part2 = await this.fitCanvasToDiscordLimit(bottomCanvas);
+      await this.edgeFunctions.sendDiscordMessage({
+        channelId,
+        content: `${baseContent} · 2/2 — mecánicas y defensivos`,
+        imageBase64: await this.blobToBase64(part2.blob),
+        imageFilename: this.filename(part2.extension, '-2-mecanicas-defensivos'),
+      });
+    } else {
+      // Fallback defensivo: si algún día cambian esas clases y el corte ya
+      // no se puede localizar, se manda entera en un único mensaje en vez
+      // de fallar el envío por completo.
+      const whole = await this.fitCanvasToDiscordLimit(canvas);
+      await this.edgeFunctions.sendDiscordMessage({
+        channelId,
+        content: baseContent,
+        imageBase64: await this.blobToBase64(whole.blob),
+        imageFilename: this.filename(whole.extension),
+      });
+    }
+  }
+
+  // §Feature "Enviar + explicación": botón nuevo junto a "Enviar a su Discord" (§1/§21-23 del encargo).
+  // Secuencia: render → enviar TODAS las páginas de infografía → verificar éxito → construir la explicación
+  // (builder puro, cero IA — ver raider-discord-explanation.ts) → enviar UN único mensaje de texto con
+  // spoiler al mismo canal. Si la infografía falla, la explicación NUNCA se envía (§21). Si la infografía
+  // llega pero el texto falla, el estado queda diferenciado (§22) y el siguiente clic reintenta solo el texto.
+  async sendToDiscordWithExplanation(): Promise<void> {
+    const channelId = this.summary().discordChannel?.discordChannelId;
+    if (!channelId) return;
+    if (
+      this.exportStatus() === 'rendering' ||
+      this.exportStatus() === 'sendingDiscord' ||
+      this.exportStatus() === 'sendingExplanation'
+    ) {
+      return;
+    }
+    this.exportError.set(null);
+
+    const retry = this.pendingExplanationRetry;
+    try {
+      let content: string;
+      if (retry && retry.channelId === channelId) {
+        // La infografía ya llegó en un intento anterior — no se vuelve a renderizar ni a enviar (§22).
+        content = retry.content;
+      } else {
+        await this.sendInfographicImages(channelId);
+        // §25/§26 del encargo: mismo snapshot que ya renderizó la imagen — summary()/evidenceProjectionV3()/
+        // v3ViewModel() son los signals ya computados, nunca una query nueva ni un segundo render.
+        const explanation = buildRaiderDiscordExplanation(
+          this.summary(),
+          this.evidenceProjectionV3(),
+          this.v3ViewModel(),
+        );
+        content = explanation.spoilerContent;
+      }
+      this.exportStatus.set('sendingExplanation');
+      this.pendingExplanationRetry = { channelId, content };
+      await this.edgeFunctions.sendDiscordMessage({ channelId, content });
+      this.pendingExplanationRetry = null;
+      this.setStatus('sentDiscord');
+    } catch (err) {
+      this.exportError.set(errorMessage(err));
+      // pendingExplanationRetry solo queda poblado cuando la infografía SÍ se entregó (se rellena justo antes
+      // de intentar el texto) — si las imágenes fallaron, nunca se llegó a esa línea y el fallo es total.
+      this.setStatus(this.pendingExplanationRetry ? 'sentDiscordExplanationFailed' : 'error');
     }
   }
 
