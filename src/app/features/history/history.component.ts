@@ -60,7 +60,9 @@ export class HistoryComponent {
       });
       this.syncSummary.set(
         `${result.reportsUpserted} reports de raid sincronizados (${result.skippedNonRaid} descartados por no ser de raid)` +
-          (result.remaining > 0 ? ` — quedan ${result.remaining} más, pulsa Sincronizar otra vez para seguir.` : '.'),
+          (result.remaining > 0
+            ? ` — quedan ${result.remaining} más, pulsa Sincronizar otra vez para seguir.`
+            : '.'),
       );
       await this.load();
     } catch (err) {
@@ -71,10 +73,17 @@ export class HistoryComponent {
   }
 
   open(code: string): void {
-    void this.router.navigate(['/'], { queryParams: { report: code } });
+    // §PR2 del plan IRIS (Report Workspace): antes navegaba a '/' con
+    // ?report=, que raidLandingRedirectGuard habría reenviado igualmente a
+    // esta misma URL — ir directo evita la ida y vuelta.
+    void this.router.navigate(['/report', code, 'raid']);
   }
 
   formatDate(startTimeMs: number): string {
-    return new Date(startTimeMs).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
+    return new Date(startTimeMs).toLocaleDateString('es-ES', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
   }
 }

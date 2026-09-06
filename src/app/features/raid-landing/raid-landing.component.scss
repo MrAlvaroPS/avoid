@@ -1,0 +1,184 @@
+// Mismas clases/tokens que raid-session.component.scss (.import-panel,
+// .recent-picker, .recent-item, .error, .duplicate-warning) — misma
+// identidad visual, solo que esta pantalla nunca tiene picker/live-refresh
+// que envolver en .sticky-raid-context.
+.raid-landing {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 900px;
+  margin: 60px auto;
+  padding: 0 20px;
+}
+
+.import-panel,
+.recent-picker {
+  background: linear-gradient(180deg, rgba(25, 20, 36, 0.98) 0%, rgba(18, 16, 28, 0.98) 100%);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card), var(--shadow-inset-top);
+  backdrop-filter: blur(14px);
+}
+
+.import-panel {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.45fr) minmax(320px, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 20px;
+
+  > div:first-child {
+    display: flex;
+    flex-direction: column;
+  }
+  strong {
+    font-size: 15px;
+  }
+}
+
+.import-eyebrow {
+  color: var(--accent);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.import-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 2;
+}
+.sync-status {
+  grid-column: 1 / -1;
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.code-input {
+  flex: 1;
+  min-width: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+
+  &::placeholder {
+    color: var(--text-faint);
+  }
+  &:focus-visible {
+    border-color: var(--accent);
+  }
+}
+
+.import-btn {
+  padding: 10px 16px;
+  border: 1px solid var(--border-bright);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--accent-solid), var(--accent-deep));
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.error,
+.duplicate-warning {
+  margin: 0;
+  font-size: 12px;
+}
+.error {
+  color: var(--danger);
+}
+.duplicate-warning {
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+}
+
+.recent-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 6px;
+}
+.recent-picker-label {
+  padding: 6px 10px 2px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.recent-item {
+  display: grid;
+  grid-template-columns: 100px minmax(140px, 0.55fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+  &:hover {
+    background: var(--surface-hover);
+  }
+}
+.recent-date {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.recent-title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-bosses {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .raid-landing {
+    margin: 24px auto;
+    padding: 0 12px;
+  }
+  .import-panel {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
+  .import-controls {
+    grid-column: 1;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .sync-status {
+    grid-column: 1;
+  }
+  .code-input {
+    width: 100%;
+  }
+  .recent-item {
+    grid-template-columns: 86px 1fr;
+  }
+  .recent-bosses {
+    grid-column: 1 / -1;
+  }
+}

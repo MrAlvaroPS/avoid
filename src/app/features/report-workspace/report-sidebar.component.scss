@@ -1,0 +1,121 @@
+// §39 del spec: ancho 260-290px, solo escritorio por ahora. Misma familia
+// visual que .sticky-raid-context/.import-panel (raid-session.component.scss)
+// — superficie con gradiente + card-border, no una caja nueva reinventada.
+.report-sidebar {
+  position: sticky;
+  top: 66px; // 56px de .top-nav (app.scss) + el mismo margen que usa .sticky-raid-context
+  flex: 0 0 280px;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: calc(100dvh - 66px);
+  overflow-y: auto;
+  border-right: 1px solid var(--card-border);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--bg) 100%);
+}
+
+.night-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.night-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.night-date {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.night-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.night-error-link {
+  align-self: flex-start;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: none;
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.night-header-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+// §43 del spec: al cambiar de report se mantiene la noche seleccionada y se
+// enseña un skeleton, en vez de vaciar bruscamente toda la interfaz.
+.skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.skeleton-line-title {
+  width: 70%;
+  height: 14px;
+}
+.skeleton-line-date {
+  width: 45%;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.workspace-views {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 10px 16px;
+}
+
+.views-label {
+  padding: 4px 8px;
+  color: var(--text-faint);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.workspace-views a {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+  &.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+}

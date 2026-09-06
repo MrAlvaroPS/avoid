@@ -1,0 +1,15 @@
+// Layout §36/§39 del spec: sidebar fija (280px) + contenido principal. Solo
+// escritorio por ahora (§39 — "la primera versión puede diseñarse
+// exclusivamente para escritorio"), IRIS ya bloquea pantallas pequeñas
+// (app.html -> app-mobile-block) antes de llegar aquí.
+.report-workspace {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  min-height: calc(100dvh - 56px); // 56px = altura de .top-nav (app.scss)
+}
+
+.report-workspace-content {
+  flex: 1;
+  min-width: 0;
+}

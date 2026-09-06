@@ -1,0 +1,34 @@
+<aside class="report-sidebar" aria-label="Noche activa">
+  <section class="night-header">
+    @if (workspace.loading() && !workspace.report()) {
+      <div class="night-header-skeleton" aria-hidden="true">
+        <div class="skeleton-line skeleton-line-title"></div>
+        <div class="skeleton-line skeleton-line-date"></div>
+      </div>
+    } @else if (workspace.error(); as e) {
+      <p class="night-error" role="alert">{{ e }}</p>
+      <a class="night-error-link" routerLink="/">Cambiar noche</a>
+    } @else if (workspace.report(); as report) {
+      <strong class="night-title">{{ report.title.trim() || report.zone_name || 'Raid' }}</strong>
+      <span class="night-date">{{ reportDateLabel(report.start_time) }}</span>
+    }
+  </section>
+
+  @if (workspace.reportCode(); as code) {
+    <nav class="workspace-views" aria-label="Vistas de la noche">
+      <span class="views-label">Vistas</span>
+      <a
+        [routerLink]="['/report', code, 'raid']"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        >Raid</a
+      >
+      <a
+        [routerLink]="['/report', code]"
+        routerLinkActive="active"
+        [routerLinkActiveOptions]="{ exact: true }"
+        >Informe</a
+      >
+    </nav>
+  }
+</aside>

@@ -1,0 +1,54 @@
+<div class="raid-landing">
+  <form class="import-panel" (submit)="$event.preventDefault(); onImport()">
+    <div>
+      <span class="import-eyebrow">Abrir una raid</span>
+      <strong>Pega un report de Warcraft Logs para empezar</strong>
+    </div>
+    <div class="import-controls">
+      <input
+        class="code-input tabular"
+        type="text"
+        placeholder="Código o URL de WCL"
+        [value]="reportCodeInput()"
+        (input)="reportCodeInput.set($any($event.target).value)"
+        [disabled]="importing()"
+      />
+      <button
+        type="submit"
+        class="import-btn"
+        [disabled]="importing() || !reportCodeInput().trim()"
+      >
+        {{ importing() ? 'Importando…' : 'Cargar report' }}
+      </button>
+    </div>
+    @if (importProgress(); as progressText) {
+      <span class="sync-status">{{ progressText }}</span>
+    }
+  </form>
+
+  @if (error(); as e) {
+    <p class="error" role="alert">{{ e }}</p>
+  }
+
+  @if (duplicateWarning(); as dupCode) {
+    <p class="duplicate-warning" role="alert">
+      ⚠ Este report puede duplicar la misma noche que <strong class="tabular">{{ dupCode }}</strong
+      >. Mantener ambos duplicaría intentos, muertes y mecánicas; revísalo en Histórico.
+    </p>
+  }
+
+  @if (recentReports().length) {
+    <section class="recent-picker">
+      <span class="recent-picker-label">Recientes</span>
+      @for (item of recentReports(); track item.report.code) {
+        <a class="recent-item" [routerLink]="['/report', item.report.code, 'raid']">
+          <span class="recent-date tabular">{{ reportDateLabel(item.report.start_time) }}</span>
+          <span class="recent-title">{{ item.report.title || 'Report de raid' }}</span>
+          @if (item.bossesAttempted.length) {
+            <span class="recent-bosses">{{ item.bossesAttempted.join(', ') }}</span>
+          }
+        </a>
+      }
+    </section>
+  }
+</div>

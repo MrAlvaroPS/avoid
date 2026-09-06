@@ -4,22 +4,34 @@
   <p class="loading">Cargando informe…</p>
 } @else if (data(); as d) {
   <div class="night-report" #reportRoot>
-    <a [routerLink]="['/']" [queryParams]="{ report: d.reportCode }" class="back-link">← Volver a la raid</a>
+    <a [routerLink]="['/report', d.reportCode, 'raid']" class="back-link">← Volver a la raid</a>
 
     <header class="page-header">
       <div class="report-heading">
-        <img class="report-guild-logo" src="/assets/avoid-guild-logo.png" alt="Logo de la hermandad Avoid" />
+        <img
+          class="report-guild-logo"
+          src="/assets/avoid-guild-logo.png"
+          alt="Logo de la hermandad Avoid"
+        />
         <div class="title-block">
           <span class="eyebrow">Avoid · IRIS · MAKE EVERY PULL COUNT</span>
           <h1>Informe de combate de IRIS</h1>
           <p class="header-sub">
             {{ d.reportDate ? (d.reportDate | date: "d 'de' MMMM, y") : d.reportTitle }}
             @if (fullReport(); as stored) {
-              <span aria-hidden="true">·</span> actualizado {{ stored.generatedAt | date: 'd MMM, HH:mm' }}
+              <span aria-hidden="true">·</span> actualizado
+              {{ stored.generatedAt | date: 'd MMM, HH:mm' }}
             }
             <span aria-hidden="true">·</span>
             <!-- §"un enlace a WCL a ese mismo log, para poder abrirlo rápido en WCL" (feedback real, 2026-08-30): reportCode ES el código de informe de WCL (mismo que usa toda la app para enlazar pulls individuales), no hace falta traer nada nuevo. -->
-            <a class="wcl-link" [href]="'https://www.warcraftlogs.com/reports/' + d.reportCode" target="_blank" rel="noopener" title="Abrir este log en Warcraft Logs">Ver en WCL ↗</a>
+            <a
+              class="wcl-link"
+              [href]="'https://www.warcraftlogs.com/reports/' + d.reportCode"
+              target="_blank"
+              rel="noopener"
+              title="Abrir este log en Warcraft Logs"
+              >Ver en WCL ↗</a
+            >
           </p>
         </div>
       </div>
@@ -28,8 +40,17 @@
            real): todas las acciones de informe 2 (antes en el footer de una
            modal aparte) viven ahora en la cabecera de esta única pantalla. -->
       <div class="page-actions">
-        <button type="button" class="update-report-btn" [disabled]="generatingFullReport()" (click)="onUpdateFullReport()">
-          @if (generatingFullReport()) { <span class="button-spinner" aria-hidden="true"></span> Actualizando… } @else { ↻ Actualizar }
+        <button
+          type="button"
+          class="update-report-btn"
+          [disabled]="generatingFullReport()"
+          (click)="onUpdateFullReport()"
+        >
+          @if (generatingFullReport()) {
+            <span class="button-spinner" aria-hidden="true"></span> Actualizando…
+          } @else {
+            ↻ Actualizar
+          }
         </button>
         <button
           type="button"
@@ -40,24 +61,53 @@
         >
           @if (recalculatingAll()) {
             <span class="button-spinner" aria-hidden="true"></span>
-            @if (recalculateAllProgress(); as p) { Reanalizando pulls… {{ p.done }}/{{ p.total }} } @else { Recalculando todo… }
+            @if (recalculateAllProgress(); as p) {
+              Reanalizando pulls… {{ p.done }}/{{ p.total }}
+            } @else {
+              Recalculando todo…
+            }
           } @else {
             🔄 Recalcular todo
           }
         </button>
         @if (fullReport()) {
-          <button type="button" class="secondary-button infographic-button" (click)="infographicOpen.set(true)">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V9m5 9V5m5 13v-6m5 6V3"/></svg>
+          <button
+            type="button"
+            class="secondary-button infographic-button"
+            (click)="infographicOpen.set(true)"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 18V9m5 9V5m5 13v-6m5 6V3" />
+            </svg>
             Ver infografía
           </button>
-          <button type="button" class="secondary-button" [disabled]="imageStatus() === 'rendering'" (click)="downloadFullReportPng()">
-            {{ imageStatus() === 'rendering' ? 'Generando PNG…' : imageStatus() === 'downloaded' ? '✓ PNG descargado' : imageStatus() === 'error' ? 'Error al generar' : 'Descargar informe PNG' }}
+          <button
+            type="button"
+            class="secondary-button"
+            [disabled]="imageStatus() === 'rendering'"
+            (click)="downloadFullReportPng()"
+          >
+            {{
+              imageStatus() === 'rendering'
+                ? 'Generando PNG…'
+                : imageStatus() === 'downloaded'
+                  ? '✓ PNG descargado'
+                  : imageStatus() === 'error'
+                    ? 'Error al generar'
+                    : 'Descargar informe PNG'
+            }}
           </button>
           <button type="button" class="secondary-button" (click)="copyFullMarkdown()">
             {{ copyStatus() === 'full' ? '✓ Informe copiado' : 'Copiar informe completo' }}
           </button>
           <button type="button" class="primary-button" (click)="copyDiscordSummary()">
-            {{ copyStatus() === 'discord' ? '✓ Resumen copiado' : copyStatus() === 'error' ? 'No se pudo copiar' : 'Copiar para Discord' }}
+            {{
+              copyStatus() === 'discord'
+                ? '✓ Resumen copiado'
+                : copyStatus() === 'error'
+                  ? 'No se pudo copiar'
+                  : 'Copiar para Discord'
+            }}
           </button>
         }
       </div>
@@ -109,17 +159,21 @@
         </div>
         <div class="hero-context">
           <span>Media {{ formatDuration(r.summary.avgPullDurationMs) }} por pull</span>
-          <span>{{ r.summary.earlyWipeCount }} wipes antes de {{ formatDuration(r.summary.earlyWipeThresholdMs) }}</span>
+          <span
+            >{{ r.summary.earlyWipeCount }} wipes antes de
+            {{ formatDuration(r.summary.earlyWipeThresholdMs) }}</span
+          >
           @if (r.summary.bestPull; as best) {
             <span>
               Mejor: {{ bilingualName(best.bossName, best.bossNameEs) }} ·
-              {{ best.kill ? 'kill' : (formatPct(best.wipePct) + ' de vida') }}
+              {{ best.kill ? 'kill' : formatPct(best.wipePct) + ' de vida' }}
             </span>
           }
           @if (r.summary.progressBoss; as progress) {
             <span>
               Progress: {{ bilingualName(progress.bossName, progress.bossNameEs) }} ·
-              {{ formatPct(progress.firstWipePct) }} → {{ formatPct(progress.lastWipePct) }} · mejor {{ formatPct(progress.bestWipePct) }}
+              {{ formatPct(progress.firstWipePct) }} → {{ formatPct(progress.lastWipePct) }} · mejor
+              {{ formatPct(progress.bestWipePct) }}
             </span>
           }
         </div>
@@ -143,9 +197,15 @@
                gente real) con el mismo patrón de doble clic que ya usa
                Ajustes → Discord para desvincular. -->
           <div class="attendance-bulk-actions">
-            <button type="button" class="secondary-button" [disabled]="bulkUpdating() || bulkSending()" (click)="updateAllInfographics()">
+            <button
+              type="button"
+              class="secondary-button"
+              [disabled]="bulkUpdating() || bulkSending()"
+              (click)="updateAllInfographics()"
+            >
               @if (bulkUpdating()) {
-                <span class="button-spinner" aria-hidden="true"></span> Actualizando {{ bulkUpdateProgress()?.done }}/{{ bulkUpdateProgress()?.total }}…
+                <span class="button-spinner" aria-hidden="true"></span> Actualizando
+                {{ bulkUpdateProgress()?.done }}/{{ bulkUpdateProgress()?.total }}…
               } @else {
                 ↻ Actualizar infografías
               }
@@ -155,11 +215,20 @@
               class="primary-button"
               [class.confirming]="bulkSendConfirming()"
               [disabled]="bulkUpdating() || bulkSending()"
-              [title]="bulkSendConfirming() ? 'Vuelve a pulsar para confirmar el envío' : 'Manda la infografía de esta noche a cada canal privado de Discord vinculado'"
+              [title]="
+                bulkSendConfirming()
+                  ? 'Vuelve a pulsar para confirmar el envío'
+                  : 'Manda la infografía de esta noche a cada canal privado de Discord vinculado'
+              "
               (click)="onRequestSendAllInfographics()"
             >
               @if (bulkSending()) {
-                <span class="button-spinner" aria-hidden="true"></span> Enviando {{ bulkSendProgress()?.done }}/{{ bulkSendProgress()?.total }}@if (bulkSendProgress()?.current) { · {{ bulkSendProgress()?.current }} }…
+                <span class="button-spinner" aria-hidden="true"></span> Enviando
+                {{ bulkSendProgress()?.done }}/{{ bulkSendProgress()?.total }}
+                @if (bulkSendProgress()?.current) {
+                  · {{ bulkSendProgress()?.current }}
+                }
+                …
               } @else if (bulkSendConfirming()) {
                 ¿Seguro? Pulsa de nuevo para enviar
               } @else {
@@ -170,17 +239,26 @@
         </div>
         @if (bulkUpdateResult(); as r) {
           <p class="bulk-result" [class.tone-warn]="r.failed.length > 0">
-            ✓ {{ r.done }} infografía{{ r.done === 1 ? '' : 's' }} actualizada{{ r.done === 1 ? '' : 's' }}
+            ✓ {{ r.done }} infografía{{ r.done === 1 ? '' : 's' }} actualizada{{
+              r.done === 1 ? '' : 's'
+            }}
             @if (r.failed.length) {
               · ⚠ error en: {{ r.failed.join(', ') }}
             }
           </p>
         }
         @if (bulkSendResult(); as r) {
-          <p class="bulk-result" [class.tone-warn]="r.failed.length > 0 || r.skippedNoChannel.length > 0">
-            ✓ {{ r.sent.length }} infografía{{ r.sent.length === 1 ? '' : 's' }} enviada{{ r.sent.length === 1 ? '' : 's' }}
+          <p
+            class="bulk-result"
+            [class.tone-warn]="r.failed.length > 0 || r.skippedNoChannel.length > 0"
+          >
+            ✓ {{ r.sent.length }} infografía{{ r.sent.length === 1 ? '' : 's' }} enviada{{
+              r.sent.length === 1 ? '' : 's'
+            }}
             @if (r.skippedNoChannel.length) {
-              · {{ r.skippedNoChannel.length }} sin canal de Discord vinculado ({{ r.skippedNoChannel.join(', ') }})
+              · {{ r.skippedNoChannel.length }} sin canal de Discord vinculado ({{
+                r.skippedNoChannel.join(', ')
+              }})
             }
             @if (r.failed.length) {
               · ⚠ fallo en:
@@ -211,60 +289,114 @@
               <tr>
                 <th></th>
                 <th>Jugador</th>
-                <th class="col-num" title="Media (redondeada) del percentil de WCL de sus kills rankeadas esta noche">Parse</th>
+                <th
+                  class="col-num"
+                  title="Media (redondeada) del percentil de WCL de sus kills rankeadas esta noche"
+                >
+                  Parse
+                </th>
                 <th class="col-num">Ejecución</th>
-                <th class="col-num" title="Sub-score defensiva del breakdown de Fiabilidad — esta noche">Defensivos</th>
+                <th
+                  class="col-num"
+                  title="Sub-score defensiva del breakdown de Fiabilidad — esta noche"
+                >
+                  Defensivos
+                </th>
                 <th class="col-num">Fiabilidad noche</th>
                 <th class="col-num">Fiabilidad 60d</th>
               </tr>
             </thead>
             <tbody>
               @for (row of attendanceRows(); track row.name; let i = $index) {
-                <tr class="attendance-row-main" [class.expanded]="isPlayerExpanded(row.name)" [class.row-alt]="i % 2 === 1">
+                <tr
+                  class="attendance-row-main"
+                  [class.expanded]="isPlayerExpanded(row.name)"
+                  [class.row-alt]="i % 2 === 1"
+                >
                   <td class="expand-cell">
                     <button
                       type="button"
                       class="row-expand-btn"
                       (click)="togglePlayer(row.name)"
                       [attr.aria-expanded]="isPlayerExpanded(row.name)"
-                      [attr.aria-label]="(isPlayerExpanded(row.name) ? 'Ocultar' : 'Ver') + ' detalle de ' + row.name"
+                      [attr.aria-label]="
+                        (isPlayerExpanded(row.name) ? 'Ocultar' : 'Ver') + ' detalle de ' + row.name
+                      "
                     >
                       <span class="row-expand-chevron" aria-hidden="true">▸</span>
                     </button>
                   </td>
                   <td>
-                    <a class="player-chip" [style.color]="classColor(row.class)" [routerLink]="['/report', d.reportCode, 'player', row.name]">
+                    <a
+                      class="player-chip"
+                      [style.color]="classColor(row.class)"
+                      [routerLink]="['/report', d.reportCode, 'player', row.name]"
+                    >
                       <app-class-icon [wclClass]="row.class" />{{ row.name }}
                       @if (row.isTrial) {
                         <small class="trial-badge">Trial</small>
                       }
                       @if (row.isUnlisted) {
-                        <small class="trial-badge unlisted-badge" title="Jugó esta noche pero no tiene fila en el roster de WowAudit todavía">Sin roster</small>
+                        <small
+                          class="trial-badge unlisted-badge"
+                          title="Jugó esta noche pero no tiene fila en el roster de WowAudit todavía"
+                          >Sin roster</small
+                        >
                       }
                     </a>
                   </td>
                   <td class="col-num">
-                    <span class="stat-chip" [class]="'wcl-' + (wclParseTier(row.stats?.nightParse ?? null) ?? '')">
-                      {{ row.stats?.nightParse == null ? '—' : formatPct(row.stats!.nightParse!, 0) }}
+                    <span
+                      class="stat-chip"
+                      [class]="'wcl-' + (wclParseTier(row.stats?.nightParse ?? null) ?? '')"
+                    >
+                      {{
+                        row.stats?.nightParse == null ? '—' : formatPct(row.stats!.nightParse!, 0)
+                      }}
                     </span>
                   </td>
                   <td class="col-num">
-                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.stats?.nightScore == null ? null : row.stats!.nightScore! * 100) ?? '')">
-                      {{ row.stats?.nightScore == null ? '…' : formatPct(row.stats!.nightScore! * 100, 0) }}
+                    <span
+                      class="stat-chip"
+                      [class]="
+                        'tone-' +
+                        (scoreTone(
+                          row.stats?.nightScore == null ? null : row.stats!.nightScore! * 100
+                        ) ?? '')
+                      "
+                    >
+                      {{
+                        row.stats?.nightScore == null
+                          ? '…'
+                          : formatPct(row.stats!.nightScore! * 100, 0)
+                      }}
                     </span>
                   </td>
                   <td class="col-num">
-                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.stats?.nightDefensiva ?? null) ?? '')">
-                      {{ row.stats?.nightDefensiva == null ? '—' : formatPct(row.stats!.nightDefensiva!, 0) }}
+                    <span
+                      class="stat-chip"
+                      [class]="'tone-' + (scoreTone(row.stats?.nightDefensiva ?? null) ?? '')"
+                    >
+                      {{
+                        row.stats?.nightDefensiva == null
+                          ? '—'
+                          : formatPct(row.stats!.nightDefensiva!, 0)
+                      }}
                     </span>
                   </td>
                   <td class="col-num">
-                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.stats?.nightReliability ?? null) ?? '')">
+                    <span
+                      class="stat-chip"
+                      [class]="'tone-' + (scoreTone(row.stats?.nightReliability ?? null) ?? '')"
+                    >
                       {{ row.stats?.nightReliability == null ? '—' : row.stats!.nightReliability }}
                     </span>
                   </td>
                   <td class="col-num">
-                    <span class="stat-chip" [class]="'tone-' + (scoreTone(row.reliability60d) ?? '')">
+                    <span
+                      class="stat-chip"
+                      [class]="'tone-' + (scoreTone(row.reliability60d) ?? '')"
+                    >
                       {{ row.reliability60d == null ? '—' : row.reliability60d }}
                     </span>
                   </td>
@@ -273,31 +405,69 @@
                   <tr class="attendance-row-detail">
                     <td colspan="7">
                       <div class="attendance-detail">
-                        <a class="dossier-link-btn" [routerLink]="['/report', d.reportCode, 'player', row.name]"> Ver dosier → </a>
+                        <a
+                          class="dossier-link-btn"
+                          [routerLink]="['/report', d.reportCode, 'player', row.name]"
+                        >
+                          Ver dosier →
+                        </a>
                         @if (tonightBossKeys().length) {
                           <div class="evolution-list">
                             @for (boss of tonightBossKeys(); track boss.key) {
                               <div class="evolution-block">
                                 <div class="evolution-heading">
-                                  <span>{{ boss.bossName }} <span class="difficulty">{{ boss.difficulty }}</span></span>
-                                  <small>Fiabilidad (mecánica + defensiva + preparación, 0-100) en este boss+dificultad — una barra por noche que lo intentó, nunca mezclado con otra dificultad. Pulsa cada barra para el desglose.</small>
+                                  <span
+                                    >{{ boss.bossName }}
+                                    <span class="difficulty">{{ boss.difficulty }}</span></span
+                                  >
+                                  <small
+                                    >Fiabilidad (mecánica + defensiva + preparación, 0-100) en este
+                                    boss+dificultad — una barra por noche que lo intentó, nunca
+                                    mezclado con otra dificultad. Pulsa cada barra para el
+                                    desglose.</small
+                                  >
                                 </div>
-                                @if (evolutionPointsFor(row.name, boss.key, d.reportCode); as points) {
+                                @if (
+                                  evolutionPointsFor(row.name, boss.key, d.reportCode);
+                                  as points
+                                ) {
                                   @if (points.length) {
                                     <div class="evolution-chart">
                                       @for (p of points; track p.reportCode) {
-                                        <div class="evolution-col" [class.is-current]="p.isCurrent" [title]="p.tooltip">
-                                          <span class="evolution-value tabular" [class]="'tone-' + (scoreTone(p.overall) ?? '')">{{ p.overall }}</span>
+                                        <div
+                                          class="evolution-col"
+                                          [class.is-current]="p.isCurrent"
+                                          [title]="p.tooltip"
+                                        >
+                                          <span
+                                            class="evolution-value tabular"
+                                            [class]="'tone-' + (scoreTone(p.overall) ?? '')"
+                                            >{{ p.overall }}</span
+                                          >
                                           <div class="evolution-track">
-                                            <div class="evolution-fill" [class]="'tone-' + (scoreTone(p.overall) ?? '')" [style.height.%]="p.overall"></div>
+                                            <div
+                                              class="evolution-fill"
+                                              [class]="'tone-' + (scoreTone(p.overall) ?? '')"
+                                              [style.height.%]="p.overall"
+                                            ></div>
                                           </div>
-                                          <span class="evolution-result" [class.tone-success]="p.resultIsKill">{{ p.resultLabel }}</span>
-                                          <span class="evolution-date">{{ p.dateLabel }}{{ p.isCurrent ? ' · hoy' : '' }}</span>
+                                          <span
+                                            class="evolution-result"
+                                            [class.tone-success]="p.resultIsKill"
+                                            >{{ p.resultLabel }}</span
+                                          >
+                                          <span class="evolution-date"
+                                            >{{ p.dateLabel
+                                            }}{{ p.isCurrent ? ' · hoy' : '' }}</span
+                                          >
                                         </div>
                                       }
                                     </div>
                                   } @else {
-                                    <p class="empty-copy">Sin historial todavía en este boss+dificultad — esta es la primera vez.</p>
+                                    <p class="empty-copy">
+                                      Sin historial todavía en este boss+dificultad — esta es la
+                                      primera vez.
+                                    </p>
                                   }
                                 }
                               </div>
@@ -315,7 +485,9 @@
         @if (d.absentMain.length) {
           <div class="attendance-row">
             <div class="attendance-col">
-              <span class="attendance-label tone-danger">Ausentes — Main ({{ d.absentMain.length }})</span>
+              <span class="attendance-label tone-danger"
+                >Ausentes — Main ({{ d.absentMain.length }})</span
+              >
               <div class="chip-row">
                 @for (player of d.absentMain; track player.name) {
                   <span class="player-chip chip-absent" [style.color]="classColor(player.class)">
@@ -334,7 +506,10 @@
           <h3 id="wipecalls-heading">🏳️ Wipe calls esta noche</h3>
           <ul class="plain-list">
             @for (w of d.wipeCallPulls; track w.bossName + w.pullNumber) {
-              <li>{{ w.bossName }} ({{ w.difficulty }}) #{{ w.pullNumber }} — {{ w.confidence }}% de confianza</li>
+              <li>
+                {{ w.bossName }} ({{ w.difficulty }}) #{{ w.pullNumber }} — {{ w.confidence }}% de
+                confianza
+              </li>
             }
           </ul>
         </section>
@@ -355,13 +530,26 @@
            con has_confirmed_detection=true en el catálogo. -->
       @if (d.unassignedMechanicCoverage.length) {
         <section class="report-section" aria-labelledby="unassigned-coverage-heading">
-          <div class="section-kicker">Vista de raid — cada ocurrencia sí sube el % de Mecánica de quien la hizo (ver su dosier)</div>
+          <div class="section-kicker">
+            Vista de raid — cada ocurrencia sí sube el % de Mecánica de quien la hizo (ver su
+            dosier)
+          </div>
           <h3 id="unassigned-coverage-heading">🥚 Mecánicas sin asignar</h3>
           <ul class="plain-list">
-            @for (c of d.unassignedMechanicCoverage; track c.bossId + c.difficulty + c.mechanicName) {
+            @for (
+              c of d.unassignedMechanicCoverage;
+              track c.bossId + c.difficulty + c.mechanicName
+            ) {
               <li>
-                {{ c.mechanicName }} — {{ c.bossName }} ({{ c.difficulty }}): {{ c.pullsWithAnyOccurrence }}/{{ c.totalPulls }} intento{{ c.totalPulls === 1 ? '' : 's' }} con
-                alguien resolviéndola · {{ c.totalOccurrences }} {{ c.totalOccurrences === 1 ? 'vez' : 'veces' }} en total · {{ c.uniqueResolvers }} jugador{{ c.uniqueResolvers === 1 ? '' : 'es' }} distinto{{ c.uniqueResolvers === 1 ? '' : 's' }}
+                {{ c.mechanicName }} — {{ c.bossName }} ({{ c.difficulty }}):
+                {{ c.pullsWithAnyOccurrence }}/{{ c.totalPulls }} intento{{
+                  c.totalPulls === 1 ? '' : 's'
+                }}
+                con alguien resolviéndola · {{ c.totalOccurrences }}
+                {{ c.totalOccurrences === 1 ? 'vez' : 'veces' }} en total ·
+                {{ c.uniqueResolvers }} jugador{{ c.uniqueResolvers === 1 ? '' : 'es' }} distinto{{
+                  c.uniqueResolvers === 1 ? '' : 's'
+                }}
               </li>
             }
           </ul>
@@ -383,25 +571,40 @@
             <div class="section-kicker">Recorrido</div>
             <h3 id="boss-overview-heading">Bosses de la noche</h3>
           </div>
-          <span class="section-count">{{ r.summary.totalBosses }} boss+dificultad · clic para ver el detalle</span>
+          <span class="section-count"
+            >{{ r.summary.totalBosses }} boss+dificultad · clic para ver el detalle</span
+          >
         </div>
         <div class="boss-accordion">
           @for (group of bossDetails(); track group.key) {
             <article class="boss-row" [class.expanded]="isBossExpanded(group.key)">
-              <button type="button" class="boss-row-header" (click)="toggleBoss(group.key)" [attr.aria-expanded]="isBossExpanded(group.key)">
+              <button
+                type="button"
+                class="boss-row-header"
+                (click)="toggleBoss(group.key)"
+                [attr.aria-expanded]="isBossExpanded(group.key)"
+              >
                 <span class="boss-row-chevron" aria-hidden="true">▸</span>
                 <span class="boss-row-name">
                   {{ bilingualName(group.boss.bossName, group.boss.bossNameEs) }}
                   <span class="difficulty">{{ group.boss.difficulty }}</span>
-                  @if (group.isProgressBoss) { <span class="difficulty">progress actual</span> }
+                  @if (group.isProgressBoss) {
+                    <span class="difficulty">progress actual</span>
+                  }
                 </span>
                 <span class="boss-row-result">
                   <span>{{ group.boss.pulls }} pulls</span>
                   <span [class.tone-success]="group.boss.kills > 0">
-                    {{ group.boss.kills > 0 ? (group.boss.kills + ' kill' + (group.boss.kills === 1 ? '' : 's')) : ('mejor ' + formatPct(group.boss.bestWipePct) + ' de vida') }}
+                    {{
+                      group.boss.kills > 0
+                        ? group.boss.kills + ' kill' + (group.boss.kills === 1 ? '' : 's')
+                        : 'mejor ' + formatPct(group.boss.bestWipePct) + ' de vida'
+                    }}
                   </span>
                   @if (group.defensiveUsage?.playersWithZeroCasts?.length) {
-                    <span class="tone-danger">⚠ {{ group.defensiveUsage!.playersWithZeroCasts.length }} sin defensivo</span>
+                    <span class="tone-danger"
+                      >⚠ {{ group.defensiveUsage!.playersWithZeroCasts.length }} sin defensivo</span
+                    >
                   }
                 </span>
               </button>
@@ -416,20 +619,41 @@
                       @for (m of group.mechanics; track m.mechanicName) {
                         <div>
                           <span>
-                            @if (m.wowheadSpellId) { <app-wowhead-link type="spell" [id]="m.wowheadSpellId">{{ bilingualName(m.mechanicName, m.mechanicNameEs) }}</app-wowhead-link> }
-                            @else { {{ bilingualName(m.mechanicName, m.mechanicNameEs) }} }
+                            @if (m.wowheadSpellId) {
+                              <app-wowhead-link type="spell" [id]="m.wowheadSpellId">{{
+                                bilingualName(m.mechanicName, m.mechanicNameEs)
+                              }}</app-wowhead-link>
+                            } @else {
+                              {{ bilingualName(m.mechanicName, m.mechanicNameEs) }}
+                            }
                             <small>
-                              {{ m.totalFails }} fallos en {{ m.pullsAffected }}/{{ m.totalPulls }} pulls
-                              @if (m.categoryLabel) { · {{ m.categoryLabel }} }
-                              @if (m.responsibilityLabel) { · {{ m.responsibilityLabel }} }
-                              @if (m.avoidableDamageTotal !== null) { · {{ compactNumber(m.avoidableDamageTotal) }} daño evitable }
+                              {{ m.totalFails }} fallos en {{ m.pullsAffected }}/{{
+                                m.totalPulls
+                              }}
+                              pulls
+                              @if (m.categoryLabel) {
+                                · {{ m.categoryLabel }}
+                              }
+                              @if (m.responsibilityLabel) {
+                                · {{ m.responsibilityLabel }}
+                              }
+                              @if (m.avoidableDamageTotal !== null) {
+                                · {{ compactNumber(m.avoidableDamageTotal) }} daño evitable
+                              }
                             </small>
-                            @if (m.note) { <small><b>Qué hace:</b> {{ m.note }}</small> }
-                            @if (comparisonLabel(m.comparisonSource, m.comparisonPercentile); as label) {
+                            @if (m.note) {
+                              <small><b>Qué hace:</b> {{ m.note }}</small>
+                            }
+                            @if (
+                              comparisonLabel(m.comparisonSource, m.comparisonPercentile);
+                              as label
+                            ) {
                               <small class="comparison-label">{{ label }}</small>
                             }
                           </span>
-                          <strong class="trend" [class]="'trend ' + m.trend">{{ trendLabel(m.trend) }}</strong>
+                          <strong class="trend" [class]="'trend ' + m.trend">{{
+                            trendLabel(m.trend)
+                          }}</strong>
                         </div>
                       }
                     </div>
@@ -443,9 +667,19 @@
                       @for (death of group.topFinalBlows; track death.mechanicName) {
                         <div>
                           <span>
-                            @if (death.wowheadSpellId) { <app-wowhead-link type="spell" [id]="death.wowheadSpellId">{{ bilingualName(death.mechanicName, death.mechanicNameEs) }}</app-wowhead-link> }
-                            @else { {{ bilingualName(death.mechanicName, death.mechanicNameEs) }} }
-                            <small>{{ death.distinctPlayers }} jugador{{ death.distinctPlayers === 1 ? '' : 'es' }} distinto{{ death.distinctPlayers === 1 ? '' : 's' }}</small>
+                            @if (death.wowheadSpellId) {
+                              <app-wowhead-link type="spell" [id]="death.wowheadSpellId">{{
+                                bilingualName(death.mechanicName, death.mechanicNameEs)
+                              }}</app-wowhead-link>
+                            } @else {
+                              {{ bilingualName(death.mechanicName, death.mechanicNameEs) }}
+                            }
+                            <small
+                              >{{ death.distinctPlayers }} jugador{{
+                                death.distinctPlayers === 1 ? '' : 'es'
+                              }}
+                              distinto{{ death.distinctPlayers === 1 ? '' : 's' }}</small
+                            >
                           </span>
                           <strong>{{ death.count }}</strong>
                         </div>
@@ -458,8 +692,15 @@
                     <div class="breakdown-list compact">
                       @for (phase of phases.phases; track phase.phaseId) {
                         <div>
-                          <span>{{ phase.name }}{{ phase.isIntermission ? ' (intermedio)' : '' }}</span>
-                          <strong>{{ phase.deaths }} muerte{{ phase.deaths === 1 ? '' : 's' }} · {{ phase.mechanicFails }} fallo{{ phase.mechanicFails === 1 ? '' : 's' }}</strong>
+                          <span
+                            >{{ phase.name }}{{ phase.isIntermission ? ' (intermedio)' : '' }}</span
+                          >
+                          <strong
+                            >{{ phase.deaths }} muerte{{ phase.deaths === 1 ? '' : 's' }} ·
+                            {{ phase.mechanicFails }} fallo{{
+                              phase.mechanicFails === 1 ? '' : 's'
+                            }}</strong
+                          >
                         </div>
                       }
                     </div>
@@ -477,8 +718,13 @@
                           @for (cast of gi.topUninterrupted; track cast.mechanicName) {
                             <div>
                               <span>
-                                @if (cast.wowheadSpellId) { <app-wowhead-link type="spell" [id]="cast.wowheadSpellId">{{ bilingualName(cast.mechanicName, cast.mechanicNameEs) }}</app-wowhead-link> }
-                                @else { {{ bilingualName(cast.mechanicName, cast.mechanicNameEs) }} }
+                                @if (cast.wowheadSpellId) {
+                                  <app-wowhead-link type="spell" [id]="cast.wowheadSpellId">{{
+                                    bilingualName(cast.mechanicName, cast.mechanicNameEs)
+                                  }}</app-wowhead-link>
+                                } @else {
+                                  {{ bilingualName(cast.mechanicName, cast.mechanicNameEs) }}
+                                }
                               </span>
                               <strong>{{ cast.completedCount }} sin cortar</strong>
                             </div>
@@ -500,13 +746,20 @@
                        compactos) en vez de una fila por cast individual. -->
                   @if (group.defensiveUsage; as def) {
                     <h4>Defensivos</h4>
-                    <p class="data-note">No incluye tanks: su mitigación es continua por diseño del rol, no comparable con un defensivo puntual.</p>
+                    <p class="data-note">
+                      No incluye tanks: su mitigación es continua por diseño del rol, no comparable
+                      con un defensivo puntual.
+                    </p>
                     @if (def.playersWithZeroCasts.length) {
                       <p class="zero-defensive-callout">
-                        ⚠ Sin ningún defensivo ({{ def.playersWithZeroCasts.length }}/{{ def.playersAttended }}):
+                        ⚠ Sin ningún defensivo ({{ def.playersWithZeroCasts.length }}/{{
+                          def.playersAttended
+                        }}):
                         @for (name of def.playersWithZeroCasts; track name) {
-                          <a [routerLink]="['/report', d.reportCode, 'player', name]">{{ name }}</a
-                          >@if (!$last) {, }
+                          <a [routerLink]="['/report', d.reportCode, 'player', name]">{{ name }}</a>
+                          @if (!$last) {
+                            ,
+                          }
                         }
                       </p>
                     } @else if (def.playersAttended) {
@@ -514,25 +767,50 @@
                     }
                     @if (def.casts.length) {
                       <div class="defensive-log">
-                        @for (playerGroup of castsByPlayer(def.casts); track playerGroup.playerName) {
+                        @for (
+                          playerGroup of castsByPlayer(def.casts);
+                          track playerGroup.playerName
+                        ) {
                           <div class="defensive-log-player">
                             <div class="defensive-log-player-header">
-                              <a [routerLink]="['/report', d.reportCode, 'player', playerGroup.playerName]">{{ playerGroup.playerName }}</a>
-                              <span>{{ playerGroup.totalCasts }} cast{{ playerGroup.totalCasts === 1 ? '' : 's' }}</span>
+                              <a
+                                [routerLink]="[
+                                  '/report',
+                                  d.reportCode,
+                                  'player',
+                                  playerGroup.playerName,
+                                ]"
+                                >{{ playerGroup.playerName }}</a
+                              >
+                              <span
+                                >{{ playerGroup.totalCasts }} cast{{
+                                  playerGroup.totalCasts === 1 ? '' : 's'
+                                }}</span
+                              >
                             </div>
-                            @for (spell of playerGroup.spells; track spell.wowheadSpellId ?? spell.spellName) {
+                            @for (
+                              spell of playerGroup.spells;
+                              track spell.wowheadSpellId ?? spell.spellName
+                            ) {
                               <div class="defensive-log-spell">
                                 <span class="defensive-log-spell-name">
                                   @if (spell.wowheadSpellId) {
-                                    <app-wowhead-link type="spell" [id]="spell.wowheadSpellId">{{ spell.spellName }}</app-wowhead-link>
+                                    <app-wowhead-link type="spell" [id]="spell.wowheadSpellId">{{
+                                      spell.spellName
+                                    }}</app-wowhead-link>
                                   } @else {
                                     {{ spell.spellName }}
                                   }
                                   <small>×{{ spell.count }}</small>
                                 </span>
                                 <span class="defensive-log-occurrences">
-                                  @for (occ of spell.occurrences; track occ.pullNumber + '-' + occ.offsetMs) {
-                                    <span class="defensive-log-chip tabular">#{{ occ.pullNumber }} {{ formatOffset(occ.offsetMs) }}</span>
+                                  @for (
+                                    occ of spell.occurrences;
+                                    track occ.pullNumber + '-' + occ.offsetMs
+                                  ) {
+                                    <span class="defensive-log-chip tabular"
+                                      >#{{ occ.pullNumber }} {{ formatOffset(occ.offsetMs) }}</span
+                                    >
                                   }
                                 </span>
                               </div>
@@ -558,20 +836,27 @@
               <li>
                 <span class="priority-index">{{ index + 1 }}</span>
                 <div>
-                  <strong>{{ priority.title }}</strong><p>{{ priority.detail }}</p>
-                  @if (priority.note) { <p class="data-note"><b>Qué hace:</b> {{ priority.note }}</p> }
+                  <strong>{{ priority.title }}</strong>
+                  <p>{{ priority.detail }}</p>
+                  @if (priority.note) {
+                    <p class="data-note"><b>Qué hace:</b> {{ priority.note }}</p>
+                  }
                 </div>
               </li>
             }
           </ol>
         } @else {
-          <p class="empty-copy">No hay una prioridad sólida del boss de progress con la muestra disponible.</p>
+          <p class="empty-copy">
+            No hay una prioridad sólida del boss de progress con la muestra disponible.
+          </p>
         }
         <div class="positive-panel">
           <strong>Lo que funcionó</strong>
           @if (r.goodPoints.length) {
             <ul>
-              @for (point of r.goodPoints; track point) { <li>{{ point }}</li> }
+              @for (point of r.goodPoints; track point) {
+                <li>{{ point }}</li>
+              }
             </ul>
           } @else {
             <p>Sin señal suficiente para destacar una mejora colectiva concreta.</p>
@@ -587,12 +872,22 @@
             <strong>{{ topLethal.count }}</strong>
             <span>
               @if (topLethal.wowheadSpellId) {
-                <app-wowhead-link type="spell" [id]="topLethal.wowheadSpellId">{{ bilingualName(topLethal.mechanicName, topLethal.mechanicNameEs) }}</app-wowhead-link>
-              } @else { {{ bilingualName(topLethal.mechanicName, topLethal.mechanicNameEs) }} }
-              · {{ bilingualName(topLethal.bossName, topLethal.bossNameEs) }} · {{ topLethal.distinctPlayers }} jugador{{ topLethal.distinctPlayers === 1 ? '' : 'es' }} distinto{{ topLethal.distinctPlayers === 1 ? '' : 's' }}
+                <app-wowhead-link type="spell" [id]="topLethal.wowheadSpellId">{{
+                  bilingualName(topLethal.mechanicName, topLethal.mechanicNameEs)
+                }}</app-wowhead-link>
+              } @else {
+                {{ bilingualName(topLethal.mechanicName, topLethal.mechanicNameEs) }}
+              }
+              · {{ bilingualName(topLethal.bossName, topLethal.bossNameEs) }} ·
+              {{ topLethal.distinctPlayers }} jugador{{
+                topLethal.distinctPlayers === 1 ? '' : 'es'
+              }}
+              distinto{{ topLethal.distinctPlayers === 1 ? '' : 's' }}
             </span>
           </div>
-          @if (topLethal.note) { <p class="data-note"><b>Qué hace:</b> {{ topLethal.note }}</p> }
+          @if (topLethal.note) {
+            <p class="data-note"><b>Qué hace:</b> {{ topLethal.note }}</p>
+          }
         </section>
       }
 
@@ -602,7 +897,12 @@
             <div class="section-kicker">Acción principal</div>
             <h3 id="responsibility-heading">Quién debía resolver las mecánicas</h3>
           </div>
-          <span class="section-count">{{ r.responsibilities.classifiedMechanics }}/{{ r.responsibilities.totalMechanics }} clasificadas · {{ formatPct(r.responsibilities.classificationCoveragePct) }}</span>
+          <span class="section-count"
+            >{{ r.responsibilities.classifiedMechanics }}/{{
+              r.responsibilities.totalMechanics
+            }}
+            clasificadas · {{ formatPct(r.responsibilities.classificationCoveragePct) }}</span
+          >
         </div>
         @if (r.responsibilities.byResponsibility.length) {
           <div class="performance-grid responsibility-grid">
@@ -610,14 +910,23 @@
               <div>
                 <span>{{ entry.label }} · {{ entry.mechanics }} mecánicas</span>
                 <strong>{{ entry.failedEvents }} fallos · {{ entry.deaths }} muertes</strong>
-                <small>{{ entry.pullsAffected }} pulls afectados · {{ entry.playersHit }} jugadores alcanzados · {{ compactNumber(entry.damageTaken) }} de daño en fallos</small>
+                <small
+                  >{{ entry.pullsAffected }} pulls afectados · {{ entry.playersHit }} jugadores
+                  alcanzados · {{ compactNumber(entry.damageTaken) }} de daño en fallos</small
+                >
               </div>
             }
           </div>
         } @else {
-          <p class="empty-copy">Todavía no hay responsabilidades clasificadas. Se completan desde Ajustes con el prompt v6.</p>
+          <p class="empty-copy">
+            Todavía no hay responsabilidades clasificadas. Se completan desde Ajustes con el prompt
+            v6.
+          </p>
         }
-        <p class="data-note">"Responsable" indica quién controla principalmente la resolución. No identifica culpables individuales ni demuestra por sí solo la causa de cada muerte.</p>
+        <p class="data-note">
+          "Responsable" indica quién controla principalmente la resolución. No identifica culpables
+          individuales ni demuestra por sí solo la causa de cada muerte.
+        </p>
       </section>
 
       <section class="report-section" aria-labelledby="roles-heading">
@@ -628,32 +937,68 @@
           </div>
           <span class="section-count">
             @if (r.roleInsights.scope; as scope) {
-              {{ bilingualName(scope.bossName, scope.bossNameEs) }} · {{ scope.difficulty }} · {{ scope.pulls }} pulls
-            } @else { toda la noche }
+              {{ bilingualName(scope.bossName, scope.bossNameEs) }} · {{ scope.difficulty }} ·
+              {{ scope.pulls }} pulls
+            } @else {
+              toda la noche
+            }
           </span>
         </div>
-        <p class="data-note">Roles identificados para {{ r.roleInsights.classifiedPlayers }}/{{ r.roleInsights.totalPlayers }} jugadores ({{ formatPct(r.roleInsights.classificationCoveragePct) }}).</p>
+        <p class="data-note">
+          Roles identificados para {{ r.roleInsights.classifiedPlayers }}/{{
+            r.roleInsights.totalPlayers
+          }}
+          jugadores ({{ formatPct(r.roleInsights.classificationCoveragePct) }}).
+        </p>
         <div class="performance-grid role-grid">
           <div>
             <span>Tanks · {{ r.roleInsights.tanks.players }} jugadores</span>
             <strong>{{ r.roleInsights.tanks.deaths }} muertes</strong>
-            <small>{{ r.roleInsights.tanks.deathsPerPull }}/pull · {{ r.roleInsights.tanks.tankbusterDeaths }} por tankbuster · defensivo {{ r.roleInsights.tanks.playersUsingDefensive }}/{{ r.roleInsights.tanks.players }}</small>
-            @if (r.roleInsights.tanks.nonTankTankbusterDeaths) { <small>{{ r.roleInsights.tanks.nonTankTankbusterDeaths }} tankbusters letales alcanzaron a no-tanks.</small> }
+            <small
+              >{{ r.roleInsights.tanks.deathsPerPull }}/pull ·
+              {{ r.roleInsights.tanks.tankbusterDeaths }} por tankbuster · defensivo
+              {{ r.roleInsights.tanks.playersUsingDefensive }}/{{
+                r.roleInsights.tanks.players
+              }}</small
+            >
+            @if (r.roleInsights.tanks.nonTankTankbusterDeaths) {
+              <small
+                >{{ r.roleInsights.tanks.nonTankTankbusterDeaths }} tankbusters letales alcanzaron a
+                no-tanks.</small
+              >
+            }
           </div>
           <div>
             <span>Healers · {{ r.roleInsights.healers.players }} jugadores</span>
             <strong>{{ r.roleInsights.healers.deaths }} muertes</strong>
-            <small>{{ r.roleInsights.healers.deathsPerPull }}/pull · defensivo {{ r.roleInsights.healers.playersUsingDefensive }}/{{ r.roleInsights.healers.players }}</small>
-            <small>{{ r.roleInsights.healers.raidDeathsWithSustainedNoHealingSignal }} muertes de raid con daño sostenido sin sanación registrada en 6 s.</small>
+            <small
+              >{{ r.roleInsights.healers.deathsPerPull }}/pull · defensivo
+              {{ r.roleInsights.healers.playersUsingDefensive }}/{{
+                r.roleInsights.healers.players
+              }}</small
+            >
+            <small
+              >{{ r.roleInsights.healers.raidDeathsWithSustainedNoHealingSignal }} muertes de raid
+              con daño sostenido sin sanación registrada en 6 s.</small
+            >
           </div>
           <div>
             <span>DPS · {{ r.roleInsights.dps.players }} jugadores</span>
             <strong>{{ r.roleInsights.dps.deaths }} muertes</strong>
-            <small>{{ r.roleInsights.dps.deathsPerPull }}/pull · defensivo {{ r.roleInsights.dps.playersUsingDefensive }}/{{ r.roleInsights.dps.players }}</small>
-            <small>{{ r.roleInsights.dps.personalMechanicDeaths }} asociadas a posicionamiento o soak.</small>
+            <small
+              >{{ r.roleInsights.dps.deathsPerPull }}/pull · defensivo
+              {{ r.roleInsights.dps.playersUsingDefensive }}/{{ r.roleInsights.dps.players }}</small
+            >
+            <small
+              >{{ r.roleInsights.dps.personalMechanicDeaths }} asociadas a posicionamiento o
+              soak.</small
+            >
           </div>
         </div>
-        <p class="data-note">La señal de healing describe la ventana registrada; no identifica responsable ni demuestra que la muerte fuese salvable.</p>
+        <p class="data-note">
+          La señal de healing describe la ventana registrada; no identifica responsable ni demuestra
+          que la muerte fuese salvable.
+        </p>
       </section>
 
       @if (d.topOffenders.length) {
@@ -663,7 +1008,9 @@
           <ul class="plain-list">
             @for (o of d.topOffenders; track o.playerName) {
               <li>
-                <a [routerLink]="['/report', d.reportCode, 'player', o.playerName]">{{ o.playerName }}</a>
+                <a [routerLink]="['/report', d.reportCode, 'player', o.playerName]">{{
+                  o.playerName
+                }}</a>
                 — {{ o.deathCount }} muertes
               </li>
             }
@@ -680,52 +1027,101 @@
             <span>muertes evaluadas</span>
           </div>
           @if (r.deaths.totalWipeCallExcluded) {
-            <p class="data-note">{{ r.deaths.totalWipeCallExcluded }} muertes de wipe call excluidas.</p>
+            <p class="data-note">
+              {{ r.deaths.totalWipeCallExcluded }} muertes de wipe call excluidas.
+            </p>
           }
           <p class="data-note">
-            Causa raíz clasificable en {{ r.deaths.rootCauseClassifiedCount }}/{{ r.deaths.totalRealDeaths }}
+            Causa raíz clasificable en {{ r.deaths.rootCauseClassifiedCount }}/{{
+              r.deaths.totalRealDeaths
+            }}
             ({{ formatPct(r.deaths.rootCauseCoveragePct) }}). Categoría mecánica conocida en
-            {{ r.deaths.mechanicCategorizedCount }}/{{ r.deaths.totalRealDeaths }}
-            ({{ formatPct(r.deaths.mechanicCategoryCoveragePct) }}).
+            {{ r.deaths.mechanicCategorizedCount }}/{{ r.deaths.totalRealDeaths }} ({{
+              formatPct(r.deaths.mechanicCategoryCoveragePct)
+            }}).
           </p>
           @if (r.deaths.unknownFinalBlowCount) {
-            <p class="data-note">{{ r.deaths.unknownFinalBlowCount }} muertes no tienen una habilidad de golpe final identificada; se excluyen del ranking inferior.</p>
+            <p class="data-note">
+              {{ r.deaths.unknownFinalBlowCount }} muertes no tienen una habilidad de golpe final
+              identificada; se excluyen del ranking inferior.
+            </p>
           }
           <div class="breakdown-list">
             @for (cause of r.deaths.byRootCause; track cause.rootCause) {
-              <div><span>{{ cause.label }}</span><strong>{{ cause.count }} · {{ formatPct(cause.pct) }}</strong></div>
+              <div>
+                <span>{{ cause.label }}</span
+                ><strong>{{ cause.count }} · {{ formatPct(cause.pct) }}</strong>
+              </div>
             }
           </div>
           @if (r.deaths.unknownFinalBlowCount) {
             <p class="data-note">
               {{ r.deaths.unknownFinalBlowCount }} sin golpe final identificado
-              @if (r.deaths.unknownFinalBlowWithDamageContextCount) { ({{ r.deaths.unknownFinalBlowWithDamageContextCount }} con algún impacto previo registrado como contexto) }.
+              @if (r.deaths.unknownFinalBlowWithDamageContextCount) {
+                ({{ r.deaths.unknownFinalBlowWithDamageContextCount }} con algún impacto previo
+                registrado como contexto)
+              }
+              .
             </p>
           }
-          <p class="data-note">Los golpes finales de cada boss están en su desplegable, arriba. "Daño sostenido sin sanación registrada" describe la ventana de 6 s previa; no atribuye la causa a los healers.</p>
+          <p class="data-note">
+            Los golpes finales de cada boss están en su desplegable, arriba. "Daño sostenido sin
+            sanación registrada" describe la ventana de 6 s previa; no atribuye la causa a los
+            healers.
+          </p>
         </section>
 
         <section class="report-section" aria-labelledby="consumables-heading">
           <div class="section-kicker">Recursos personales</div>
           <h3 id="consumables-heading">Piedras y pociones</h3>
           <div class="meter-row">
-            <div><span>Healthstone, uso al menos una vez</span><strong>{{ r.survival.healthstone.playersEverUsed }}/{{ r.survival.healthstone.playersWithObservedAccess }}</strong></div>
-            <div class="meter"><i [style.width.%]="r.survival.healthstone.pctUsedAtLeastOnce"></i></div>
+            <div>
+              <span>Healthstone, uso al menos una vez</span
+              ><strong
+                >{{ r.survival.healthstone.playersEverUsed }}/{{
+                  r.survival.healthstone.playersWithObservedAccess
+                }}</strong
+              >
+            </div>
+            <div class="meter">
+              <i [style.width.%]="r.survival.healthstone.pctUsedAtLeastOnce"></i>
+            </div>
           </div>
           <div class="meter-row">
-            <div><span>Health potion, uso al menos una vez</span><strong>{{ r.survival.healthPotion.playersEverUsed }}/{{ r.survival.healthPotion.totalPlayersTracked }}</strong></div>
-            <div class="meter"><i [style.width.%]="r.survival.healthPotion.pctUsedAtLeastOnce"></i></div>
+            <div>
+              <span>Health potion, uso al menos una vez</span
+              ><strong
+                >{{ r.survival.healthPotion.playersEverUsed }}/{{
+                  r.survival.healthPotion.totalPlayersTracked
+                }}</strong
+              >
+            </div>
+            <div class="meter">
+              <i [style.width.%]="r.survival.healthPotion.pctUsedAtLeastOnce"></i>
+            </div>
           </div>
           <div class="meter-row">
-            <div><span>Algún recurso de emergencia</span><strong>{{ r.survival.either.playersEverUsed }}/{{ r.survival.either.totalPlayersTracked }}</strong></div>
+            <div>
+              <span>Algún recurso de emergencia</span
+              ><strong
+                >{{ r.survival.either.playersEverUsed }}/{{
+                  r.survival.either.totalPlayersTracked
+                }}</strong
+              >
+            </div>
             <div class="meter"><i [style.width.%]="r.survival.either.pctUsedAtLeastOnce"></i></div>
           </div>
           <p class="data-note">
-            {{ formatPct(r.survival.pctDeathsWithNoEmergencyConsumableInPull) }} de las muertes no registraron uso de healthstone ni health potion durante el try.
+            {{ formatPct(r.survival.pctDeathsWithNoEmergencyConsumableInPull) }} de las muertes no
+            registraron uso de healthstone ni health potion durante el try.
           </p>
           @if (r.survival.healthstone.deathsEvaluable) {
             <p class="data-note">
-              En {{ r.survival.healthstone.deathsWithObservedAccessNoUseInPull }}/{{ r.survival.healthstone.deathsEvaluable }} muertes evaluables había acceso observable a healthstone y no se registró uso durante el try.
+              En {{ r.survival.healthstone.deathsWithObservedAccessNoUseInPull }}/{{
+                r.survival.healthstone.deathsEvaluable
+              }}
+              muertes evaluables había acceso observable a healthstone y no se registró uso durante
+              el try.
             </p>
           }
         </section>
@@ -734,25 +1130,36 @@
           <div class="section-kicker">Mitigación registrada</div>
           <h3 id="defensives-heading">Defensivos</h3>
           <div class="lead-metric">
-            <strong>{{ r.defensives.playersEverUsed }}/{{ r.defensives.totalPlayersTracked }}</strong>
+            <strong
+              >{{ r.defensives.playersEverUsed }}/{{ r.defensives.totalPlayersTracked }}</strong
+            >
             <span>jugadores usaron al menos uno</span>
           </div>
           <p class="data-note">
-            {{ r.defensives.totalCasts }} casts registrados · {{ r.defensives.castsPerCombatMinute }} por minuto de combate.
+            {{ r.defensives.totalCasts }} casts registrados ·
+            {{ r.defensives.castsPerCombatMinute }} por minuto de combate.
           </p>
           @if (r.defensives.totalEvaluated) {
             <div class="lead-metric warning">
               <strong>{{ formatPct(r.defensives.globalAvailableUnusedPct) }}</strong>
               <span>con otra herramienta defensiva disponible</span>
             </div>
-            <p class="data-note">{{ r.defensives.availableUnusedCount }}/{{ r.defensives.totalEvaluated }} muertes evaluables; disponibilidad no implica que ese botón hubiese evitado la muerte.</p>
+            <p class="data-note">
+              {{ r.defensives.availableUnusedCount }}/{{ r.defensives.totalEvaluated }} muertes
+              evaluables; disponibilidad no implica que ese botón hubiese evitado la muerte.
+            </p>
             <div class="breakdown-list compact">
               @for (category of r.defensives.byCategory; track category.category) {
-                <div><span>{{ category.label }} · n={{ category.evaluated }}</span><strong>{{ formatPct(category.availableUnusedPct) }}</strong></div>
+                <div>
+                  <span>{{ category.label }} · n={{ category.evaluated }}</span
+                  ><strong>{{ formatPct(category.availableUnusedPct) }}</strong>
+                </div>
               }
             </div>
           } @else {
-            <p class="empty-copy">Sin muertes evaluables con información de cooldown para medir disponibilidad al morir.</p>
+            <p class="empty-copy">
+              Sin muertes evaluables con información de cooldown para medir disponibilidad al morir.
+            </p>
           }
         </section>
 
@@ -763,13 +1170,19 @@
           @if (r.interrupts.totalCasts) {
             <div class="lead-metric">
               <strong>{{ formatPct(r.interrupts.pctSuccess) }}</strong>
-              <span>{{ r.interrupts.interrupted }}/{{ r.interrupts.totalCasts }} casts interrumpidos</span>
+              <span
+                >{{ r.interrupts.interrupted }}/{{ r.interrupts.totalCasts }} casts
+                interrumpidos</span
+              >
             </div>
           } @else {
             <p class="empty-copy">Sin casts interruptibles con clasificación verificada.</p>
           }
           @if (r.interrupts.excludedUnverifiedCasts) {
-            <p class="data-note">{{ r.interrupts.excludedUnverifiedCasts }} casts históricos excluidos: solo estaban inferidos como interrupt por texto.</p>
+            <p class="data-note">
+              {{ r.interrupts.excludedUnverifiedCasts }} casts históricos excluidos: solo estaban
+              inferidos como interrupt por texto.
+            </p>
           }
         </section>
       </div>
@@ -780,34 +1193,60 @@
         <div class="performance-grid">
           @if (r.avoidableDamage; as avoidable) {
             <div>
-              <span>Daño evitable medido</span><strong>{{ compactNumber(avoidable.total) }}</strong><small>{{ compactNumber(avoidable.perMinute) }}/min · {{ avoidable.complete ? 'cobertura completa' : ('cobertura ' + avoidable.measuredBossScopes + '/' + avoidable.totalBossScopes) }}</small>
+              <span>Daño evitable medido</span><strong>{{ compactNumber(avoidable.total) }}</strong
+              ><small
+                >{{ compactNumber(avoidable.perMinute) }}/min ·
+                {{
+                  avoidable.complete
+                    ? 'cobertura completa'
+                    : 'cobertura ' + avoidable.measuredBossScopes + '/' + avoidable.totalBossScopes
+                }}</small
+              >
             </div>
             <div>
-              <span>Parte del daño de raid</span><strong>{{ avoidable.pctOfRaidDamage === null ? '—' : formatPct(avoidable.pctOfRaidDamage) }}</strong><small>solo dentro del ámbito medido</small>
+              <span>Parte del daño de raid</span
+              ><strong>{{
+                avoidable.pctOfRaidDamage === null ? '—' : formatPct(avoidable.pctOfRaidDamage)
+              }}</strong
+              ><small>solo dentro del ámbito medido</small>
             </div>
           } @else {
-            <div class="unavailable-metric"><span>Daño evitable</span><strong>Sin medir</strong><small>No equivale a cero</small></div>
+            <div class="unavailable-metric">
+              <span>Daño evitable</span><strong>Sin medir</strong><small>No equivale a cero</small>
+            </div>
           }
         </div>
-        <p class="data-note">Los promedios globales de DPS/HPS se omiten: mezclar bosses, duraciones y composiciones distintas no produce una recomendación útil para los raiders.</p>
+        <p class="data-note">
+          Los promedios globales de DPS/HPS se omiten: mezclar bosses, duraciones y composiciones
+          distintas no produce una recomendación útil para los raiders.
+        </p>
       </section>
 
       <div class="section-grid wide-left">
         <section class="report-section" aria-labelledby="wipe-patterns-heading">
           <div class="section-kicker">Diagnóstico prudente</div>
           <h3 id="wipe-patterns-heading">Señales presentes en wipes</h3>
-          <p class="data-note">Son señales no exclusivas: un mismo wipe puede aparecer en varias filas. No demuestran por sí solas qué causó el wipe.</p>
+          <p class="data-note">
+            Son señales no exclusivas: un mismo wipe puede aparecer en varias filas. No demuestran
+            por sí solas qué causó el wipe.
+          </p>
           @if (r.wipeRecovery.wipesEvaluable) {
             <div class="lead-metric">
               <strong>{{ formatPct(r.wipeRecovery.pctWipesWithCascade) }}</strong>
-              <span>{{ r.wipeRecovery.wipesWithCascade }}/{{ r.wipeRecovery.wipesEvaluable }} wipes con ≥3 muertes reales en {{ r.wipeRecovery.windowMs / 1000 }} s desde la primera</span>
+              <span
+                >{{ r.wipeRecovery.wipesWithCascade }}/{{ r.wipeRecovery.wipesEvaluable }} wipes con
+                ≥3 muertes reales en {{ r.wipeRecovery.windowMs / 1000 }} s desde la primera</span
+              >
             </div>
           }
           <div class="breakdown-list">
             @for (pattern of r.wipePatterns; track pattern.category) {
               <div>
                 <span>{{ pattern.label }}</span>
-                <strong>{{ pattern.count }}/{{ r.summary.totalWipes }} · {{ formatPct(pattern.pct) }}</strong>
+                <strong
+                  >{{ pattern.count }}/{{ r.summary.totalWipes }} ·
+                  {{ formatPct(pattern.pct) }}</strong
+                >
               </div>
             } @empty {
               <p class="empty-copy">Sin wipes evaluables.</p>
@@ -819,10 +1258,19 @@
           <div class="section-kicker">Evolución</div>
           <h3 id="progress-heading">Progresión</h3>
           <div class="breakdown-list progression-list">
-            @for (progress of r.summary.progression; track progress.bossName + progress.difficulty) {
+            @for (
+              progress of r.summary.progression;
+              track progress.bossName + progress.difficulty
+            ) {
               <div>
-                <span>{{ bilingualName(progress.bossName, progress.bossNameEs) }} · {{ progress.difficulty }} <small>{{ progress.pulls }} pulls</small></span>
-                <strong>{{ formatPct(progress.firstWipePct) }} → {{ formatPct(progress.lastWipePct) }}</strong>
+                <span
+                  >{{ bilingualName(progress.bossName, progress.bossNameEs) }} ·
+                  {{ progress.difficulty }} <small>{{ progress.pulls }} pulls</small></span
+                >
+                <strong
+                  >{{ formatPct(progress.firstWipePct) }} →
+                  {{ formatPct(progress.lastWipePct) }}</strong
+                >
               </div>
             } @empty {
               <p class="empty-copy">Hace falta más de un pull por boss para medir progresión.</p>
@@ -831,9 +1279,17 @@
           @if (r.progressionComparison; as comparison) {
             <div class="comparison">
               <span>Segunda mitad vs primera · mismo boss+dificultad</span>
-              <div><b>Muertes/pull</b><strong>{{ deltaLabel(comparison.deathsDeltaPct) }}</strong></div>
-              <div><b>Daño evitable/pull</b><strong>{{ deltaLabel(comparison.avoidableDamageDeltaPct) }}</strong></div>
-              <div><b>Cobertura defensivos</b><strong>{{ deltaLabel(comparison.defensiveCoverageDeltaPct) }}</strong></div>
+              <div>
+                <b>Muertes/pull</b><strong>{{ deltaLabel(comparison.deathsDeltaPct) }}</strong>
+              </div>
+              <div>
+                <b>Daño evitable/pull</b
+                ><strong>{{ deltaLabel(comparison.avoidableDamageDeltaPct) }}</strong>
+              </div>
+              <div>
+                <b>Cobertura defensivos</b
+                ><strong>{{ deltaLabel(comparison.defensiveCoverageDeltaPct) }}</strong>
+              </div>
             </div>
           }
         </section>
@@ -844,7 +1300,9 @@
         <h3 id="limitations-heading">Datos que este informe no tiene</h3>
         <p>No se rellenan huecos con estimaciones ni texto generado.</p>
         <ul>
-          @for (item of r.notAvailable; track item) { <li>{{ item }}</li> }
+          @for (item of r.notAvailable; track item) {
+            <li>{{ item }}</li>
+          }
         </ul>
       </section>
     } @else if (generatingFullReport()) {
