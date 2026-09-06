@@ -2,6 +2,15 @@
   @if (selectorOpen()) {
     <app-report-night-selector (closed)="selectorOpen.set(false)" />
   } @else {
+    @if (playerMissingNotice(); as notice) {
+      <div class="player-missing-notice" role="status">
+        <span>{{ notice }}</span>
+        <button type="button" (click)="dismissPlayerMissingNotice()" aria-label="Cerrar aviso">
+          ×
+        </button>
+      </div>
+    }
+
     <button
       type="button"
       class="night-header"

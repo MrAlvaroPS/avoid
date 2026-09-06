@@ -56,7 +56,7 @@
                 <a
                   class="report-row"
                   [routerLink]="['/report', item.report.code, 'raid']"
-                  (click)="closed.emit()"
+                  (click)="onRowClick($event, item.report.code)"
                 >
                   <span class="report-date tabular">{{
                     reportDateLabel(item.report.start_time)
@@ -74,7 +74,7 @@
           <a
             class="report-row"
             [routerLink]="['/report', item.report.code, 'raid']"
-            (click)="closed.emit()"
+            (click)="onRowClick($event, item.report.code)"
           >
             <span class="report-date tabular">{{ reportDateLabel(item.report.start_time) }}</span>
             <span class="report-title">{{ item.report.title || 'Report de raid' }}</span>
@@ -94,7 +94,7 @@
           <a
             class="report-row"
             [routerLink]="['/report', item.report.code, 'raid']"
-            (click)="closed.emit()"
+            (click)="onRowClick($event, item.report.code)"
           >
             <span class="report-date tabular">{{ reportDateLabel(item.report.start_time) }}</span>
             <span class="report-title">{{ item.report.title || 'Report de raid' }}</span>

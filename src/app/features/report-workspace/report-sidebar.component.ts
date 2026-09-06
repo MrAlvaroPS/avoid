@@ -9,7 +9,7 @@
 // workspace.reportCode(), y elegir otra navega (ver ReportNightSelectorComponent).
 // §14/§41: el sidebar es navegación, nunca un dashboard (nada de score/
 // muertes/% defensivo/mecánicas aquí).
-import { Component, computed, inject, signal } from '@angular/core';
+import { Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import {
   ActivatedRoute,
@@ -73,6 +73,42 @@ export class ReportSidebarComponent {
 
   private groups = computed(() => groupParticipantsForSidebar(this.workspace.participants()));
   protected filteredGroups = computed(() => filterParticipantGroups(this.groups(), this.search()));
+
+  /**
+   * §PR5 del plan (Entrega 5: "conservación de contexto entre noches",
+   * §26 del spec): cuando el cambio de noche NO pudo preservar el Dosier
+   * (el jugador no participó en la noche nueva), ReportNightSelectorComponent
+   * navega con ?playerMissing=NOMBRE en vez de guardar nada en
+   * ReportWorkspaceService — el router sigue siendo la única fuente de
+   * verdad, esto solo lo LEE. Se captura una vez, se limpia de la URL
+   * inmediatamente (§45/§46: la URL debe quedar canónica, sin parámetros
+   * transitorios) y el aviso vive de ahí en adelante solo en este signal
+   * local, con auto-cierre.
+   */
+  private playerMissingParam = toSignal(this.route.queryParamMap, {
+    initialValue: this.route.snapshot.queryParamMap,
+  });
+  protected playerMissingNotice = signal<string | null>(null);
+
+  constructor() {
+    effect(() => {
+      const name = this.playerMissingParam().get('playerMissing');
+      if (!name) return;
+      untracked(() => {
+        this.playerMissingNotice.set(`${name} no participó en esta noche.`);
+        void this.router.navigate([], {
+          queryParams: { playerMissing: null },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
+        setTimeout(() => this.playerMissingNotice.set(null), 6000);
+      });
+    });
+  }
+
+  dismissPlayerMissingNotice(): void {
+    this.playerMissingNotice.set(null);
+  }
 
   reportDateLabel(startTime: number): string {
     return new Date(startTime).toLocaleDateString('es-ES', {
