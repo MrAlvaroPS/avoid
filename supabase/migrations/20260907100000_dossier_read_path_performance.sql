@@ -11,33 +11,39 @@
 -- This migration is deliberately semantics-preserving:
 --   * it does NOT change scoring, attribution, candidate policy or UI data;
 --   * it materializes only the tiny observed identity key set used by the
---     existing EXISTS predicate and maintains an exact event_count;
+--     existing EXISTS predicate and maintains exact counts per pull;
 --   * applicable_boss_mechanics_candidates keeps the same predicate, replacing
 --     only the repeated historical scan with an indexed key lookup;
 --   * supporting indexes match the concrete dossier/infographic read paths.
 
 create table if not exists public.pull_mechanic_observation_keys (
+  pull_id uuid not null references public.pulls(id) on delete cascade,
   boss_id text not null,
   difficulty text not null,
   normalized_name text not null,
   event_count bigint not null check (event_count > 0),
-  primary key (boss_id, difficulty, normalized_name)
+  primary key (pull_id, normalized_name)
 );
 
+create index if not exists pull_mechanic_observation_keys_scope_idx
+  on public.pull_mechanic_observation_keys (boss_id, difficulty, normalized_name);
+
 comment on table public.pull_mechanic_observation_keys is
-  'Exact compact projection of observed pull_mechanic_events identities by boss+difficulty+normalized mechanic name. Used to avoid rescanning the full event history when resolving applicable mechanic candidates.';
+  'Exact compact projection of observed pull_mechanic_events identities per pull. The scope index answers boss+difficulty+mechanic observation without rescanning the event history.';
 comment on column public.pull_mechanic_observation_keys.event_count is
-  'Number of backing pull_mechanic_events for this identity. Exact count allows replay/delete operations to remove stale observed keys safely.';
+  'Number of backing pull_mechanic_events for this pull+normalized mechanic. Exact counts keep replay/delete/update operations free of stale observed keys.';
 
 -- Initial exact projection. ON CONFLICT makes the migration retry-safe without
 -- deleting any pre-existing helper rows.
 insert into public.pull_mechanic_observation_keys (
+  pull_id,
   boss_id,
   difficulty,
   normalized_name,
   event_count
 )
 select
+  p.id,
   p.boss_id,
   p.difficulty,
   lower(btrim(e.mechanic_name)) as normalized_name,
@@ -45,9 +51,12 @@ select
 from public.pull_mechanic_events e
 join public.pulls p on p.id = e.pull_id
 where e.mechanic_name is not null
-group by p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
-on conflict (boss_id, difficulty, normalized_name)
-do update set event_count = excluded.event_count;
+group by p.id, p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
+on conflict (pull_id, normalized_name)
+do update set
+  boss_id = excluded.boss_id,
+  difficulty = excluded.difficulty,
+  event_count = excluded.event_count;
 
 -- Keep the helper exact for normal ingestion and for the atomic historical
 -- replay primitive (DELETE + bulk INSERT). Transition tables aggregate an
@@ -60,12 +69,14 @@ set search_path = public
 as $$
 begin
   insert into public.pull_mechanic_observation_keys as observation (
+    pull_id,
     boss_id,
     difficulty,
     normalized_name,
     event_count
   )
   select
+    p.id,
     p.boss_id,
     p.difficulty,
     lower(btrim(e.mechanic_name)),
@@ -73,9 +84,12 @@ begin
   from new_rows e
   join public.pulls p on p.id = e.pull_id
   where e.mechanic_name is not null
-  group by p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
-  on conflict (boss_id, difficulty, normalized_name)
-  do update set event_count = observation.event_count + excluded.event_count;
+  group by p.id, p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
+  on conflict (pull_id, normalized_name)
+  do update set
+    boss_id = excluded.boss_id,
+    difficulty = excluded.difficulty,
+    event_count = observation.event_count + excluded.event_count;
 
   return null;
 end;
@@ -88,42 +102,36 @@ security definer
 set search_path = public
 as $$
 begin
-  -- Keys whose complete backing population disappeared are removed first so
-  -- the positive-count constraint is never transiently violated.
+  -- Delete keys whose full per-pull population disappeared first, so the
+  -- positive-count constraint is never transiently violated.
   with removed as (
     select
-      p.boss_id,
-      p.difficulty,
+      e.pull_id,
       lower(btrim(e.mechanic_name)) as normalized_name,
       count(*)::bigint as removed_count
     from old_rows e
-    join public.pulls p on p.id = e.pull_id
     where e.mechanic_name is not null
-    group by p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
+    group by e.pull_id, lower(btrim(e.mechanic_name))
   )
   delete from public.pull_mechanic_observation_keys observation
   using removed
-  where observation.boss_id = removed.boss_id
-    and observation.difficulty = removed.difficulty
+  where observation.pull_id = removed.pull_id
     and observation.normalized_name = removed.normalized_name
     and observation.event_count <= removed.removed_count;
 
   with removed as (
     select
-      p.boss_id,
-      p.difficulty,
+      e.pull_id,
       lower(btrim(e.mechanic_name)) as normalized_name,
       count(*)::bigint as removed_count
     from old_rows e
-    join public.pulls p on p.id = e.pull_id
     where e.mechanic_name is not null
-    group by p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
+    group by e.pull_id, lower(btrim(e.mechanic_name))
   )
   update public.pull_mechanic_observation_keys observation
      set event_count = observation.event_count - removed.removed_count
     from removed
-   where observation.boss_id = removed.boss_id
-     and observation.difficulty = removed.difficulty
+   where observation.pull_id = removed.pull_id
      and observation.normalized_name = removed.normalized_name;
 
   return null;
@@ -147,19 +155,16 @@ begin
        or o.mechanic_name is distinct from n.mechanic_name
   ), removed as (
     select
-      p.boss_id,
-      p.difficulty,
+      e.pull_id,
       lower(btrim(e.mechanic_name)) as normalized_name,
       count(*)::bigint as removed_count
     from changed_old e
-    join public.pulls p on p.id = e.pull_id
     where e.mechanic_name is not null
-    group by p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
+    group by e.pull_id, lower(btrim(e.mechanic_name))
   )
   delete from public.pull_mechanic_observation_keys observation
   using removed
-  where observation.boss_id = removed.boss_id
-    and observation.difficulty = removed.difficulty
+  where observation.pull_id = removed.pull_id
     and observation.normalized_name = removed.normalized_name
     and observation.event_count <= removed.removed_count;
 
@@ -171,29 +176,28 @@ begin
        or o.mechanic_name is distinct from n.mechanic_name
   ), removed as (
     select
-      p.boss_id,
-      p.difficulty,
+      e.pull_id,
       lower(btrim(e.mechanic_name)) as normalized_name,
       count(*)::bigint as removed_count
     from changed_old e
-    join public.pulls p on p.id = e.pull_id
     where e.mechanic_name is not null
-    group by p.boss_id, p.difficulty, lower(btrim(e.mechanic_name))
+    group by e.pull_id, lower(btrim(e.mechanic_name))
   )
   update public.pull_mechanic_observation_keys observation
      set event_count = observation.event_count - removed.removed_count
     from removed
-   where observation.boss_id = removed.boss_id
-     and observation.difficulty = removed.difficulty
+   where observation.pull_id = removed.pull_id
      and observation.normalized_name = removed.normalized_name;
 
   insert into public.pull_mechanic_observation_keys as observation (
+    pull_id,
     boss_id,
     difficulty,
     normalized_name,
     event_count
   )
   select
+    p.id,
     p.boss_id,
     p.difficulty,
     lower(btrim(n.mechanic_name)),
@@ -204,9 +208,12 @@ begin
   where (o.pull_id is distinct from n.pull_id
       or o.mechanic_name is distinct from n.mechanic_name)
     and n.mechanic_name is not null
-  group by p.boss_id, p.difficulty, lower(btrim(n.mechanic_name))
-  on conflict (boss_id, difficulty, normalized_name)
-  do update set event_count = observation.event_count + excluded.event_count;
+  group by p.id, p.boss_id, p.difficulty, lower(btrim(n.mechanic_name))
+  on conflict (pull_id, normalized_name)
+  do update set
+    boss_id = excluded.boss_id,
+    difficulty = excluded.difficulty,
+    event_count = observation.event_count + excluded.event_count;
 
   return null;
 end;
@@ -239,139 +246,20 @@ security definer
 set search_path = public
 as $$
 begin
-  with changed_pulls as (
-    select o.id, o.boss_id, o.difficulty
-    from old_pulls o
-    join new_pulls n on n.id = o.id
-    where o.boss_id is distinct from n.boss_id
-       or o.difficulty is distinct from n.difficulty
-  ), removed as (
-    select
-      cp.boss_id,
-      cp.difficulty,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from changed_pulls cp
-    join public.pull_mechanic_events e on e.pull_id = cp.id
-    where e.mechanic_name is not null
-    group by cp.boss_id, cp.difficulty, lower(btrim(e.mechanic_name))
-  )
-  delete from public.pull_mechanic_observation_keys observation
-  using removed
-  where observation.boss_id = removed.boss_id
-    and observation.difficulty = removed.difficulty
-    and observation.normalized_name = removed.normalized_name
-    and observation.event_count <= removed.removed_count;
-
-  with changed_pulls as (
-    select o.id, o.boss_id, o.difficulty
-    from old_pulls o
-    join new_pulls n on n.id = o.id
-    where o.boss_id is distinct from n.boss_id
-       or o.difficulty is distinct from n.difficulty
-  ), removed as (
-    select
-      cp.boss_id,
-      cp.difficulty,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from changed_pulls cp
-    join public.pull_mechanic_events e on e.pull_id = cp.id
-    where e.mechanic_name is not null
-    group by cp.boss_id, cp.difficulty, lower(btrim(e.mechanic_name))
-  )
   update public.pull_mechanic_observation_keys observation
-     set event_count = observation.event_count - removed.removed_count
-    from removed
-   where observation.boss_id = removed.boss_id
-     and observation.difficulty = removed.difficulty
-     and observation.normalized_name = removed.normalized_name;
-
-  insert into public.pull_mechanic_observation_keys as observation (
-    boss_id,
-    difficulty,
-    normalized_name,
-    event_count
-  )
-  select
-    n.boss_id,
-    n.difficulty,
-    lower(btrim(e.mechanic_name)),
-    count(*)::bigint
-  from new_pulls n
-  join old_pulls o on o.id = n.id
-  join public.pull_mechanic_events e on e.pull_id = n.id
-  where (o.boss_id is distinct from n.boss_id
-      or o.difficulty is distinct from n.difficulty)
-    and e.mechanic_name is not null
-  group by n.boss_id, n.difficulty, lower(btrim(e.mechanic_name))
-  on conflict (boss_id, difficulty, normalized_name)
-  do update set event_count = observation.event_count + excluded.event_count;
-
-  return null;
+     set boss_id = new.boss_id,
+         difficulty = new.difficulty
+   where observation.pull_id = new.id
+     and (old.boss_id is distinct from new.boss_id
+       or old.difficulty is distinct from new.difficulty);
+  return new;
 end;
 $$;
 
 drop trigger if exists pull_mechanic_observation_keys_pull_update on public.pulls;
 create trigger pull_mechanic_observation_keys_pull_update
-after update on public.pulls
-referencing old table as old_pulls new table as new_pulls
-for each statement execute function public.sync_pull_mechanic_observation_keys_pull_update();
-
--- If a pull itself is deleted, decrement while its scope and child events are
--- still available. The later FK cascade sees no parent row, so the event
--- delete statement trigger has no scope to decrement a second time.
-create or replace function public.sync_pull_mechanic_observation_keys_pull_delete()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  with removed as (
-    select
-      old.boss_id,
-      old.difficulty,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from public.pull_mechanic_events e
-    where e.pull_id = old.id
-      and e.mechanic_name is not null
-    group by lower(btrim(e.mechanic_name))
-  )
-  delete from public.pull_mechanic_observation_keys observation
-  using removed
-  where observation.boss_id = removed.boss_id
-    and observation.difficulty = removed.difficulty
-    and observation.normalized_name = removed.normalized_name
-    and observation.event_count <= removed.removed_count;
-
-  with removed as (
-    select
-      old.boss_id,
-      old.difficulty,
-      lower(btrim(e.mechanic_name)) as normalized_name,
-      count(*)::bigint as removed_count
-    from public.pull_mechanic_events e
-    where e.pull_id = old.id
-      and e.mechanic_name is not null
-    group by lower(btrim(e.mechanic_name))
-  )
-  update public.pull_mechanic_observation_keys observation
-     set event_count = observation.event_count - removed.removed_count
-    from removed
-   where observation.boss_id = removed.boss_id
-     and observation.difficulty = removed.difficulty
-     and observation.normalized_name = removed.normalized_name;
-
-  return old;
-end;
-$$;
-
-drop trigger if exists pull_mechanic_observation_keys_pull_delete on public.pulls;
-create trigger pull_mechanic_observation_keys_pull_delete
-before delete on public.pulls
-for each row execute function public.sync_pull_mechanic_observation_keys_pull_delete();
+after update of boss_id, difficulty on public.pulls
+for each row execute function public.sync_pull_mechanic_observation_keys_pull_update();
 
 -- Exact same applicability contract as before. Only the historical
 -- pull_mechanic_events EXISTS is replaced with the compact exact projection.
@@ -459,6 +347,5 @@ revoke all on function public.sync_pull_mechanic_observation_keys_insert() from 
 revoke all on function public.sync_pull_mechanic_observation_keys_delete() from public, anon, authenticated;
 revoke all on function public.sync_pull_mechanic_observation_keys_update() from public, anon, authenticated;
 revoke all on function public.sync_pull_mechanic_observation_keys_pull_update() from public, anon, authenticated;
-revoke all on function public.sync_pull_mechanic_observation_keys_pull_delete() from public, anon, authenticated;
 
 analyze public.pull_mechanic_observation_keys;
