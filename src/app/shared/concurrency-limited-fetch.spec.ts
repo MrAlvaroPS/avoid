@@ -81,6 +81,10 @@ describe('createConcurrencyLimitedFetch', () => {
     });
 
     const rest = limitedFetch('https://example.supabase.co/rest/v1/pulls');
+    // acquire() resolves asynchronously even when a slot is immediately
+    // available; let the matching request enter rawFetch before exercising
+    // the bypass path so the assertion checks only the intended behaviour.
+    await Promise.resolve();
     const functions = limitedFetch('https://example.supabase.co/functions/v1/analyze-report');
 
     await functions;
