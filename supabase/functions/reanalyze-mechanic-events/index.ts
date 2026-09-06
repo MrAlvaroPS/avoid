@@ -129,6 +129,9 @@ Deno.serve(async (req: Request) => {
         404,
       );
     }
+    // TypeScript does not preserve find() narrowing inside nested callbacks.
+    // Keep an explicitly narrowed reference for the helper closures below.
+    const replayFight = fight;
 
     const [actors, abilities, mechanicsResult, ownRatioResult, playerRecordsResult, beforeResult] =
       await Promise.all([
@@ -273,7 +276,7 @@ Deno.serve(async (req: Request) => {
           if (!finiteNumber(cast.spellId) || !Array.isArray(cast.timestampsMs)) continue;
           const usedInWindow = cast.timestampsMs.some((offset) => {
             if (!finiteNumber(offset)) return false;
-            const absoluteTimestamp = fight.startTime + offset;
+            const absoluteTimestamp = replayFight.startTime + offset;
             return absoluteTimestamp >= t0 - RESPONSE_WINDOW_MS && absoluteTimestamp <= windowEnd;
           });
           if (usedInWindow) {
@@ -295,7 +298,7 @@ Deno.serve(async (req: Request) => {
     }
 
     function resolvePhaseId(timestampAbsolute: number): number | null {
-      const transitions = fight.phaseTransitions;
+      const transitions = replayFight.phaseTransitions;
       if (!transitions?.length) return null;
       let current: number | null = null;
       for (const transition of transitions) {
