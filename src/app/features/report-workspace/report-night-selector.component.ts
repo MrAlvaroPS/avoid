@@ -176,9 +176,11 @@ export class ReportNightSelectorComponent {
     this.closed.emit();
   }
 
+  /** §mismo cuidado que ReportSidebarComponent.currentPlayerName: .snapshot
+   * de un hijo activo puede tardar en comprometerse — nunca se asume. */
   private currentViewSnapshot(): { path: string | null; playerName: string | null } | null {
     const child = this.route.firstChild;
-    if (!child) return null;
+    if (!child?.snapshot) return null;
     return {
       path: child.snapshot.routeConfig?.path ?? null,
       playerName: child.snapshot.paramMap.get('playerName'),

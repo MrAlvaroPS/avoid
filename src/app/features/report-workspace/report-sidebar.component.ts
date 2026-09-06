@@ -53,8 +53,22 @@ export class ReportSidebarComponent {
   // selectedPlayer en ReportWorkspaceService).
   private route = inject(ActivatedRoute);
 
+  /**
+   * §bug real encontrado (2026-09-06, verificado en navegador autenticado:
+   * "Cannot read properties of undefined (reading 'paramMap')" al construir
+   * este componente): ActivatedRoute.snapshot es un campo SIN asignar en el
+   * constructor de la clase (ver ActivatedRoute en @angular/router) — un
+   * nodo hijo puede ya existir en .children (firstChild da un objeto real)
+   * mientras su .snapshot todavía no se ha comprometido, si ese nodo hijo
+   * se activa/confirma DESPUÉS de que este componente (hermano del
+   * router-outlet dentro de ReportWorkspaceComponent, no él mismo enrutado)
+   * termine de construirse. `?.` extra tras `.snapshot` — nunca se inventa
+   * un jugador, simplemente "todavía no lo sé" se trata igual que "no hay
+   * jugador", y el propio NavigationEnd de abajo lo corrige en cuanto la
+   * navegación termina de verdad.
+   */
   private currentPlayerName(): string | null {
-    return this.route.firstChild?.snapshot.paramMap.get('playerName') ?? null;
+    return this.route.firstChild?.snapshot?.paramMap.get('playerName') ?? null;
   }
 
   // Mismo patrón que app.ts (isIsolatedPage): toSignal + NavigationEnd +
