@@ -34,7 +34,12 @@ import { SupabaseService } from './supabase.service';
 // v2 creado bajo ese comportamiento y se rechaza cualquier lote que todavía
 // contenga una fila completamente vacía (la forma exacta que usa el caller
 // para representar una excepción de carga).
-const STORAGE_PREFIX = 'avoid:night-scores:v3:';
+// v4 (2026-09-07): nightDefensiva y nightReliability cambian de semántica:
+// cuando existe la generación defensiva canónica publicada, el eje
+// Defensivos se calcula exclusivamente desde Response canónico. Un snapshot
+// v3 puede tener datos válidos pero derivados del baremo anterior, por lo
+// que debe expulsarse incluso si el fingerprint del report no ha cambiado.
+const STORAGE_PREFIX = 'avoid:night-scores:v4:';
 
 export interface CachedNightAttendanceStats {
   /** Ejecución de esta noche — night-player-summary.service.ts: nightScore (0-1). */
