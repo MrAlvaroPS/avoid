@@ -628,6 +628,156 @@ function canonicalDefensiveItem(
   };
 }
 
+function sortedOccurrences(occurrences: RaiderEvidenceOccurrence[]): RaiderEvidenceOccurrence[] {
+  return [...occurrences].sort(
+    (left, right) =>
+      left.pullNumber - right.pullNumber || left.atMs - right.atMs || left.pullId.localeCompare(right.pullId),
+  );
+}
+
+/**
+ * Resume SOLO las ocurrencias posteriores a la que ya aparece en la columna izquierda de la card. El límite
+ * es visual (cinco timings adicionales): toda la evidencia permanece en `occurrences`/`provenance` y el dossier
+ * conserva el detalle completo. Agrupa varios timings del mismo pull para gastar menos espacio.
+ */
+function additionalOccurrenceSummary(
+  occurrences: RaiderEvidenceOccurrence[],
+  maxVisible = 5,
+): string | null {
+  const ordered = sortedOccurrences(occurrences);
+  const additional = ordered.slice(1);
+  if (!additional.length) return null;
+
+  const visible = additional.slice(0, maxVisible);
+  const byPull = new Map<number, string[]>();
+  for (const occurrence of visible) {
+    const times = byPull.get(occurrence.pullNumber) ?? [];
+    times.push(formatDuration(occurrence.atMs));
+    byPull.set(occurrence.pullNumber, times);
+  }
+  const labels = [...byPull.entries()].map(
+    ([pullNumber, times]) => `P${pullNumber} ${times.join(' / ')}`,
+  );
+  const hidden = additional.length - visible.length;
+  return `${labels.join(' · ')}${hidden > 0 ? ` · +${hidden} más` : ''}`;
+}
+
+function canonicalDefensiveCoachingGroupKey(item: RaiderEvidenceItem): string | null {
+  if (
+    item.kind !== 'defensive' ||
+    item.mechanicId == null ||
+    !item.mechanicName ||
+    !item.provenance.length ||
+    !item.provenance.every((ref) => ref.source === 'player_pull_defensive_episode_evaluations')
+  ) {
+    return null;
+  }
+
+  const defensiveSignature = [...item.defensives]
+    .sort((left, right) => left.spellId - right.spellId || left.status.localeCompare(right.status))
+    .map((row) => `${row.spellId}:${row.status}`)
+    .join(',');
+
+  // Firma deliberadamente estricta: además de identidad de boss/mecánica/veredicto/confianza/spells exige el
+  // mismo copy ya proyectado. Así un futuro cambio de semántica (p.ej. misma ability pero acción distinta) no
+  // queda escondido dentro de una agrupación visual. Esto solo compacta coaching equivalente; no crea verdad.
+  return [
+    item.bossId ?? '',
+    item.difficulty ?? '',
+    item.mechanicId,
+    item.reasonCode,
+    item.confidence,
+    defensiveSignature,
+    item.title,
+    item.observation,
+    item.whyItMatters ?? '',
+    item.action ?? '',
+    item.preventionKey ?? '',
+    item.resolutionText ?? '',
+  ].join('\u001f');
+}
+
+function uniqueOccurrences(items: RaiderEvidenceItem[]): RaiderEvidenceOccurrence[] {
+  const unique = new Map<string, RaiderEvidenceOccurrence>();
+  for (const item of items) {
+    for (const occurrence of item.occurrences) {
+      unique.set(
+        `${occurrence.pullId}|${occurrence.pullNumber}|${occurrence.atMs}`,
+        occurrence,
+      );
+    }
+  }
+  return sortedOccurrences([...unique.values()]);
+}
+
+function uniqueProvenance(items: RaiderEvidenceItem[]): RaiderEvidenceRef[] {
+  return [
+    ...new Map(
+      items
+        .flatMap((item) => item.provenance)
+        .map((ref) => [`${ref.source}|${ref.key}|${ref.version ?? ''}`, ref]),
+    ).values(),
+  ];
+}
+
+/**
+ * Agrupación EDITORIAL para la portada de coaching. `items` sigue conservando un RaiderEvidenceItem por
+ * episodio canónico, por lo que timeline/auditoría no pierden granularidad. Solo la lista candidata a las cuatro
+ * cards se compacta antes de seleccionar el Top 4. Nunca mezcla:
+ * - abilities distintas;
+ * - boss/dificultad distintos;
+ * - missed_ready con missed_due_to_mistime;
+ * - evidencia/confianza distinta;
+ * - conjuntos de defensivos/copy distintos.
+ */
+export function groupEquivalentCanonicalCoaching(
+  actionable: RaiderEvidenceItem[],
+): RaiderEvidenceItem[] {
+  const groups = new Map<string, RaiderEvidenceItem[]>();
+  const passthrough: RaiderEvidenceItem[] = [];
+
+  for (const item of actionable) {
+    const key = canonicalDefensiveCoachingGroupKey(item);
+    if (!key) {
+      passthrough.push(item);
+      continue;
+    }
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+
+  const compacted = [...groups.values()].map((group): RaiderEvidenceItem => {
+    group.sort(
+      (left, right) =>
+        (left.pullNumber ?? Number.MAX_SAFE_INTEGER) -
+          (right.pullNumber ?? Number.MAX_SAFE_INTEGER) ||
+        (left.atMs ?? Number.MAX_SAFE_INTEGER) - (right.atMs ?? Number.MAX_SAFE_INTEGER) ||
+        left.id.localeCompare(right.id),
+    );
+    const first = group[0];
+    const occurrences = uniqueOccurrences(group);
+    if (group.length === 1 || occurrences.length <= 1) return first;
+
+    const firstOccurrence = occurrences[0];
+    const also = additionalOccurrenceSummary(occurrences);
+    return {
+      ...first,
+      id: `group|${first.id}`,
+      pullId: firstOccurrence?.pullId ?? first.pullId,
+      pullNumber: firstOccurrence?.pullNumber ?? first.pullNumber,
+      atMs: firstOccurrence?.atMs ?? first.atMs,
+      title: `${first.title} ×${occurrences.length}`,
+      observation: `${first.observation}${also ? ` También en ${also}.` : ''}`,
+      occurrences,
+      provenance: uniqueProvenance(group),
+      damageTotal: group.reduce((sum, item) => sum + Math.max(0, item.damageTotal), 0),
+    };
+  });
+
+  return [...passthrough, ...compacted].sort(compareEvidence);
+}
+
 function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] {
   const grouped = new Map<string, NightMechanicFailRow[]>();
   for (const row of rows) {
@@ -662,6 +812,12 @@ function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] 
         : `${group.length} exposición${group.length === 1 ? '' : 'es'} verificable${
             group.length === 1 ? '' : 's'
           }.`;
+    const occurrences = group.map((row) => ({
+      pullId: row.pullId,
+      pullNumber: row.pullNumber,
+      atMs: row.timeMs,
+    }));
+    const also = additionalOccurrenceSummary(occurrences);
     return {
       id: `mechanic|${key}`,
       kind: 'mechanic',
@@ -673,12 +829,12 @@ function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] 
       atMs: first.timeMs,
       mechanicId: first.mechanicId,
       mechanicName: first.mechanicName,
-      title: first.mechanicName,
+      title: group.length > 1 ? `${first.mechanicName} ×${group.length}` : first.mechanicName,
       verdict: personal ? 'confirmed_error' : first.resolution ? 'coaching' : 'no_verdict',
       reasonCode: personal ? `PERSONAL_${first.category}` : 'CATEGORY_UNRESOLVED',
       observation: `${group.length} incidencia${group.length === 1 ? '' : 's'} registrada${
         group.length === 1 ? '' : 's'
-      } en ${first.bossName}.`,
+      } en ${first.bossName}.${also ? ` También en ${also}.` : ''}`,
       whyItMatters: mechanicContext
         ? `${compactCoachingText(mechanicContext, 135)} · ${quantitativeEvidence}`
         : quantitativeEvidence,
@@ -689,11 +845,7 @@ function groupMechanicFails(rows: NightMechanicFailRow[]): RaiderEvidenceItem[] 
       resolutionText: resolutions.length === 1 ? resolutions[0] : null,
       defensives: [],
       confidence: personal ? 'verified' : 'uncertain',
-      occurrences: group.map((row) => ({
-        pullId: row.pullId,
-        pullNumber: row.pullNumber,
-        atMs: row.timeMs,
-      })),
+      occurrences,
       provenance: group.map((row) => ({
         source: 'pull_mechanic_events',
         key: `${row.pullId}|${row.mechanicId}|${row.timeMs}`,
@@ -804,10 +956,6 @@ export function buildRaiderEvidenceProjection(
       const isDeathDecision =
         decision.state === 'death_with_viable_cd' || decision.state === 'death_with_ready_cd';
       if (isDeathDecision) v2DeathPulls.add(decision.pullId);
-      // Tener un cooldown listo no identifica la causa de una muerte. Sin
-      // habilidad verificable (p. ej. caída/entorno con mechanicId=0), la
-      // proyección conserva la muerte como contexto pero no publica una
-      // recomendación defensiva ni expone candidatos como si fueran receta.
       const causeIsVerifiable =
         !isDeathDecision || verifiableMechanic(decision.abilityId ?? null, decision.mechanicName);
       const knownReason = causeIsVerifiable && KNOWN_DEFENSIVE_REASONS.has(decision.reason);
@@ -853,11 +1001,6 @@ export function buildRaiderEvidenceProjection(
           },
         ],
         priorityTier: knownReason ? defensivePriority(decision) : 9,
-        // §"si en ese momento tenía un defensivo en CD (mal usado)... si lo
-        // tiró en las mecánicas de más daño" (feedback real, 2026-09-03):
-        // antes siempre 0 — el pico de daño real de la ventana (cuando la
-        // decisión viene de una ventana de presión, no de un slot de plan o
-        // una muerte) ahora viaja hasta aquí vía peakValue.
         damageTotal: decision.peakValue ?? 0,
       });
     }
@@ -872,27 +1015,13 @@ export function buildRaiderEvidenceProjection(
     ) {
       continue;
     }
-    // El evaluator v2 representa el mismo episodio con una prueba temporal
-    // más fuerte; no se crea una segunda card legacy para esa muerte.
     if (v2DeathPulls.has(death.pullId)) continue;
     const mechanicIsVerifiable = verifiableMechanic(death.mechanicId, death.mechanicName);
     const hasResponse = death.defensivesAvailable.length > 0;
-    // §45 (cutover frontend, corregido en revisión): v7 no tiene linkage canónico episodio↔muerte hoy — ni por
-    // identidad ni por proximidad temporal (un join "misma pull ± N segundos" sería el mismo problema con
-    // disfraz canónico). `death.defensivesAvailable` es legacy (death_cause.defensiveOptions, sin vínculo
-    // canónico) — en el modo canónico (v3) nunca se usa para acusar; la muerte se sigue mostrando como
-    // muerte/contexto, solo deja de afirmar "tenías X disponible" hasta que exista ese vínculo real.
     const canCoachDefensiveResponse = !canonical && mechanicIsVerifiable && hasResponse;
     const availableDefensiveNames = death.defensivesAvailable
       .map((row) => safeSpellName(row.name))
       .join(' / ');
-    // §"no tenemos en ningún lado el uso de poción / piedra de brujo" (feedback
-    // real, 2026-09-03): usedHealthstoneInPull/usedHealthPotionInPull ya
-    // existen en NightDeathRow (night-player-summary.service.ts) pero no se
-    // mostraban en ningún sitio de la infografía. Son solo "se usó" — no
-    // "estaba disponible y no se usó" (eso exigiría saber si había Warlock en
-    // el pull, que no está aquí) — así que solo se afirma el caso positivo,
-    // nunca se interpreta `false` como una omisión.
     const consumableNote = [
       death.usedHealthstoneInPull ? 'usó piedra de brujo' : null,
       death.usedHealthPotionInPull ? 'usó poción de vida' : null,
@@ -929,16 +1058,6 @@ export function buildRaiderEvidenceProjection(
         : death.damageWindowTotal == null
           ? 'La muestra temporal de daño es insuficiente para una afirmación contrafactual.'
           : `${Math.round(death.damageWindowTotal).toLocaleString('es-ES')} de daño observado en los 5 s previos.`,
-      // §Hallazgo 3 (2026-09-03): antes esta card usaba siempre
-      // `death.resolution` (nota táctica general de la mecánica: cómo
-      // esquivarla) también cuando el hallazgo real de la card es "murió con
-      // un defensivo libre" — dos preguntas distintas ("¿cómo evito esto?"
-      // vs. "¿qué hago con mi cooldown?"). El resultado eran cards donde la
-      // corrección hablaba de posicionamiento sin mencionar el defensivo que
-      // la propia card acababa de mostrar como disponible. Cuando el
-      // hallazgo es de disponibilidad defensiva, la corrección debe salir
-      // del mismo dato (nombres de `defensivesAvailable`), no de la
-      // resolución general de la mecánica.
       action: canCoachDefensiveResponse
         ? `Ten ${availableDefensiveNames} preparado para esa ventana; estaba disponible y no se usó, sin que esto demuestre que habría evitado la muerte.`
         : mechanicIsVerifiable
@@ -949,9 +1068,6 @@ export function buildRaiderEvidenceProjection(
         : null,
       mechanicDescription: mechanicIsVerifiable ? death.aiNote : null,
       resolutionText: mechanicIsVerifiable ? death.resolution : null,
-      // §45 (corregido en revisión): en modo canónico (v3) esta lista se suprime por completo, no solo el
-      // verdict/action — death.defensivesAvailable es legacy sin vínculo canónico con el episodio, y mostrarla
-      // como chips informativos seguiría siendo la misma afirmación de disponibilidad sin poder sostenerla.
       defensives:
         !canonical && mechanicIsVerifiable
           ? death.defensivesAvailable.map((row) => ({
@@ -1025,20 +1141,18 @@ export function buildRaiderEvidenceProjection(
   }
 
   items.sort(compareEvidence);
-  const actionable = items.filter(
+  const rawActionable = items.filter(
     (item) =>
       item.verdict === 'confirmed_error' ||
       item.verdict === 'coaching' ||
       (item.verdict === 'no_verdict' && item.kind === 'defensive'),
   );
-  // §"solo aparecen 3 cards y creo que caben 4 (o 5)" (feedback real,
-  // 2026-09-03): cuatro huecos fijos, pero la selección es ahora diversa: una sola familia defensiva no puede
-  // expulsar toda la mecánica/preparación accionable. selectCoachingItems no toca verdicts ni scoring.
+  // Las cards canónicas repetidas se compactan DESPUÉS de construir `items` (timeline/auditoría conservan cada
+  // episodio) pero ANTES del Top 4. Así dos Noxious Ground+Barkskin idénticos ocupan un solo hueco y liberan
+  // espacio para otro problema distinto sin alterar ningún score/verdict.
+  const actionable = canonical ? groupEquivalentCanonicalCoaching(rawActionable) : rawActionable;
   const coaching = selectCoachingItems(actionable, 4);
   const uncertainVisible = coaching.some((item) => item.confidence === 'uncertain');
-  // §Frontend cutover: la v3 canvas nunca pasa v2, así que "high" no puede seguir dependiendo solo de su
-  // presencia — canonicalStrong exige cobertura completa (state='available'), no solo "hay canonicalDefensive".
-  // Una noche con datos parciales (state='partial') cae a 'partial'/'limited' igual que antes lo hacía v2=null.
   const canonicalStrong = canonical != null && canonical.state === 'available';
   const quality: RaiderEvidenceQuality =
     evaluatedPulls.length === 0
@@ -1048,10 +1162,6 @@ export function buildRaiderEvidenceProjection(
         : items.some((item) => item.confidence !== 'uncertain')
           ? 'partial'
           : 'limited';
-  // §"esto no es información útil para un raider" (feedback real,
-  // 2026-09-03): las tres frases anteriores explicaban mecanismos internos
-  // (gate, generación, confianza homogénea) en vez de lo que el jugador
-  // puede confiar de esta lámina.
   const qualityReason =
     quality === 'high'
       ? 'Todos los datos de la noche están completos y verificados.'
@@ -1089,6 +1199,11 @@ export function buildRaiderEvidenceProjection(
     };
   });
 
+  const coachingIds = new Set(coaching.map((item) => item.id));
+  const additionalCoachingCount = actionable
+    .filter((item) => !coachingIds.has(item.id))
+    .reduce((sum, item) => sum + Math.max(1, item.occurrences.length), 0);
+
   return {
     reportCode: summary.reportCode,
     playerName: summary.playerName,
@@ -1097,7 +1212,7 @@ export function buildRaiderEvidenceProjection(
     qualityReason,
     items,
     coaching,
-    additionalCoachingCount: Math.max(0, actionable.length - coaching.length),
+    additionalCoachingCount,
     timeline,
     defensiveGeneration: v2
       ? {
