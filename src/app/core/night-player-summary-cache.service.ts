@@ -95,7 +95,12 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // state='error'. Guardar ese objeto convertía un fallo transitorio de red/DB
 // en datos falsamente estables para el dosier y la infografía. v13 invalida
 // esas entradas y, además, impide volver a persistir un snapshot incompleto.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v13:';
+// v14 (2026-09-07): el eje Defensivos de Fiabilidad deja de usar la señal
+// legacy/Management V2 cuando existe una generación canónica publicada y
+// pasa a Response canónico (covered / evaluable). Un snapshot v13 puede ser
+// perfectamente íntegro pero contener el porcentaje calculado con la fuente
+// anterior; por eso este cambio semántico exige invalidación explícita.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v14:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;
