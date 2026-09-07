@@ -12,5 +12,5 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx vitest run src/app/core/reliability.service.spec.ts src/app/core/reliability-canonical-response.spec.ts
+      - run: npx vitest run --globals src/app/core/reliability.service.spec.ts src/app/core/reliability-canonical-response.spec.ts
       - run: npm run build
