@@ -95,7 +95,14 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // state='error'. Guardar ese objeto convertía un fallo transitorio de red/DB
 // en datos falsamente estables para el dosier y la infografía. v13 invalida
 // esas entradas y, además, impide volver a persistir un snapshot incompleto.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v13:';
+// v14 (2026-09-07): mismo shape, pero canonicalDefensive.episodes[].mechanicName
+// cambia de VALOR — "han desaparecido algunos nombres de mecánicas y sale solo
+// el id con #" (feedback real): el cruce de nombre por ability_id estaba roto
+// (ver mechanic-notes.ts) y ya arreglado, pero un dosier cacheado ANTES del
+// arreglo seguía sirviendo `mechanicName: null` (título "#<id>") tal cual pese
+// a que ng serve ya corría el código corregido — localStorage sobrevive a un
+// reinicio del servidor de dev, mismo motivo exacto que el bump de v6/v7/v8.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v14:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;
