@@ -1,0 +1,397 @@
+-- Fiabilidad read-path v2 follow-up.
+--
+-- The first scoped RPC removed the player×pull correlated aggregation, but
+-- reading applicable_pull_mechanic_events as a view still made PostgreSQL
+-- repeatedly resolve applicability while building the scoped event set.
+-- Resolve the two mechanic-name key sets once, then read pull_mechanic_events
+-- directly. Semantics are identical to applicable_pull_mechanic_events:
+--   include an event when no candidate exists for scope+normalized name,
+--   or when that normalized candidate key is currently applicable.
+
+create or replace function public.get_player_pull_reliability_inputs_v2(
+  p_player_name text default null,
+  p_since timestamptz default null,
+  p_boss_id text default null,
+  p_difficulty text default null,
+  p_pull_ids uuid[] default null
+)
+returns table (
+  player_name text,
+  pull_id uuid,
+  boss_id text,
+  difficulty text,
+  closed_at timestamptz,
+  had_avoidable_damage boolean,
+  self_positioning_death boolean,
+  used_defensive_when_died boolean,
+  used_defensive_in_pull boolean,
+  defensive_use_opportunity boolean,
+  enchanted_slot_count bigint,
+  enchantable_slot_count bigint,
+  gem_count bigint,
+  gemmed_slot_count bigint,
+  gemmable_slot_count bigint,
+  personal_mechanic_fail_count bigint,
+  report_code text,
+  pull_number integer,
+  avoidable_mechanic_eligible_count bigint,
+  avoidable_mechanic_fail_count bigint,
+  defensive_window_coverable_count bigint,
+  defensive_window_covered_count bigint,
+  defensive_window_used_anything boolean,
+  unassigned_mechanic_success_count bigint,
+  defensive_management_score_v2 numeric,
+  defensive_management_decision_count integer,
+  defensive_required_count integer,
+  defensive_required_success_count integer,
+  defensive_required_exact_adherence_count integer,
+  defensive_broken_reservation_count integer,
+  defensive_death_viable_cd_count integer,
+  defensive_evaluation_confidence text,
+  defensive_evaluator_version text,
+  defensive_resolver_version text,
+  defensive_solver_version text,
+  defensive_game_build text,
+  defensive_build_fingerprint text,
+  defensive_evaluated_at timestamptz,
+  canonical_response_evaluable_count integer,
+  canonical_response_success_count integer,
+  canonical_response_failure_count integer,
+  canonical_defensive_generation_id uuid,
+  canonical_defensive_evaluated_at timestamptz
+)
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+with base as materialized (
+  select
+    r.player_name,
+    p.id as pull_id,
+    p.boss_id,
+    p.difficulty,
+    p.closed_at,
+    p.report_code,
+    p.pull_number,
+    r.died,
+    r.wipe_call_cluster,
+    p.wipe_call_excluded,
+    r.death_cause,
+    r.defensive_casts,
+    r.equipped_items,
+    r.defensive_pressure_windows,
+    p.unassigned_mechanic_occurrences,
+    case
+      when p.wipe_call_excluded
+       and p.wipe_call_signals is not null
+       and jsonb_typeof(p.wipe_call_signals->'wipeCallStartMs') = 'number'
+      then (p.wipe_call_signals->>'wipeCallStartMs')::numeric
+      else null
+    end as cutoff_ms
+  from public.player_pull_records r
+  join public.pulls p on p.id = r.pull_id
+  where not p.ninja_pull_excluded
+    and p.ingestion_status = 'complete'
+    and (p_player_name is null or r.player_name = p_player_name)
+    and (p_since is null or p.closed_at >= p_since)
+    and (p_boss_id is null or p.boss_id = p_boss_id)
+    and (p_difficulty is null or p.difficulty = p_difficulty)
+    and (p_pull_ids is null or r.pull_id = any(p_pull_ids))
+),
+scoped_pulls as materialized (
+  select distinct pull_id, cutoff_ms, unassigned_mechanic_occurrences
+  from base
+),
+raw_mechanic_keys as materialized (
+  select distinct
+    boss_id,
+    difficulty,
+    lower(btrim(name)) as normalized_name
+  from public.boss_mechanics_candidates
+),
+applicable_mechanic_keys as materialized (
+  select distinct
+    boss_id,
+    difficulty,
+    lower(btrim(name)) as normalized_name
+  from public.applicable_boss_mechanics_candidates
+),
+events as materialized (
+  select
+    event.pull_id,
+    event.trigger_time_ms,
+    event.avoidable,
+    event.outcome,
+    event.category,
+    event.responsibility,
+    event.player_hit_details
+  from public.pull_mechanic_events event
+  join public.pulls pull on pull.id = event.pull_id
+  join scoped_pulls sp on sp.pull_id = event.pull_id
+  left join raw_mechanic_keys raw_key
+    on raw_key.boss_id = pull.boss_id
+   and raw_key.difficulty = pull.difficulty
+   and raw_key.normalized_name = lower(btrim(event.mechanic_name))
+  left join applicable_mechanic_keys applicable_key
+    on applicable_key.boss_id = pull.boss_id
+   and applicable_key.difficulty = pull.difficulty
+   and applicable_key.normalized_name = lower(btrim(event.mechanic_name))
+  where (raw_key.normalized_name is null or applicable_key.normalized_name is not null)
+    and (sp.cutoff_ms is null or event.trigger_time_ms::numeric < sp.cutoff_ms)
+),
+eligible_stats as (
+  select
+    b.pull_id,
+    b.player_name,
+    count(*) filter (
+      where e.category in ('avoidable-ground', 'spread')
+        and (e.responsibility = 'personal' or e.responsibility is null)
+        and e.outcome <> 'clean'
+        and (
+          not b.died
+          or (
+            jsonb_typeof(b.death_cause->'timeMs') = 'number'
+            and (b.death_cause->>'timeMs')::numeric > e.trigger_time_ms
+          )
+        )
+    )::bigint as avoidable_mechanic_eligible_count
+  from base b
+  left join events e on e.pull_id = b.pull_id
+  group by b.pull_id, b.player_name
+),
+hit_stats as (
+  select
+    e.pull_id,
+    detail->>'name' as player_name,
+    bool_or(
+      e.avoidable is true
+      and e.outcome <> 'clean'
+      and coalesce((detail->>'damage_taken')::numeric, 0) > 0
+    ) as had_avoidable_damage,
+    count(*) filter (
+      where e.category in ('avoidable-ground', 'spread', 'soak', 'personal-target')
+        and (e.responsibility = 'personal' or e.responsibility is null)
+        and e.outcome <> 'clean'
+    )::bigint as personal_mechanic_fail_count
+  from events e
+  cross join lateral jsonb_array_elements(coalesce(e.player_hit_details, '[]'::jsonb)) detail
+  where nullif(detail->>'name', '') is not null
+  group by e.pull_id, detail->>'name'
+),
+avoidable_fail_stats as (
+  select
+    b.pull_id,
+    b.player_name,
+    count(*) filter (
+      where e.category in ('avoidable-ground', 'spread')
+        and (e.responsibility = 'personal' or e.responsibility is null)
+        and e.outcome <> 'clean'
+        and detail->>'name' = b.player_name
+        and (
+          not b.died
+          or (
+            jsonb_typeof(b.death_cause->'timeMs') = 'number'
+            and (b.death_cause->>'timeMs')::numeric > e.trigger_time_ms
+          )
+        )
+    )::bigint as avoidable_mechanic_fail_count
+  from base b
+  left join events e on e.pull_id = b.pull_id
+  left join lateral jsonb_array_elements(coalesce(e.player_hit_details, '[]'::jsonb)) detail on true
+  group by b.pull_id, b.player_name
+),
+unassigned_stats as (
+  select
+    sp.pull_id,
+    occ->>'actorName' as player_name,
+    count(*)::bigint as success_count
+  from scoped_pulls sp
+  cross join lateral jsonb_array_elements(coalesce(sp.unassigned_mechanic_occurrences, '[]'::jsonb)) occ
+  where nullif(occ->>'actorName', '') is not null
+  group by sp.pull_id, occ->>'actorName'
+),
+canonical_stats as (
+  select
+    evaluation.pull_id,
+    evaluation.player_name,
+    evaluation.defensive_generation_id,
+    max(evaluation.evaluated_at) as evaluated_at,
+    count(*) filter (
+      where episode->>'responseVerdict' in (
+        'covered_verified', 'missed_ready', 'missed_due_to_mistime'
+      )
+    )::integer as evaluable_count,
+    count(*) filter (
+      where episode->>'responseVerdict' = 'covered_verified'
+    )::integer as success_count,
+    count(*) filter (
+      where episode->>'responseVerdict' in ('missed_ready', 'missed_due_to_mistime')
+    )::integer as failure_count
+  from public.player_pull_defensive_episode_evaluations evaluation
+  join public.defensive_generation_pointer pointer
+    on pointer.id = true
+   and pointer.published_generation_id = evaluation.defensive_generation_id
+  join base b
+    on b.pull_id = evaluation.pull_id
+   and b.player_name = evaluation.player_name
+  left join lateral jsonb_array_elements(coalesce(evaluation.episodes, '[]'::jsonb)) episode on true
+  group by evaluation.pull_id, evaluation.player_name, evaluation.defensive_generation_id
+)
+select
+  b.player_name,
+  b.pull_id,
+  b.boss_id,
+  b.difficulty,
+  b.closed_at,
+  coalesce(hs.had_avoidable_damage, false) as had_avoidable_damage,
+  (
+    b.died
+    and not (
+      (b.wipe_call_cluster and b.wipe_call_excluded)
+      or coalesce(b.death_cause->>'statisticalExclusionReason', '') = 'boss_melee_on_non_tank'
+    )
+    and b.death_cause->>'rootCause' = 'self_positioning'
+  ) as self_positioning_death,
+  case
+    when (b.wipe_call_cluster and b.wipe_call_excluded)
+      or coalesce(b.death_cause->>'statisticalExclusionReason', '') = 'boss_melee_on_non_tank'
+    then null
+    when b.died
+      and jsonb_array_length(coalesce(b.death_cause->'defensiveOptions', '[]'::jsonb)) > 0
+    then (
+      select bool_and((opt->>'status') <> 'available_unused')
+      from jsonb_array_elements(b.death_cause->'defensiveOptions') opt
+    )
+    else null
+  end as used_defensive_when_died,
+  exists (
+    select 1
+    from jsonb_array_elements(coalesce(b.defensive_casts, '[]'::jsonb)) defensive
+    cross join lateral jsonb_array_elements(coalesce(defensive->'timestampsMs', '[]'::jsonb)) cast_time
+    where jsonb_typeof(cast_time) = 'number'
+      and (b.cutoff_ms is null or (cast_time #>> '{}')::numeric < b.cutoff_ms)
+  ) as used_defensive_in_pull,
+  (
+    exists (
+      select 1
+      from jsonb_array_elements(coalesce(b.defensive_casts, '[]'::jsonb)) defensive
+      cross join lateral jsonb_array_elements(coalesce(defensive->'timestampsMs', '[]'::jsonb)) cast_time
+      where jsonb_typeof(cast_time) = 'number'
+        and (b.cutoff_ms is null or (cast_time #>> '{}')::numeric < b.cutoff_ms)
+    )
+    or (
+      b.died
+      and not (
+        (b.wipe_call_cluster and b.wipe_call_excluded)
+        or coalesce(b.death_cause->>'statisticalExclusionReason', '') = 'boss_melee_on_non_tank'
+      )
+      and jsonb_array_length(coalesce(b.death_cause->'defensiveOptions', '[]'::jsonb)) > 0
+    )
+    or coalesce(hs.had_avoidable_damage, false)
+  ) as defensive_use_opportunity,
+  (
+    select count(*) filter (
+      where coalesce((item->>'permanentEnchant')::bigint, 0) > 0
+        and coalesce((item->>'id')::bigint, 0) > 0
+    )
+    from jsonb_array_elements(coalesce(b.equipped_items, '[]'::jsonb))
+      with ordinality as t(item, slot)
+    where slot - 1 in (0, 2, 4, 6, 7, 10, 11)
+  )::bigint as enchanted_slot_count,
+  (
+    select count(*) filter (where coalesce((item->>'id')::bigint, 0) > 0)
+    from jsonb_array_elements(coalesce(b.equipped_items, '[]'::jsonb))
+      with ordinality as t(item, slot)
+    where slot - 1 in (0, 2, 4, 6, 7, 10, 11)
+  )::bigint as enchantable_slot_count,
+  (
+    select coalesce(sum(jsonb_array_length(coalesce(item->'gems', '[]'::jsonb))), 0)
+    from jsonb_array_elements(coalesce(b.equipped_items, '[]'::jsonb)) item
+  )::bigint as gem_count,
+  (
+    select count(*) filter (
+      where coalesce((item->>'id')::bigint, 0) > 0
+        and jsonb_array_length(coalesce(item->'gems', '[]'::jsonb)) > 0
+    )
+    from jsonb_array_elements(coalesce(b.equipped_items, '[]'::jsonb))
+      with ordinality as t(item, slot)
+    where slot - 1 in (1, 10, 11)
+  )::bigint as gemmed_slot_count,
+  (
+    select count(*) filter (where coalesce((item->>'id')::bigint, 0) > 0)
+    from jsonb_array_elements(coalesce(b.equipped_items, '[]'::jsonb))
+      with ordinality as t(item, slot)
+    where slot - 1 in (1, 10, 11)
+  )::bigint as gemmable_slot_count,
+  coalesce(hs.personal_mechanic_fail_count, 0)::bigint as personal_mechanic_fail_count,
+  b.report_code,
+  b.pull_number,
+  coalesce(es.avoidable_mechanic_eligible_count, 0)::bigint as avoidable_mechanic_eligible_count,
+  coalesce(afs.avoidable_mechanic_fail_count, 0)::bigint as avoidable_mechanic_fail_count,
+  (
+    select coalesce(count(*) filter (where (w->>'coverable')::boolean), 0)
+    from jsonb_array_elements(coalesce(b.defensive_pressure_windows->'windows', '[]'::jsonb)) w
+    where b.cutoff_ms is null or (w->>'startMs')::numeric < b.cutoff_ms
+  )::bigint as defensive_window_coverable_count,
+  (
+    select coalesce(count(*) filter (where (w->>'covered')::boolean), 0)
+    from jsonb_array_elements(coalesce(b.defensive_pressure_windows->'windows', '[]'::jsonb)) w
+    where b.cutoff_ms is null or (w->>'startMs')::numeric < b.cutoff_ms
+  )::bigint as defensive_window_covered_count,
+  exists (
+    select 1
+    from jsonb_array_elements(coalesce(b.defensive_casts, '[]'::jsonb)) defensive
+    cross join lateral jsonb_array_elements(coalesce(defensive->'timestampsMs', '[]'::jsonb)) cast_time
+    where jsonb_typeof(cast_time) = 'number'
+      and (b.cutoff_ms is null or (cast_time #>> '{}')::numeric < b.cutoff_ms)
+  ) as defensive_window_used_anything,
+  coalesce(us.success_count, 0)::bigint as unassigned_mechanic_success_count,
+  management.management_score as defensive_management_score_v2,
+  case
+    when management.pull_id is null then null::integer
+    else (
+      select count(*)::integer
+      from jsonb_array_elements(management.events) event
+      where (event->>'state') in (
+        'plan_broken', 'death_with_viable_cd', 'safe_extra_use', 'missed_extra_opportunity'
+      )
+      or (
+        (event->>'state') in ('plan_covered', 'covered_with_substitution', 'reminder_missed')
+        and (event->>'requirementLevel') in ('required', 'recommended')
+      )
+    )
+  end as defensive_management_decision_count,
+  management.plan_required_count as defensive_required_count,
+  management.required_coverage_success_count as defensive_required_success_count,
+  management.required_exact_adherence_count as defensive_required_exact_adherence_count,
+  management.broken_reservation_count as defensive_broken_reservation_count,
+  management.death_viable_cd_count as defensive_death_viable_cd_count,
+  management.data_confidence as defensive_evaluation_confidence,
+  management.evaluator_version as defensive_evaluator_version,
+  management.resolver_version as defensive_resolver_version,
+  management.solver_version as defensive_solver_version,
+  management.game_build as defensive_game_build,
+  management.build_fingerprint as defensive_build_fingerprint,
+  management.evaluated_at as defensive_evaluated_at,
+  canonical.evaluable_count as canonical_response_evaluable_count,
+  canonical.success_count as canonical_response_success_count,
+  canonical.failure_count as canonical_response_failure_count,
+  canonical.defensive_generation_id as canonical_defensive_generation_id,
+  canonical.evaluated_at as canonical_defensive_evaluated_at
+from base b
+left join hit_stats hs
+  on hs.pull_id = b.pull_id and hs.player_name = b.player_name
+left join eligible_stats es
+  on es.pull_id = b.pull_id and es.player_name = b.player_name
+left join avoidable_fail_stats afs
+  on afs.pull_id = b.pull_id and afs.player_name = b.player_name
+left join unassigned_stats us
+  on us.pull_id = b.pull_id and us.player_name = b.player_name
+left join public.player_pull_defensive_evaluations management
+  on management.pull_id = b.pull_id and management.player_name = b.player_name
+left join canonical_stats canonical
+  on canonical.pull_id = b.pull_id and canonical.player_name = b.player_name
+$$;
+
+notify pgrst, 'reload schema';
