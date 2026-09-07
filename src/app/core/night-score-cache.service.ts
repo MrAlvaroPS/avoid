@@ -27,7 +27,14 @@ import { SupabaseService } from './supabase.service';
 // mismo fingerprint de siempre: acotado a los pulls de ESTE report). Bump de
 // versión porque el shape cambia — una entrada v1 vieja (solo nightScore)
 // no debe leerse como si ya trajera los campos nuevos.
-const STORAGE_PREFIX = 'avoid:night-scores:v2:';
+// v3 (2026-09-07): un fallo transitorio de una de las cargas por jugador se
+// convertía en cuatro null y se persistía junto al fingerprint válido del
+// report. Después, aunque Supabase se recuperase, la tabla seguía enseñando
+// "—" como si fuese ausencia real de dato. Se invalida cualquier snapshot
+// v2 creado bajo ese comportamiento y se rechaza cualquier lote que todavía
+// contenga una fila completamente vacía (la forma exacta que usa el caller
+// para representar una excepción de carga).
+const STORAGE_PREFIX = 'avoid:night-scores:v3:';
 
 export interface CachedNightAttendanceStats {
   /** Ejecución de esta noche — night-player-summary.service.ts: nightScore (0-1). */
@@ -44,6 +51,19 @@ interface CachedEntry {
   fingerprint: string;
   savedAt: string;
   scores: Record<string, CachedNightAttendanceStats>;
+}
+
+function isTransientEmptyRow(value: CachedNightAttendanceStats): boolean {
+  return (
+    value.nightScore == null &&
+    value.nightReliability == null &&
+    value.nightDefensiva == null &&
+    value.nightParse == null
+  );
+}
+
+function hasTransientFailure(scores: Record<string, CachedNightAttendanceStats>): boolean {
+  return Object.values(scores).some(isTransientEmptyRow);
 }
 
 @Injectable({ providedIn: 'root' })
@@ -67,10 +87,15 @@ export class NightScoreCacheService {
 
   read(reportCode: string): CachedEntry | null {
     try {
-      const raw = localStorage.getItem(STORAGE_PREFIX + reportCode);
+      const key = STORAGE_PREFIX + reportCode;
+      const raw = localStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as Partial<CachedEntry>;
       if (typeof parsed.fingerprint !== 'string' || !parsed.scores) return null;
+      if (hasTransientFailure(parsed.scores)) {
+        localStorage.removeItem(key);
+        return null;
+      }
       return parsed as CachedEntry;
     } catch {
       return null;
@@ -78,6 +103,12 @@ export class NightScoreCacheService {
   }
 
   write(reportCode: string, fingerprint: string, scores: Record<string, CachedNightAttendanceStats>): void {
+    // `loadNightAttendanceStats` representa una excepción puntual como una
+    // fila con sus cuatro campos a null. Esa fila NO es un dato; persistirla
+    // hace que un 500/timeout se convierta en "—" estable hasta el próximo
+    // cambio de fingerprint. Un lote parcial se usa en memoria, pero nunca
+    // se convierte en snapshot durable.
+    if (hasTransientFailure(scores)) return;
     try {
       localStorage.setItem(
         STORAGE_PREFIX + reportCode,

@@ -89,7 +89,13 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // defensivas de la infografía v3 leerían `undefined` en vez de la generación
 // canónica hasta que algo más invalidara el fingerprint — mismo motivo que
 // todos los bumps anteriores.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v12:';
+// v13 (2026-09-07): integridad de caché. Bajo saturación de PostgREST,
+// NightPlayerSummary podía terminar de construirse con nightReliability=null
+// (la lectura fallaba y el caller degradaba a null) o con canonicalDefensive
+// state='error'. Guardar ese objeto convertía un fallo transitorio de red/DB
+// en datos falsamente estables para el dosier y la infografía. v13 invalida
+// esas entradas y, además, impide volver a persistir un snapshot incompleto.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v13:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;
@@ -104,6 +110,18 @@ function cacheKey(reportCode: string, playerName: string): string {
   return `${STORAGE_PREFIX}${reportCode}|${playerName}`;
 }
 
+function isCacheableSummary(summary: NightPlayerSummary): boolean {
+  // getNightReliability devuelve un objeto incluso si sampleSize=0. Por
+  // tanto null aquí no significa "sin oportunidades": significa que su
+  // lectura falló y fue degradada a null durante la construcción.
+  if (summary.nightReliability == null) return false;
+  // El contrato canónico distingue explícitamente 'error' de estados
+  // legítimos como unavailable/partial. Solo el error transitorio invalida
+  // el snapshot; no reinterpretamos falta real de evidencia como fallo.
+  if (summary.canonicalDefensive?.state === 'error') return false;
+  return true;
+}
+
 @Injectable({ providedIn: 'root' })
 export class NightPlayerSummaryCacheService {
   private rosterCache = inject(RosterSnapshotCacheService);
@@ -115,10 +133,15 @@ export class NightPlayerSummaryCacheService {
 
   read(reportCode: string, playerName: string): CachedEntry | null {
     try {
-      const raw = localStorage.getItem(cacheKey(reportCode, playerName));
+      const key = cacheKey(reportCode, playerName);
+      const raw = localStorage.getItem(key);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as Partial<CachedEntry>;
       if (typeof parsed.fingerprint !== 'string' || !parsed.summary) return null;
+      if (!isCacheableSummary(parsed.summary)) {
+        localStorage.removeItem(key);
+        return null;
+      }
       return parsed as CachedEntry;
     } catch {
       return null;
@@ -126,6 +149,7 @@ export class NightPlayerSummaryCacheService {
   }
 
   write(reportCode: string, playerName: string, fingerprint: string, summary: NightPlayerSummary): void {
+    if (!isCacheableSummary(summary)) return;
     try {
       this.evictOldestBeyondLimit();
       localStorage.setItem(
