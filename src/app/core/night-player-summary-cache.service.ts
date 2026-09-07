@@ -95,12 +95,27 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // state='error'. Guardar ese objeto convertía un fallo transitorio de red/DB
 // en datos falsamente estables para el dosier y la infografía. v13 invalida
 // esas entradas y, además, impide volver a persistir un snapshot incompleto.
-// v14 (2026-09-07): el eje Defensivos de Fiabilidad deja de usar la señal
-// legacy/Management V2 cuando existe una generación canónica publicada y
-// pasa a Response canónico (covered / evaluable). Un snapshot v13 puede ser
-// perfectamente íntegro pero contener el porcentaje calculado con la fuente
-// anterior; por eso este cambio semántico exige invalidación explícita.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v14:';
+// v14 (2026-09-07): mismo shape, pero canonicalDefensive.episodes[].mechanicName
+// cambia de VALOR — "han desaparecido algunos nombres de mecánicas y sale solo
+// el id con #" (feedback real): el cruce de nombre por ability_id estaba roto
+// (ver mechanic-notes.ts) y ya arreglado, pero un dosier cacheado ANTES del
+// arreglo seguía sirviendo `mechanicName: null` (título "#<id>") tal cual pese
+// a que ng serve ya corría el código corregido — localStorage sobrevive a un
+// reinicio del servidor de dev, mismo motivo exacto que el bump de v6/v7/v8.
+// v15 (2026-09-07): mismo shape, pero nightScore/execution cambian de VALOR —
+// "la ejecución del informe de la noche no coincide con la del dosier"
+// (feedback real): un fallo transitorio en getPlayerPullReliabilityInputsForReport
+// se absorbía en `[]` y computePullScore caía a una fórmula aproximada distinta
+// de la real (ver el comentario junto a esa llamada en
+// night-player-summary.service.ts) sin que isCacheableSummary lo detectara — un
+// nightScore degradado ya quedó persistido con forma válida antes de este
+// arreglo. v15 lo descarta de golpe, igual que v6/v7/v8/v14.
+// v16 (2026-09-07): el eje Defensivos de Fiabilidad cambia de fuente: cuando
+// existe una generación defensiva canónica publicada, se usa exclusivamente
+// Response canónico (covered / evaluable). Un snapshot v15 puede ser íntegro
+// pero contener nightReliability calculado con la semántica anterior; debe
+// invalidarse aunque ni el report ni la forma del objeto hayan cambiado.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v16:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;
