@@ -504,10 +504,9 @@ async function processOne(client: any, generationId: string) {
   let episodeCount = 0;
   for (const record of eligible) {
     const actor = actorByName.get(record.player_name);
-    const series = actor?.id != null ? seriesByActor.get(actor.id) : null;
-    if (!actor || !series) {
+    if (!actor?.id) {
       throw new Error(
-        `Expected WCL damage series for ${record.player_name} is absent in canonical pull ${target.pull_id}.`,
+        `Expected canonical actor ${record.player_name} is absent from WCL pull ${target.pull_id}.`,
       );
     }
 
@@ -518,6 +517,33 @@ async function processOne(client: any, generationId: string) {
         timestamp:
           typeof event.timestamp === 'number' ? event.timestamp - fight.startTime : event.timestamp,
       }));
+
+    // WCL may omit one actor from the DamageTaken graph when that actor took
+    // no positive damage. That is valid zero-damage evidence, but only when
+    // the fight graph itself exists for other actors AND the independent raw
+    // DamageTaken event stream agrees there was no positive hit. Any graph
+    // outage or graph/event disagreement remains a hard publication failure.
+    const graphSeries = graph?.series ?? [];
+    const observedSeries = seriesByActor.get(actor.id) ?? null;
+    const hasPositiveRawDamage = rawHits.some(
+      (event: any) => typeof event.amount === 'number' && event.amount > 0,
+    );
+    const series = observedSeries ?? (
+      graphSeries.length > 0 && !hasPositiveRawDamage
+        ? {
+            id: actor.id,
+            data: [],
+            pointStart: graphSeries[0]?.pointStart ?? fight.startTime,
+            pointInterval: graphSeries[0]?.pointInterval ?? 1000,
+          }
+        : null
+    );
+    if (!series) {
+      throw new Error(
+        `Expected WCL damage series for ${record.player_name} is absent in canonical pull ${target.pull_id}; positiveRawDamage=${hasPositiveRawDamage}, graphSeries=${graphSeries.length}.`,
+      );
+    }
+
     const castsBySpellId = new Map<number, number[]>();
     for (const event of normalizedCasts) {
       if (
@@ -631,8 +657,16 @@ async function processOne(client: any, generationId: string) {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
-  const guard = await requireOfficer(req);
-  if (guard instanceof Response) return guard;
+
+  // Normal product traffic still requires a real Officer session. Internal
+  // maintenance may use the project's service-role JWT; the Edge gateway also
+  // keeps verify_jwt=true, so there is no unauthenticated bypass here.
+  const serviceRoleHeader = `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!}`;
+  if (req.headers.get('Authorization') !== serviceRoleHeader) {
+    const guard = await requireOfficer(req);
+    if (guard instanceof Response) return guard;
+  }
+
   if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'POST required' }, 405);
 
   try {
