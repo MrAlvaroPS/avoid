@@ -1024,9 +1024,25 @@ export class NightPlayerSummaryService {
       // personal_mechanic_fail_count) — computePullScore las reutiliza vía
       // mechanicScoreFor en vez de re-derivar el ratio con su propia
       // lógica, así los dos sistemas nunca pueden divergir en "Mecánica".
-      this.reliability
-        .getPlayerPullReliabilityInputsForReport(reportCode, playerName)
-        .catch(() => []),
+      //
+      // §Bug real (2026-09-07, "la ejecución del informe de la noche no
+      // coincide con la del dosier del jugador"): este `.catch(() => [])`
+      // convertía un fallo TRANSITORIO (PostgREST saturado — night-report
+      // carga a 20-30 jugadores en paralelo, cada uno con ~13 queries propias;
+      // ver el comentario de v3 en night-score-cache.service.ts sobre el mismo
+      // origen) en una lista vacía LEGÍTIMA. computePullScore no distingue
+      // ambos casos: sin reliabilityRow cae al conteo aproximado en cliente
+      // (`1 - mechanicFailCount * FAIL_PENALTY`, comentario más abajo), NUNCA
+      // igual a mechanicScoreFor — un nightScore visiblemente distinto, pero
+      // con forma perfectamente válida (no null), así que ni
+      // isCacheableSummary aquí ni hasTransientFailure en
+      // NightScoreCacheService lo detectaban: se cacheaba como si fuera el
+      // cálculo correcto. fetchReliabilityInputs (reliability.service.ts) ya
+      // hace `throw response.error` en un fallo real — dejar que ese throw
+      // propague (en vez de absorberlo aquí) hace que todo `load()` rechace,
+      // y los callers (loadNightAttendanceStats en night-report.component.ts)
+      // ya tratan ese fallo como transitorio y no lo cachean.
+      this.reliability.getPlayerPullReliabilityInputsForReport(reportCode, playerName),
       // §rendimiento (2026-08-29): antes se esperaba SECUENCIALMENTE después
       // de este Promise.all sin motivo — no depende de nada de aquí, solo de
       // reportCode/playerName, así que corre en paralelo con todo lo demás.
