@@ -20,7 +20,7 @@ describe('pull evaluation context commands', () => {
     expect(isEventEvaluable(moved, 18_000)).toBe(false);
   });
 
-  it('keeps a detector result as a non-authoritative candidate until accepted', () => {
+  it('keeps a wipe detector result as a non-authoritative candidate until accepted', () => {
     const candidate = initialPullEvaluationContext(facts);
     expect(candidate.evaluationEndMs).toBe(90_000);
     expect(candidate.wipeCallAtMs).toBeNull();
@@ -29,7 +29,61 @@ describe('pull evaluation context commands', () => {
     expect(accepted.wipeCallVerified).toBe(true);
   });
 
-  it('can deny a candidate and restores the complete evaluable interval', () => {
+  it('auto-confirms a strict ninja candidate and removes it from statistical evaluation', () => {
+    const ninjaFacts = {
+      ...facts,
+      inferredWipeCandidate: null,
+      durationMs: 20_409,
+      ninjaCandidate: {
+        confidence: 53,
+        evidence: {
+          durationMs: 20_409,
+          raidSize: 17,
+          engagedPlayerCount: 12,
+          engagedFraction: 0.71,
+          bossHealthPct: 91.05,
+          barelyDamagedBoss: true,
+        },
+      },
+    };
+    const context = initialPullEvaluationContext(ninjaFacts);
+    expect(context.evaluationEligible).toBe(false);
+    expect(context.cutoffReason).toBe('invalid_pull');
+    expect(context.ninjaStatus).toBe('confirmed');
+    expect(context.ninjaSource).toBe('heuristic');
+    expect(context.ninjaConfidence).toBe(53);
+    expect(isEventEvaluable(context, 1)).toBe(false);
+  });
+
+  it('allows a raid leader to restore an auto-confirmed ninja and makes the decision manual', () => {
+    const ninjaFacts = {
+      ...facts,
+      inferredWipeCandidate: null,
+      ninjaCandidate: { confidence: 80, evidence: { durationMs: 23_087, bossHealthPct: 99.99 } },
+    };
+    const auto = initialPullEvaluationContext(ninjaFacts);
+    const valid = applyPullEvaluationAction(auto, ninjaFacts, { action: 'mark_valid' });
+    expect(valid.evaluationEligible).toBe(true);
+    expect(valid.cutoffReason).toBe('fight_end');
+    expect(valid.ninjaStatus).toBe('valid');
+    expect(valid.ninjaSource).toBe('manual');
+    expect(valid.ninjaConfidence).toBe(100);
+  });
+
+  it('can deliberately downgrade an auto-confirmed ninja to probable for review', () => {
+    const ninjaFacts = {
+      ...facts,
+      inferredWipeCandidate: null,
+      ninjaCandidate: { confidence: 80, evidence: { durationMs: 23_472, bossHealthPct: 99.99 } },
+    };
+    const auto = initialPullEvaluationContext(ninjaFacts);
+    const probable = applyPullEvaluationAction(auto, ninjaFacts, { action: 'mark_probable_ninja' });
+    expect(probable.evaluationEligible).toBe(true);
+    expect(probable.ninjaStatus).toBe('probable');
+    expect(probable.ninjaSource).toBe('manual');
+  });
+
+  it('can deny a wipe candidate and restores the complete evaluable interval', () => {
     const accepted = applyPullEvaluationAction(null, facts, { action: 'accept_inferred_wipe' });
     const denied = applyPullEvaluationAction(accepted, facts, { action: 'clear_wipe' });
     expect(denied.cutoffReason).toBe('fight_end');
