@@ -1915,10 +1915,11 @@ export class NightPlayerSummaryService {
         coachingFor({ boss_id: pull.bossId, difficulty: pull.difficulty }, mechanicName),
     });
 
-    // §Frontend cutover (2026-09-05): metadata de mecánica para los episodios canónicos por ability_id real
-    // (applicable_boss_mechanics_candidates), NUNCA por pull_mechanic_events — esa tabla solo tiene eventos
-    // outcome!=clean donde el jugador fue golpeado, y omitiría en silencio abilities detrás de episodios
-    // missed_ready/no_applicable_resource donde el jugador nunca llegó a ser golpeado (corrección de revisión).
+    // §Frontend cutover (2026-09-05, corregido 2026-09-07): metadata de mecánica para los episodios canónicos
+    // por el abilityGameID real de WCL — ver el comentario de loadMechanicCatalogByAbilityId en mechanic-notes.ts
+    // para el porqué exacto de NO cruzar por boss_mechanics_candidates.ability_id directamente (es el ID del
+    // Journal, casi nunca coincide con el real). mechanicNameById (más abajo) es la segunda fuente para cubrir
+    // los episodios missed_ready/no_applicable_resource que pull_mechanic_events pueda omitir en silencio.
     const [canonicalRaw, mechanicCatalogByAbility] = await Promise.all([
       canonicalDefensivePromise,
       mechanicCatalogByAbilityPromise,
@@ -1938,13 +1939,20 @@ export class NightPlayerSummaryService {
               mechanicCatalogKeyByAbility(pull.boss_id, pull.difficulty, episode.dominantAbilityGameId),
             )
           : undefined;
+      // §Bug real (2026-09-07): mechanicCatalogByAbility solo resuelve ability_ids que aparecieron alguna vez
+      // en pull_mechanic_events (outcome!=clean, ver mechanic-notes.ts). mechanicNameById ya está construido más
+      // arriba a partir de mechanicPressureBreakdown/deaths de ESTA MISMA noche (mismo abilityGameID real de
+      // WCL) y cubre además ventanas cubiertas/limpias — se usa como segunda fuente antes de caer al fallback
+      // `#<id>` visible en la infografía.
+      const fallbackName =
+        episode.dominantAbilityGameId != null ? (mechanicNameById.get(episode.dominantAbilityGameId) ?? null) : null;
       canonicalEpisodes.push({
         ...episode,
         bossId: pull.boss_id,
         bossName: bossNameByFightId.get(pull.fight_id) ?? `Boss ${pull.boss_id}`,
         difficulty: pull.difficulty,
         pullNumber: bossPullNumber(pull),
-        mechanicName: catalogEntry?.name ?? null,
+        mechanicName: catalogEntry?.name ?? fallbackName,
         mechanicDescription: catalogEntry?.note ?? null,
         mechanicResolution: catalogEntry?.resolution ?? null,
       });

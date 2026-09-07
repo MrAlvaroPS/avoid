@@ -83,10 +83,24 @@ export function mechanicCatalogKeyByAbility(bossId: string, difficulty: string, 
 /**
  * Variant of loadMechanicCoachingByKey keyed by the real WCL ability id instead of name. Needed for surfaces
  * that only have an ability id and no reliable name of their own (e.g. a canonical DefensiveEpisode's
- * `dominantAbilityGameId`) — unlike `pull_mechanic_events` (which only carries non-clean, player-hit rows and
- * would silently omit abilities behind e.g. `missed_ready`/`no_applicable_resource` episodes where the player
- * was never hit), `boss_mechanics_candidates.ability_id` is the catalog itself and covers every known ability
- * for the boss, hit or not. Same table/view/fallback as loadMechanicCoachingByKey — metadata lookup only.
+ * `dominantAbilityGameId`).
+ *
+ * §Bug real (2026-09-07, "han desaparecido algunos nombres de mecánicas y sale solo el id con #"): esto
+ * cruzaba antes por `boss_mechanics_candidates.ability_id` directamente. Ese ability_id es el ID del Journal
+ * de Blizzard, NUNCA el abilityGameID real de WCL — sync-boss-mechanics.ts ya lo documenta y lo verificó en
+ * real (0/54 candidatas de un boss casaban por ID). `episode.dominantAbilityGameId` SIEMPRE es el ID real de
+ * WCL, así que ese cruce fallaba casi siempre y la infografía v3 caía al fallback `#<id>` para la mayoría de
+ * mecánicas (introducido en el cutover v3 del 2026-09-05, commit "infografic v3 KPI" — antes de eso el
+ * desglose de mecánicas usaba el pipeline v2, que sí lleva el nombre pegado al evento).
+ *
+ * `pull_mechanic_events.ability_id` sí es el abilityGameID real de WCL — mechanic-event-materialization.ts lo
+ * graba directamente desde `abilityGameID`/`extraAbilityGameID`/`killingAbilityGameID`. Se usa esa tabla para
+ * resolver el ability_id real -> nombre, y luego se cruza ese nombre (no el ability_id) contra
+ * `boss_mechanics_candidates` para traer nota/resolución — mismo cruce por NOMBRE que ya rige el resto del
+ * pipeline (ver cabecera del archivo). pull_mechanic_events solo tiene outcome!=clean (rows donde alguien fue
+ * golpeado): sigue sin cubrir en el 100% de los casos una mecánica que este boss+dificultad SIEMPRE esquivó en
+ * toda la historia registrada, pero eso es un hueco raro y de fallo silencioso (`#<id>`), no un cruce roto que
+ * falla casi siempre.
  */
 export async function loadMechanicCatalogByAbilityId(
   client: SupabaseClient,
@@ -96,12 +110,42 @@ export async function loadMechanicCatalogByAbilityId(
   const map = new Map<string, { name: string; note: string | null; resolution: string | null }>();
   if (!uniqueBossIds.length) return map;
 
+  const { data: pullRows, error: pullError } = await client
+    .from('pulls')
+    .select('id, boss_id, difficulty')
+    .in('boss_id', uniqueBossIds);
+  if (pullError) throw pullError;
+  const pullMeta = new Map(
+    ((pullRows ?? []) as { id: string; boss_id: string; difficulty: string }[]).map((p) => [
+      p.id,
+      { bossId: p.boss_id, difficulty: p.difficulty },
+    ]),
+  );
+  const pullIds = [...pullMeta.keys()];
+  if (!pullIds.length) return map;
+
+  const { data: eventRows, error: eventError } = await client
+    .from('pull_mechanic_events')
+    .select('pull_id, ability_id, mechanic_name')
+    .in('pull_id', pullIds);
+  if (eventError) throw eventError;
+
+  const nameByKey = new Map<string, string>();
+  for (const row of (eventRows ?? []) as { pull_id: string; ability_id: number; mechanic_name: string }[]) {
+    const meta = pullMeta.get(row.pull_id);
+    if (!meta) continue;
+    // Primera aparición gana — si un mismo ability_id llegó alguna vez con dos textos distintos (typo/rename
+    // histórico), no vale la pena resolverlo aquí; ninguna variante es más "correcta" que otra sin más contexto.
+    const key = mechanicCatalogKeyByAbility(meta.bossId, meta.difficulty, row.ability_id);
+    if (!nameByKey.has(key)) nameByKey.set(key, row.mechanic_name);
+  }
+  if (!nameByKey.size) return map;
+
   const query = (relation: string) =>
     client
       .from(relation)
-      .select('boss_id, difficulty, ability_id, name, ai_classification, resolution')
-      .in('boss_id', uniqueBossIds)
-      .not('ability_id', 'is', null);
+      .select('boss_id, difficulty, name, ai_classification, resolution')
+      .in('boss_id', uniqueBossIds);
   const { data, error } = await withSupabaseRelationFallback(
     'applicable_boss_mechanics_candidates',
     () => query('applicable_boss_mechanics_candidates'),
@@ -109,20 +153,24 @@ export async function loadMechanicCatalogByAbilityId(
   );
   if (error) throw error;
 
+  const coachingByNameKey = new Map<string, { note: string | null; resolution: string | null }>();
   for (const row of (data ?? []) as {
     boss_id: string;
     difficulty: string;
-    ability_id: number | null;
     name: string;
     ai_classification: { notes?: string } | null;
     resolution: string | null;
   }[]) {
-    if (row.ability_id == null) continue;
-    map.set(mechanicCatalogKeyByAbility(row.boss_id, row.difficulty, row.ability_id), {
-      name: row.name,
+    coachingByNameKey.set(mechanicCoachingKey(row.boss_id, row.difficulty, row.name), {
       note: row.ai_classification?.notes?.trim() || null,
       resolution: row.resolution?.trim() || null,
     });
+  }
+
+  for (const [key, name] of nameByKey) {
+    const [bossId, difficulty] = key.split('|');
+    const coaching = coachingByNameKey.get(mechanicCoachingKey(bossId, difficulty, name));
+    map.set(key, { name, note: coaching?.note ?? null, resolution: coaching?.resolution ?? null });
   }
   return map;
 }
