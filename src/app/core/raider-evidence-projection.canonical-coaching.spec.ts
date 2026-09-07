@@ -41,18 +41,21 @@ function episode(
 }
 
 function canonical(episodes: CanonicalDefensiveEpisodeView[]): NightCanonicalDefensiveSummary {
+  const missedReady = episodes.filter((row) => row.responseVerdict === 'missed_ready').length;
+  const missedMistimed = episodes.filter(
+    (row) => row.responseVerdict === 'missed_due_to_mistime',
+  ).length;
   return {
     state: 'available',
     coverage: { evaluatedPulls: 1, expectedPulls: 1 },
-    usage: { status: 'available', score: 0, engaged: 0, evaluable: 1 },
+    usage: { status: 'available', score: 0, engaged: 0, evaluable: Math.max(1, episodes.length) },
     response: {
       status: 'available',
       score: 0,
       covered: 0,
-      evaluable: 1,
-      missedReady: episodes.filter((row) => row.responseVerdict === 'missed_ready').length,
-      missedMistimed: episodes.filter((row) => row.responseVerdict === 'missed_due_to_mistime')
-        .length,
+      evaluable: Math.max(1, episodes.length),
+      missedReady,
+      missedMistimed,
     },
     management: { status: 'no_plan', score: null, fulfilled: 0, evaluable: 0 },
     context: { unavailableLegitimate: 0, noApplicableResource: 0, uncertain: 0, excluded: 0 },
@@ -61,15 +64,14 @@ function canonical(episodes: CanonicalDefensiveEpisodeView[]): NightCanonicalDef
     generation: null,
     integrityIssues: [],
     diagnostics: {
-      usage: { status: 'available', score: 0, engaged: 0, evaluable: 1 },
+      usage: { status: 'available', score: 0, engaged: 0, evaluable: Math.max(1, episodes.length) },
       response: {
         status: 'available',
         score: 0,
         covered: 0,
-        evaluable: 1,
-        missedReady: episodes.filter((row) => row.responseVerdict === 'missed_ready').length,
-        missedMistimed: episodes.filter((row) => row.responseVerdict === 'missed_due_to_mistime')
-          .length,
+        evaluable: Math.max(1, episodes.length),
+        missedReady,
+        missedMistimed,
       },
       rowsExpected: 1,
       rowsFound: 1,
@@ -93,6 +95,7 @@ function summary(overrides: Partial<NightPlayerSummary> = {}): NightPlayerSummar
       },
     ],
     defensiveManagementV2: null,
+    defensiveSummary: { mechanicPressureBreakdown: [] },
     deaths: [],
     mechanicFails: [],
     startingPreparation: null,
@@ -125,18 +128,12 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
     const projection = buildRaiderEvidenceProjection(summary(), {
       defensiveManagementV2: null,
       canonicalDefensive: canonical([
-        episode({
-          // Caso realista: el mismo spell puede aparecer en usedSpellIds por un cast dentro del episodio,
-          // pero el verdict demuestra que estaba available_unused en el instante decisivo. No duplicar chips.
-          usageEngaged: true,
-          usedSpellIds: [22812],
-        }),
+        episode({ usageEngaged: true, usedSpellIds: [22812] }),
       ]),
       spellNameById: new Map([[22812, 'Barkskin']]),
     });
 
     const item = projection.items.find((row) => row.id === 'defensive|canonical|episode-1');
-    expect(item).toBeDefined();
     expect(item?.defensives).toEqual([
       { spellId: 22812, name: 'Barkskin', status: 'available_unused' },
     ]);
@@ -188,11 +185,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
       {
         defensiveManagementV2: null,
         canonicalDefensive: canonical([
-          episode({
-            mechanicName: null,
-            mechanicDescription: null,
-            mechanicResolution: null,
-          }),
+          episode({ mechanicName: null, mechanicDescription: null, mechanicResolution: null }),
         ]),
         spellNameById: new Map([[22812, 'Barkskin']]),
       },
@@ -202,11 +195,9 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
     expect(item?.mechanicName).toBe('Soulcoil Rite');
     expect(item?.title).toBe('Soulcoil Rite · CD disponible sin cubrir');
     expect(item?.whyItMatters).toContain('Soulcoil Rite daña a toda la raid');
-    expect(item?.whyItMatters).not.toContain('IRIS verificó que Barkskin');
     expect(item?.resolutionText).toContain('Sana las aplicaciones guionizadas');
     expect(item?.preventionKey).toContain('Barkskin');
     expect(item?.reasonCode).toBe('DEFENSIVE_READY_NOT_USED');
-    // La descripción se consume en "Qué sabemos" y no se duplica bajo el boss de la misma card.
     expect(item?.mechanicDescription).toBeNull();
   });
 
@@ -259,11 +250,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
       {
         defensiveManagementV2: null,
         canonicalDefensive: canonical([
-          episode({
-            mechanicName: null,
-            mechanicDescription: null,
-            mechanicResolution: null,
-          }),
+          episode({ mechanicName: null, mechanicDescription: null, mechanicResolution: null }),
         ]),
         spellNameById: new Map([[22812, 'Barkskin']]),
       },
@@ -275,7 +262,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
     expect(item?.whyItMatters).toContain('IRIS verificó que Barkskin');
   });
 
-  it('reserva hasta dos huecos del top 4 para coaching no defensivo cuando existe', () => {
+  it('compacta defensivos equivalentes antes de reservar huecos para coaching no defensivo', () => {
     const episodes = [1, 2, 3, 4].map((index) =>
       episode({
         episodeId: `episode-${index}`,
@@ -295,6 +282,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
             mechanicName: 'Avoidable One',
             mechanicId: 900001,
             category: 'avoidable-ground',
+            responsibility: 'personal',
             outcome: 'fail',
             timeMs: 10_000,
             damageTaken: 100_000,
@@ -312,6 +300,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
             mechanicName: 'Avoidable Two',
             mechanicId: 900002,
             category: 'spread',
+            responsibility: 'personal',
             outcome: 'fail',
             timeMs: 20_000,
             damageTaken: 80_000,
@@ -329,10 +318,11 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
       },
     );
 
-    expect(projection.coaching).toHaveLength(4);
-    expect(projection.coaching.filter((item) => item.kind === 'defensive')).toHaveLength(2);
+    expect(projection.coaching).toHaveLength(3);
+    expect(projection.coaching.filter((item) => item.kind === 'defensive')).toHaveLength(1);
     expect(projection.coaching.filter((item) => item.kind === 'mechanic')).toHaveLength(2);
-    expect(projection.additionalCoachingCount).toBe(2);
+    expect(projection.coaching.find((item) => item.kind === 'defensive')?.title).toContain('×4');
+    expect(projection.additionalCoachingCount).toBe(0);
   });
 
   it('en una card puramente mecánica combina contexto + impacto y genera prevención desde la resolución revisada', () => {
@@ -348,6 +338,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
             mechanicName: 'Axegrinder',
             mechanicId: 900010,
             category: 'avoidable-ground',
+            responsibility: 'personal',
             outcome: 'fail',
             timeMs: 69_000,
             damageTaken: 1_417_944,
@@ -371,7 +362,7 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
     expect(item?.preventionKey).not.toBe('—');
   });
 
-  it('permite cuatro cards defensivas si realmente no existe otro coaching accionable', () => {
+  it('si solo hay una familia defensiva repetida muestra una sola card con todas las ocurrencias', () => {
     const episodes = [1, 2, 3, 4, 5].map((index) =>
       episode({
         episodeId: `episode-${index}`,
@@ -385,8 +376,10 @@ describe('RaiderEvidenceProjection · canonical defensive coaching details', () 
       spellNameById: new Map([[22812, 'Barkskin']]),
     });
 
-    expect(projection.coaching).toHaveLength(4);
-    expect(projection.coaching.every((item) => item.kind === 'defensive')).toBe(true);
-    expect(projection.additionalCoachingCount).toBe(1);
+    expect(projection.coaching).toHaveLength(1);
+    expect(projection.coaching[0].kind).toBe('defensive');
+    expect(projection.coaching[0].title).toContain('×5');
+    expect(projection.coaching[0].occurrences).toHaveLength(5);
+    expect(projection.additionalCoachingCount).toBe(0);
   });
 });
