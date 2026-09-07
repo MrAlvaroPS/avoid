@@ -49,7 +49,19 @@ import { SupabaseService } from './supabase.service';
 // divergiendo en silencio. Se añaden aquí las mismas señales extra que ya
 // demostraron hacer falta en el fingerprint global, acotadas a los pulls de
 // ESTE report donde es posible.
-const STORAGE_PREFIX = 'avoid:night-scores:v4:';
+// v5 (2026-09-07): mismo shape, pero nightScore cambia de VALOR — un fallo
+// transitorio en getPlayerPullReliabilityInputsForReport se absorbía en `[]`
+// (ver night-player-summary.service.ts) y producía un nightScore aproximado
+// distinto del real sin que hasTransientFailure lo detectara (no era una fila
+// vacía, era una fila con forma válida pero mal calculada). Ya arreglado en
+// origen; v5 descarta cualquier snapshot que ya se hubiera guardado con ese
+// número degradado.
+// v6 (2026-09-07): nightDefensiva y nightReliability cambian de semántica:
+// con una generación canónica publicada, Defensivos usa exclusivamente
+// Response canónico. El fingerprint ya detecta cambios de generación, pero
+// no puede distinguir un snapshot v5 calculado con la fórmula anterior sobre
+// la MISMA generación; el bump elimina esos valores de forma determinista.
+const STORAGE_PREFIX = 'avoid:night-scores:v6:';
 
 export interface CachedNightAttendanceStats {
   /** Ejecución de esta noche — night-player-summary.service.ts: nightScore (0-1). */
