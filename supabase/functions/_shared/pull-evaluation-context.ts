@@ -1,7 +1,7 @@
 // @ts-ignore Angular's test compiler rejects explicit .ts extensions; Deno requires them at runtime.
 import { PULL_CONTEXT_RESOLVER_VERSION, type NinjaStatus, type PullEvaluationContextContract } from './combat-evaluation-contract.ts';
 
-export const PULL_CONTEXT_COMMAND_VERSION = `${PULL_CONTEXT_RESOLVER_VERSION}:commands-v2`;
+export const PULL_CONTEXT_COMMAND_VERSION = `${PULL_CONTEXT_RESOLVER_VERSION}:commands-v3`;
 
 export type PullEvaluationContextAction =
   | { action: 'confirm_wipe'; boundaryMs: number; reason?: string }
@@ -27,6 +27,13 @@ export interface PullContextFacts {
   durationMs: number;
   bossHpAtBoundaryPct?: number | null;
   inferredWipeCandidate?: { boundaryMs: number; confidence: number | null; evidence?: Record<string, unknown> } | null;
+  /**
+   * `ninjaCandidate` no es una sospecha genérica: solo existe después de que
+   * detectNinjaPull haya superado su contrato estricto (no kill, <45 s y
+   * apenas engagement o apenas daño al boss). Por eso sí es una decisión
+   * automática de validez estadística. La evidencia cruda se conserva para
+   * auditoría y un RL siempre puede restaurar el pull con `mark_valid`.
+   */
   ninjaCandidate?: { confidence: number | null; evidence?: Record<string, unknown> } | null;
 }
 
@@ -38,20 +45,21 @@ function finiteBoundary(value: number, durationMs: number): number {
 }
 
 export function initialPullEvaluationContext(facts: PullContextFacts, now = new Date().toISOString()): PullEvaluationContextContract {
-  const ninjaStatus: NinjaStatus = facts.ninjaCandidate ? 'probable' : 'valid';
+  const autoConfirmedNinja = Boolean(facts.ninjaCandidate);
+  const ninjaStatus: NinjaStatus = autoConfirmedNinja ? 'confirmed' : 'valid';
   return {
     pullId: facts.pullId,
-    evaluationEligible: true,
+    evaluationEligible: !autoConfirmedNinja,
     evaluationStartMs: 0,
     evaluationEndMs: facts.durationMs,
-    cutoffReason: 'fight_end',
+    cutoffReason: autoConfirmedNinja ? 'invalid_pull' : 'fight_end',
     wipeCallAtMs: null,
     wipeCallBossHpPct: null,
     wipeCallSource: 'none',
     wipeCallConfidence: null,
     wipeCallVerified: false,
     ninjaStatus,
-    ninjaSource: facts.ninjaCandidate ? 'heuristic' : 'imported',
+    ninjaSource: autoConfirmedNinja ? 'heuristic' : 'imported',
     ninjaConfidence: facts.ninjaCandidate?.confidence ?? null,
     evidence: {
       ...(facts.inferredWipeCandidate ? { wipeCallCandidate: facts.inferredWipeCandidate } : {}),
@@ -64,7 +72,13 @@ export function initialPullEvaluationContext(facts: PullContextFacts, now = new 
 
 /**
  * Único reductor de decisiones autoritativas del bloque B.
- * Los sensores solo entran por `facts.*Candidate`; nunca activan exclusiones.
+ *
+ * Los candidatos de wipe siguen siendo no autoritativos hasta una acción
+ * explícita. `ninjaCandidate`, en cambio, ya es la salida del detector
+ * estricto de pull inválido y nace auto-confirmado para que nunca contamine
+ * denominadores. Toda acción manual (`mark_valid`, `confirm_ninja`,
+ * `mark_probable_ninja`) cambia `ninjaSource` a `manual`; la capa SQL impide
+ * que una escritura heurística posterior pueda pisarla.
  */
 export function applyPullEvaluationAction(
   current: PullEvaluationContextContract | null,
