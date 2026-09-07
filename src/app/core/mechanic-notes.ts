@@ -94,13 +94,18 @@ export function mechanicCatalogKeyByAbility(bossId: string, difficulty: string, 
  * desglose de mecánicas usaba el pipeline v2, que sí lleva el nombre pegado al evento).
  *
  * `pull_mechanic_events.ability_id` sí es el abilityGameID real de WCL — mechanic-event-materialization.ts lo
- * graba directamente desde `abilityGameID`/`extraAbilityGameID`/`killingAbilityGameID`. Se usa esa tabla para
- * resolver el ability_id real -> nombre, y luego se cruza ese nombre (no el ability_id) contra
- * `boss_mechanics_candidates` para traer nota/resolución — mismo cruce por NOMBRE que ya rige el resto del
- * pipeline (ver cabecera del archivo). pull_mechanic_events solo tiene outcome!=clean (rows donde alguien fue
- * golpeado): sigue sin cubrir en el 100% de los casos una mecánica que este boss+dificultad SIEMPRE esquivó en
- * toda la historia registrada, pero eso es un hueco raro y de fallo silencioso (`#<id>`), no un cruce roto que
- * falla casi siempre.
+ * graba directamente desde `abilityGameID`/`extraAbilityGameID`/`killingAbilityGameID`. Se usa
+ * `applicable_pull_mechanic_events` (la vista), NUNCA la tabla base directamente: `pull_mechanic_events` tiene
+ * RLS `is_officer()` (verificado en real contra la BD de producción) — un raider normal viendo su propio
+ * dosier no es officer, así que una query directa a la tabla vuelve SIEMPRE vacía en silencio (sin error) y el
+ * fallback `#<id>` seguía saliendo igual que antes de este fix (§bug real, verificado 2026-09-07: primera
+ * versión de este fix consultaba la tabla base y no se enteró de que RLS la estaba vaciando). La vista no tiene
+ * RLS propia y concede SELECT a `authenticated` — mismo patrón que `applicable_boss_mechanics_candidates`.
+ * Luego se cruza el nombre resuelto (no el ability_id) contra `boss_mechanics_candidates` para traer
+ * nota/resolución — mismo cruce por NOMBRE que ya rige el resto del pipeline (ver cabecera del archivo).
+ * Sigue sin cubrir el caso raro de una mecánica que este boss+dificultad SIEMPRE esquivó en toda la historia
+ * registrada (pull_mechanic_events solo tiene outcome!=clean), pero eso es un hueco raro y de fallo silencioso
+ * (`#<id>`), no un cruce roto que falla casi siempre.
  */
 export async function loadMechanicCatalogByAbilityId(
   client: SupabaseClient,
@@ -125,7 +130,7 @@ export async function loadMechanicCatalogByAbilityId(
   if (!pullIds.length) return map;
 
   const { data: eventRows, error: eventError } = await client
-    .from('pull_mechanic_events')
+    .from('applicable_pull_mechanic_events')
     .select('pull_id, ability_id, mechanic_name')
     .in('pull_id', pullIds);
   if (eventError) throw eventError;
