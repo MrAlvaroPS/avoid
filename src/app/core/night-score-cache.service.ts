@@ -34,7 +34,22 @@ import { SupabaseService } from './supabase.service';
 // v2 creado bajo ese comportamiento y se rechaza cualquier lote que todavía
 // contenga una fila completamente vacía (la forma exacta que usa el caller
 // para representar una excepción de carga).
-const STORAGE_PREFIX = 'avoid:night-scores:v3:';
+// v4 (2026-09-07): fingerprint incompleto — "la ejecución del informe de la
+// noche no coincide con la que sale al abrir el dosier del jugador" (feedback
+// real, verificado): este fingerprint solo miraba `pulls.closed_at/updated_at`
+// de ESTE report, pero nightScore también puede cambiar de VALOR sin tocar
+// ningún pull — un backfill/replay de evaluación defensiva (mismo motivo que
+// el v5 de RosterSnapshotCacheService), un cutover de generación defensiva
+// publicada (mismo motivo que su v6), o una reanálisis que corrige el estado
+// de ninja pull de un pull ya analizado. Con el fingerprint viejo, el
+// snapshot de ESTE informe seguía "vigente" mientras
+// NightPlayerSummaryService.load() (fingerprint global, ver
+// RosterSnapshotCacheService) ya recalculaba fresco para el mismo jugador —
+// dos cachés del mismo número, dos señales de invalidación distintas,
+// divergiendo en silencio. Se añaden aquí las mismas señales extra que ya
+// demostraron hacer falta en el fingerprint global, acotadas a los pulls de
+// ESTE report donde es posible.
+const STORAGE_PREFIX = 'avoid:night-scores:v4:';
 
 export interface CachedNightAttendanceStats {
   /** Ejecución de esta noche — night-player-summary.service.ts: nightScore (0-1). */
@@ -70,19 +85,64 @@ function hasTransientFailure(scores: Record<string, CachedNightAttendanceStats>)
 export class NightScoreCacheService {
   private supabase = inject(SupabaseService);
 
-  /** Comprobación ligera: cuántos pulls tiene este report y cuándo se tocó el más reciente (closed_at de uno nuevo, o updated_at de una corrección retroactiva — wipe call reanalizado, ninja pull revertido). */
+  /**
+   * Comprobación ligera: cuántos pulls tiene este report y cuándo se tocó el más reciente (closed_at de uno
+   * nuevo, o updated_at de una corrección retroactiva — wipe call reanalizado, ninja pull revertido) — MÁS las
+   * mismas señales que RosterSnapshotCacheService.fingerprint() ya demostró necesitar (v5/v6 de ese archivo),
+   * acotadas a los pulls de ESTE report: un backfill/replay de evaluación defensiva o un cutover de generación
+   * publicada pueden cambiar nightScore sin tocar `pulls` en absoluto.
+   */
   async fingerprint(reportCode: string): Promise<string> {
-    const { data, error } = await this.supabase.client
+    const client = this.supabase.client;
+    const { data: pullRows, error: pullError } = await client
       .from('pulls')
       .select('id, closed_at, updated_at')
       .eq('report_code', reportCode);
-    if (error) throw error;
-    const rows = (data ?? []) as { id: string; closed_at: string; updated_at: string | null }[];
+    if (pullError) throw pullError;
+    const rows = (pullRows ?? []) as { id: string; closed_at: string; updated_at: string | null }[];
     const latestTouch = rows.reduce((max, r) => {
       const touch = r.updated_at && r.updated_at > r.closed_at ? r.updated_at : r.closed_at;
       return touch > max ? touch : max;
     }, '');
-    return `${rows.length}:${latestTouch}`;
+    const pullIds = rows.map((r) => r.id);
+
+    const [defensiveEvaluationResponse, ledgerEvaluationResponse, defensiveGenerationPointerResponse] =
+      await Promise.all([
+        pullIds.length
+          ? client
+              .from('player_pull_defensive_evaluations')
+              .select('pull_id, player_name, evaluator_version, resolver_version, evaluated_at')
+              .in('pull_id', pullIds)
+              .order('evaluated_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        pullIds.length
+          ? client
+              .from('player_execution_events')
+              .select('pull_id, ledger_evaluator_version, evaluated_at')
+              .in('pull_id', pullIds)
+              .order('evaluated_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        client
+          .from('defensive_generation_pointer')
+          .select('published_generation_id, updated_at')
+          .eq('id', true)
+          .maybeSingle(),
+      ]);
+    if (defensiveEvaluationResponse.error) throw defensiveEvaluationResponse.error;
+    if (ledgerEvaluationResponse.error) throw ledgerEvaluationResponse.error;
+    if (defensiveGenerationPointerResponse.error) throw defensiveGenerationPointerResponse.error;
+
+    return JSON.stringify({
+      pullCount: rows.length,
+      latestTouch,
+      defensiveEvaluation: defensiveEvaluationResponse.data ?? null,
+      ledgerEvaluation: ledgerEvaluationResponse.data ?? null,
+      defensiveGenerationPointer: defensiveGenerationPointerResponse.data ?? null,
+    });
   }
 
   read(reportCode: string): CachedEntry | null {
