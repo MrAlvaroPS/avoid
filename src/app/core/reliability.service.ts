@@ -1,34 +1,3 @@
-// Colocar en: src/app/core/reliability.service.ts
-// §12 de la hoja de ruta (auditoría v2): sistema de fiabilidad del raider,
-// score 1-100. La parte cara (cruzar pulls+player_pull_records de TODA la
-// guild en una ventana móvil) ya vive en SQL — player_pull_reliability_inputs
-// (ver la migración) — este servicio solo aplica la fórmula: peso por
-// recencia, blend de ejes, renormalización si falta uno. Mecánica 40%/
-// defensiva 30%/preparación 20% (por pull), en proporción 4:3:2 entre ellos
-// — sin eje de asistencia (ver más abajo). Preparación = siete slots de
-// enchant de esta season + tres slots de gema (cuello/anillos). Para gemas
-// se evalúa si el slot elegible lleva al menos una, no un máximo de
-// sockets que WCL no expone. Nunca se rellena un eje ausente con un cero
-// silencioso. Preparación es además asimétrica (§"se da por supuesto que
-// si lo tienes que hacer no cuenta para sumar", feedback real,
-// 2026-08-30): solo entra en el blend del `overall` cuando está incompleta
-// — venir con el pj perfecto es la línea base esperada, no un mérito que
-// deba subir el número (ver computeReliabilityBreakdown). El desglose
-// (`breakdown.preparacion`) sí sigue enseñando el 100% real, informativo.
-//
-// §"quitar de ahí asistencia... eventualmente habrá rotaciones y rotar en
-// un boss por tema de specs no tiene por qué afectar a la fiabilidad"
-// (feedback real, 2026-08-28): la asistencia SÍ se sigue calculando y
-// enseñando (attendanceNightsAttended/attendanceNightsTotal en
-// PlayerReliability, informativo) pero deja de puntuar dentro de
-// Fiabilidad — no asistir a un pull por rotación de composición es una
-// decisión del RL, no un fallo del jugador, y no debería poder bajarle la
-// puntuación. Efecto colateral que arregla también la inconsistencia real
-// que reportó el usuario ("fiabilidad esta noche" parecía peor que "60
-// días" sin que hubiera ejecución peor detrás): "esta noche" nunca tuvo
-// asistencia (no tiene sentido en una sola noche) mientras "60 días" sí la
-// tenía — dos ejes distintos con la etiqueta de "misma fórmula". Al
-// quitarla de las dos, vuelven a ser comparables de verdad.
 import { Injectable, inject } from '@angular/core';
 import { SupabaseService } from './supabase.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
@@ -47,15 +16,9 @@ const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.
 const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
 const REQUIRED_EXECUTION_LEDGER_VERSION = 'execution-ledger@1.0.0';
 
-const WINDOW_DAYS = 60; // "varias noches o semanas", no los 21 días de una versión anterior
-const HALF_LIFE_DAYS = 10; // un pull de hace 10 días pesa la mitad que uno de hoy
+const WINDOW_DAYS = 60;
+const HALF_LIFE_DAYS = 10;
 const AXIS_WEIGHTS = { mecanica: 0.4, defensiva: 0.3, preparacion: 0.2 } as const;
-// §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback real,
-// 2026-08-29): crédito parcial cuando un pull tiene 0 ventanas cubiertas
-// PERO sí hubo algún cast de su catálogo en algún momento — evidencia de que
-// lo intenta, aunque mal sincronizado. 0 (nunca tocó nada) sigue puntuando
-// como fallo completo. Deliberadamente por debajo de 0.5 — sigue siendo un
-// problema real de ejecución, solo que menos grave que la desconexión total.
 const DEFENSIVE_MISTIMED_CREDIT = 0.3;
 
 export interface PlayerReliability {
@@ -67,11 +30,8 @@ export interface PlayerReliability {
     preparacion: number | null;
   };
   consistency: PlayerConsistency | null;
-  /** Comparación interna v1/v2 sobre los mismos pulls; no altera el score mientras el flag siga apagado. */
   defensiveShadowComparison: DefensiveReliabilityShadowComparison | null;
-  /** Comparación causal legacy/v3; informativa hasta activar reliabilityExecutionV3. */
   executionLedgerShadowComparison: ExecutionLedgerShadowComparison | null;
-  /** Snapshot de preparación al inicio de la última noche observada. */
   latestGemCount: number | null;
   latestGemmedSlotCount: number | null;
   latestGemmableSlotCount: number | null;
@@ -80,27 +40,19 @@ export interface PlayerReliability {
   latestMissingEnchantSlots: string[];
   latestMissingGemSlots: string[];
   latestPreparationObservedAt: string | null;
-  /** Nº de pulls con al menos un dato aprovechable en la ventana — no es lo mismo un 92 sobre 40 pulls que un 92 sobre 3. */
   sampleSize: number;
-  /** Noches reales distintas, deduplicadas por fecha para no contar dos uploads del mismo día dos veces. */
   sampleNightCount: number;
-  /** Última vez que el jugador aparece en un pull evaluable. */
   lastObservedAt: string | null;
-  /** Pulls distintos con motivo para evaluar disciplina defensiva. Nunca incluye dos veces el mismo pull. */
   defensiveOpportunityCount: number;
   defensiveUseCount: number;
-  /** Muertes con catálogo de defensivos disponible; se separan porque pesan doble en la fórmula. */
   defensiveDeathOpportunityCount: number;
   defensiveDeathUseCount: number;
   defensiveSpellUsage: DefensiveSpellUsage[];
   defensiveDeathEvidence: DefensiveDeathEvidence[];
-  /** Cuántos de los cuatro ejes aportaron evidencia al score compuesto. */
   observedAxisCount: number;
   attendanceNightsAttended: number | null;
   attendanceNightsTotal: number | null;
-  /** §12.5: flecha de tendencia — primera mitad de la ventana vs. segunda mitad, mismo cálculo que `overall` aplicado a cada mitad. null = alguna mitad no tiene datos suficientes para comparar (no es lo mismo "sin dato" que "estable"). Solo los ejes por pull (asistencia no se trae partida en dos mitades — exigiría dos llamadas a wowaudit con rangos distintos). */
   trend: 'up' | 'down' | 'flat' | null;
-  /** §"roster de verdad": identidad real de wowaudit — null si el nombre no cruza (jugador nunca sincronizado, o nombre distinto entre WCL y wowaudit). */
   role: 'Tank' | 'Heal' | 'Melee' | 'Ranged' | null;
   rank: 'Main' | 'Trial' | null;
 }
@@ -129,10 +81,6 @@ export interface DefensiveDeathEvidence {
   onCooldown: { spellId: number; name: string; cooldownRemainingMs: number | null }[];
 }
 
-// Exportado: player-detail.service.ts reutiliza EXACTAMENTE esta misma
-// fórmula (mecánica/defensiva/preparación, renormalizada) para partirla en
-// cubos semanales — un "¿cómo va este jugador semana a semana?" no es una
-// fórmula nueva, es la misma aplicada a un subconjunto de filas más pequeño.
 export interface ReliabilityInputRow {
   pull_id: string;
   boss_id: string;
@@ -149,56 +97,15 @@ export interface ReliabilityInputRow {
   gem_count: number;
   gemmed_slot_count: number;
   gemmable_slot_count: number;
-  /** §"actualizar el binario de 'Mecánica' para que use este mismo conteo
-   * graduado... así Fiabilidad hereda la precisión sin duplicar nada"
-   * (feedback real, 2026-08-27): mismo conteo que ya usa pullScore
-   * (mechanicFailCount en night-player-summary.service.ts), NO un booleano —
-   * un jugador con 2 fallos ya no puntúa igual que uno con 1. null solo en
-   * el escalón de fallback más antiguo (LEGACY_RELIABILITY_COLUMNS, columna
-   * todavía sin migrar) — ahí computeReliabilityBreakdown vuelve al binario
-   * de siempre en vez de asumir 0 fallos silenciosamente. */
   personal_mechanic_fail_count: number | null;
-  /** §"el baremo de preparación deberia medir los primeros pulls no los
-   * ultimos, porque si en mitad de la raid te toca un objeto y te lo
-   * equipas, es normal que ese item no tenga enchant o gema hasta el dia
-   * siguiente" (feedback real, 2026-08-27): identifican "primer pull de
-   * esta noche para este jugador" (min pull_number por report_code) — ver
-   * computeReliabilityBreakdown. null en los escalones de fallback más
-   * antiguos (la columna todavía no existía) — ahí se trata cualquier fila
-   * como si fuera la primera, mismo comportamiento que había antes de este
-   * cambio, sin regresión. */
   report_code: string | null;
   pull_number: number | null;
-  /** §"consistente... contemplar muchas posibilidades distintas" (feedback
-   * real, 2026-08-28): instancias avoidable-ground/spread donde este
-   * jugador seguía vivo (elegible) y cuántas de ellas le golpearon — ver
-   * mechanicScoreFor en pull-analysis.service.ts. null en los 3 escalones
-   * de fallback más antiguos (columna todavía sin migrar). */
   avoidable_mechanic_eligible_count: number | null;
   avoidable_mechanic_fail_count: number | null;
-  /** §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback
-   * real, 2026-08-29): conteo REAL de ventanas de presión (ver
-   * damage-pressure-windows.ts), no el booleano defensive_use_opportunity —
-   * cuántas de esas ventanas tenían algo disponible y NO se cubrieron.
-   * null en los escalones de fallback anteriores a WINDOW_RELIABILITY_COLUMNS
-   * (pull sin backfill de ventanas todavía) — ahí computeReliabilityBreakdown
-   * cae al booleano de siempre (defensive_use_opportunity/used_defensive_in_pull). */
   defensive_window_coverable_count: number | null;
-  /** De esas mismas ventanas, cuántas SÍ se cubrieron (activo o casteado dentro). */
   defensive_window_covered_count: number | null;
-  /** true = lanzó CUALQUIER defensivo de su catálogo en algún momento del
-   * pull, sin mirar si acertó la ventana — distingue "nunca lo intentó" de
-   * "lo intentó a destiempo" cuando covered_count sale en 0 en ambos casos. */
   defensive_window_used_anything: boolean | null;
-  /** §"subir su porcentaje de mecanicas por haberlo hecho con éxito"
-   * (feedback real, 2026-08-29): cuántas mecánicas sin asignar (huevos,
-   * orbes, ítems — unassigned_mechanic_catalog) resolvió este jugador en
-   * este pull — mechanicScoreFor lo suma como bonus, nunca lo resta. null
-   * solo en el escalón de fallback anterior a esta columna (despliegue en
-   * dos tiempos); 0 real (no "sin dato") en cuanto la columna existe, la
-   * vista ya lo garantiza con count(*) sobre un array posiblemente vacío. */
   unassigned_mechanic_success_count: number | null;
-  /** Bloque K: snapshot semántico v2. Todos permanecen null hasta backfill fiable. */
   defensive_management_score_v2: number | null;
   defensive_management_decision_count: number | null;
   defensive_required_count: number | null;
@@ -213,6 +120,16 @@ export interface ReliabilityInputRow {
   defensive_game_build: string | null;
   defensive_build_fingerprint: string | null;
   defensive_evaluated_at: string | null;
+  /**
+   * Canonical defensive Response counters from the currently published
+   * defensive generation. Optional so older schema/test fixtures remain
+   * source-compatible during the rolling deployment.
+   */
+  canonical_response_evaluable_count?: number | null;
+  canonical_response_success_count?: number | null;
+  canonical_response_failure_count?: number | null;
+  canonical_defensive_generation_id?: string | null;
+  canonical_defensive_evaluated_at?: string | null;
 }
 
 function recencyWeight(closedAtIso: string, now: number): number {
@@ -340,8 +257,52 @@ function reliableV2DefensiveScore(row: ReliabilityInputRow): number | null {
     : null;
 }
 
+function hasAnyCanonicalDefensiveValue(row: ReliabilityInputRow): boolean {
+  return (
+    row.canonical_response_evaluable_count != null ||
+    row.canonical_response_success_count != null ||
+    row.canonical_response_failure_count != null ||
+    row.canonical_defensive_generation_id != null ||
+    row.canonical_defensive_evaluated_at != null
+  );
+}
+
+function canonicalDefensiveRowIsCompatible(row: ReliabilityInputRow): boolean {
+  const evaluable = row.canonical_response_evaluable_count;
+  const success = row.canonical_response_success_count;
+  const failure = row.canonical_response_failure_count;
+  return (
+    typeof row.canonical_defensive_generation_id === 'string' &&
+    row.canonical_defensive_generation_id.length > 0 &&
+    evaluable != null &&
+    success != null &&
+    failure != null &&
+    Number.isInteger(evaluable) &&
+    Number.isInteger(success) &&
+    Number.isInteger(failure) &&
+    evaluable >= 0 &&
+    success >= 0 &&
+    failure >= 0 &&
+    success <= evaluable &&
+    failure <= evaluable &&
+    success + failure === evaluable
+  );
+}
+
+function canonicalDefensiveGenerationForRows(rows: readonly ReliabilityInputRow[]): string | null {
+  const canonicalRows = rows.filter(hasAnyCanonicalDefensiveValue);
+  if (!canonicalRows.length || !canonicalRows.every(canonicalDefensiveRowIsCompatible)) return null;
+  const generationIds = new Set(canonicalRows.map((row) => row.canonical_defensive_generation_id!));
+  return generationIds.size === 1 ? [...generationIds][0] : null;
+}
+
+function canonicalDefensiveScore(row: ReliabilityInputRow): number | null {
+  if (!canonicalDefensiveRowIsCompatible(row)) return null;
+  const evaluable = row.canonical_response_evaluable_count!;
+  return evaluable > 0 ? row.canonical_response_success_count! / evaluable : null;
+}
+
 export interface PlayerConsistency {
-  /** Media de ejecución menos la mitad de su desviación: nivel y regularidad, no solo varianza. */
   score: number;
   averageExecution: number;
   volatility: number;
@@ -349,17 +310,6 @@ export interface PlayerConsistency {
   sampleSize: number;
 }
 
-/**
- * Mismo cálculo que usaba `overall` en listPlayerReliability, factorizado
- * para poder aplicarlo a CUALQUIER subconjunto de filas — la ventana
- * completa, cada mitad (tendencia), los cubos semanales de player-detail, y
- * también (§"fiabilidad de la noche" — feedback real) las filas de una
- * sola noche. Sin eje de asistencia (§"rotar en un boss por tema de specs
- * no tiene por qué afectar a la fiabilidad" — feedback real, 2026-08-28):
- * mecánica/defensiva/preparación son las únicas señales, la MISMA fórmula
- * para cualquier ventana — ya no hace falta un parámetro aparte para "esta
- * noche no tiene asistencia".
- */
 export function computeReliabilityBreakdown(
   rows: ReliabilityInputRow[],
   now: number,
@@ -367,8 +317,17 @@ export function computeReliabilityBreakdown(
 ): ReliabilityBreakdown | null {
   if (!rows.length) return null;
 
+  // Canonical Response is now the authoritative defensive axis whenever the
+  // scope contains a coherent published generation. Rows outside that
+  // generation simply do not contribute defensive evidence; they are never
+  // mixed with legacy/window/management semantics inside the same score.
+  const canonicalGenerationId = canonicalDefensiveGenerationForRows(rows);
+  const useCanonicalDefensiveGeneration = canonicalGenerationId != null;
+
   const visibleV2Generation =
-    options.defensiveV2Enabled === true && rows.every(v2DefensiveRowIsCompatible)
+    !useCanonicalDefensiveGeneration &&
+    options.defensiveV2Enabled === true &&
+    rows.every(v2DefensiveRowIsCompatible)
       ? homogeneousDefensiveEvaluationGeneration(
           rows.map((row) => ({
             evaluatorVersion: row.defensive_evaluator_version,
@@ -381,19 +340,6 @@ export function computeReliabilityBreakdown(
       : null;
   const useVisibleV2Generation = visibleV2Generation != null;
 
-  // §"el baremo de preparación deberia medir los primeros pulls no los
-  // ultimos, porque si en mitad de la raid te toca un objeto y te lo
-  // equipas, es normal que ese item no tenga enchant o gema hasta el dia
-  // siguiente, por lo que medir que tengas tu pj preparado con enchants y
-  // gemas al inicio de la raid es mas correcto" (feedback real,
-  // 2026-08-27): promediar preparación sobre TODOS los pulls de la noche
-  // penalizaba justo lo contrario de lo que debía — un jugador que mejora
-  // de equipo a mitad de raid veía CAER su preparación esa noche. Solo
-  // cuenta el primer pull (min pull_number) de cada report_code por
-  // jugador; el resto de ejes sigue usando todas las filas (ahí la
-  // tendencia pull a pull sí es la señal que se quiere). Sin report_code/
-  // pull_number todavía (escalón de fallback más antiguo) se trata
-  // cualquier fila como "primera" — mismo comportamiento que había antes.
   const minPullNumberByReport = new Map<string, number>();
   for (const r of rows) {
     if (r.report_code == null || r.pull_number == null) continue;
@@ -418,16 +364,9 @@ export function computeReliabilityBreakdown(
   let prepWeight = 0;
   let prepSum = 0;
   const pullExecution: { value: number; weight: number }[] = [];
+
   for (const r of rows) {
     const w = recencyWeight(r.closed_at, now);
-    // §"un 77% de puntuación de noche pero a la vez un 44 de fiabilidad en
-    // la noche... esto parece bastante incongruente" (feedback real,
-    // 2026-08-27) + "quiero que la puntuación... sea consistente en
-    // realidad" (feedback real, 2026-08-28): MISMA función que
-    // computePullScore en night-player-summary.service.ts
-    // (mechanicScoreFor, en pull-analysis.service.ts para que ambos lean
-    // la MISMA fila y apliquen la MISMA fórmula) — así Fiabilidad hereda la
-    // precisión de pullScore sin duplicar nada.
     const mecScore = mechanicScoreFor({
       personalMechanicFailCount: r.personal_mechanic_fail_count,
       avoidableMechanicEligibleCount: r.avoidable_mechanic_eligible_count,
@@ -438,69 +377,56 @@ export function computeReliabilityBreakdown(
     });
     mecSum += mecScore * w;
     mecWeight += w;
-    // La respuesta en una muerte evaluable es la evidencia más directa y
-    // pesa el doble. El uso general del try también cuenta, pero solo genera
-    // una muestra negativa si hubo presión verificable; así no se castiga un
-    // pull limpio/corto por no gastar un cooldown sin necesidad.
+
     let pullDefensiveSum = 0;
     let pullDefensiveWeight = 0;
     if (r.used_defensive_when_died != null) {
       pullDefensiveSum += (r.used_defensive_when_died ? 1 : 0) * 2;
       pullDefensiveWeight += 2;
     }
-    // §"no es lo mismo usar 0 defensivos que usarlo a destiempo, lo primero
-    // debe penalizar mucho y lo segundo debe penalizar un poco pero guiar
-    // para corregirlo" (feedback real, 2026-08-29): con ventanas reales
-    // disponibles (ver damage-pressure-windows.ts), el ratio
-    // cubiertas/cubribles YA distingue casi todo por sí solo — 0 ventanas
-    // cubiertas de N puntúa peor que 1 de N. El único caso que el ratio NO
-    // distingue es "0 de N por no haber tocado nada en todo el pull" vs "0
-    // de N por haber usado algo, pero desincronizado con la presión real" —
-    // ambos dan ratio 0. defensive_window_used_anything es la señal que
-    // separa esos dos casos: nunca lo intentó (0, penalización completa) vs
-    // lo intentó a destiempo (crédito parcial, penalización ligera — la
-    // guía de CUÁNDO y POR QUÉ vive en la UI del dosier, no en el número).
-    // §bug real encontrado en auditoría (2026-08-29): la condición original
-    // era `!= null && windowTotal > 0` — un pull CON columnas de ventana
-    // (schema 'window') pero SIN ninguna ventana real esta vez (windowTotal
-    // === 0, ni una presión detectada) caía al `else if` de abajo y
-    // resucitaba el booleano legacy, que puede seguir siendo `true` por una
-    // vía que las ventanas no capturan (p.ej. death_cause.defensiveOptions
-    // de una muerte excluida de las ventanas) — dos fuentes de verdad
-    // contradiciéndose para la misma fila. El fallback SOLO debe disparar
-    // cuando la columna en sí no existe (`== null`, schema anterior a
-    // WINDOW_RELIABILITY_COLUMNS) — un windowTotal de 0 con columna presente
-    // es "sin presión real esta vez", no "sin dato": no debe sumar nada.
     if (r.defensive_window_coverable_count != null) {
       const windowTotal = (r.defensive_window_covered_count ?? 0) + r.defensive_window_coverable_count;
       if (windowTotal > 0) {
         const covered = r.defensive_window_covered_count ?? 0;
         const executionValue =
-          covered > 0 ? covered / windowTotal : r.defensive_window_used_anything ? DEFENSIVE_MISTIMED_CREDIT : 0;
+          covered > 0
+            ? covered / windowTotal
+            : r.defensive_window_used_anything
+              ? DEFENSIVE_MISTIMED_CREDIT
+              : 0;
         pullDefensiveSum += executionValue;
         pullDefensiveWeight += 1;
       }
     } else if (r.defensive_use_opportunity) {
-      // Fallback: pull sin backfill de ventanas todavía, o schema anterior a
-      // WINDOW_RELIABILITY_COLUMNS — mismo booleano de siempre.
       pullDefensiveSum += r.used_defensive_in_pull ? 1 : 0;
       pullDefensiveWeight += 1;
     }
+
     const legacyDefensiveExecution =
       pullDefensiveWeight > 0 ? pullDefensiveSum / pullDefensiveWeight : null;
     const v2DefensiveExecution = reliableV2DefensiveScore(r);
+    const canonicalExecution = canonicalDefensiveScore(r);
     const useV2ForPull = useVisibleV2Generation && v2DefensiveExecution != null;
-    if (useV2ForPull) {
-      // Selección atómica: si v2 es fiable, esta fila no aporta ninguna
-      // señal defensiva legacy al score efectivo.
+
+    if (useCanonicalDefensiveGeneration) {
+      if (canonicalDefensiveRowIsCompatible(r)) {
+        const evaluable = r.canonical_response_evaluable_count!;
+        if (evaluable > 0) {
+          // Episode-level Response KPI: covered / evaluable. Recency is
+          // applied per pull, so a pull with N episodes contributes N
+          // samples instead of being flattened to a single pull average.
+          defSum += r.canonical_response_success_count! * w;
+          defWeight += evaluable * w;
+        }
+      }
+    } else if (useV2ForPull) {
       defSum += v2DefensiveExecution * w;
       defWeight += w;
     } else if (!useVisibleV2Generation && legacyDefensiveExecution != null) {
-      // Conserva exactamente la ponderación legacy (muerte x2 + ventana x1)
-      // cuando el flag está apagado o esta fila todavía no tiene backfill.
       defSum += pullDefensiveSum * w;
       defWeight += pullDefensiveWeight * w;
     }
+
     if (v2DefensiveExecution != null && legacyDefensiveExecution != null) {
       shadowV2Sum += v2DefensiveExecution * w;
       shadowV2Weight += w;
@@ -508,15 +434,19 @@ export function computeReliabilityBreakdown(
       shadowLegacySum += legacyDefensiveExecution * w;
       shadowLegacyWeight += w;
     }
+
     const preparationSlots = r.enchantable_slot_count + r.gemmable_slot_count;
     if (preparationSlots > 0 && isFirstPullOfNight(r)) {
       prepSum += ((r.enchanted_slot_count + r.gemmed_slot_count) / preparationSlots) * w;
       prepWeight += w;
     }
+
     const mechanicExecution = mecScore * 100;
-    const selectedDefensiveExecution = useVisibleV2Generation
-      ? v2DefensiveExecution
-      : legacyDefensiveExecution;
+    const selectedDefensiveExecution = useCanonicalDefensiveGeneration
+      ? canonicalExecution
+      : useVisibleV2Generation
+        ? v2DefensiveExecution
+        : legacyDefensiveExecution;
     const defensiveExecution =
       selectedDefensiveExecution == null ? null : selectedDefensiveExecution * 100;
     pullExecution.push({
@@ -527,29 +457,21 @@ export function computeReliabilityBreakdown(
       weight: w,
     });
   }
+
   const mecanica = mecWeight > 0 ? (mecSum / mecWeight) * 100 : null;
   const defensiva = defWeight > 0 ? (defSum / defWeight) * 100 : null;
   const preparacion = prepWeight > 0 ? (prepSum / prepWeight) * 100 : null;
+
   const axes: { key: keyof typeof AXIS_WEIGHTS; value: number }[] = [];
   if (mecanica != null) axes.push({ key: 'mecanica', value: mecanica });
   if (defensiva != null) axes.push({ key: 'defensiva', value: defensiva });
-  // §"venir sin la preparación penaliza si no se hace, pero se da por
-  // supuesto que si lo tienes que hacer así que no cuenta para sumar"
-  // (feedback real, 2026-08-30): llegar con el pj completo (todos los
-  // enchants/gemas de la season) es la línea base esperada, no un mérito —
-  // un 100% aquí solo entra en el `overall` cuando hay algo que penalizar
-  // (preparacion < 100). Perfecto de verdad (100) queda fuera del blend:
-  // antes pesaba igual que un mecánica/defensiva perfectos y podía tapar
-  // una ejecución floja (caso real: Fiabilidad 60 con mecánica ~71 pero
-  // defensiva ~18, inflado por preparación=100%). `breakdown.preparacion`
-  // se sigue devolviendo intacto — la UI necesita el 100 real, no un "sin
-  // datos", solo cambia si CUENTA para el overall.
   if (preparacion != null && preparacion < 100) axes.push({ key: 'preparacion', value: preparacion });
   const weightSum = axes.reduce((s, a) => s + AXIS_WEIGHTS[a.key], 0);
   const overall =
     weightSum > 0
       ? Math.round(axes.reduce((s, a) => s + a.value * AXIS_WEIGHTS[a.key], 0) / weightSum)
       : 0;
+
   let consistency: PlayerConsistency | null = null;
   if (pullExecution.length >= 5) {
     const totalWeight = pullExecution.reduce((sum, sample) => sum + sample.weight, 0);
@@ -571,6 +493,7 @@ export function computeReliabilityBreakdown(
       sampleSize: pullExecution.length,
     };
   }
+
   const v2ShadowScore = shadowV2Weight > 0 ? (shadowV2Sum / shadowV2Weight) * 100 : null;
   const legacyShadowScore = shadowLegacyWeight > 0 ? (shadowLegacySum / shadowLegacyWeight) * 100 : null;
   const defensiveShadowComparison: DefensiveReliabilityShadowComparison | null =
@@ -595,6 +518,7 @@ export function computeReliabilityBreakdown(
           }).length,
           evaluatorVersions: [...shadowEvaluatorVersions].sort(),
         };
+
   return {
     overall,
     breakdown: { mecanica, defensiva, preparacion },
@@ -603,18 +527,6 @@ export function computeReliabilityBreakdown(
   };
 }
 
-/**
- * §"venir sin la preparación penaliza si no se hace, pero se da por
- * supuesto que si lo tienes que hacer así que no cuenta para sumar"
- * (feedback real, 2026-08-30): los pesos normalizados (44%/33%/22%) que
- * enseñaban el modal de explicación y el drawer del roster eran un texto
- * FIJO que asumía los 3 ejes siempre puntuando — desde este cambio ya no es
- * cierto cuando preparación sale perfecta (100, excluida del blend). Este
- * helper replica EXACTAMENTE el mismo criterio de inclusión/normalización
- * que usa `overall` arriba, para que la UI muestre el peso REAL aplicado en
- * cada caso en vez de una etiqueta que puede mentir. null = ese eje no
- * participó en el overall (sin dato, o preparación perfecta).
- */
 export function effectiveAxisWeights(breakdown: {
   mecanica: number | null;
   defensiva: number | null;
@@ -634,7 +546,6 @@ export function effectiveAxisWeights(breakdown: {
   };
 }
 
-/** Wrapper de compatibilidad — player-detail.service.ts solo necesita el número, no el desglose. */
 export function computeOverall(
   rows: ReliabilityInputRow[],
   now: number,
@@ -643,14 +554,7 @@ export function computeOverall(
   return computeReliabilityBreakdown(rows, now, options)?.overall ?? null;
 }
 
-// §12.5 "flecha de tendencia": diferencia mínima para no marcar como
-// subida/bajada ruido de un par de pulls — por debajo de esto se enseña
-// "flat", no un movimiento que no es de verdad significativo.
 const TREND_THRESHOLD = 4;
-
-// §"clasifícalos tanks primero, luego healers y luego DPS": Melee/Ranged
-// comparten posición (ambos son "dps" a efectos de orden) — dentro de ese
-// empate de rol, decide overall (ver el sort de más abajo).
 const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', number> = {
   Tank: 0,
   Heal: 1,
@@ -659,15 +563,6 @@ const ROLE_SORT_ORDER: Record<'Tank' | 'Heal' | 'Melee' | 'Ranged' | 'unknown', 
   unknown: 3,
 };
 
-// §"consistente... contemplar muchas posibilidades distintas" (feedback
-// real, 2026-08-28): avoidable_mechanic_eligible_count/
-// avoidable_mechanic_fail_count son las más nuevas de la vista — escalón
-// propio por encima de RELIABILITY_COLUMNS para el mismo despliegue en dos
-// tiempos de siempre (frontend puede llegar antes que la migración).
-// §"subir su porcentaje de mecanicas" (feedback real, 2026-08-29):
-// unassigned_mechanic_success_count es la más nueva de la vista — escalón
-// propio por encima de WINDOW_RELIABILITY_COLUMNS, mismo motivo de siempre
-// (frontend puede llegar antes que la migración).
 const V2_RELIABILITY_COLUMNS =
   'player_name, pull_id, boss_id, difficulty, closed_at, had_avoidable_damage, self_positioning_death, used_defensive_when_died, used_defensive_in_pull, defensive_use_opportunity, enchanted_slot_count, enchantable_slot_count, gem_count, gemmed_slot_count, gemmable_slot_count, personal_mechanic_fail_count, report_code, pull_number, avoidable_mechanic_eligible_count, avoidable_mechanic_fail_count, defensive_window_coverable_count, defensive_window_covered_count, defensive_window_used_anything, unassigned_mechanic_success_count, defensive_management_score_v2, defensive_management_decision_count, defensive_required_count, defensive_required_success_count, defensive_required_exact_adherence_count, defensive_broken_reservation_count, defensive_death_viable_cd_count, defensive_evaluation_confidence, defensive_evaluator_version, defensive_resolver_version, defensive_solver_version, defensive_game_build, defensive_build_fingerprint, defensive_evaluated_at';
 const UNASSIGNED_MECHANIC_RELIABILITY_COLUMNS =
@@ -724,6 +619,15 @@ function isReliabilitySchemaTransitionError(
   );
 }
 
+function isReliabilityRpcUnavailable(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  return (
+    error.code === 'PGRST202' ||
+    error.code === '42883' ||
+    /get_player_pull_reliability_inputs_v2/i.test(error.message ?? '')
+  );
+}
+
 @Injectable({ providedIn: 'root' })
 export class ReliabilityService {
   private supabase = inject(SupabaseService);
@@ -736,7 +640,6 @@ export class ReliabilityService {
     try {
       return await this.executionLedger.listPullSummaries(pullIds);
     } catch {
-      // La migración puede llegar después del frontend durante el rollout.
       return [];
     }
   }
@@ -747,16 +650,130 @@ export class ReliabilityService {
     };
   }
 
-  /**
-   * Compatibilidad de despliegue: el frontend puede llegar antes que la
-   * migración que amplía la vista. En ese intervalo se leen las columnas
-   * antiguas y se conserva la fórmula previa (solo evidencia al morir), sin
-   * vaciar todo el roster. Tras aplicar la migración no entra en este fallback.
-   */
+  private normalizeReliabilityRows(
+    data: unknown[],
+    schemaLevel: 'rpc-v2' | 'v2' | 'unassigned' | 'window' | 'ratio' | 'current' | 'defensive' | 'legacy',
+  ): ReliabilityInputRow[] {
+    return (data as Partial<ReliabilityInputRow>[]).map((row) => {
+      const hasCurrentSchema = ['rpc-v2', 'v2', 'unassigned', 'window', 'ratio', 'current'].includes(schemaLevel);
+      const hasRatioSchema = ['rpc-v2', 'v2', 'unassigned', 'window', 'ratio'].includes(schemaLevel);
+      const hasWindowSchema = ['rpc-v2', 'v2', 'unassigned', 'window'].includes(schemaLevel);
+      const hasV2Schema = schemaLevel === 'rpc-v2' || schemaLevel === 'v2';
+      const hasCanonicalSchema = schemaLevel === 'rpc-v2';
+      return {
+        ...(row as ReliabilityInputRow),
+        used_defensive_in_pull:
+          schemaLevel === 'legacy' ? false : row.used_defensive_in_pull === true,
+        defensive_use_opportunity:
+          schemaLevel === 'legacy' ? false : row.defensive_use_opportunity === true,
+        gemmed_slot_count: hasCurrentSchema ? Number(row.gemmed_slot_count ?? 0) : 0,
+        gemmable_slot_count: hasCurrentSchema ? Number(row.gemmable_slot_count ?? 0) : 0,
+        personal_mechanic_fail_count:
+          hasCurrentSchema ? Number(row.personal_mechanic_fail_count ?? 0) : null,
+        report_code: hasCurrentSchema ? (row.report_code ?? null) : null,
+        pull_number: hasCurrentSchema ? (row.pull_number ?? null) : null,
+        avoidable_mechanic_eligible_count:
+          hasRatioSchema ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
+        avoidable_mechanic_fail_count:
+          hasRatioSchema ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
+        defensive_window_coverable_count:
+          hasWindowSchema ? Number(row.defensive_window_coverable_count ?? 0) : null,
+        defensive_window_covered_count:
+          hasWindowSchema ? Number(row.defensive_window_covered_count ?? 0) : null,
+        defensive_window_used_anything:
+          hasWindowSchema ? row.defensive_window_used_anything === true : null,
+        unassigned_mechanic_success_count:
+          ['rpc-v2', 'v2', 'unassigned'].includes(schemaLevel)
+            ? Number(row.unassigned_mechanic_success_count ?? 0)
+            : null,
+        defensive_management_score_v2:
+          hasV2Schema && row.defensive_management_score_v2 != null
+            ? Number(row.defensive_management_score_v2)
+            : null,
+        defensive_management_decision_count:
+          hasV2Schema && row.defensive_management_decision_count != null
+            ? Number(row.defensive_management_decision_count)
+            : null,
+        defensive_required_count:
+          hasV2Schema && row.defensive_required_count != null
+            ? Number(row.defensive_required_count)
+            : null,
+        defensive_required_success_count:
+          hasV2Schema && row.defensive_required_success_count != null
+            ? Number(row.defensive_required_success_count)
+            : null,
+        defensive_required_exact_adherence_count:
+          hasV2Schema && row.defensive_required_exact_adherence_count != null
+            ? Number(row.defensive_required_exact_adherence_count)
+            : null,
+        defensive_broken_reservation_count:
+          hasV2Schema && row.defensive_broken_reservation_count != null
+            ? Number(row.defensive_broken_reservation_count)
+            : null,
+        defensive_death_viable_cd_count:
+          hasV2Schema && row.defensive_death_viable_cd_count != null
+            ? Number(row.defensive_death_viable_cd_count)
+            : null,
+        defensive_evaluation_confidence:
+          hasV2Schema ? (row.defensive_evaluation_confidence ?? null) : null,
+        defensive_evaluator_version:
+          hasV2Schema ? (row.defensive_evaluator_version ?? null) : null,
+        defensive_resolver_version:
+          hasV2Schema ? (row.defensive_resolver_version ?? null) : null,
+        defensive_solver_version:
+          hasV2Schema ? (row.defensive_solver_version ?? null) : null,
+        defensive_game_build:
+          hasV2Schema ? (row.defensive_game_build ?? null) : null,
+        defensive_build_fingerprint:
+          hasV2Schema ? (row.defensive_build_fingerprint ?? null) : null,
+        defensive_evaluated_at:
+          hasV2Schema ? (row.defensive_evaluated_at ?? null) : null,
+        canonical_response_evaluable_count:
+          hasCanonicalSchema && row.canonical_response_evaluable_count != null
+            ? Number(row.canonical_response_evaluable_count)
+            : null,
+        canonical_response_success_count:
+          hasCanonicalSchema && row.canonical_response_success_count != null
+            ? Number(row.canonical_response_success_count)
+            : null,
+        canonical_response_failure_count:
+          hasCanonicalSchema && row.canonical_response_failure_count != null
+            ? Number(row.canonical_response_failure_count)
+            : null,
+        canonical_defensive_generation_id:
+          hasCanonicalSchema ? (row.canonical_defensive_generation_id ?? null) : null,
+        canonical_defensive_evaluated_at:
+          hasCanonicalSchema ? (row.canonical_defensive_evaluated_at ?? null) : null,
+      };
+    });
+  }
+
   private async fetchReliabilityInputs(
     filters: ReliabilityInputFilters,
   ): Promise<ReliabilityInputRow[]> {
     if (filters.pullIds && !filters.pullIds.length) return [];
+
+    // The expensive dossier/night path is always player-scoped. Use the
+    // set-based RPC there so PostgREST never expands the global reliability
+    // view and its correlated mechanic subqueries before applying the actor
+    // filter. If the RPC is not deployed yet, only the explicit
+    // function-not-found rollout case falls back to the old view. Timeouts
+    // and pool errors are surfaced instead of silently re-entering the heavy
+    // path that caused the original incident.
+    if (filters.playerName) {
+      const rpc = await this.supabase.client.rpc('get_player_pull_reliability_inputs_v2', {
+        p_player_name: filters.playerName,
+        p_since: filters.since ?? null,
+        p_boss_id: filters.scope?.bossId ?? null,
+        p_difficulty: filters.scope?.difficulty ?? null,
+        p_pull_ids: filters.pullIds ?? null,
+      });
+      if (!rpc.error) {
+        return this.normalizeReliabilityRows((rpc.data ?? []) as unknown[], 'rpc-v2');
+      }
+      if (!isReliabilityRpcUnavailable(rpc.error)) throw rpc.error;
+    }
+
     const run = async (columns: string) => {
       let query = this.supabase.client.from('player_pull_reliability_inputs').select(columns);
       if (filters.scope)
@@ -797,99 +814,7 @@ export class ReliabilityService {
       schemaLevel = 'legacy';
     }
     if (response.error) throw response.error;
-    return ((response.data ?? []) as unknown as Partial<ReliabilityInputRow>[]).map((row) => {
-      const hasCurrentSchema = ['v2', 'unassigned', 'window', 'ratio', 'current'].includes(schemaLevel);
-      const hasRatioSchema = ['v2', 'unassigned', 'window', 'ratio'].includes(schemaLevel);
-      const hasWindowSchema = ['v2', 'unassigned', 'window'].includes(schemaLevel);
-      return {
-      ...(row as ReliabilityInputRow),
-      used_defensive_in_pull:
-        schemaLevel === 'legacy' ? false : row.used_defensive_in_pull === true,
-      defensive_use_opportunity:
-        schemaLevel === 'legacy' ? false : row.defensive_use_opportunity === true,
-      gemmed_slot_count: hasCurrentSchema ? Number(row.gemmed_slot_count ?? 0) : 0,
-      gemmable_slot_count: hasCurrentSchema ? Number(row.gemmable_slot_count ?? 0) : 0,
-      // null (no 0) en los escalones de fallback a propósito —
-      // computeReliabilityBreakdown/mechanicScoreFor lo leen como "sin dato
-      // todavía" en vez de "0 fallos"/"0 elegibles" (ver el comentario ahí).
-      personal_mechanic_fail_count:
-        hasCurrentSchema ? Number(row.personal_mechanic_fail_count ?? 0) : null,
-      // null en fallback (igual criterio): isFirstPullOfNight trata
-      // cualquier fila como "primera" cuando no hay report_code/pull_number.
-      report_code: hasCurrentSchema ? (row.report_code ?? null) : null,
-      pull_number: hasCurrentSchema ? (row.pull_number ?? null) : null,
-      // §"consistente... contemplar muchas posibilidades distintas"
-      // (feedback real, 2026-08-28): null en los 3 escalones de fallback
-      // más antiguos — mechanicScoreFor cae al conteo plano de siempre
-      // (personal_mechanic_fail_count) en vez de asumir "sin oportunidades
-      // ratio" silenciosamente.
-      avoidable_mechanic_eligible_count:
-        hasRatioSchema ? Number(row.avoidable_mechanic_eligible_count ?? 0) : null,
-      avoidable_mechanic_fail_count:
-        hasRatioSchema ? Number(row.avoidable_mechanic_fail_count ?? 0) : null,
-      // §"no es lo mismo usar 0 defensivos que usarlo a destiempo" (feedback
-      // real, 2026-08-29): null en TODOS los escalones de fallback anteriores
-      // a WINDOW_RELIABILITY_COLUMNS — computeReliabilityBreakdown cae al
-      // booleano de siempre (defensive_use_opportunity/used_defensive_in_pull)
-      // en vez de asumir "sin ventanas" silenciosamente.
-      defensive_window_coverable_count:
-        hasWindowSchema ? Number(row.defensive_window_coverable_count ?? 0) : null,
-      defensive_window_covered_count:
-        hasWindowSchema ? Number(row.defensive_window_covered_count ?? 0) : null,
-      defensive_window_used_anything:
-        hasWindowSchema ? row.defensive_window_used_anything === true : null,
-      // §"subir su porcentaje de mecanicas por haberlo hecho con éxito"
-      // (feedback real, 2026-08-29): null SOLO en el escalón anterior a esta
-      // columna — a diferencia de avoidable_mechanic_*, no depende de ningún
-      // backfill aparte (unassigned_mechanic_occurrences ya vive en pulls
-      // desde que se creó la tabla), así que en cuanto la columna existe
-      // siempre es un número real, nunca "sin dato todavía".
-      unassigned_mechanic_success_count:
-        schemaLevel === 'v2' || schemaLevel === 'unassigned' ? Number(row.unassigned_mechanic_success_count ?? 0) : null,
-      defensive_management_score_v2:
-        schemaLevel === 'v2' && row.defensive_management_score_v2 != null
-          ? Number(row.defensive_management_score_v2)
-          : null,
-      defensive_management_decision_count:
-        schemaLevel === 'v2' && row.defensive_management_decision_count != null
-          ? Number(row.defensive_management_decision_count)
-          : null,
-      defensive_required_count:
-        schemaLevel === 'v2' && row.defensive_required_count != null
-          ? Number(row.defensive_required_count)
-          : null,
-      defensive_required_success_count:
-        schemaLevel === 'v2' && row.defensive_required_success_count != null
-          ? Number(row.defensive_required_success_count)
-          : null,
-      defensive_required_exact_adherence_count:
-        schemaLevel === 'v2' && row.defensive_required_exact_adherence_count != null
-          ? Number(row.defensive_required_exact_adherence_count)
-          : null,
-      defensive_broken_reservation_count:
-        schemaLevel === 'v2' && row.defensive_broken_reservation_count != null
-          ? Number(row.defensive_broken_reservation_count)
-          : null,
-      defensive_death_viable_cd_count:
-        schemaLevel === 'v2' && row.defensive_death_viable_cd_count != null
-          ? Number(row.defensive_death_viable_cd_count)
-          : null,
-      defensive_evaluation_confidence:
-        schemaLevel === 'v2' ? (row.defensive_evaluation_confidence ?? null) : null,
-      defensive_evaluator_version:
-        schemaLevel === 'v2' ? (row.defensive_evaluator_version ?? null) : null,
-      defensive_resolver_version:
-        schemaLevel === 'v2' ? (row.defensive_resolver_version ?? null) : null,
-      defensive_solver_version:
-        schemaLevel === 'v2' ? (row.defensive_solver_version ?? null) : null,
-      defensive_game_build:
-        schemaLevel === 'v2' ? (row.defensive_game_build ?? null) : null,
-      defensive_build_fingerprint:
-        schemaLevel === 'v2' ? (row.defensive_build_fingerprint ?? null) : null,
-      defensive_evaluated_at:
-        schemaLevel === 'v2' ? (row.defensive_evaluated_at ?? null) : null,
-      };
-    });
+    return this.normalizeReliabilityRows((response.data ?? []) as unknown[], schemaLevel);
   }
 
   async getPlayerReliabilityInputs(
@@ -899,14 +824,6 @@ export class ReliabilityService {
     return this.fetchReliabilityInputs({ playerName, since });
   }
 
-  /**
-   * §"todos los pulls de un boss": fiabilidad ACOTADA a un boss+dificultad
-   * concreto, TODA su historia (no la ventana móvil de 60 días — aquí la
-   * pregunta es "¿quién falla más EN ESTE BOSS?", no "¿quién falla más en
-   * general últimamente?"). Reutiliza exactamente la misma fórmula — nada
-   * de esto es una función nueva/paralela, solo cambia qué filas entran.
-   * Sin scope = comportamiento de siempre (ventana de 60 días, roster completo).
-   */
   async listPlayerReliability(scope?: {
     bossId: string;
     difficulty: string;
@@ -917,13 +834,7 @@ export class ReliabilityService {
           ? { scope }
           : { since: new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString() },
       ),
-      // best-effort: sin sync de wowaudit todavía, se sigue con mecánica+defensiva solamente (mismo comportamiento de antes).
       this.wowauditRoster.listRoster().catch(() => []),
-      // §"la asistencia sigue saliendo rara" (feedback real, investigado):
-      // ya NO se usa attendedPercentage de wowaudit (calcula sobre SU
-      // calendario de eventos/firmas, no sobre raids reales — ver
-      // attendance.service.ts) — se deriva de los reports que Avoid ya tiene
-      // importados desde el inicio de la season.
       this.attendanceService
         .listRealAttendance()
         .catch(() => new Map<string, { attended: number; total: number; pct: number | null }>()),
@@ -933,10 +844,6 @@ export class ReliabilityService {
       [...new Set(data.map((row) => row.pull_id))],
     );
 
-    // El roster necesita poder explicar el score, no solo calcularlo. Estas
-    // lecturas son best-effort y solo se hacen en la vista global: equipo
-    // exacto, casts y estado de cada defensivo al morir ya están persistidos
-    // en los registros del pull, así que no se vuelve a consultar WCL.
     let evidenceRecords: RawReliabilityEvidenceRecord[] = [];
     let evidencePulls: ReliabilityEvidencePull[] = [];
     let bossNames = new Map<string, string>();
@@ -981,20 +888,10 @@ export class ReliabilityService {
       if (!byPlayer.has(row.player_name)) byPlayer.set(row.player_name, []);
       byPlayer.get(row.player_name)!.push(row);
     }
-    // §"todo el roster de todas las pantallas... tiene que ser el oficial de
-    // wowaudit": con el roster sincronizado, ES la lista — ni de menos (un
-    // jugador del roster sin pulls todavía sigue apareciendo, "sin datos")
-    // ni de más (un nombre con pulls que NO está en wowaudit — un pug, un
-    // sub puntual, un nombre mal escrito por WCL — no se enseña como si
-    // fuera roster). Sin sync todavía (roster vacío, best-effort de arriba),
-    // se degrada al comportamiento anterior: quien tenga pulls, aparece.
     if (roster.length) {
       byPlayer.forEach((_, name) => {
         if (!rosterByName.has(name)) byPlayer.delete(name);
       });
-      // Rellenar con roster sin datos SOLO en la vista general (§12) — en
-      // una vista acotada a un boss (scope), listar a todo el mundo que
-      // nunca lo ha intentado no aporta nada, solo ruido.
       if (!scope) {
         for (const entry of roster) {
           if (!byPlayer.has(entry.name)) byPlayer.set(entry.name, []);
@@ -1022,29 +919,12 @@ export class ReliabilityService {
       );
     }
 
-    // §"clasifícalos tanks primero, luego healers y luego DPS": orden de rol
-    // fijo (el mismo que usa cualquier UI de raid — LFG, WCL, wowaudit
-    // mismo), fiabilidad como criterio de desempate dentro de cada rol.
-    // null (no cruza con wowaudit) se queda al final, después de DPS.
     return results.sort((a, b) => {
       const roleDelta = ROLE_SORT_ORDER[a.role ?? 'unknown'] - ROLE_SORT_ORDER[b.role ?? 'unknown'];
       return roleDelta !== 0 ? roleDelta : b.overall - a.overall;
     });
   }
 
-  /**
-   * §rendimiento (2026-08-29): "el dosier de un jugador tarda muchísimo en
-   * cargar" (feedback real) — investigado: night-player-summary.service.ts
-   * llamaba a listPlayerReliability() (fiabilidad de TODA la guild, 60 días,
-   * con SU evidencia completa — player_pull_records/pulls/known_raid_bosses
-   * de todos los raiders) solo para quedarse con
-   * .find(r => r.playerName === playerName). Esta variante calcula
-   * EXACTAMENTE la misma fórmula (buildReliabilityEntry, factorizado de
-   * listPlayerReliability) pero cada query ya sale filtrada por jugador en
-   * el propio SQL — de "toda la guild × 60 días" a "un jugador × 60 días".
-   * null si el roster está sincronizado y este nombre no está en él (mismo
-   * criterio de exclusión que listPlayerReliability sin scope).
-   */
   async getPlayerReliability(playerName: string): Promise<PlayerReliability | null> {
     const since = new Date(Date.now() - WINDOW_DAYS * 86_400_000).toISOString();
     const [rows, roster, attendance] = await Promise.all([
@@ -1114,12 +994,6 @@ export class ReliabilityService {
     );
   }
 
-  /**
-   * Fórmula compuesta para UN jugador dadas sus filas de
-   * player_pull_reliability_inputs — factorizado de listPlayerReliability
-   * para que getPlayerReliability (un solo jugador) pueda reutilizar
-   * exactamente el mismo cálculo sin duplicarlo.
-   */
   private buildReliabilityEntry(
     playerName: string,
     rows: ReliabilityInputRow[],
@@ -1132,10 +1006,6 @@ export class ReliabilityService {
     midpoint: number,
     ledgerSummaries: ExecutionLedgerPullSummary[] = [],
   ): PlayerReliability {
-    // Para la pantalla operativa importa cómo llegó a la última noche,
-    // no el objeto sin encantar que pudo equipar a mitad de raid. Se toma
-    // la primera aparición del jugador por fecha (dos uploads del mismo día
-    // siguen siendo una noche) y, de ellas, la fecha más reciente.
     let latestGemCount: number | null = null;
     let latestGemmedSlotCount: number | null = null;
     let latestGemmableSlotCount: number | null = null;
@@ -1174,13 +1044,6 @@ export class ReliabilityService {
       }
     }
 
-    // §"rotar en un boss por tema de specs no tiene por qué afectar a la
-    // fiabilidad" (feedback real, 2026-08-28): asistencia ya no puntúa
-    // dentro de Fiabilidad (ver comentario junto a AXIS_WEIGHTS) — sigue
-    // calculándose y mostrándose (attendanceNightsAttended/
-    // attendanceNightsTotal más abajo, informativo) a partir de reports
-    // REALMENTE importados en Avoid desde el inicio de season
-    // (attendance.service.ts), no del calendario propio de wowaudit.
     const computationOptions = this.reliabilityComputationOptions();
     const result = computeReliabilityBreakdown(rows, now, computationOptions);
     const overall = result?.overall ?? 0;
@@ -1192,10 +1055,6 @@ export class ReliabilityService {
     const observedAxisCount = result
       ? Object.values(result.breakdown).filter((value) => value != null).length
       : 0;
-    // Antes se sumaban `defensive_use_opportunity` y la evaluación al
-    // morir como si fueran oportunidades independientes. Una misma fila
-    // podía aportar 2 y la UI llegaba a enseñar más oportunidades que
-    // pulls. Son dos muestras distintas y así se conservan desde aquí.
     const defensiveOpportunityCount = rows.filter((row) => row.defensive_use_opportunity).length;
     const defensiveUseCount = rows.filter(
       (row) => row.defensive_use_opportunity && row.used_defensive_in_pull,
@@ -1277,11 +1136,6 @@ export class ReliabilityService {
       .sort((a, b) => b.castCount - a.castCount || a.name.localeCompare(b.name, 'es'));
     defensiveDeathEvidence.sort((a, b) => b.closedAt.localeCompare(a.closedAt));
 
-    // §12.5 "flecha de tendencia": mismo cálculo aplicado a cada mitad
-    // cronológica de la ventana — sin recalcular nada nuevo, solo
-    // particionando las filas que ya se trajeron. Si alguna mitad se
-    // queda sin pulls (jugador nuevo en la guild, o hueco real sin
-    // asistir), trend queda null — no es lo mismo "sin dato" que "estable".
     const olderScore = computeOverall(
       rows.filter((r) => new Date(r.closed_at).getTime() < midpoint),
       now,
@@ -1331,16 +1185,6 @@ export class ReliabilityService {
     };
   }
 
-  /**
-   * §"consistente... contemplar muchas posibilidades distintas" (feedback
-   * real, 2026-08-28): filas crudas de player_pull_reliability_inputs para
-   * los pulls de UNA noche — night-player-summary.service.ts las reutiliza
-   * para que pullScore comparta EXACTAMENTE el mismo ratio avoidable-ground/
-   * spread (y el mismo conteo de mecánica) que ya usa el eje Mecánica de
-   * fiabilidad, en vez de re-derivarlo con su propia lógica. getNightReliability
-   * (debajo) es el otro consumidor — factorizado aquí para no traer los
-   * pulls del report dos veces.
-   */
   async getPlayerPullReliabilityInputsForReport(
     reportCode: string,
     playerName: string,
@@ -1351,15 +1195,6 @@ export class ReliabilityService {
     return this.fetchReliabilityInputs({ playerName, pullIds });
   }
 
-  /**
-   * §"fiabilidad en el dosier debería tener 2 valores: fiabilidad a 60 días
-   * y fiabilidad de la noche" (feedback real): MISMA fórmula
-   * (computeReliabilityBreakdown), acotada a los pulls de un solo
-   * report_code en vez de la ventana de 60 días — de verdad la misma
-   * fórmula ahora que ninguna de las dos lleva eje de asistencia (ver
-   * AXIS_WEIGHTS). null si el jugador no tiene ningún pull evaluable esa
-   * noche.
-   */
   async getNightReliability(
     reportCode: string,
     playerName: string,
@@ -1390,26 +1225,6 @@ export class ReliabilityService {
         };
   }
 
-  /**
-   * §"comparación (OJO: con la misma dificultad) de su evolución... con
-   * otros logs comparables por dificultad y boss de esa misma dificultad...
-   * heroico con heroico y mítico con mítico" (feedback real, 2026-08-30):
-   * un punto por NOCHE (report_code) en ESTE boss+dificultad, para TODOS
-   * los jugadores a la vez — mismo scope que ya usa listPlayerReliability
-   * ({bossId,difficulty}, ver boss-history.service.ts) pero sin colapsar
-   * todo el historial en un único número: aquí se agrupa por report_code
-   * para poder pintar la evolución noche a noche. MISMA fórmula que
-   * Fiabilidad (computeReliabilityBreakdown) — nunca un cálculo paralelo.
-   * Todo el historial, sin ventana de tiempo (a diferencia de los 60 días
-   * de listPlayerReliability sin scope): aquí la pregunta es "¿cómo le ha
-   * ido a este jugador en este boss+dificultad concreto, alguna vez?", no
-   * "últimamente en general".
-   *
-   * El parse (WCL) no vive en player_pull_reliability_inputs — se trae
-   * aparte con un query sobre player_pull_records acotado a los pulls ya
-   * resueltos por el primero (mismo boss+dificultad), sin llamar a WCL de
-   * nuevo (world_rank_percent ya está persistido desde analyze-report).
-   */
   async getBossDifficultyEvolution(
     bossId: string,
     difficulty: string,
@@ -1417,22 +1232,19 @@ export class ReliabilityService {
     const client = this.supabase.client;
     const [inputRows, pullsResponse] = await Promise.all([
       this.fetchReliabilityInputs({ scope: { bossId, difficulty } }),
-      // §bug real encontrado en auditoría (2026-08-30 — "¿has asegurado que
-      // no hay contradicciones de datos?"): player_pull_reliability_inputs
-      // (fetchReliabilityInputs de arriba) ya excluye ninja pulls a nivel de
-      // vista (`where not p.ninja_pull_excluded`, ver migración
-      // 20260829070000), así que `breakdown`/`kill`/`bestWipePct` (derivados
-      // de `inputRows`) ya salían limpios sin querer. El parse (WCL) NO pasa
-      // por esa vista — sale de player_pull_records directo — así que sin
-      // este filtro aquí, un ninja pull SÍ colaba su world_rank_percent en
-      // parseAvg, mientras que la columna "Parse" de la cabecera (que sí
-      // filtra excludedFromStats, ver loadNightAttendanceStats) lo
-      // descartaba: dos números que deberían coincidir en una noche de un
-      // solo boss+dificultad podían divergir por esto.
-      client.from('pulls').select('id, report_code, wipe_pct').eq('boss_id', bossId).eq('difficulty', difficulty).eq('ninja_pull_excluded', false),
+      client
+        .from('pulls')
+        .select('id, report_code, wipe_pct')
+        .eq('boss_id', bossId)
+        .eq('difficulty', difficulty)
+        .eq('ninja_pull_excluded', false),
     ]);
     if (pullsResponse.error) throw pullsResponse.error;
-    const pullRows = (pullsResponse.data ?? []) as { id: string; report_code: string; wipe_pct: number | null }[];
+    const pullRows = (pullsResponse.data ?? []) as {
+      id: string;
+      report_code: string;
+      wipe_pct: number | null;
+    }[];
     const pullIds = pullRows.map((p) => p.id);
     const wipePctByPullId = new Map(pullRows.map((p) => [p.id, p.wipe_pct]));
     const reportCodeByPullId = new Map(pullRows.map((p) => [p.id, p.report_code]));
@@ -1440,19 +1252,37 @@ export class ReliabilityService {
 
     const [recordsResponse, reportsResponse] = await Promise.all([
       pullIds.length
-        ? client.from('player_pull_records').select('pull_id, player_name, world_rank_percent').in('pull_id', pullIds)
-        : Promise.resolve({ data: [] as { pull_id: string; player_name: string; world_rank_percent: number | null }[], error: null }),
+        ? client
+            .from('player_pull_records')
+            .select('pull_id, player_name, world_rank_percent')
+            .in('pull_id', pullIds)
+        : Promise.resolve({
+            data: [] as {
+              pull_id: string;
+              player_name: string;
+              world_rank_percent: number | null;
+            }[],
+            error: null,
+          }),
       reportCodes.length
         ? client.from('reports').select('code, title, start_time').in('code', reportCodes)
-        : Promise.resolve({ data: [] as { code: string; title: string | null; start_time: string | null }[], error: null }),
+        : Promise.resolve({
+            data: [] as { code: string; title: string | null; start_time: string | null }[],
+            error: null,
+          }),
     ]);
     if (recordsResponse.error) throw recordsResponse.error;
     if (reportsResponse.error) throw reportsResponse.error;
     const reportByCode = new Map(
-      ((reportsResponse.data ?? []) as { code: string; title: string | null; start_time: string | null }[]).map((r) => [r.code, r]),
+      (
+        (reportsResponse.data ?? []) as {
+          code: string;
+          title: string | null;
+          start_time: string | null;
+        }[]
+      ).map((r) => [r.code, r]),
     );
 
-    // Filas de fiabilidad, agrupadas por jugador → report_code.
     const byPlayerReport = new Map<string, Map<string, ReliabilityInputRow[]>>();
     for (const row of inputRows) {
       if (!row.report_code) continue;
@@ -1465,9 +1295,13 @@ export class ReliabilityService {
       list.push(row);
       byReport.set(row.report_code, list);
     }
-    // Parse (WCL), agrupado igual — vía pull_id → report_code, no viene con el campo directo.
+
     const parseByPlayerReport = new Map<string, Map<string, number[]>>();
-    for (const record of (recordsResponse.data ?? []) as { pull_id: string; player_name: string; world_rank_percent: number | null }[]) {
+    for (const record of (recordsResponse.data ?? []) as {
+      pull_id: string;
+      player_name: string;
+      world_rank_percent: number | null;
+    }[]) {
       if (record.world_rank_percent == null) continue;
       const reportCode = reportCodeByPullId.get(record.pull_id);
       if (!reportCode) continue;
@@ -1492,13 +1326,20 @@ export class ReliabilityService {
           this.reliabilityComputationOptions(),
         );
         if (!breakdown) continue;
-        const wipePcts = rows.map((r) => wipePctByPullId.get(r.pull_id)).filter((v): v is number => v != null);
+        const wipePcts = rows
+          .map((r) => wipePctByPullId.get(r.pull_id))
+          .filter((v): v is number => v != null);
         const kill = wipePcts.some((v) => v === 0);
         const bestWipePct = wipePcts.length ? Math.min(...wipePcts) : null;
         const parses = parseByPlayerReport.get(playerName)?.get(reportCode) ?? [];
-        const parseAvg = parses.length ? Math.round((parses.reduce((sum, v) => sum + v, 0) / parses.length) * 10) / 10 : null;
+        const parseAvg = parses.length
+          ? Math.round((parses.reduce((sum, v) => sum + v, 0) / parses.length) * 10) / 10
+          : null;
         const report = reportByCode.get(reportCode);
-        const closedAt = rows.reduce((max, r) => (r.closed_at > max ? r.closed_at : max), rows[0].closed_at);
+        const closedAt = rows.reduce(
+          (max, r) => (r.closed_at > max ? r.closed_at : max),
+          rows[0].closed_at,
+        );
         points.push({
           reportCode,
           reportTitle: report?.title ?? null,
@@ -1521,15 +1362,11 @@ export class ReliabilityService {
 export interface BossDifficultyEvolutionPoint {
   reportCode: string;
   reportTitle: string | null;
-  /** Momento del pull más reciente de este jugador en este report_code para este boss+dificultad — no siempre coincide con reports.start_time (un report puede abarcar varios bosses). */
   closedAt: string;
   kill: boolean;
-  /** Mejor (menor) % de vida restante esa noche en este boss+dificultad — null si hubo kill (ya no aplica) o sin dato. */
   bestWipePct: number | null;
-  /** 0-100, misma fórmula que Fiabilidad (mecánica+defensiva+preparación). */
   overall: number;
   breakdown: { mecanica: number | null; defensiva: number | null; preparacion: number | null };
-  /** Media (0-100) del percentil de WCL (world_rank_percent) de esa noche en este boss+dificultad — null si WCL no pudo rankear ningún pull. */
   parseAvg: number | null;
   sampleSize: number;
 }
