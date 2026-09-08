@@ -14,6 +14,12 @@ const recoveryMigrationPath = join(
   'migrations',
   '20260908221000_canonical_defensive_auto_refresh_publish_recovery.sql',
 );
+const resumeMigrationPath = join(
+  root,
+  'supabase',
+  'migrations',
+  '20260908222000_canonical_defensive_auto_refresh_resume.sql',
+);
 const workerPath = join(
   root,
   'supabase',
@@ -31,6 +37,7 @@ const helperPath = join(
 
 const migration = readFileSync(migrationPath, 'utf8');
 const recoveryMigration = readFileSync(recoveryMigrationPath, 'utf8');
+const resumeMigration = readFileSync(resumeMigrationPath, 'utf8');
 const worker = readFileSync(workerPath, 'utf8');
 const helper = readFileSync(helperPath, 'utf8');
 
@@ -101,6 +108,31 @@ assert(
 assert(
   recoveryMigration.includes('current_attempts < 5'),
   'incomplete-generation failures lost their bounded retry policy',
+);
+
+// A transient failure/expired lease must resume the same BUILDING generation.
+// Otherwise a timeout late in a report throws away all already-completed pulls
+// and replays the whole report on every retry.
+for (const required of [
+  'is_dispatch_resume boolean := false',
+  "q.status = 'running'",
+  'q.generation_id = existing_id',
+  'if not is_dispatch_resume then',
+  'lease_generation_id = selected.generation_id',
+  'generation_id = current_generation_id',
+]) {
+  assert(
+    resumeMigration.includes(required),
+    `resume hardening is missing required contract: ${required}`,
+  );
+}
+assert(
+  !resumeMigration.includes("generation_id = null,\n        not_before = now()"),
+  'expired leases still discard their BUILDING generation',
+);
+assert(
+  resumeMigration.includes('publish_complete_defensive_generation(current_generation_id)'),
+  'resume migration accidentally dropped complete-generation recovery',
 );
 
 // Edge worker processes a bounded number of pulls, then continues with a fresh
