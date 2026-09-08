@@ -38,6 +38,16 @@ jobs:
       - name: Step 1 - unify resolver inputs and observed-cast acquisition
         run: |
           python scripts/apply-defensive-consistency-fix.py --step 1
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('supabase/functions/reanalyze-defensive-pressure/index.ts')
+          text = p.read_text()
+          old = "      if (!actor || !damageSeries) {"
+          new = "      if (actorId == null || !actor || !damageSeries) {"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one actorId narrowing site, got {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
           git diff --check
           npx vitest run src/app/shared/defensive-runtime-identity.spec.ts src/app/shared/defensive-evidence-v6.spec.ts src/app/shared/effective-defensives.spec.ts
           deno check \
@@ -71,6 +81,16 @@ jobs:
       - name: Step 3 - add regression and integration guards
         run: |
           python scripts/apply-defensive-consistency-fix.py --step 3
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/app/shared/defensive-version-identity.spec.ts')
+          text = p.read_text()
+          old = "    expect(EFFECTIVE_DEFENSIVE_RESOLVER_VERSION).toBe('effective-defensives@2.3.0');"
+          new = "    expect(EFFECTIVE_DEFENSIVE_RESOLVER_VERSION).toBe('effective-defensives@2.4.0');"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one current resolver version assertion, got {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
           git diff --check
           npx vitest run \
             src/app/shared/defensive-observed-cast-evidence.spec.ts \
@@ -94,7 +114,8 @@ jobs:
             supabase/functions/canonical-defensive-refresh/index.ts
           git add \
             src/app/shared/defensive-observed-cast-evidence.spec.ts \
-            src/app/shared/defensive-materialization-consistency.spec.ts
+            src/app/shared/defensive-materialization-consistency.spec.ts \
+            src/app/shared/defensive-version-identity.spec.ts
           git commit -m "[defensive-fix:step3] Guard defensive resolver parity"
 
       - name: Push atomic fix series
