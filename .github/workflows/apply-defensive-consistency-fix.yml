@@ -64,6 +64,18 @@ jobs:
 
       - name: Step 2 - enforce semantic membership in materialization
         run: |
+          # Disambiguate the two structurally similar interfaces so the guarded
+          # patch can only add missability to EffectiveWindowOption.
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('supabase/functions/_shared/effective-defensive-state.ts')
+          text = p.read_text()
+          old = "  nextChargeAtMs?: number;\n}\n\nexport interface EffectiveWindowOption"
+          new = "  nextChargeAtMs?: number;\n  // Missability belongs to the window option, not the replay state.\n}\n\nexport interface EffectiveWindowOption"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one EffectiveDefensiveState anchor, got {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
           python scripts/apply-defensive-consistency-fix.py --step 2
           git diff --check
           npx vitest run src/app/shared/effective-defensive-state.spec.ts src/app/shared/effective-defensives.spec.ts src/app/shared/defensive-runtime-identity.spec.ts
