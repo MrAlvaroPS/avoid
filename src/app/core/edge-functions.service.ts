@@ -222,6 +222,64 @@ export class EdgeFunctionsService {
     return newestPullId;
   }
 
+  /**
+   * Reconstruye la generación defensiva canónica publicada después de
+   * reanalizar un report. El worker procesa UN pull por invocación para no
+   * reintroducir WORKER_RESOURCE_LIMIT y publica de forma atómica/fail-closed.
+   */
+  async refreshCanonicalDefensiveReport(
+    reportCode: string,
+    onProgress?: (processedPulls: number) => void,
+  ): Promise<{ skipped: boolean; generationId: string | null; processedPulls: number }> {
+    type StartResult = {
+      ok: true;
+      skipped: boolean;
+      generationId?: string | null;
+      coverage?: { expectedPulls?: number } | null;
+    };
+    type ProcessResult = {
+      ok: true;
+      done: boolean;
+      generationId: string;
+      pullId?: string | null;
+    };
+
+    const callWithRetry = async <T>(body: Record<string, unknown>): Promise<T> => {
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await this.invoke<T>('canonical-defensive-refresh', body);
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      throw lastError instanceof Error ? lastError : new Error(errorMessage(lastError));
+    };
+
+    const started = await callWithRetry<StartResult>({ action: 'start', reportCode });
+    if (started.skipped) return { skipped: true, generationId: null, processedPulls: 0 };
+    const generationId = started.generationId ?? null;
+    if (!generationId) {
+      throw new Error('canonical-defensive-refresh no devolvió generationId al iniciar el recálculo.');
+    }
+
+    let processedPulls = 0;
+    const expectedPulls = started.coverage?.expectedPulls;
+    const maxSteps = typeof expectedPulls === 'number' && Number.isFinite(expectedPulls)
+      ? Math.max(25, Math.min(2_000, Math.ceil(expectedPulls) + 25))
+      : 500;
+
+    for (let guard = 0; guard < maxSteps; guard++) {
+      const step = await callWithRetry<ProcessResult>({ action: 'process', generationId });
+      if (step.done) return { skipped: false, generationId, processedPulls };
+      processedPulls++;
+      onProgress?.(processedPulls);
+    }
+    throw new Error(
+      `canonical-defensive-refresh no convergió tras ${maxSteps} pulls; la generación ${generationId} no se considera publicable.`,
+    );
+  }
+
   /** Genera (o devuelve cacheado) el brief LLM de un pull. Idempotente por pull_id salvo force:true. */
   async generatePullBrief(pullId: string, force = false): Promise<GeneratePullBriefResult> {
     return this.invoke<GeneratePullBriefResult>('generate-pull-brief', { pullId, force });

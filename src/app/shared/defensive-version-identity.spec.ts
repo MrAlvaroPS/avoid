@@ -16,7 +16,7 @@ import {
 
 describe('defensive version identity', () => {
   it('uses the canonical resolver module as the single source of truth', () => {
-    expect(EFFECTIVE_DEFENSIVE_RESOLVER_VERSION).toBe('effective-defensives@2.3.0');
+    expect(EFFECTIVE_DEFENSIVE_RESOLVER_VERSION).toBe('effective-defensives@2.4.0');
     expect(EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION).toBe('effective-defensive-semantics@1.5.0');
     expect(EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V6).toBe(EFFECTIVE_DEFENSIVE_RESOLVER_VERSION);
     expect(EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V6).toBe(EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION);

@@ -27,6 +27,29 @@ function defensive(overrides: Partial<ResolvedDefensive> = {}): ResolvedDefensiv
     confidence: 'verified',
     provenance: [],
     conditionalModifiers: [],
+    semanticResolved: true,
+    usageRole: 'personal_survival',
+    activationScope: 'self',
+    primaryBeneficiary: 'self',
+    secondaryPropagation: 'none',
+    mechanisms: ['mitigation'],
+    opportunityMode: 'normal',
+    defensiveIntent: 'primary',
+    semanticStatus: 'verified',
+    semanticVersion: 'defensive-semantics@1.0.0',
+    semanticConfidence: 'verified',
+    semanticResolverVersion: 'effective-defensive-semantics@1.5.0',
+    semanticProvenance: [],
+    buildPresence: 'present',
+    buildPresenceReason: 'fixture',
+    buildPresenceConfidence: 'verified',
+    buildPresenceEvidence: 'baseline_kit',
+    applicability: null,
+    applicabilityConfidence: 'verified',
+    resolutionStatus: 'resolved',
+    unresolvedRuntimeRules: [],
+    isDefensiveKitMember: true,
+    createsMissableOpportunity: true,
     ...overrides,
   };
 }
@@ -97,5 +120,31 @@ describe('effective v2 materialization', () => {
 
     expect(result.covered).toBe(true);
     expect(result.options[0].status).toBe('used_during_window');
+  });
+
+  it('excludes a replaced/non-member resource even if legacy category still says personal_defensive', () => {
+    const replaced = defensive({ spellId: 45438, name: 'Ice Block', isDefensiveKitMember: false, createsMissableOpportunity: false });
+    const replacement = defensive({ spellId: 414658, name: 'Ice Cold' });
+    const result = evaluateEffectiveWindowCoverage(10_000, 12_000, [replaced, replacement], new Map());
+
+    expect(result.options.map((option) => option.spellId)).toEqual([414658]);
+  });
+
+  it('credits credit_only use but never fabricates an available-unused opportunity from it', () => {
+    const creditOnly = defensive({
+      spellId: 34428,
+      name: 'Victory Rush',
+      usageRole: 'hybrid_survival',
+      opportunityMode: 'credit_only',
+      createsMissableOpportunity: false,
+      effectiveDurationMs: null,
+    });
+    const unused = evaluateEffectiveWindowCoverage(10_000, 12_000, [creditOnly], new Map());
+    expect(unused.options[0].status).toBe('available_unused');
+    expect(unused.availableOpportunity).toBe(false);
+
+    const used = evaluateEffectiveWindowCoverage(10_000, 12_000, [creditOnly], new Map([[34428, [11_000]]]));
+    expect(used.covered).toBe(true);
+    expect(used.availableOpportunity).toBe(false);
   });
 });
