@@ -7,6 +7,7 @@ export interface EffectiveDefensiveState {
   chargesAvailable: number | null;
   cooldownRemainingMs?: number;
   nextChargeAtMs?: number;
+  // Missability belongs to the window option, not the replay state.
 }
 
 export interface EffectiveWindowOption {
@@ -18,6 +19,8 @@ export interface EffectiveWindowOption {
   chargesAvailable: number | null;
   cooldownRemainingMs?: number;
   nextChargeAtMs?: number;
+  /** True only for verified personal_survival + opportunity_mode=normal. */
+  createsMissableOpportunity: boolean;
 }
 
 export interface EffectiveWindowCoverage {
@@ -31,6 +34,7 @@ function personalCandidates(kit: ResolvedDefensive[]): ResolvedDefensive[] {
   return kit.filter(
     (defensive) =>
       defensive.eligible &&
+      defensive.isDefensiveKitMember &&
       defensive.category === 'personal_defensive' &&
       defensive.targetingMode === 'self',
   );
@@ -126,6 +130,7 @@ export function effectiveDeathOptions(
     name: defensive.name,
     survivalType: defensive.survivalType,
     confidence: defensive.confidence,
+    createsMissableOpportunity: defensive.createsMissableOpportunity,
     ...effectiveDefensiveStateAt(defensive, castsBySpellId.get(defensive.spellId) ?? [], deathAtMs, activeSpellIds.has(defensive.spellId)),
   }));
 }
@@ -145,6 +150,7 @@ export function evaluateEffectiveWindowCoverage(
       name: defensive.name,
       survivalType: defensive.survivalType,
       confidence: defensive.confidence,
+      createsMissableOpportunity: defensive.createsMissableOpportunity,
       ...atStart,
       status: atStart.status === 'active' ? 'active' : usedDuringWindow ? 'used_during_window' : atStart.status,
     };
@@ -154,6 +160,7 @@ export function evaluateEffectiveWindowCoverage(
     !covered &&
     options.some(
       (option) =>
+        option.createsMissableOpportunity &&
         option.status === 'available_unused' &&
         option.survivalType !== 'emergency' &&
         (option.confidence === 'verified' || option.confidence === 'inferred'),

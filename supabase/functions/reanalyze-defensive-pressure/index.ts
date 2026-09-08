@@ -555,7 +555,7 @@ Deno.serve(async (req: Request) => {
       const resolvedCastsBySpellId = new Map(
         resolvedKit.map((entry) => [entry.spellId, castTimestampsByActor.get(actorId)?.get(entry.spellId) ?? []]),
       );
-      updatePatch['defensive_casts'] = resolvedKit.filter((defensive) => defensive.eligible).map((defensive) => ({
+      updatePatch['defensive_casts'] = resolvedKit.filter((defensive) => defensive.isDefensiveKitMember).map((defensive) => ({
         spellId: defensive.spellId,
         name: defensive.name,
         timestampsMs: (castTimestampsByActor.get(actorId)?.get(defensive.spellId) ?? []).map((timestamp) => timestamp - fight.startTime),
@@ -612,12 +612,14 @@ Deno.serve(async (req: Request) => {
         updatePatch['death_defensive_options_v2'] = deathDefensiveOptionsV2;
         updatePatch['death_cause'] = {
           ...record.death_cause,
-          defensiveOptions: deathDefensiveOptionsV2.map((option) => ({
-            spellId: option.spellId,
-            name: option.name,
-            status: option.status,
-            cooldownRemainingMs: option.cooldownRemainingMs,
-          })),
+          defensiveOptions: deathDefensiveOptionsV2
+            .filter((option) => option.createsMissableOpportunity)
+            .map((option) => ({
+              spellId: option.spellId,
+              name: option.name,
+              status: option.status,
+              cooldownRemainingMs: option.cooldownRemainingMs,
+            })),
         };
       } else {
         updatePatch['death_defensive_options_v2'] = record.died ? [] : null;

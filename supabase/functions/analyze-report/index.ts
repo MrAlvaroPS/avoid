@@ -1319,12 +1319,14 @@ Deno.serve(async (req: Request) => {
               coverable: window.availableOpportunity,
             })),
           };
-          const defensiveOptions = (deathDefensiveOptionsV2 ?? []).map((option) => ({
-            spellId: option.spellId,
-            name: option.name,
-            status: option.status,
-            cooldownRemainingMs: option.cooldownRemainingMs,
-          }));
+          const defensiveOptions = (deathDefensiveOptionsV2 ?? [])
+            .filter((option) => option.createsMissableOpportunity)
+            .map((option) => ({
+              spellId: option.spellId,
+              name: option.name,
+              status: option.status,
+              cooldownRemainingMs: option.cooldownRemainingMs,
+            }));
           return {
             pull_id: insertedPull.id,
             player_name: actor?.name ?? `#${actorId}`,
@@ -1356,7 +1358,14 @@ Deno.serve(async (req: Request) => {
                 responsibility: mechanic?.responsibility ?? null,
                 categoryIsInferred: mechanic ? mechanic.category == null && deathEffectiveCategory != null : false,
                 avoidable: mechanic?.avoidable ?? null,
-                preventableWithDefensive: bossMeleeOnNonTank ? null : buffsSnapshotIsFresh ? defensivesAtDeath.length === 0 : null,
+                preventableWithDefensive: bossMeleeOnNonTank
+                  ? null
+                  : (() => {
+                      const missableOptions = (deathDefensiveOptionsV2 ?? []).filter((option) => option.createsMissableOpportunity);
+                      if (missableOptions.some((option) => option.status === 'available_unused')) return true;
+                      if (missableOptions.some((option) => option.status === 'unknown')) return null;
+                      return missableOptions.length ? false : null;
+                    })(),
                 statisticalExclusionReason: bossMeleeOnNonTank ? 'boss_melee_on_non_tank' : null,
                 // §10: "no es lo mismo un oneshot que una muerte por daño
                 // sostenido sin sanar, y la causa real puede ser muy
@@ -1406,7 +1415,7 @@ Deno.serve(async (req: Request) => {
             // su clase durante el pull completo (no solo el estado en el
             // instante de morir, que vive aparte en death_cause.defensiveOptions).
             defensive_casts: actor
-              ? resolvedKit.filter((defensive) => defensive.eligible).map((cd) => ({
+              ? resolvedKit.filter((defensive) => defensive.isDefensiveKitMember).map((cd) => ({
                 spellId: cd.spellId,
                 name: cd.name,
                 timestampsMs: (defensiveCastTimestampsByActor.get(actorId)?.get(cd.spellId) ?? []).map((t) => t - fight.startTime),
