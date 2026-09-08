@@ -1,0 +1,101 @@
+name: Apply defensive consistency fix
+
+on:
+  push:
+    branches:
+      - fix/defensive-spell-identity-aliases
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[defensive-fix:step3]') && !contains(github.event.head_commit.message, '[defensive-fix:cleanup]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/defensive-spell-identity-aliases
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - run: npm ci
+      - run: deno install --allow-scripts
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Step 1 - unify resolver inputs and observed-cast acquisition
+        run: |
+          python scripts/apply-defensive-consistency-fix.py --step 1
+          git diff --check
+          npx vitest run src/app/shared/defensive-runtime-identity.spec.ts src/app/shared/defensive-evidence-v6.spec.ts src/app/shared/effective-defensives.spec.ts
+          deno check \
+            supabase/functions/_shared/defensive-observed-cast-evidence.ts \
+            supabase/functions/analyze-report/index.ts \
+            supabase/functions/reanalyze-defensive-pressure/index.ts \
+            supabase/functions/canonical-defensive-refresh/index.ts
+          git add \
+            supabase/functions/_shared/effective-defensives.ts \
+            supabase/functions/_shared/defensive-observed-cast-evidence.ts \
+            supabase/functions/analyze-report/index.ts \
+            supabase/functions/reanalyze-defensive-pressure/index.ts
+          git commit -m "[defensive-fix:step1] Unify observed defensive resolution"
+
+      - name: Step 2 - enforce semantic membership in materialization
+        run: |
+          python scripts/apply-defensive-consistency-fix.py --step 2
+          git diff --check
+          npx vitest run src/app/shared/effective-defensive-state.spec.ts src/app/shared/effective-defensives.spec.ts src/app/shared/defensive-runtime-identity.spec.ts
+          deno check \
+            supabase/functions/_shared/effective-defensive-state.ts \
+            supabase/functions/analyze-report/index.ts \
+            supabase/functions/reanalyze-defensive-pressure/index.ts
+          git add \
+            supabase/functions/_shared/effective-defensive-state.ts \
+            supabase/functions/analyze-report/index.ts \
+            supabase/functions/reanalyze-defensive-pressure/index.ts \
+            src/app/shared/effective-defensive-state.spec.ts
+          git commit -m "[defensive-fix:step2] Enforce semantic defensive materialization"
+
+      - name: Step 3 - add regression and integration guards
+        run: |
+          python scripts/apply-defensive-consistency-fix.py --step 3
+          git diff --check
+          npx vitest run \
+            src/app/shared/defensive-observed-cast-evidence.spec.ts \
+            src/app/shared/defensive-materialization-consistency.spec.ts \
+            src/app/shared/effective-defensive-state.spec.ts \
+            src/app/shared/defensive-runtime-identity.spec.ts \
+            src/app/shared/effective-defensives.spec.ts \
+            src/app/shared/defensive-evidence-v5.spec.ts \
+            src/app/shared/defensive-evidence-v6.spec.ts \
+            src/app/shared/defensive-version-identity.spec.ts
+          npm run verify:defensive-contract
+          npm run verify:causal-schema
+          npm run verify:causal-runtime
+          npm run build
+          deno check \
+            supabase/functions/_shared/effective-defensives.ts \
+            supabase/functions/_shared/defensive-observed-cast-evidence.ts \
+            supabase/functions/_shared/effective-defensive-state.ts \
+            supabase/functions/analyze-report/index.ts \
+            supabase/functions/reanalyze-defensive-pressure/index.ts \
+            supabase/functions/canonical-defensive-refresh/index.ts
+          git add \
+            src/app/shared/defensive-observed-cast-evidence.spec.ts \
+            src/app/shared/defensive-materialization-consistency.spec.ts
+          git commit -m "[defensive-fix:step3] Guard defensive resolver parity"
+
+      - name: Push atomic fix series
+        run: git push origin HEAD:fix/defensive-spell-identity-aliases
