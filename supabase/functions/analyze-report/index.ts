@@ -33,9 +33,9 @@ import {
   fingerprintTalentBuild,
   inferCurrentGameBuildObservation,
   normalizeTalentBuild,
-  resolveEffectiveDefensiveKit,
   type TalentBuildNode,
 } from '../_shared/effective-defensives.ts';
+import { resolveEffectiveDefensiveKitWithObservedCastEvidence } from '../_shared/defensive-observed-cast-evidence.ts';
 import { effectiveDeathOptions, evaluateEffectiveWindowCoverage } from '../_shared/effective-defensive-state.ts';
 import { evaluateDefensivePull } from '../_shared/defensive-execution-persistence.ts';
 import { buildMechanicEventRows } from '../_shared/mechanic-event-materialization.ts';
@@ -314,7 +314,7 @@ Deno.serve(async (req: Request) => {
       // §12.1: catálogo real de defensivos, sincronizado desde WoWAnalyzer
       // (o la semilla manual mientras no se haya sincronizado nada aún).
       // Se carga UNA VEZ por report, no por fight ni por evento.
-      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spec_override,spell_id,name,category,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build,base_cooldown_ms,base_duration_ms,survival_type,excluded').eq('excluded', false);
+      const { data: catalogRows } = await supabase.from('cooldown_catalog').select('class,spec,spec_override,spell_id,name,category,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build,base_cooldown_ms,base_duration_ms,survival_type,reviewed,excluded').eq('excluded', false);
       const cooldownCatalog: CooldownCatalog = (catalogRows ?? []).map((r) => ({
         spellId: r.spell_id,
         name: r.name,
@@ -376,20 +376,30 @@ Deno.serve(async (req: Request) => {
       // preceder al despliegue porque el insert ya escribe columnas v2. El
       // shadow no modifica death_cause ni defensive_pressure_windows.
       const resolverShadowWarnings: string[] = [];
-      const [specProfilesResult, modifierRulesResult, overridesResult] = await Promise.all([
+      const [specProfilesResult, modifierRulesResult, semanticsResult, semanticRulesResult, overridesResult] = await Promise.all([
         supabase.from('defensive_spec_profiles').select('*'),
         supabase.from('defensive_modifier_rules').select('*').eq('active', true),
+        supabase.from('defensive_ability_semantic_catalog').select('*'),
+        supabase.from('defensive_semantic_rules').select('*'),
         currentGameBuild
           ? supabase.from('player_defensive_overrides').select('*').eq('game_build', currentGameBuild).eq('active', true)
           : Promise.resolve({ data: [], error: null }),
       ]);
-      if (specProfilesResult.error) resolverShadowWarnings.push(`defensive_spec_profiles: ${specProfilesResult.error.message}`);
-      if (modifierRulesResult.error) resolverShadowWarnings.push(`defensive_modifier_rules: ${modifierRulesResult.error.message}`);
-      if (overridesResult.error) resolverShadowWarnings.push(`player_defensive_overrides: ${overridesResult.error.message}`);
+      for (const [source, result] of [
+        ['defensive_spec_profiles', specProfilesResult],
+        ['defensive_modifier_rules', modifierRulesResult],
+        ['defensive_ability_semantic_catalog', semanticsResult],
+        ['defensive_semantic_rules', semanticRulesResult],
+        ['player_defensive_overrides', overridesResult],
+      ] as const) {
+        if (result.error) throw new Error(`No se pudo cargar ${source} para resolver defensivos: ${result.error.message}`);
+      }
       const resolverData = effectiveDefensiveDataFromDatabaseRows({
         catalogRows: catalogRows ?? [],
         specProfileRows: specProfilesResult.data ?? [],
         modifierRuleRows: modifierRulesResult.data ?? [],
+        semanticRows: semanticsResult.data ?? [],
+        semanticRuleRows: semanticRulesResult.data ?? [],
         overrideRows: overridesResult.data ?? [],
       });
 
@@ -1228,9 +1238,8 @@ Deno.serve(async (req: Request) => {
           const talentBuildFingerprint = actor && observedBuild.gameBuild
             ? await fingerprintTalentBuild(actor.subType, playerSpec, observedBuild.gameBuild, talentBuild)
             : null;
-          const resolvedKit = actor
-            ? resolveEffectiveDefensiveKit(
-              {
+          const resolverInput = actor
+            ? {
                 className: actor.subType,
                 specName: playerSpec,
                 talentBuild,
@@ -1241,9 +1250,21 @@ Deno.serve(async (req: Request) => {
                 allTalentSpellIds: shadowTalentLookup ? new Set(shadowTalentLookup.values()) : null,
                 talentLookupComplete: shadowTalentLookup != null,
                 knownTalentEntryIds: shadowKnownEntryIds,
-              },
-              resolverData,
-            )
+              }
+            : null;
+          const liveDefensiveSpellIds = actor
+            ? [...(defensiveCastTimestampsByActor.get(actorId)?.entries() ?? [])]
+                .filter(([, timestamps]) => timestamps.length > 0)
+                .map(([spellId]) => spellId)
+            : [];
+          const resolvedKit = resolverInput
+            ? (await resolveEffectiveDefensiveKitWithObservedCastEvidence({
+                client: supabase,
+                input: resolverInput,
+                data: resolverData,
+                currentPullId: insertedPull.id,
+                liveSpellIds: liveDefensiveSpellIds,
+              })).kit
             : [];
           const legacyKit = actor ? defensivesForClass(actor.subType, playerSpec, cooldownCatalog, talentGateForActor(actorId)) : [];
           const legacyBySpellId = new Map(legacyKit.map((entry) => [entry.spellId, entry]));
