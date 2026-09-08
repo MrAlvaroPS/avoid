@@ -33,7 +33,7 @@ import {
   type ValidatedSpecSemanticProfile,
 } from './defensive-semantic-payload-validation.ts';
 
-export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.3.0';
+export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.4.0';
 // §Paso C (iris-defensive-canonicalization-v1-plan.md §5): resolución
 // SEMÁNTICA (usageRole/mechanisms/membership) versionada por separado del
 // resolver de TIMING de arriba, a propósito. Bump del resolver de timing ya

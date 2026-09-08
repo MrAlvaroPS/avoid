@@ -308,7 +308,7 @@ export class NightReportComponent {
       const pullIds = await this.nightReportService.listPullIds(code);
       const failures: string[] = [];
       let done = 0;
-      this.recalculateAllProgress.set({ done, total: pullIds.length });
+      this.recalculateAllProgress.set({ done, total: pullIds.length + 1 });
 
       // Cada pull es una invocación independiente: evita WORKER_RESOURCE_LIMIT
       // y, con un reintento, reduce el riesgo de dejar una noche a medias por
@@ -332,8 +332,19 @@ export class NightReportComponent {
           if (lastError != null) failures.push(`${pullId} · ${label}: ${errorMessage(lastError)}`);
         }
         done++;
-        this.recalculateAllProgress.set({ done, total: pullIds.length });
+        this.recalculateAllProgress.set({ done, total: pullIds.length + 1 });
       }
+
+      // Usage/Response de la infografía v3 salen de la generación canónica,
+      // no de player_pull_records. Sin este paso, un recálculo podía dejar
+      // casts nuevos con episodios defensivos publicados antiguos.
+      try {
+        await this.edgeFunctions.refreshCanonicalDefensiveReport(code);
+      } catch (err) {
+        failures.push(`generación defensiva canónica: ${errorMessage(err)}`);
+      }
+      done++;
+      this.recalculateAllProgress.set({ done, total: pullIds.length + 1 });
 
       // Invalida también el estado EN MEMORIA de la evolución: su Set de
       // "ya solicitado" impediría volver a entrar aunque el fingerprint

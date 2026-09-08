@@ -395,7 +395,7 @@ export class NightPlayerDossierComponent {
       // este report de verdad.
       const pullIds = this.data()?.pulls.map((p) => p.pullId) ?? [];
       let done = 0;
-      this.recalculateProgress.set({ done, total: pullIds.length });
+      this.recalculateProgress.set({ done, total: pullIds.length + 1 });
       for (const pullId of pullIds) {
         try {
           await this.edgeFunctions.reanalyzeDefensivePressure(pullId);
@@ -408,8 +408,13 @@ export class NightPlayerDossierComponent {
           console.error(`No se pudo reanalizar mecánicas sin asignar del pull ${pullId} al recalcular el dosier:`, err);
         }
         done++;
-        this.recalculateProgress.set({ done, total: pullIds.length });
+        this.recalculateProgress.set({ done, total: pullIds.length + 1 });
       }
+      // La infografía defensiva consume la generación canónica: releer el
+      // dosier después de reanalizar player_pull_records no basta.
+      await this.edgeFunctions.refreshCanonicalDefensiveReport(this.reportCode());
+      done++;
+      this.recalculateProgress.set({ done, total: pullIds.length + 1 });
       this.data.set(await this.summaryService.load(this.reportCode(), this.playerName(), true, true));
     } catch (err) {
       this.error.set(errorMessage(err));
