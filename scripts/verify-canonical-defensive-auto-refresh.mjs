@@ -8,6 +8,12 @@ const migrationPath = join(
   'migrations',
   '20260908220000_canonical_defensive_auto_refresh.sql',
 );
+const recoveryMigrationPath = join(
+  root,
+  'supabase',
+  'migrations',
+  '20260908221000_canonical_defensive_auto_refresh_publish_recovery.sql',
+);
 const workerPath = join(
   root,
   'supabase',
@@ -24,6 +30,7 @@ const helperPath = join(
 );
 
 const migration = readFileSync(migrationPath, 'utf8');
+const recoveryMigration = readFileSync(recoveryMigrationPath, 'utf8');
 const worker = readFileSync(workerPath, 'utf8');
 const helper = readFileSync(helperPath, 'utf8');
 
@@ -64,11 +71,36 @@ for (const required of [
   assert(migration.includes(required), `migration is missing required contract: ${required}`);
 }
 
-// The existing canonical lifecycle remains the publication authority. This
-// migration must enqueue/dispatch only; it must not write the published pointer.
+// The existing canonical lifecycle remains the publication authority. The base
+// migration must enqueue/dispatch only; it must not write the pointer directly.
 assert(
   !migration.includes('set published_generation_id ='),
   'auto-refresh migration bypasses canonical publication guards',
+);
+
+// Production hardening: if the worker fails after the BUILDING generation is
+// already exhaustively complete, the failure path must recover through the
+// existing guarded publication RPC instead of exhausting retries and leaving a
+// complete generation stranded forever.
+for (const required of [
+  'defensive_generation_coverage(current_generation_id)',
+  "(generation_coverage ->> 'complete')::boolean",
+  'publish_complete_defensive_generation(current_generation_id)',
+  "status = 'completed'",
+  "'recoveredPublished', true",
+]) {
+  assert(
+    recoveryMigration.includes(required),
+    `complete-generation recovery is missing required contract: ${required}`,
+  );
+}
+assert(
+  !recoveryMigration.includes('set published_generation_id ='),
+  'recovery bypasses canonical publication guards instead of using the guarded RPC',
+);
+assert(
+  recoveryMigration.includes('current_attempts < 5'),
+  'incomplete-generation failures lost their bounded retry policy',
 );
 
 // Edge worker processes a bounded number of pulls, then continues with a fresh
