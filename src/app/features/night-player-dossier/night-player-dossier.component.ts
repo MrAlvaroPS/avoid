@@ -21,6 +21,7 @@ import type { DeathCause, MechanicCategory } from '../../shared/models/domain';
 import type { LlmPullAnalysis } from '../../shared/models/ui';
 import { errorMessage } from '../../shared/error-message.util';
 import { NightPlayerInfographicComponent } from './night-player-infographic.component';
+import { PlayerDefensiveAuditComponent } from './player-defensive-audit.component';
 import { CombatEvaluationFeatureFlagsService } from '../../core/combat-evaluation-feature-flags.service';
 
 // §"preparar la vinculación de ese ID... con el dosier de ese raider, para
@@ -54,7 +55,7 @@ interface ExplanationContent {
 @Component({
   selector: 'app-night-player-dossier',
   standalone: true,
-  imports: [DatePipe, DecimalPipe, RouterLink, RoleIconComponent, WowheadLinkComponent, EmptyPanelComponent, MechanicInfoIconComponent, LlmAnalysisCardComponent, NightPlayerInfographicComponent],
+  imports: [DatePipe, DecimalPipe, RouterLink, RoleIconComponent, WowheadLinkComponent, EmptyPanelComponent, MechanicInfoIconComponent, LlmAnalysisCardComponent, NightPlayerInfographicComponent, PlayerDefensiveAuditComponent],
   templateUrl: './night-player-dossier.component.html',
   styleUrl: './night-player-dossier.component.scss',
 })

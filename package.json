@@ -9,7 +9,8 @@
     "test": "ng test",
     "verify:causal-schema": "node scripts/verify-causal-schema.mjs",
     "verify:causal-runtime": "node scripts/verify-causal-runtime.mjs",
-    "verify:defensive-contract": "node scripts/verify-defensive-contract.mjs"
+    "verify:defensive-contract": "node scripts/verify-defensive-contract.mjs",
+    "verify:defensive-audit": "node scripts/verify-player-defensive-audit.mjs"
   },
   "private": true,
   "packageManager": "npm@10.9.8",

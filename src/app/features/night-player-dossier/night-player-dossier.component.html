@@ -689,6 +689,14 @@
         }
       </section>
     }
+
+    @if (d.defensiveAudit; as defensiveAudit) {
+      <app-player-defensive-audit
+        [audit]="defensiveAudit"
+        [rosterCharacterId]="d.roster?.characterId ?? null"
+        [hasDiscordChannel]="!!d.discordChannel?.discordChannelId"
+      />
+    }
   </div>
 
   <!-- §"el tooltip se sale de la pantalla... tiene que ser un clicable con

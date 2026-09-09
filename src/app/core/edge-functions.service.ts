@@ -19,6 +19,10 @@ import type {
   MechanicAliasContract,
   MechanicPolicyContract,
 } from '../../../supabase/functions/_shared/combat-evaluation-contract';
+import type {
+  DefensiveAuditDiscordSendResult,
+  DefensiveNightAudit,
+} from '../../../supabase/functions/_shared/player-defensive-audit-contract';
 
 export interface AnalyzeReportResult {
   ok: true;
@@ -325,6 +329,31 @@ export class EdgeFunctionsService {
    */
   async sendDiscordMessage(params: { channelId: string; content?: string; imageBase64?: string; imageFilename?: string }): Promise<{ ok: true; messageId: string; channelName: string | null }> {
     return this.invoke('send-discord-message', params);
+  }
+
+  /** Canonical, backend-built audit projection. Angular only renders the returned AST. */
+  async getPlayerDefensiveAudit(reportCode: string, playerName: string): Promise<DefensiveNightAudit> {
+    const result = await this.invoke<{ ok: true; audit: DefensiveNightAudit }>('player-defensive-audit', {
+      action: 'audit',
+      reportCode,
+      playerName,
+    });
+    return result.audit;
+  }
+
+  /**
+   * Bound player send: the server resolves discord_roster_channels from the
+   * character id. No arbitrary channel id crosses this API boundary.
+   */
+  async sendPlayerDefensiveAuditToDiscord(params: {
+    rosterCharacterId: number;
+    playerName: string;
+    parts: string[];
+    startPartIndex?: number;
+  }): Promise<DefensiveAuditDiscordSendResult> {
+    const { data, error } = await this.supabase.client.functions.invoke('send-discord-message', { body: params });
+    if (error) throw await describeFunctionError(error, 'send-discord-message');
+    return data as DefensiveAuditDiscordSendResult;
   }
   async getManualNightBriefPrompt(reportCode: string): Promise<{ ok: true; systemPrompt: string; userMessage: string }> {
     return this.invoke('manual-night-brief', { reportCode, action: 'prompt' });

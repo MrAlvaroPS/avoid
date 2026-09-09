@@ -1,0 +1,94 @@
+<section class="defensive-audit" aria-labelledby="defensive-audit-heading">
+  <header class="audit-header">
+    <div>
+      <h2 id="defensive-audit-heading">Auditoría defensiva</h2>
+      <p>Qué lanzaste, cuándo lo hiciste y qué presión cubrió realmente.</p>
+    </div>
+    <button type="button" class="audit-discord" [disabled]="sendDisabled()" (click)="sendToDiscord()">
+      {{ sendLabel() }}
+    </button>
+  </header>
+
+  @if (!hasDiscordChannel()) {
+    <p class="audit-notice">Este raider no tiene canal privado de Discord vinculado.</p>
+  }
+
+  @if (audit().state !== 'available') {
+    <div class="audit-state" [class.audit-state-error]="audit().state === 'error' || audit().state === 'incompatible'" role="status">
+      <p>{{ audit().statusMessage }}</p>
+      @if (audit().state === 'partial') {
+        <small>{{ audit().metadata.evaluatedPulls }}/{{ audit().metadata.expectedPulls }} pulls disponibles.</small>
+      }
+    </div>
+  } @else if (audit().narrative; as narrative) {
+    <article class="audit-document">
+      @for (block of narrative.blocks; track $index) {
+        @switch (block.kind) {
+          @case ('heading') {
+            @if (block.level === 3) {
+              <h4>{{ block.text }}</h4>
+            }
+          }
+          @case ('paragraph') {
+            <p>
+              @for (inline of block.inlines; track $index) {
+                @switch (inline.kind) {
+                  @case ('pull_link') {
+                    <a [href]="inline.url" target="_blank" rel="noopener">{{ inline.value }}</a>
+                  }
+                  @case ('emphasis') { <strong>{{ inline.value }}</strong> }
+                  @case ('player') { <strong>{{ inline.value }}</strong> }
+                  @case ('spell') { <span class="audit-spell">{{ inline.value }}</span> }
+                  @default { <span>{{ inline.value }}</span> }
+                }
+              }
+            </p>
+          }
+          @case ('list') {
+            <ul>
+              @for (item of block.items; track $index) {
+                <li>
+                  @for (inline of item; track $index) {
+                    @switch (inline.kind) {
+                      @case ('pull_link') {
+                        <a [href]="inline.url" target="_blank" rel="noopener">{{ inline.value }}</a>
+                      }
+                      @case ('emphasis') { <strong>{{ inline.value }}</strong> }
+                      @case ('player') { <strong>{{ inline.value }}</strong> }
+                      @case ('spell') { <span class="audit-spell">{{ inline.value }}</span> }
+                      @default { <span>{{ inline.value }}</span> }
+                    }
+                  }
+                </li>
+              }
+            </ul>
+          }
+          @case ('spacer') { <div class="audit-spacer" aria-hidden="true"></div> }
+        }
+      }
+    </article>
+  }
+
+  @if (sendError(); as sendError) {
+    <p class="audit-send-error" role="alert">{{ sendError }}</p>
+  }
+
+  <details class="audit-metadata">
+    <summary>
+      {{ audit().metadata.evaluatedPulls }}/{{ audit().metadata.expectedPulls }} pulls evaluados
+      @if (audit().metadata.generationPublishedAt) {
+        · generación publicada {{ audit().metadata.generationPublishedAt | date: 'short' }}
+      }
+    </summary>
+    <dl>
+      <div><dt>Auditoría</dt><dd>{{ audit().metadata.auditVersion }}</dd></div>
+      <div><dt>Generación</dt><dd>{{ audit().metadata.generationId ?? 'N/D' }}</dd></div>
+      <div><dt>Evaluator</dt><dd>{{ audit().metadata.evaluatorVersion ?? 'N/D' }}</dd></div>
+      <div><dt>Resolver</dt><dd>{{ audit().metadata.resolverVersion ?? 'N/D' }}</dd></div>
+      <div><dt>Resolver semántico</dt><dd>{{ audit().metadata.semanticResolverVersion ?? 'N/D' }}</dd></div>
+      <div><dt>Semántica</dt><dd>{{ audit().metadata.semanticVersion ?? 'N/D' }}</dd></div>
+      <div><dt>Build</dt><dd>{{ audit().metadata.gameBuild ?? 'N/D' }}</dd></div>
+      <div><dt>Fingerprint</dt><dd>{{ audit().metadata.sourceFingerprint ?? 'N/D' }}</dd></div>
+    </dl>
+  </details>
+</section>

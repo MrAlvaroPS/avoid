@@ -76,10 +76,12 @@ export interface EpisodeVerdictCandidate {
 export interface EpisodeVerdictResult {
   usageEngaged: boolean;
   /** True when a real core opportunity was actionable, even if Response itself must remain uncertain. */
-  usageEvaluable: boolean;
+  /** Optional only for pre-v5 persisted/test fixtures; current evaluator always writes it explicitly. */
+  usageEvaluable?: boolean;
   usedSpellIds: number[];
   /** Positive non-core defensive actions are preserved without inflating either KPI. */
-  bonusCreditSpellIds: number[];
+  /** Optional only for backward-compatible fixtures; current evaluator always writes it explicitly. */
+  bonusCreditSpellIds?: number[];
   responseVerdict: ResponseVerdict;
   reason: string;
   coveredBySpellId: number | null;
@@ -392,6 +394,12 @@ export function reconstructCausalAvailability(
 export interface CausallyAwareCandidate extends EpisodeVerdictCandidate {
   castsForSpellMs: number[];
   timing: CausalTimingContext;
+  /** Full charge-aware result used to derive statusAtPeak; persisted by v8 for auditability. */
+  availabilityAtPeak?: {
+    status: DefensiveCooldownStatus;
+    chargesAvailable: number | null;
+    cooldownRemainingMs?: number;
+  };
 }
 
 export function resolveEpisodeVerdictWithCausalAvailability(

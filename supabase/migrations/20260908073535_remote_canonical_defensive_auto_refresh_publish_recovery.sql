@@ -1,0 +1,11 @@
+-- Historical migration reconciliation.
+--
+-- This migration was intentionally applied to the linked project before its
+-- checked-in canonical version received repository timestamp 20260908221000.
+-- The remote history identifies it as
+-- `canonical_defensive_auto_refresh_publish_recovery`.
+--
+-- It is deliberately a local no-op. The complete replacement function and
+-- grants are versioned in
+-- 20260908221000_canonical_defensive_auto_refresh_publish_recovery.sql.
+

@@ -1,8 +1,8 @@
 // Production canonical defensive generation refresher.
 //
-// This is deliberately NOT the old shadow-defensive-v7 empirical runner:
+// This is deliberately NOT the old shadow-defensive empirical runner:
 // that runner was hard-scoped to two reports and explicitly said not to wire
-// it into product traffic. This worker reuses the exact evaluator/resolver v7
+// it into product traffic. This worker reuses the exact canonical evaluator/resolver
 // contract, but delegates scope, retry state and publication invariants to the
 // database lifecycle introduced in 20260907110000.
 //
@@ -31,14 +31,15 @@ import {
   computeDemonstratedPersistentCastSpellIds,
 } from '../_shared/effective-defensives.ts';
 import {
-  EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
-  EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-  DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
+  EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V8,
+  EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V8,
+  DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8,
   mergeObservedCastEvidenceV6,
   defensiveSemanticClosureViolationsV6,
   defensiveScoreabilityViolationsV6,
   observedSelfCastAcquisitionViolationsV6,
-} from '../_shared/defensive-evidence-v7.ts';
+} from '../_shared/defensive-evidence-v8.ts';
+import { buildEffectiveDefensiveAuditFacts } from '../_shared/defensive-audit-facts.ts';
 import { evaluateDefensiveEpisodesForPlayer } from '../_shared/defensive-episode-evaluator.ts';
 import { buildDefensiveEpisodeLedgerEvents } from '../_shared/defensive-episode-ledger-events.ts';
 import {
@@ -57,7 +58,7 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 const GAME_BUILD = '12.1.0.68914';
 const SEMANTIC_VERSION = 'defensive-semantics@1.0.0';
 const LEDGER_VERSION = 'execution-ledger@1.0.0';
-const FUNCTION_VERSION = 'canonical-defensive-refresh@1';
+const FUNCTION_VERSION = 'canonical-defensive-refresh@2';
 
 type Action = 'health' | 'start' | 'process' | 'status';
 interface Body {
@@ -277,10 +278,10 @@ async function start(client: any, reportCode: string | null) {
   const { data: generationId, error } = await client.rpc('begin_defensive_generation_refresh', {
     p_game_build: GAME_BUILD,
     p_semantic_version: SEMANTIC_VERSION,
-    p_resolver_version: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
-    p_semantic_resolver_version: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-    p_episode_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
-    p_evaluator_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
+    p_resolver_version: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V8,
+    p_semantic_resolver_version: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V8,
+    p_episode_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8,
+    p_evaluator_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8,
     p_report_code: reportCode,
   });
   if (error) throw error;
@@ -305,10 +306,10 @@ async function processOne(client: any, generationId: string) {
   if (
     generation.game_build !== GAME_BUILD ||
     generation.semantic_version !== SEMANTIC_VERSION ||
-    generation.resolver_version !== EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7 ||
-    generation.semantic_resolver_version !== EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7 ||
-    generation.episode_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7 ||
-    generation.evaluator_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7
+    generation.resolver_version !== EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V8 ||
+    generation.semantic_resolver_version !== EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V8 ||
+    generation.episode_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8 ||
+    generation.evaluator_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8
   ) {
     throw new Error(`Generation ${generationId} contract does not match ${FUNCTION_VERSION}.`);
   }
@@ -466,7 +467,7 @@ async function processOne(client: any, generationId: string) {
     ];
     if (hard.length) {
       throw new Error(
-        `Canonical v7 hard gate violation on ${target.pull_id}/${record.player_name}: ${JSON.stringify(hard.slice(0, 10))}`,
+        `Canonical v8 hard gate violation on ${target.pull_id}/${record.player_name}: ${JSON.stringify(hard.slice(0, 10))}`,
       );
     }
     for (const violation of resolved.scoreability) {
@@ -579,11 +580,12 @@ async function processOne(client: any, generationId: string) {
       defensiveGenerationId: generationId,
       pullId: target.pull_id,
       playerName: record.player_name,
-      episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
+      episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8,
       semanticVersion: SEMANTIC_VERSION,
-      semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-      resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
+      semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V8,
+      resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V8,
       buildFingerprint: resolved.fingerprint,
+      effectiveKit: buildEffectiveDefensiveAuditFacts(resolved.kit),
       episodes,
     });
     const { error: stageError } = await client
@@ -680,9 +682,9 @@ Deno.serve(async (req: Request) => {
         version: FUNCTION_VERSION,
         gameBuild: GAME_BUILD,
         semanticVersion: SEMANTIC_VERSION,
-        resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
-        semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-        evaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
+        resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V8,
+        semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V8,
+        evaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8,
       });
     }
     if (action === 'start') {

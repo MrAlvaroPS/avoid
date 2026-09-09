@@ -115,7 +115,9 @@ import type { NightPlayerSummary } from './night-player-summary.service';
 // Response canónico (covered / evaluable). Un snapshot v15 puede ser íntegro
 // pero contener nightReliability calculado con la semántica anterior; debe
 // invalidarse aunque ni el report ni la forma del objeto hayan cambiado.
-const STORAGE_PREFIX = 'avoid:night-player-summary:v16:';
+// v17: añade defensiveAudit; su sourceFingerprint depende de la generación
+// publicada, que ya forma parte del fingerprint global de Roster.
+const STORAGE_PREFIX = 'avoid:night-player-summary:v17:';
 // No acumular sin límite en localStorage — solo los dosiers consultados más
 // recientemente (un RL mirando varios raiders seguidos en la misma sesión).
 const MAX_ENTRIES = 12;
@@ -139,6 +141,7 @@ function isCacheableSummary(summary: NightPlayerSummary): boolean {
   // legítimos como unavailable/partial. Solo el error transitorio invalida
   // el snapshot; no reinterpretamos falta real de evidencia como fallo.
   if (summary.canonicalDefensive?.state === 'error') return false;
+  if (summary.defensiveAudit?.state === 'error') return false;
   return true;
 }
 

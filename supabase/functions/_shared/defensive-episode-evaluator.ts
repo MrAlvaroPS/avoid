@@ -293,13 +293,14 @@ function buildCandidate(
     evaluationEndMs,
     observedActiveIntervals,
   });
-  const statusAtPeak = chargeAvailabilityAt(
+  const availabilityAtPeak = chargeAvailabilityAt(
     toChargeAvailabilityAdapter(r),
     r.charges,
     r.rechargeMs,
     castsForSpellMs,
     window.peakMs,
-  ).status;
+  );
+  const statusAtPeak = availabilityAtPeak.status;
   const membershipConfidence = weakestConfidence(r.semanticConfidence, r.buildPresenceConfidence);
   const applicabilityClaimConfidence = weakestConfidence(
     membershipConfidence,
@@ -348,6 +349,7 @@ function buildCandidate(
     },
     castsForSpellMs,
     timing: { timingRelation, effectiveDurationMs: r.effectiveDurationMs, afterDamageResponseWindowMs, evaluationEndMs },
+    availabilityAtPeak,
   };
 }
 
@@ -402,6 +404,7 @@ export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvalua
       startMs: episode.startMs,
       endMs: episode.endMs,
       peakMs: episode.peakMs,
+      peakValue: episode.peakValue,
     };
 
     // §10 — cutoff/wipe safety: un pico EN o después del cutoff nunca se evalúa (conservador: >= , no solo >).

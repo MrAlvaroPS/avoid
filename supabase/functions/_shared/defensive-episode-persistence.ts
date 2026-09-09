@@ -10,8 +10,15 @@
 // Response verdict, plan linkage, evidence y versiones."
 
 import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
-import type { EpisodeVerdictCandidate, EpisodeVerdictResult, ResponseVerdict } from './defensive-episode-verdict.ts';
+import type {
+  CausallyAwareCandidate,
+  EpisodeVerdictCandidate,
+  EpisodeVerdictResult,
+  ResponseVerdict,
+} from './defensive-episode-verdict.ts';
 import { deriveEpisodeCausalGroupId, resolveDefensiveEpisodeId, type EpisodeIdentitySource } from './defensive-episode-identity.ts';
+import { deriveUsageEvaluable } from './defensive-episode-kpis.ts';
+export { deriveUsageEvaluable } from './defensive-episode-kpis.ts';
 
 export type PlanVerdict = 'covered' | 'missed';
 
@@ -21,6 +28,8 @@ export interface PersistedDefensiveEpisode {
   startMs: number;
   peakMs: number;
   endMs: number;
+  /** WCL DamageTaken graph bucket magnitude selected by the canonical detector. Units are intentionally not relabelled downstream. */
+  peakValue?: number;
   /** KPI Uso — independiente de responseVerdict, ver §2.5.1 del plan. */
   usageEngaged: boolean;
   /**
@@ -34,7 +43,7 @@ export interface PersistedDefensiveEpisode {
   usageEvaluable: boolean;
   usedSpellIds: number[];
   /** Snapshot completo de candidatos evaluados — membership/applicability/availability por spellId. */
-  applicableCandidates: EpisodeVerdictCandidate[];
+  applicableCandidates: PersistedEpisodeVerdictCandidate[];
   responseVerdict: ResponseVerdict;
   responseReason: string;
   coveredBySpellId: number | null;
@@ -45,12 +54,27 @@ export interface PersistedDefensiveEpisode {
   confidence: EvaluationConfidence;
 }
 
+/**
+ * v8 makes the runtime fields used by the canonical verdict an explicit part
+ * of persistence. They already survived JSON serialization in v7 through
+ * structural typing; naming them here removes that accidental contract.
+ */
+export interface PersistedEpisodeVerdictCandidate extends EpisodeVerdictCandidate {
+  castsForSpellMs?: number[];
+  timing?: CausallyAwareCandidate['timing'];
+  availabilityAtPeak?: {
+    status: CausallyAwareCandidate['statusAtPeak'];
+    chargesAvailable: number | null;
+    cooldownRemainingMs?: number;
+  };
+}
+
 
 export interface BuildPersistedDefensiveEpisodeParams {
   pullId: string;
   playerName: string;
-  window: EpisodeIdentitySource & { peakMs: number };
-  candidates: EpisodeVerdictCandidate[];
+  window: EpisodeIdentitySource & { peakMs: number; peakValue?: number };
+  candidates: PersistedEpisodeVerdictCandidate[];
   verdict: EpisodeVerdictResult;
   confidence: EvaluationConfidence;
   /** Evidencia adicional (p. ej. reconstrucción causal, grouping basis) — se fusiona con la evidencia mínima ya derivada aquí. */
@@ -69,13 +93,14 @@ export function buildPersistedDefensiveEpisode(
   params: BuildPersistedDefensiveEpisodeParams,
 ): PersistedDefensiveEpisode {
   const episodeId = resolveDefensiveEpisodeId(params.pullId, params.playerName, params.window);
-  const usageEvaluable = params.verdict.usageEvaluable;
+  const usageEvaluable = params.verdict.usageEvaluable ?? deriveUsageEvaluable(params.verdict.responseVerdict);
   return {
     episodeId,
     causalGroupId: deriveEpisodeCausalGroupId(episodeId),
     startMs: params.window.startMs,
     peakMs: params.window.peakMs,
     endMs: params.window.endMs,
+    ...(params.window.peakValue != null ? { peakValue: params.window.peakValue } : {}),
     usageEngaged: params.verdict.usageEngaged,
     usageEvaluable,
     usedSpellIds: params.verdict.usedSpellIds,
@@ -94,7 +119,7 @@ export function buildPersistedDefensiveEpisode(
       // veredicto y cuáles, sin resolver, bloquearon una conclusión positiva.
       decisiveSpellIds: [...params.verdict.decisiveSpellIds].sort((a, b) => a - b),
       uncertaintyBlockers: [...params.verdict.uncertaintyBlockers].sort((a, b) => a - b),
-      bonusCreditSpellIds: [...params.verdict.bonusCreditSpellIds].sort((a, b) => a - b),
+      bonusCreditSpellIds: [...(params.verdict.bonusCreditSpellIds ?? [])].sort((a, b) => a - b),
       ...params.evidence,
     },
     confidence: params.confidence,
