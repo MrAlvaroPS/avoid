@@ -1424,7 +1424,7 @@ Deno.serve(async (req: Request) => {
                 })),
               }))
               : [],
-            consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent, defensivePressureWindows.windows),
+            consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent, actor?.subType ?? null, defensivePressureWindows.windows),
             defensive_pressure_windows: defensivePressureWindows,
             talent_build: talentBuild,
             talent_build_fingerprint: talentBuildFingerprint,
