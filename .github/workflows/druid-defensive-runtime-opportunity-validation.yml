@@ -1,0 +1,26 @@
+name: Druid defensive runtime opportunity validation
+on:
+  push:
+    branches: [fix/druid-defensive-runtime-opportunity]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm ci
+      - run: deno install --allow-scripts
+      - run: npx vitest run src/app/shared/druid-defensive-runtime-opportunity.spec.ts src/app/shared/effective-defensives.spec.ts src/app/shared/defensive-episode-evaluator.spec.ts src/app/shared/defensive-classification-semantics.spec.ts src/app/shared/effective-defensive-state.spec.ts
+      - run: npm run verify:defensive-contract
+      - run: npm run verify:causal-schema
+      - run: npm run verify:causal-runtime
+      - run: npm run build
+      - run: deno check supabase/functions/_shared/effective-defensives.ts supabase/functions/_shared/defensive-episode-evaluator.ts supabase/functions/_shared/defensive-episode-verdict.ts supabase/functions/analyze-report/index.ts supabase/functions/reanalyze-defensive-pressure/index.ts supabase/functions/canonical-defensive-refresh/index.ts
