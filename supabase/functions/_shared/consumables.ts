@@ -11,14 +11,16 @@
 import type { WclAbility } from './wcl-client.ts';
 
 export interface ConsumableAbilityIds {
-  healthstoneId: number | null;
+  healthstoneIds: Set<number>;
   healthPotionIds: Set<number>;
 }
 
 export function resolveConsumableAbilityIds(abilities: WclAbility[]): ConsumableAbilityIds {
-  const healthstone = abilities.find((a) => a.name === 'Healthstone');
+  const healthstoneIds = new Set(
+    abilities.filter((a) => /^(?:Demonic )?Healthstone$/i.test(a.name)).map((a) => a.gameID),
+  );
   const healthPotionIds = new Set(abilities.filter((a) => /health(ing)? potion/i.test(a.name)).map((a) => a.gameID));
-  return { healthstoneId: healthstone?.gameID ?? null, healthPotionIds };
+  return { healthstoneIds, healthPotionIds };
 }
 
 export interface ConsumableUsage {
@@ -73,7 +75,11 @@ export function buildConsumableUsage(
   warlockPresent: boolean,
   pressureWindowsMs: { startMs: number; endMs: number }[] = [],
 ): ConsumableUsage {
-  const healthstoneTimestamps = (ids.healthstoneId != null ? castTimestampsBySpell?.get(ids.healthstoneId) : undefined) ?? [];
+  const healthstoneTimestamps: number[] = [];
+  for (const id of ids.healthstoneIds) {
+    for (const t of castTimestampsBySpell?.get(id) ?? []) healthstoneTimestamps.push(t);
+  }
+  healthstoneTimestamps.sort((a, b) => a - b);
   const healthPotionTimestamps: number[] = [];
   for (const id of ids.healthPotionIds) {
     for (const t of castTimestampsBySpell?.get(id) ?? []) healthPotionTimestamps.push(t);
