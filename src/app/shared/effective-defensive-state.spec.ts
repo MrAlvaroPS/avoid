@@ -4,6 +4,7 @@ import {
   effectiveDeathOptions,
   effectiveDefensiveStateAt,
   evaluateEffectiveWindowCoverage,
+  preventableWithEffectiveDefensive,
 } from '../../../supabase/functions/_shared/effective-defensive-state';
 
 function defensive(overrides: Partial<ResolvedDefensive> = {}): ResolvedDefensive {
@@ -146,5 +147,59 @@ describe('effective v2 materialization', () => {
     const used = evaluateEffectiveWindowCoverage(10_000, 12_000, [creditOnly], new Map([[34428, [11_000]]]));
     expect(used.covered).toBe(true);
     expect(used.availableOpportunity).toBe(false);
+  });
+});
+
+
+describe('preventableWithEffectiveDefensive — lethal-hit causality', () => {
+  it('does not blame a pure sustain resource for a hit that is already >= max HP', () => {
+    const sustain = defensive({
+      spellId: 202168,
+      name: 'Impending Victory',
+      survivalType: 'sustain',
+      mechanisms: ['sustain'],
+      effectiveDurationMs: 0,
+    });
+    const options = effectiveDeathOptions([sustain], new Map(), 100_000);
+
+    expect(preventableWithEffectiveDefensive(options, { killingBlowAmount: 870_060, maxHitPoints: 870_060 })).toBe(false);
+  });
+
+  it('keeps pure sustain missable for non-one-shot deaths', () => {
+    const sustain = defensive({
+      spellId: 49039,
+      name: 'Lichborne',
+      survivalType: 'sustain',
+      mechanisms: ['sustain'],
+      effectiveDurationMs: 10_000,
+    });
+    const options = effectiveDeathOptions([sustain], new Map(), 100_000);
+
+    expect(preventableWithEffectiveDefensive(options, { killingBlowAmount: 300_000, maxHitPoints: 850_000 })).toBe(true);
+  });
+
+  it('still treats mitigation as causally viable against a full-health lethal hit', () => {
+    const options = effectiveDeathOptions([defensive({ spellId: 48792, name: 'Icebound Fortitude', mechanisms: ['mitigation'] })], new Map(), 100_000);
+
+    expect(preventableWithEffectiveDefensive(options, { killingBlowAmount: 850_000, maxHitPoints: 850_000 })).toBe(true);
+  });
+
+  it('still treats effective-health as causally viable against a full-health lethal hit', () => {
+    const effectiveHealth = defensive({
+      spellId: 19236,
+      name: 'Desperate Prayer',
+      survivalType: 'emergency',
+      mechanisms: ['effective_health', 'sustain'],
+    });
+    const options = effectiveDeathOptions([effectiveHealth], new Map(), 100_000);
+
+    expect(preventableWithEffectiveDefensive(options, { killingBlowAmount: '836200', maxHitPoints: '836200' })).toBe(true);
+  });
+
+  it('preserves the previous rule when lethal-hit evidence is unavailable', () => {
+    const sustain = defensive({ survivalType: 'sustain', mechanisms: ['sustain'] });
+    const options = effectiveDeathOptions([sustain], new Map(), 100_000);
+
+    expect(preventableWithEffectiveDefensive(options)).toBe(true);
   });
 });
