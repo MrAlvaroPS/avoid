@@ -1,7 +1,7 @@
 # Auditoría defensiva narrativa por jugador
 
-Estado: análisis previo completo; implementación local pendiente en
-`feature/player-defensive-audit-narrative`.
+Estado: implementación v8 en `feature/player-defensive-audit-narrative`;
+corrección local del bloqueo de publicación automática pendiente de desplegar.
 
 Este documento registra las dos revisiones independientes exigidas antes de
 implementar. La fuente normativa sigue siendo
@@ -104,10 +104,10 @@ el servidor comprueba la vinculación del personaje.
 
 Informe `TvZnzN16tKPdVp2D`, población exacta de 20 pulls canónicos:
 
-| Jugador | Divine Protection (403876) | Divine Shield (642) |
-| --- | ---: | ---: |
-| Ssquall | 57 | 8 |
-| Helssipanki | 55 | 6 |
+| Jugador     | Divine Protection (403876) | Divine Shield (642) |
+| ----------- | -------------------------: | ------------------: |
+| Ssquall     |                         57 |                   8 |
+| Helssipanki |                         55 |                   6 |
 
 La consulta de eventos WCL y la tabla visible de casts de WCL coinciden. No hay
 timestamps duplicados para Divine Protection y el fight ninja no aporta casts
@@ -141,3 +141,134 @@ dos huecos descritos arriba son carencias de persistencia, no instrucciones
 incompatibles. Se resolverán de forma aditiva; si la generación publicada no
 contiene el nuevo contrato, el estado será `incompatible` y no se narrará.
 
+## 2026-09-10 — incidente KPI N/D tras desplegar evaluator v8
+
+### Evidencia observada en producción
+
+- `defensive_generation_pointer` seguía apuntando a
+  `44b0f9ff-afba-45f0-b900-73ceb9842a7c`, generación v7 publicada el
+  2026-09-08 07:36:29 UTC.
+- Existía una generación privada `building`
+  `a4cfc6b9-58dc-4ce5-9f76-d18562f1657e`, también v7, con 78/91 pulls y
+  1745/2057 filas jugador×pull seguras. Le faltaban exactamente 13 pulls y
+  312 filas.
+- El report nuevo `VNvX3MqWxZ9jhT6d` tenía 13 pulls canónicos, 25 jugadores
+  y 312 filas elegibles. Su request automática agotó 5 intentos y quedó
+  `blocked` con error de `canonical-defensive-refresh start`.
+- Caso individual comprobado: `Gusmï` tenía 6 pulls esperados y 0/6 filas
+  tanto en la generación publicada como en la `building`. El frontend debía
+  devolver `incompatible` y `N/D`; no era correcto inventar un porcentaje.
+- La función desplegada era `canonical-defensive-refresh@2`, evaluator v8,
+  mientras la única `building` era evaluator v7. El RPC anterior rechazaba
+  siempre esa combinación con una generación de contrato distinto. La cola no
+  podía progresar y el pointer, correctamente, no se movía sin completitud.
+- El fingerprint del dosier ya incluye `published_generation_id` y
+  `defensive_generation_pointer.updated_at`; la caché se invalida cuando el
+  pointer cambia. La causa primaria de este incidente no era la caché.
+
+### Corrección implementada
+
+- Migración
+  `20260910001000_canonical_defensive_contract_upgrade_recovery.sql`:
+  arranque version-aware, retiro auditable de una `building` privada
+  incompatible, protección por lease, enlace atómico cola↔generación,
+  reencolado de requests bloqueadas que todavía necesitan refresh y wake-up
+  best-effort. No escribe `defensive_generation_pointer`; la publicación
+  sigue pasando por `publish_complete_defensive_generation` y sus gates.
+- `canonical-defensive-refresh`: el `start` devuelve la identidad de
+  generación sin depender de una lectura accesoria de coverage y conserva los
+  errores estructurados de PostgREST en vez de reducirlos a `[object Object]`.
+- `canonical-defensive-auto-refresh`: pasa su lease al worker para permitir la
+  transición atómica y conserva el bind antiguo como comprobación idempotente
+  compatible con despliegues escalonados.
+- `scripts/verify-canonical-defensive-auto-refresh.mjs` amplía el contrato
+  estático con las invariantes de upgrade, lease, no-escritura del pointer y
+  conservación del ID antes de coverage.
+
+Durante la recuperación aparecieron otros bloqueos sistémicos que también se
+corrigieron:
+
+- el lease expirado tenía una referencia SQL ambigua a `lease_token`;
+- una continuación fire-and-forget podía perderse después del último pull;
+- el despacho `pg_net` agotaba sus 5 segundos cuando intentaba ejecutar todo
+  el drain dentro de la petición;
+- el gate de publicación repetía un cálculo de coverage costoso y podía agotar
+  el statement timeout de PostgREST;
+- un lease expirado podía volver a la cola sin respetar el presupuesto de
+  reintentos;
+- preparar el ledger de una noche podía resetear el lease vivo de otro worker;
+- los flujos de importación y envío masivo no esperaban conjuntamente a
+  ingesta, ledger y generación defensiva canónica.
+
+Las siete migraciones `20260910001000` a `20260910112058` resuelven esos casos
+de forma aditiva. `canonical-defensive-auto-refresh` deployment v6
+(`canonical-defensive-auto-refresh@2` como versión de aplicación),
+`canonical-defensive-refresh@12` y `process-combat-evaluation-queue@6` están
+desplegadas con verificación JWT. El dispatcher de base de datos usa un JWT
+anon cifrado en Vault para atravesar el gateway y conserva un segundo secreto
+interno `x-iris-dispatch-token`; el endpoint de ejecución no es público.
+
+La publicación no actualizó el pointer manualmente: el worker llamó al gate
+canónico y éste publicó la generación únicamente después de verificar su
+completitud. El backend y las migraciones están desplegados en producción. La
+barrera Angular de importación/envío masivo permanece local hasta desplegar
+esta rama; el repositorio no contiene un destino de hosting enlazado que
+permita publicarla de forma segura desde este entorno.
+
+### Barrera E2E para informes nuevos
+
+- La importación manual ya no termina al descargar WCL: espera a que la ingesta
+  quede completa, prepara/procesa el ledger específico del report y espera a
+  la generación defensiva publicada.
+- La preparación del ledger es atómica y service-only: reencola filas
+  ausentes/antiguas sin tocar un job que tenga un lease vivo.
+- El worker defensivo puede reanudarse aunque se pierda una continuación; el
+  cliente sondea y vuelve a despertar el drain de forma acotada.
+- El sondeo de readiness consulta la request exacta del report y sólo calcula
+  el coverage exhaustivo cada diez segundos, evitando cargar la base de datos
+  una vez por segundo mientras el worker sigue activo.
+- Tanto `Actualizar infografías` como `Enviar todas` atraviesan la barrera. El
+  envío materializa y valida todas las infografías enviables antes del primer
+  mensaje a Discord; si una sola tiene cobertura parcial, generación distinta
+  o error, no envía ninguna.
+- Un KPI individual puede seguir siendo `N/D` de forma legítima cuando no hay
+  oportunidad evaluable. La barrera comprueba cobertura e identidad de
+  generación, no fabrica porcentajes.
+
+### Verificación empírica en producción
+
+- El worker publicó automáticamente la generación v8
+  `5c7b8864-2d51-4a65-aea5-32756d7e04b8` el
+  2026-09-10 11:18:01 UTC. La request terminó `completed` y
+  `needs_refresh = false`.
+- Cobertura global: 91/91 pulls, 2057/2057 filas jugador×pull y 3292/3292
+  eventos de ledger; cero pulls/filas/eventos ausentes, huérfanos o con deriva
+  de versión.
+- Report `VNvX3MqWxZ9jhT6d`: 13/13 pulls y 312/312 filas elegibles, sin filas
+  ausentes.
+- `Gusmï`: 6/6 pulls, cuatro episodios canónicos; Usage 0/3 y Response 0/3
+  (`missed_ready` ×3 y `uncertain` ×1). Ahora obtiene un 0 % reconstruible en
+  ambos KPI, no `N/D`. Management permanece `N/D` porque no existe un plan
+  defensivo publicado, que es el resultado correcto según contrato.
+
+### Validación local ejecutada
+
+- La migración se aplicó en un PostgreSQL desechable reproduciendo una
+  generación v7 obsoleta y una petición bloqueada: retiró la `building` con
+  auditoría, creó la v8, reencoló la petición y mantuvo el pointer intacto.
+  También se comprobó el reemplazo v8 → v9 por el mismo propietario de un
+  lease vivo y su enlace atómico a cola/runtime.
+- El RPC atómico de readiness se probó contra PostgreSQL 17: reencoló dos jobs
+  ausentes/antiguos, conservó intacto un job con lease vivo y sólo quedó
+  ejecutable por `service_role`.
+- La nueva implementación de coverage se comparó transaccionalmente en
+  producción con la anterior: JSON exactamente idéntico; redujo los shared
+  buffer hits de 144.346 a 41.501 y los bloques temporales de 37.212 a 12.404.
+- Vitest dirigido: 10 archivos y 134/134 tests correctos.
+- `node scripts/verify-canonical-defensive-auto-refresh.mjs`: correcto.
+- `npm run verify:defensive-contract`: correcto.
+- `npm run verify:causal-schema`: correcto.
+- `npm run verify:causal-runtime`: correcto (17 Edge Functions y 3 suites
+  Deno).
+- `npm run build`: correcto; conserva únicamente los avisos de presupuesto de
+  bundles/SCSS ya existentes.

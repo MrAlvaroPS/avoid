@@ -205,6 +205,45 @@ export interface SyncReportsResult {
   remaining: number;
 }
 
+interface NightInfographicLedgerStatus {
+  ok: true;
+  state: 'ready' | 'pending' | 'failed';
+  reportCode: string;
+  readinessVersion: string;
+  totalPulls: number;
+  completedPulls: number;
+  pendingPulls: number;
+  failedPulls: number;
+  lastError: string | null;
+  batchId?: string | null;
+  waitingPulls?: number;
+}
+
+interface CanonicalDefensiveRefreshRequestStatus {
+  report_code: string;
+  status: 'pending' | 'running' | 'completed' | 'blocked';
+  attempts: number;
+  generation_id: string | null;
+  last_error: string | null;
+}
+
+interface CanonicalDefensiveAutoRefreshStatus {
+  ok: true;
+  requests: CanonicalDefensiveRefreshRequestStatus[];
+  buildingCoverage?: {
+    generationId?: string;
+    stagedPulls?: number;
+    expectedPulls?: number;
+  } | null;
+}
+
+export type NightInfographicReadinessPhase = 'ingestion' | 'ledger' | 'defensives' | 'summaries';
+
+export interface NightInfographicReadinessProgress {
+  phase: NightInfographicReadinessPhase;
+  message: string;
+}
+
 @Injectable({ providedIn: 'root' })
 export class EdgeFunctionsService {
   private supabase = inject(SupabaseService);
@@ -217,13 +256,20 @@ export class EdgeFunctionsService {
   /** Llama analyzeReport en bucle hasta que remaining llega a 0. Devuelve el pull_id más reciente que haya quedado procesado. */
   async analyzeReportFully(reportCode: string, onProgress?: (r: AnalyzeReportResult) => void): Promise<string | null> {
     let newestPullId: string | null = null;
-    for (let guard = 0; guard < 50; guard++) {
+    for (let guard = 0; guard < 500; guard++) {
       const result = await this.analyzeReport(reportCode);
       onProgress?.(result);
       if (result.newestPullId) newestPullId = result.newestPullId;
-      if (result.remaining <= 0) break;
+      if (result.remaining <= 0) return newestPullId;
+      if (result.processed <= 0) {
+        throw new Error(
+          `analyze-report no avanza para ${reportCode}: quedan ${result.remaining} pulls. No se usará un informe parcial.`,
+        );
+      }
     }
-    return newestPullId;
+    throw new Error(
+      `analyze-report no terminó tras 500 iteraciones para ${reportCode}. No se usará un informe parcial.`,
+    );
   }
 
   /**
@@ -281,6 +327,153 @@ export class EdgeFunctionsService {
     }
     throw new Error(
       `canonical-defensive-refresh no convergió tras ${maxSteps} pulls; la generación ${generationId} no se considera publicable.`,
+    );
+  }
+
+  /**
+   * Readiness barrier for the Night Report bulk sender. It advances the
+   * existing ingestion, causal-ledger and canonical-defensive pipelines and
+   * returns only after all three durable contracts are current for this exact
+   * report. Any blocked queue or timeout throws before Discord receives the
+   * first message.
+   */
+  async ensureNightInfographicReadiness(
+    reportCode: string,
+    onProgress?: (progress: NightInfographicReadinessProgress) => void,
+    onAnalyzeProgress?: (result: AnalyzeReportResult) => void,
+  ): Promise<string | null> {
+    onProgress?.({ phase: 'ingestion', message: 'Comprobando que el log está ingerido por completo…' });
+    const newestPullId = await this.analyzeReportFully(reportCode, (result) => {
+      onAnalyzeProgress?.(result);
+      onProgress?.({
+        phase: 'ingestion',
+        message: result.remaining > 0
+          ? `Ingestando pulls pendientes… quedan ${result.remaining}`
+          : 'Log ingerido por completo.',
+      });
+    });
+
+    onProgress?.({ phase: 'ledger', message: 'Comprobando el ledger de ejecución…' });
+    let ledger = await this.invoke<NightInfographicLedgerStatus>('process-combat-evaluation-queue', {
+      action: 'prepare-report',
+      reportCode,
+    });
+    if (ledger.state === 'failed') {
+      throw new Error(`El ledger del informe está bloqueado: ${ledger.lastError ?? 'error sin detalle'}`);
+    }
+    let batchId = ledger.batchId ?? null;
+    const ledgerDeadline = Date.now() + 30 * 60_000;
+    while (ledger.state !== 'ready' && Date.now() < ledgerDeadline) {
+      onProgress?.({
+        phase: 'ledger',
+        message: batchId
+          ? `Materializando ledger… ${ledger.completedPulls}/${ledger.totalPulls} pulls`
+          : `Esperando ${ledger.waitingPulls ?? ledger.pendingPulls} jobs con lease activo…`,
+      });
+
+      let processed = false;
+      if (batchId) {
+        const step = await this.invoke<{ ok: true; processed: boolean; reason?: string }>(
+          'process-combat-evaluation-queue',
+          { action: 'process-batch', batchId },
+        );
+        processed = step.processed;
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+
+      ledger = await this.invoke<NightInfographicLedgerStatus>('process-combat-evaluation-queue', {
+        action: 'status-report',
+        reportCode,
+      });
+      if (ledger.state === 'failed') {
+        throw new Error(`El ledger del informe está bloqueado: ${ledger.lastError ?? 'error sin detalle'}`);
+      }
+      if (ledger.state === 'ready') break;
+
+      // batch_empty puede significar que quedan jobs protegidos por otro
+      // worker. Repreparar de forma atómica adopta solo los que ya terminaron
+      // o cuyo lease expiró, sin resetear los que siguen vivos.
+      if (!batchId || !processed) {
+        ledger = await this.invoke<NightInfographicLedgerStatus>(
+          'process-combat-evaluation-queue',
+          { action: 'prepare-report', reportCode },
+        );
+        if (ledger.state === 'failed') {
+          throw new Error(`El ledger del informe está bloqueado: ${ledger.lastError ?? 'error sin detalle'}`);
+        }
+        batchId = ledger.batchId ?? null;
+      }
+    }
+    if (ledger.state !== 'ready') {
+      throw new Error(
+        `El ledger no terminó en 30 minutos (${ledger.completedPulls}/${ledger.totalPulls} pulls); no se enviará ninguna infografía.`,
+      );
+    }
+    onProgress?.({
+      phase: 'ledger',
+      message: `Ledger completo: ${ledger.completedPulls}/${ledger.totalPulls} pulls.`,
+    });
+
+    onProgress?.({ phase: 'defensives', message: 'Comprobando la generación defensiva publicada…' });
+    let start = await this.invoke<{ ok: true; state: string }>('canonical-defensive-auto-refresh', {
+      action: 'start',
+      reportCode,
+    });
+    if (start.state === 'already_current') {
+      onProgress?.({ phase: 'summaries', message: 'Datos canónicos listos.' });
+      return newestPullId;
+    }
+
+    for (let guard = 0; guard < 600; guard++) {
+      if (guard > 0 && guard % 10 === 0) {
+        await this.invoke<{ ok: true; state: string }>('canonical-defensive-auto-refresh', {
+          action: 'drain',
+        });
+      }
+      const status = await this.invoke<CanonicalDefensiveAutoRefreshStatus>(
+        'canonical-defensive-auto-refresh',
+        {
+          action: 'status',
+          reportCode,
+          // Coverage is exhaustive and intentionally more expensive than the
+          // request state. Sample it for progress instead of recalculating it
+          // on every one-second poll.
+          includeCoverage: guard % 10 === 0,
+        },
+      );
+      const request = status.requests.find((candidate) => candidate.report_code === reportCode);
+      if (request?.status === 'blocked') {
+        throw new Error(
+          `La generación defensiva está bloqueada: ${request.last_error ?? 'error sin detalle'}`,
+        );
+      }
+      if (request?.status === 'completed') {
+        start = await this.invoke<{ ok: true; state: string }>('canonical-defensive-auto-refresh', {
+          action: 'start',
+          reportCode,
+        });
+        if (start.state === 'already_current') {
+          onProgress?.({ phase: 'summaries', message: 'Datos canónicos listos.' });
+          return newestPullId;
+        }
+      }
+
+      const coverage = status.buildingCoverage;
+      const ownsCoverage = coverage?.generationId != null
+        && coverage.generationId === request?.generation_id;
+      onProgress?.({
+        phase: 'defensives',
+        message: ownsCoverage && coverage?.expectedPulls != null
+          ? `Evaluando defensivos… ${coverage.stagedPulls ?? 0}/${coverage.expectedPulls} pulls`
+          : request?.status === 'pending'
+            ? 'La generación defensiva está esperando turno…'
+            : 'Evaluando y publicando defensivos…',
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    throw new Error(
+      'La generación defensiva no terminó en 10 minutos; no se enviará ninguna infografía.',
     );
   }
 

@@ -3,17 +3,18 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { canonicalRefreshStepsForInvocation } from '../_shared/canonical-defensive-auto-refresh.ts';
 
-const FUNCTION_VERSION = 'canonical-defensive-auto-refresh@1';
+const FUNCTION_VERSION = 'canonical-defensive-auto-refresh@2';
 const SELF_SLUG = 'canonical-defensive-auto-refresh';
 const CANONICAL_WORKER_SLUG = 'canonical-defensive-refresh';
 
-type Action = 'drain' | 'continue' | 'start' | 'status';
+type Action = 'drain' | 'execute' | 'continue' | 'start' | 'status';
 
 interface Body {
   action?: Action;
   reportCode?: string | null;
   leaseToken?: string | null;
   generationId?: string | null;
+  includeCoverage?: boolean;
 }
 
 interface ClaimRow {
@@ -41,12 +42,32 @@ interface RuntimeRow {
 const serviceClient = () =>
   createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
+function describeUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message;
+    const code = (error as { code?: unknown }).code;
+    if (typeof message === 'string') {
+      return typeof code === 'string' ? `${code}: ${message}` : message;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // Fall through to the final string conversion.
+    }
+  }
+  return String(error);
+}
+
 function edgeWaitUntil(promise: Promise<unknown>) {
-  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (task: Promise<unknown>) => void } }).EdgeRuntime;
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil?: (task: Promise<unknown>) => void } })
+    .EdgeRuntime;
   if (typeof runtime?.waitUntil === 'function') {
     runtime.waitUntil(promise);
   } else {
-    void promise.catch((error) => console.error(`${FUNCTION_VERSION}: background task failed`, error));
+    void promise.catch((error) =>
+      console.error(`${FUNCTION_VERSION}: background task failed`, error),
+    );
   }
 }
 
@@ -86,7 +107,9 @@ async function rpc<T>(
   return data as T;
 }
 
-async function callCanonicalWorker(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function callCanonicalWorker(
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
   const url = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const response = await fetch(`${url}/functions/v1/${CANONICAL_WORKER_SLUG}`, {
@@ -119,12 +142,16 @@ async function scheduleSelf(body: Body, delayMs = 0) {
   const client = serviceClient();
   const runtime = await readRuntime(client);
   const url = Deno.env.get('SUPABASE_URL')!;
+  const gatewayKey = Deno.env.get('SUPABASE_ANON_KEY');
+  if (!gatewayKey) throw new Error('SUPABASE_ANON_KEY is required for authenticated self-dispatch');
   const task = (async () => {
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
     const response = await fetch(`${url}/functions/v1/${SELF_SLUG}`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        authorization: `Bearer ${gatewayKey}`,
+        apikey: gatewayKey,
         'x-iris-dispatch-token': runtime.dispatch_token,
       },
       body: JSON.stringify(body),
@@ -232,10 +259,7 @@ async function processGeneration(
       }
     }
 
-    await scheduleSelf(
-      { action: 'continue', reportCode, leaseToken, generationId },
-      0,
-    );
+    await scheduleSelf({ action: 'continue', reportCode, leaseToken, generationId }, 0);
     return {
       ok: true,
       state: 'running',
@@ -252,7 +276,49 @@ async function startClaimedRequest(client: ReturnType<typeof serviceClient>, cla
   const reportCode = claim.report_code;
   const leaseToken = claim.lease_token;
   try {
-    const started = await callCanonicalWorker({ action: 'start', reportCode });
+    // A long report can finish its final pull and then lose the fire-and-forget
+    // continuation before the next invocation observes `done`. Resume the
+    // already-bound generation directly when its persisted contract matches
+    // the worker health contract; do not rebuild or wait for WCL again.
+    const { data: request, error: requestError } = await client
+      .from('canonical_defensive_refresh_requests')
+      .select('generation_id')
+      .eq('report_code', reportCode)
+      .eq('lease_token', leaseToken)
+      .eq('status', 'running')
+      .maybeSingle();
+    if (requestError) throw requestError;
+    const resumableGenerationId = typeof request?.generation_id === 'string'
+      ? request.generation_id
+      : null;
+    if (resumableGenerationId) {
+      const [{ data: generation, error: generationError }, health] = await Promise.all([
+        client
+          .from('defensive_generations')
+          .select(
+            'game_build,semantic_version,resolver_version,semantic_resolver_version,episode_version,evaluator_version',
+          )
+          .eq('id', resumableGenerationId)
+          .maybeSingle(),
+        callCanonicalWorker({ action: 'health' }),
+      ]);
+      if (generationError) throw generationError;
+      const contractMatches = generation
+        && generation.game_build === health.gameBuild
+        && generation.semantic_version === health.semanticVersion
+        && generation.resolver_version === health.resolverVersion
+        && generation.semantic_resolver_version === health.semanticResolverVersion
+        && generation.episode_version === health.evaluatorVersion
+        && generation.evaluator_version === health.evaluatorVersion;
+      if (contractMatches) {
+        return await processGeneration(client, reportCode, leaseToken, resumableGenerationId);
+      }
+    }
+
+    // Passing the current lease lets the worker replace an incompatible
+    // private BUILDING generation and bind the replacement atomically. The
+    // legacy bind below remains as an idempotent compatibility check.
+    const started = await callCanonicalWorker({ action: 'start', reportCode, leaseToken });
     if (started.skipped === true) {
       const reason =
         typeof started.reason === 'string'
@@ -290,7 +356,21 @@ async function startClaimedRequest(client: ReturnType<typeof serviceClient>, cla
 async function drain(client: ReturnType<typeof serviceClient>) {
   const claims = await rpc<ClaimRow[]>(client, 'claim_canonical_defensive_refresh_request');
   const claim = claims?.[0] ?? null;
-  if (claim) return await startClaimedRequest(client, claim);
+  if (claim) {
+    // The PostgreSQL wake-up has a deliberately short HTTP timeout. Return as
+    // soon as ownership is durable, then perform WCL/canonical work in a fresh
+    // authenticated invocation whose lifetime is not tied to pg_net.
+    await scheduleSelf(
+      { action: 'execute', reportCode: claim.report_code, leaseToken: claim.lease_token },
+      0,
+    );
+    return {
+      ok: true,
+      state: 'scheduled',
+      reportCode: claim.report_code,
+      attempt: claim.attempt,
+    };
+  }
 
   const [runtimeResponse, pendingResponse] = await Promise.all([
     client
@@ -330,7 +410,10 @@ async function drain(client: ReturnType<typeof serviceClient>) {
 
   const pending = pendingResponse.data as { report_code: string; not_before: string } | null;
   if (pending) {
-    const delayMs = Math.max(250, Math.min(10_000, new Date(pending.not_before).getTime() - Date.now()));
+    const delayMs = Math.max(
+      250,
+      Math.min(10_000, new Date(pending.not_before).getTime() - Date.now()),
+    );
     await scheduleSelf({ action: 'drain' }, delayMs);
     return { ok: true, state: 'waiting', reportCode: pending.report_code, delayMs };
   }
@@ -338,20 +421,27 @@ async function drain(client: ReturnType<typeof serviceClient>) {
   return { ok: true, state: 'idle' };
 }
 
-async function status(client: ReturnType<typeof serviceClient>) {
+async function status(
+  client: ReturnType<typeof serviceClient>,
+  reportCode: string | null,
+  includeCoverage: boolean,
+) {
+  let requestsQuery = client
+    .from('canonical_defensive_refresh_requests')
+    .select(
+      'report_code,status,requested_at,not_before,attempts,generation_id,lease_expires_at,last_error,completed_at,updated_at',
+    )
+    .order('updated_at', { ascending: false })
+    .limit(reportCode ? 1 : 25);
+  if (reportCode) requestsQuery = requestsQuery.eq('report_code', reportCode);
+
   const [runtimeResponse, requestsResponse, generationsResponse] = await Promise.all([
     client
       .from('canonical_defensive_refresh_dispatch_runtime')
       .select('function_url,lease_report_code,lease_generation_id,lease_expires_at,updated_at')
       .eq('id', true)
       .single(),
-    client
-      .from('canonical_defensive_refresh_requests')
-      .select(
-        'report_code,status,requested_at,not_before,attempts,generation_id,lease_expires_at,last_error,completed_at,updated_at',
-      )
-      .order('updated_at', { ascending: false })
-      .limit(25),
+    requestsQuery,
     client
       .from('defensive_generations')
       .select('id,status,created_at,published_at,game_build')
@@ -363,8 +453,10 @@ async function status(client: ReturnType<typeof serviceClient>) {
   }
 
   let buildingCoverage: unknown = null;
-  const building = (generationsResponse.data ?? []).find((row: { status: string }) => row.status === 'building');
-  if (building?.id) {
+  const building = (generationsResponse.data ?? []).find(
+    (row: { status: string }) => row.status === 'building',
+  );
+  if (includeCoverage && building?.id) {
     try {
       buildingCoverage = await rpc(client, 'defensive_generation_coverage', {
         p_generation_id: building.id,
@@ -392,18 +484,27 @@ Deno.serve(async (req: Request) => {
   const client = serviceClient();
   try {
     const body = (await req.json().catch(() => ({}))) as Body;
-    const action: Action = body.action ?? 'drain';
+    const requestedAction = body.action ?? 'drain';
+    const allowedActions: readonly Action[] = ['start', 'drain', 'execute', 'continue', 'status'];
+    if (!allowedActions.includes(requestedAction)) {
+      return jsonResponse({ ok: false, error: `Unknown action ${String(requestedAction)}` }, 400);
+    }
+    const action: Action = requestedAction;
     const internal = await hasInternalDispatchToken(client, req);
 
     if (!internal) {
       const guard = await requireOfficer(req);
       if (guard instanceof Response) return guard;
-      if (action === 'continue') {
-        return jsonResponse({ ok: false, error: 'continue is internal-only' }, 403);
+      if (action === 'execute' || action === 'continue') {
+        return jsonResponse({ ok: false, error: `${action} is internal-only` }, 403);
       }
     }
 
-    if (action === 'status') return jsonResponse(await status(client));
+    if (action === 'status') {
+      return jsonResponse(
+        await status(client, body.reportCode ?? null, body.includeCoverage !== false),
+      );
+    }
 
     if (action === 'start') {
       if (!body.reportCode) {
@@ -416,6 +517,19 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ ok: true, state: 'already_current', reportCode: body.reportCode });
       }
       return jsonResponse(await drain(client));
+    }
+
+    if (action === 'execute') {
+      if (!body.reportCode || !body.leaseToken) {
+        return jsonResponse({ ok: false, error: 'reportCode and leaseToken required' }, 400);
+      }
+      return jsonResponse(
+        await startClaimedRequest(client, {
+          report_code: body.reportCode,
+          lease_token: body.leaseToken,
+          attempt: 0,
+        }),
+      );
     }
 
     if (action === 'continue') {
@@ -436,7 +550,7 @@ Deno.serve(async (req: Request) => {
       {
         ok: false,
         version: FUNCTION_VERSION,
-        error: error instanceof Error ? error.message : String(error),
+        error: describeUnknownError(error),
       },
       500,
     );

@@ -28,6 +28,10 @@ const ingestionHardeningMigration = '20260903070000_harden_pull_ingestion_recove
 const ingestionHardeningSql = readFileSync(join(migrationDir, ingestionHardeningMigration), 'utf8');
 const mechanicAttributionShadowMigration = '20260905233000_mechanic_attribution_canonical_shadow_v1.sql';
 const mechanicAttributionShadowSql = readFileSync(join(migrationDir, mechanicAttributionShadowMigration), 'utf8');
+const nightReadinessClaimMigration = '20260910072905_night_infographic_readiness_barrier.sql';
+const nightReadinessClaimSql = readFileSync(join(migrationDir, nightReadinessClaimMigration), 'utf8');
+const nightReadinessEnqueueMigration = '20260910103453_night_infographic_readiness_enqueue.sql';
+const nightReadinessEnqueueSql = readFileSync(join(migrationDir, nightReadinessEnqueueMigration), 'utf8');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -104,6 +108,39 @@ assert(queueSql.includes('alter table combat_evaluation_batches enable row level
 assert(queueSql.includes('alter table combat_evaluation_jobs enable row level security'), 'La cola causal no activa RLS en jobs.');
 assert(queueSql.includes('create or replace function claim_combat_evaluation_job'), 'M11b no crea la RPC de claim con lease.');
 assert(queueSql.includes('create or replace function finish_combat_evaluation_job'), 'M11b no crea la RPC de finish con lease.');
+
+for (const required of [
+  'create or replace function claim_combat_evaluation_job_for_batch',
+  'batch_id = p_batch_id',
+  'for update skip locked',
+  'grant execute on function claim_combat_evaluation_job_for_batch(uuid, text, integer)',
+]) {
+  assert(nightReadinessClaimSql.includes(required), `La barrera de noche no implementa el claim dirigido: ${required}`);
+}
+assert(
+  !nightReadinessClaimSql.includes('grant execute on function claim_combat_evaluation_job_for_batch(uuid, text, integer) to authenticated'),
+  'El claim dirigido no puede exponerse a authenticated.',
+);
+
+for (const required of [
+  'create or replace function public.enqueue_night_infographic_readiness_jobs',
+  "pg_advisory_xact_lock(hashtextextended('night-infographic-readiness-enqueue', 0))",
+  "j.status = 'running'",
+  'j.lease_expires_at >= now()',
+  'for update',
+  "'nightInfographicReadinessVersion'",
+  'grant execute on function public.enqueue_night_infographic_readiness_jobs(uuid[], text, text, uuid)',
+]) {
+  assert(nightReadinessEnqueueSql.includes(required), `El encolado de noche no protege leases activos: ${required}`);
+}
+assert(
+  !nightReadinessEnqueueSql.includes('grant execute on function public.enqueue_night_infographic_readiness_jobs(uuid[], text, text, uuid) to authenticated'),
+  'El encolado atómico de noche no puede exponerse a authenticated.',
+);
+const combatQueueWorker = readFileSync(join(root, 'supabase', 'functions', 'process-combat-evaluation-queue', 'index.ts'), 'utf8');
+assert(combatQueueWorker.includes("action === 'prepare-report'"), 'El worker causal no expone el preflight por report.');
+assert(combatQueueWorker.includes(".rpc('enqueue_night_infographic_readiness_jobs'"), 'El preflight no usa el encolado atómico protegido por lease.');
+assert(combatQueueWorker.includes(".rpc('claim_combat_evaluation_job_for_batch'"), 'El worker causal no limita el procesamiento al batch del report.');
 
 const dispelSql = extensionSql.get(extensionMigrations[1]);
 assert(dispelSql.includes('create table if not exists pull_dispel_events'), 'M15 no crea pull_dispel_events.');
@@ -232,4 +269,4 @@ for (const [flag, enabled] of expectedFlagStates) {
   assert(new RegExp(`${flag}:\\s*${enabled}`).test(environment), `${flag} no coincide con el rollout esperado (${enabled}).`);
 }
 
-console.log(`Causal schema OK: ${migrations.length + extensionMigrations.length + 2} migraciones, ${contractReasons.length} reason codes y ${expectedFlagStates.size} flags de rollout explícitos.`);
+console.log(`Causal schema OK: ${migrations.length + extensionMigrations.length + 4} migraciones, ${contractReasons.length} reason codes y ${expectedFlagStates.size} flags de rollout explícitos.`);

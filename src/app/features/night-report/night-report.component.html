@@ -204,8 +204,12 @@
               (click)="updateAllInfographics()"
             >
               @if (bulkUpdating()) {
-                <span class="button-spinner" aria-hidden="true"></span> Actualizando
-                {{ bulkUpdateProgress()?.done }}/{{ bulkUpdateProgress()?.total }}…
+                <span class="button-spinner" aria-hidden="true"></span>
+                @if (bulkUpdateReadinessMessage(); as readinessMessage) {
+                  {{ readinessMessage }}
+                } @else {
+                  Actualizando {{ bulkUpdateProgress()?.done }}/{{ bulkUpdateProgress()?.total }}…
+                }
               } @else {
                 ↻ Actualizar infografías
               }
@@ -223,12 +227,16 @@
               (click)="onRequestSendAllInfographics()"
             >
               @if (bulkSending()) {
-                <span class="button-spinner" aria-hidden="true"></span> Enviando
-                {{ bulkSendProgress()?.done }}/{{ bulkSendProgress()?.total }}
-                @if (bulkSendProgress()?.current) {
-                  · {{ bulkSendProgress()?.current }}
+                <span class="button-spinner" aria-hidden="true"></span>
+                @if (bulkSendReadinessMessage(); as readinessMessage) {
+                  {{ readinessMessage }}
+                } @else {
+                  Enviando {{ bulkSendProgress()?.done }}/{{ bulkSendProgress()?.total }}
+                  @if (bulkSendProgress()?.current) {
+                    · {{ bulkSendProgress()?.current }}
+                  }
+                  …
                 }
-                …
               } @else if (bulkSendConfirming()) {
                 ¿Seguro? Pulsa de nuevo para enviar
               } @else {
@@ -246,6 +254,12 @@
               · ⚠ error en: {{ r.failed.join(', ') }}
             }
           </p>
+        }
+        @if (bulkUpdateError(); as updateError) {
+          <p class="full-report-error" role="alert">{{ updateError }}</p>
+        }
+        @if (bulkSendError(); as sendError) {
+          <p class="full-report-error" role="alert">{{ sendError }}</p>
         }
         @if (bulkSendResult(); as r) {
           <p
