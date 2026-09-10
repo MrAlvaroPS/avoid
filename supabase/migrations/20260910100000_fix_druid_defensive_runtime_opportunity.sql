@@ -20,6 +20,13 @@
 -- Balance/Guardian = 8s, Feral/Restoration = 12s. Exact spec profiles are the
 -- supported timing override mechanism; no spell-specific evaluator hardcode
 -- is introduced.
+--
+-- Canonical generations are immutable snapshots. The production worker moves
+-- to defensive-semantics@1.0.1 in the same release. Any still-BUILDING older
+-- generation is therefore invalidated here, and an attached queue request is
+-- safely returned to pending with its lease released. This prevents a deploy
+-- from either serving mixed old/new semantics or getting permanently wedged
+-- behind an incompatible BUILDING generation.
 
 DO $$
 DECLARE
@@ -114,10 +121,61 @@ DO UPDATE SET
   verified_at = EXCLUDED.verified_at,
   updated_at = EXCLUDED.updated_at;
 
+-- Release any in-flight canonical work whose snapshot identity predates this
+-- scoring-relevant data correction. Published generations are never mutated.
+-- The advisory lock is the same one used by begin_defensive_generation_refresh
+-- so a concurrent generation start cannot race this invalidation.
+DO $$
+DECLARE
+  v_stale_generation_ids uuid[];
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('iris:defensive-generation-refresh'));
+
+  SELECT array_agg(id ORDER BY created_at)
+  INTO v_stale_generation_ids
+  FROM defensive_generations
+  WHERE status = 'building'
+    AND semantic_version IS DISTINCT FROM 'defensive-semantics@1.0.1';
+
+  IF coalesce(cardinality(v_stale_generation_ids), 0) = 0 THEN
+    RETURN;
+  END IF;
+
+  -- First revoke durable ownership so any already-scheduled continuation
+  -- becomes stale instead of doing more work under the old snapshot.
+  UPDATE canonical_defensive_refresh_dispatch_runtime
+  SET lease_token = NULL,
+      lease_report_code = NULL,
+      lease_generation_id = NULL,
+      lease_expires_at = NULL,
+      updated_at = now()
+  WHERE id = true
+    AND lease_generation_id = ANY(v_stale_generation_ids);
+
+  UPDATE canonical_defensive_refresh_requests
+  SET status = 'pending',
+      not_before = now(),
+      attempts = 0,
+      generation_id = NULL,
+      lease_token = NULL,
+      lease_expires_at = NULL,
+      completed_at = NULL,
+      last_error = NULL,
+      updated_at = now()
+  WHERE generation_id = ANY(v_stale_generation_ids)
+     OR lease_token IS NOT NULL AND status = 'running';
+
+  UPDATE defensive_generations
+  SET status = 'failed'
+  WHERE id = ANY(v_stale_generation_ids)
+    AND status = 'building';
+END $$;
+
 DO $$
 DECLARE
   v_fr_safe integer;
   v_bark_profiles integer;
+  v_stale_building integer;
 BEGIN
   SELECT count(*) INTO v_fr_safe
   FROM defensive_ability_semantic_catalog
@@ -145,5 +203,14 @@ BEGIN
 
   IF v_bark_profiles <> 4 THEN
     RAISE EXCEPTION 'Druid safety postcondition failed: expected four exact Barkskin spec profiles, found %', v_bark_profiles;
+  END IF;
+
+  SELECT count(*) INTO v_stale_building
+  FROM defensive_generations
+  WHERE status = 'building'
+    AND semantic_version IS DISTINCT FROM 'defensive-semantics@1.0.1';
+
+  IF v_stale_building <> 0 THEN
+    RAISE EXCEPTION 'Druid safety postcondition failed: stale canonical BUILDING generation survived semantic release';
   END IF;
 END $$;
