@@ -152,6 +152,8 @@ BEGIN
   WHERE id = true
     AND lease_generation_id = ANY(v_stale_generation_ids);
 
+  -- Reset only requests actually bound to one of those stale generations.
+  -- A different pending/running report is deliberately untouched.
   UPDATE canonical_defensive_refresh_requests
   SET status = 'pending',
       not_before = now(),
@@ -162,8 +164,7 @@ BEGIN
       completed_at = NULL,
       last_error = NULL,
       updated_at = now()
-  WHERE generation_id = ANY(v_stale_generation_ids)
-     OR lease_token IS NOT NULL AND status = 'running';
+  WHERE generation_id = ANY(v_stale_generation_ids);
 
   UPDATE defensive_generations
   SET status = 'failed'
