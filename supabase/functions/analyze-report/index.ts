@@ -36,7 +36,7 @@ import {
   type TalentBuildNode,
 } from '../_shared/effective-defensives.ts';
 import { resolveEffectiveDefensiveKitWithObservedCastEvidence } from '../_shared/defensive-observed-cast-evidence.ts';
-import { effectiveDeathOptions, evaluateEffectiveWindowCoverage } from '../_shared/effective-defensive-state.ts';
+import { effectiveDeathOptions, evaluateEffectiveWindowCoverage, preventableWithEffectiveDefensive } from '../_shared/effective-defensive-state.ts';
 import { evaluateDefensivePull } from '../_shared/defensive-execution-persistence.ts';
 import { buildMechanicEventRows } from '../_shared/mechanic-event-materialization.ts';
 
@@ -1360,12 +1360,10 @@ Deno.serve(async (req: Request) => {
                 avoidable: mechanic?.avoidable ?? null,
                 preventableWithDefensive: bossMeleeOnNonTank
                   ? null
-                  : (() => {
-                      const missableOptions = (deathDefensiveOptionsV2 ?? []).filter((option) => option.createsMissableOpportunity);
-                      if (missableOptions.some((option) => option.status === 'available_unused')) return true;
-                      if (missableOptions.some((option) => option.status === 'unknown')) return null;
-                      return missableOptions.length ? false : null;
-                    })(),
+                  : preventableWithEffectiveDefensive(deathDefensiveOptionsV2 ?? [], {
+                      killingBlowAmount: deathDamageProfile?.killingBlowAmount ?? null,
+                      maxHitPoints: deathDamageProfile?.maxHitPoints ?? null,
+                    }),
                 statisticalExclusionReason: bossMeleeOnNonTank ? 'boss_melee_on_non_tank' : null,
                 // §10: "no es lo mismo un oneshot que una muerte por daño
                 // sostenido sin sanar, y la causa real puede ser muy
@@ -1426,7 +1424,7 @@ Deno.serve(async (req: Request) => {
                 })),
               }))
               : [],
-            consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent, defensivePressureWindows.windows),
+            consumables: buildConsumableUsage(defensiveCastTimestampsByActor.get(actorId), consumableIds, fight.startTime, warlockPresent, actor?.subType ?? null, defensivePressureWindows.windows),
             defensive_pressure_windows: defensivePressureWindows,
             talent_build: talentBuild,
             talent_build_fingerprint: talentBuildFingerprint,

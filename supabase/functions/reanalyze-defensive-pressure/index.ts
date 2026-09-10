@@ -17,7 +17,7 @@ import {
   type TalentBuildNode,
 } from '../_shared/effective-defensives.ts';
 import { resolveEffectiveDefensiveKitWithObservedCastEvidence } from '../_shared/defensive-observed-cast-evidence.ts';
-import { effectiveDeathOptions, evaluateEffectiveWindowCoverage } from '../_shared/effective-defensive-state.ts';
+import { effectiveDeathOptions, evaluateEffectiveWindowCoverage, preventableWithEffectiveDefensive } from '../_shared/effective-defensive-state.ts';
 import { DEFENSIVE_REANALYSIS_MAX_ATTEMPTS } from '../_shared/defensive-reanalysis-queue.ts';
 import { evaluateDefensivePull } from '../_shared/defensive-execution-persistence.ts';
 
@@ -620,6 +620,13 @@ Deno.serve(async (req: Request) => {
               status: option.status,
               cooldownRemainingMs: option.cooldownRemainingMs,
             })),
+          preventableWithDefensive:
+            record.death_cause?.['statisticalExclusionReason'] != null
+              ? null
+              : preventableWithEffectiveDefensive(deathDefensiveOptionsV2, {
+                  killingBlowAmount: record.death_cause?.['killingBlowAmount'],
+                  maxHitPoints: record.death_cause?.['maxHitPoints'],
+                }),
         };
       } else {
         updatePatch['death_defensive_options_v2'] = record.died ? [] : null;

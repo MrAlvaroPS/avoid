@@ -11,14 +11,22 @@
 import type { WclAbility } from './wcl-client.ts';
 
 export interface ConsumableAbilityIds {
-  healthstoneId: number | null;
+  /** Shared Healthstone identity: usable by any class when the item is available. */
+  healthstoneIds: Set<number>;
+  /** Warlock-only runtime identity produced by Pact of Gluttony. */
+  warlockOnlyHealthstoneIds: Set<number>;
   healthPotionIds: Set<number>;
 }
 
 export function resolveConsumableAbilityIds(abilities: WclAbility[]): ConsumableAbilityIds {
-  const healthstone = abilities.find((a) => a.name === 'Healthstone');
+  const healthstoneIds = new Set(
+    abilities.filter((a) => /^Healthstone$/i.test(a.name)).map((a) => a.gameID),
+  );
+  const warlockOnlyHealthstoneIds = new Set(
+    abilities.filter((a) => /^Demonic Healthstone$/i.test(a.name)).map((a) => a.gameID),
+  );
   const healthPotionIds = new Set(abilities.filter((a) => /health(ing)? potion/i.test(a.name)).map((a) => a.gameID));
-  return { healthstoneId: healthstone?.gameID ?? null, healthPotionIds };
+  return { healthstoneIds, warlockOnlyHealthstoneIds, healthPotionIds };
 }
 
 export interface ConsumableUsage {
@@ -60,6 +68,10 @@ export function isReactiveConsumableUse(
  * `available: false` en vez de asumir que la tenía igualmente (más honesto
  * que adivinar; ver misma idea en DefensiveOption.status 'unknown').
  *
+ * `playerClass`: es obligatorio para resolver identidades class-scoped.
+ * `Demonic Healthstone` se agrega únicamente para Warlock; nunca se trata
+ * como alias global de Healthstone para el resto del roster.
+ *
  * `pressureWindowsMs`: las ventanas de presión YA calculadas para este mismo
  * jugador/pull (detectDamageWindows, en ms relativos al inicio del pull,
  * igual espacio que timestampsMs de aquí abajo) — se pasan ya calculadas en
@@ -71,9 +83,19 @@ export function buildConsumableUsage(
   ids: ConsumableAbilityIds,
   fightStartTime: number,
   warlockPresent: boolean,
+  playerClass: string | null,
   pressureWindowsMs: { startMs: number; endMs: number }[] = [],
 ): ConsumableUsage {
-  const healthstoneTimestamps = (ids.healthstoneId != null ? castTimestampsBySpell?.get(ids.healthstoneId) : undefined) ?? [];
+  const healthstoneTimestamps: number[] = [];
+  for (const id of ids.healthstoneIds) {
+    for (const t of castTimestampsBySpell?.get(id) ?? []) healthstoneTimestamps.push(t);
+  }
+  if (playerClass?.trim().toLowerCase() === 'warlock') {
+    for (const id of ids.warlockOnlyHealthstoneIds) {
+      for (const t of castTimestampsBySpell?.get(id) ?? []) healthstoneTimestamps.push(t);
+    }
+  }
+  healthstoneTimestamps.sort((a, b) => a - b);
   const healthPotionTimestamps: number[] = [];
   for (const id of ids.healthPotionIds) {
     for (const t of castTimestampsBySpell?.get(id) ?? []) healthPotionTimestamps.push(t);
