@@ -55,7 +55,10 @@ import { requireOfficer } from '../_shared/require-officer.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 
 const GAME_BUILD = '12.1.0.68914';
-const SEMANTIC_VERSION = 'defensive-semantics@1.0.0';
+// Input-data release identity, not just the parser version. Bump whenever a
+// scoring-relevant reviewed semantic/spec fact changes so a fresh canonical
+// generation cannot clone rows evaluated under the previous dataset.
+const SEMANTIC_VERSION = 'defensive-semantics@1.0.1';
 const LEDGER_VERSION = 'execution-ledger@1.0.0';
 const FUNCTION_VERSION = 'canonical-defensive-refresh@1';
 
