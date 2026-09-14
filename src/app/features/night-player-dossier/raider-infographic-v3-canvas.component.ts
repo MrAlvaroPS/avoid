@@ -10,7 +10,13 @@ import { formatDuration } from '../../shared/format.util';
   selector: 'app-raider-infographic-v3-canvas',
   standalone: true,
   templateUrl: './raider-infographic-v3-canvas.component.html',
-  styleUrl: './raider-infographic-v3-canvas.component.scss',
+  // Dos hojas en vez de una: angular.json mide el budget anyComponentStyle
+  // por archivo compilado, no por componente — ver el comentario al inicio
+  // de raider-infographic-v3-canvas-right-page.component.scss.
+  styleUrls: [
+    './raider-infographic-v3-canvas.component.scss',
+    './raider-infographic-v3-canvas-right-page.component.scss',
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
 })
