@@ -62,8 +62,12 @@ for (const value of [
   'availabilityAtPeak',
   'castsForSpellMs',
   'effectiveKit: buildEffectiveDefensiveAuditFacts',
-  'DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8',
-]) requireText(evaluator + persistence + refresh, value, 'Persistencia v8');
+  // El evaluador ha avanzado de v8 a v10 (defensive-evidence-v9.ts,
+  // defensive-evidence-v10.ts) desde que se escribió este guard; el check
+  // solo debe exigir que refresh/evaluator/persistence sigan referenciando
+  // el marcador de versión CANÓNICO actual, no el histórico v8.
+  'DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10',
+]) requireText(evaluator + persistence + refresh, value, 'Persistencia v10');
 
 for (const value of [
   'add column if not exists effective_kit',
