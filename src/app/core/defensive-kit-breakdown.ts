@@ -21,8 +21,18 @@ export interface DefensiveKitBreakdownEntry {
   timesUsed: number;
 }
 
-function spellName(spellId: number, spellNameById: ReadonlyMap<number, string>): string {
-  return spellNameById.get(spellId) ?? `Spell ${spellId}`;
+/**
+ * `effective_kit` se persiste desde EffectiveDefensiveAuditFact y YA contiene
+ * el nombre canónico resuelto por el backend. El mirror frontend histórico
+ * EffectiveKitEntry no expone ese campo todavía, así que lo leemos de forma
+ * aditiva y compatible con filas antiguas: snapshot > mapa de casts > fallback.
+ * Esto evita que un defensivo real que no se casteó esa noche aparezca como
+ * "Spell 5277" solo porque no existe en spellNameById.
+ */
+function spellName(entry: EffectiveKitEntry, spellNameById: ReadonlyMap<number, string>): string {
+  const persistedName = (entry as EffectiveKitEntry & { name?: unknown }).name;
+  if (typeof persistedName === 'string' && persistedName.trim()) return persistedName.trim();
+  return spellNameById.get(entry.spellId) ?? `Spell ${entry.spellId}`;
 }
 
 export function buildDefensiveKitBreakdown(
@@ -34,7 +44,7 @@ export function buildDefensiveKitBreakdown(
   for (const entry of kit ?? []) {
     bySpell.set(entry.spellId, {
       spellId: entry.spellId,
-      name: spellName(entry.spellId, spellNameById),
+      name: spellName(entry, spellNameById),
       countsAgainstKpi: entry.opportunityMode === 'normal',
       effectiveCooldownMs: entry.effectiveCooldownMs,
       charges: entry.charges,
