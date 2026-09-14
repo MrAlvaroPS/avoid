@@ -149,7 +149,7 @@ export async function loadMechanicCatalogByAbilityId(
   const query = (relation: string) =>
     client
       .from(relation)
-      .select('boss_id, difficulty, name, ai_classification, resolution')
+      .select('boss_id, difficulty, ability_id, name, ai_classification, resolution')
       .in('boss_id', uniqueBossIds);
   const { data, error } = await withSupabaseRelationFallback(
     'applicable_boss_mechanics_candidates',
@@ -159,9 +159,18 @@ export async function loadMechanicCatalogByAbilityId(
   if (error) throw error;
 
   const coachingByNameKey = new Map<string, { note: string | null; resolution: string | null }>();
+  // §mechanic-name-direct-id-fallback (2026-09-11, feedback real: "hay habilidades que no salen, y solo sale
+  // su ID") — confirmado contra la BD real: 144/267 abilityGameID reales de episodios canónicos SÍ casan
+  // directo contra boss_mechanics_candidates.ability_id ahora (el bug de 2026-09-07 documentado arriba, "0/54
+  // casaban por ID", ya no describe el estado real del catálogo tras los resyncs posteriores). El cruce por
+  // NOMBRE contra pull_mechanic_events sigue siendo la fuente PRIMARIA (nace de eventos realmente observados);
+  // esto es solo un fallback para ability_ids que esa fuente no cubre — nunca sustituye ni reordena la
+  // prioridad existente.
+  const byDirectAbilityKey = new Map<string, { name: string; note: string | null; resolution: string | null }>();
   for (const row of (data ?? []) as {
     boss_id: string;
     difficulty: string;
+    ability_id: number | null;
     name: string;
     ai_classification: { notes?: string } | null;
     resolution: string | null;
@@ -170,12 +179,25 @@ export async function loadMechanicCatalogByAbilityId(
       note: row.ai_classification?.notes?.trim() || null,
       resolution: row.resolution?.trim() || null,
     });
+    if (row.ability_id != null) {
+      const directKey = mechanicCatalogKeyByAbility(row.boss_id, row.difficulty, row.ability_id);
+      if (!byDirectAbilityKey.has(directKey)) {
+        byDirectAbilityKey.set(directKey, {
+          name: row.name,
+          note: row.ai_classification?.notes?.trim() || null,
+          resolution: row.resolution?.trim() || null,
+        });
+      }
+    }
   }
 
   for (const [key, name] of nameByKey) {
     const [bossId, difficulty] = key.split('|');
     const coaching = coachingByNameKey.get(mechanicCoachingKey(bossId, difficulty, name));
     map.set(key, { name, note: coaching?.note ?? null, resolution: coaching?.resolution ?? null });
+  }
+  for (const [key, entry] of byDirectAbilityKey) {
+    if (!map.has(key)) map.set(key, entry);
   }
   return map;
 }

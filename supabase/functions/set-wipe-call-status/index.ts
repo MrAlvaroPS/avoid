@@ -2,6 +2,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { executePullEvaluationCommand, type PullContextCommandClient } from '../_shared/pull-evaluation-context-command.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 
 /** Adaptador legacy. La autoridad y la auditoría viven ya en PullEvaluationContext. */
 interface Body { pullId: string; excluded: boolean }
@@ -26,7 +27,9 @@ Deno.serve(async (req: Request) => {
     const result = await executePullEvaluationCommand(client as unknown as PullContextCommandClient, body.pullId, action, guard.userId);
     return jsonResponse({ ok: true, pullId: body.pullId, excluded: result.context.wipeCallAtMs != null, context: result.context, reanalysisQueued: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    // §bug real (2026-09-11) — mismo fix que materialize-execution-ledger: errorMessage() maneja los objetos
+    // planos de Postgrest que `error instanceof Error` no detecta, evitando "[object Object]".
+    const message = errorMessage(error);
     return jsonResponse({ ok: false, error: message }, /no encontrado/i.test(message) ? 404 : /No hay candidato/i.test(message) ? 400 : 500);
   }
 });

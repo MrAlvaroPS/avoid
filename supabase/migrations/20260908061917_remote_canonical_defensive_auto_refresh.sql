@@ -1,0 +1,11 @@
+-- Historical migration reconciliation.
+--
+-- This migration was intentionally applied to the linked project before its
+-- checked-in canonical version received repository timestamp 20260908220000.
+-- The remote history identifies it as `canonical_defensive_auto_refresh`.
+--
+-- It is deliberately a local no-op: replaying the full body here and again in
+-- 20260908220000 would add a second execution path for fresh databases. The
+-- complete, reviewable and idempotent SQL remains versioned in
+-- 20260908220000_canonical_defensive_auto_refresh.sql.
+

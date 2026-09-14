@@ -25,7 +25,7 @@ import { RouterLink } from '@angular/router';
 import { toBlob } from 'html-to-image';
 import { NightReportService, type NightAttendee, type NightReport } from '../../core/night-report.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
-import { NightPlayerSummaryService } from '../../core/night-player-summary.service';
+import { NightPlayerSummaryService, type NightPlayerSummary } from '../../core/night-player-summary.service';
 import { ReliabilityService, type PlayerReliability, type BossDifficultyEvolutionPoint } from '../../core/reliability.service';
 import { OffendersService, type RepeatOffenderRow } from '../../core/offenders.service';
 import { RosterSnapshotCacheService, type RosterSnapshot } from '../../core/roster-snapshot-cache.service';
@@ -44,6 +44,7 @@ import type { LlmPullAnalysis } from '../../shared/models/ui';
 import type { NightFullReport, NightReportTrend, StoredNightFullReport } from '../../shared/models/night-full-report';
 import { bilingualName, buildNightDiscordSummary, buildNightFullReportMarkdown, formatOffset, type NightReportAttendanceExtras } from './night-full-report-markdown';
 import { errorMessage } from '../../shared/error-message.util';
+import { nightInfographicSummaryReadinessError } from '../../shared/night-infographic-readiness.util';
 
 const SCHEMA_VERSION = 15;
 
@@ -805,25 +806,44 @@ export class NightReportComponent {
   readonly bulkUpdating = signal(false);
   readonly bulkUpdateProgress = signal<{ done: number; total: number } | null>(null);
   readonly bulkUpdateResult = signal<{ done: number; failed: string[] } | null>(null);
+  readonly bulkUpdateReadinessMessage = signal<string | null>(null);
+  readonly bulkUpdateError = signal<string | null>(null);
 
   async updateAllInfographics(): Promise<void> {
     const players = this.attendingPlayers();
     if (!players.length || this.bulkUpdating()) return;
     this.bulkUpdating.set(true);
     this.bulkUpdateResult.set(null);
+    this.bulkUpdateError.set(null);
     const failed: string[] = [];
-    this.bulkUpdateProgress.set({ done: 0, total: players.length });
-    for (const [index, player] of players.entries()) {
-      try {
-        await this.nightPlayerSummaryService.load(this.reportCode(), player.name, true, true);
-      } catch {
-        failed.push(player.name);
+    try {
+      await this.edgeFunctions.ensureNightInfographicReadiness(this.reportCode(), (progress) => {
+        this.bulkUpdateReadinessMessage.set(progress.message);
+      });
+      this.bulkUpdateReadinessMessage.set(null);
+      this.bulkUpdateProgress.set({ done: 0, total: players.length });
+      for (const [index, player] of players.entries()) {
+        try {
+          const summary = await this.nightPlayerSummaryService.load(
+            this.reportCode(),
+            player.name,
+            true,
+            true,
+          );
+          if (nightInfographicSummaryReadinessError(summary)) failed.push(player.name);
+        } catch {
+          failed.push(player.name);
+        }
+        this.bulkUpdateProgress.set({ done: index + 1, total: players.length });
       }
-      this.bulkUpdateProgress.set({ done: index + 1, total: players.length });
+      this.bulkUpdateResult.set({ done: players.length - failed.length, failed });
+    } catch (err) {
+      this.bulkUpdateError.set(`No se han actualizado las infografías: ${errorMessage(err)}`);
+    } finally {
+      this.bulkUpdating.set(false);
+      this.bulkUpdateReadinessMessage.set(null);
+      this.bulkUpdateProgress.set(null);
     }
-    this.bulkUpdating.set(false);
-    this.bulkUpdateProgress.set(null);
-    this.bulkUpdateResult.set({ done: players.length - failed.length, failed });
   }
 
   // §"otro botón que tenga alguna clase de confirmacion" (feedback real,
@@ -847,6 +867,8 @@ export class NightReportComponent {
   readonly bulkSending = signal(false);
   readonly bulkSendProgress = signal<{ done: number; total: number; current: string | null } | null>(null);
   readonly bulkSendResult = signal<{ sent: string[]; skippedNoChannel: string[]; failed: { name: string; error: string }[] } | null>(null);
+  readonly bulkSendReadinessMessage = signal<string | null>(null);
+  readonly bulkSendError = signal<string | null>(null);
 
   // §"asegurando 100% que estan actualizadas [...] es importante que esten
   // actualizadas a la noche en cuestion cuyo informe tenemos abierto"
@@ -869,37 +891,67 @@ export class NightReportComponent {
     if (!players.length || this.bulkSending()) return;
     this.bulkSending.set(true);
     this.bulkSendResult.set(null);
+    this.bulkSendError.set(null);
     const sent: string[] = [];
     const skippedNoChannel: string[] = [];
     const failed: { name: string; error: string }[] = [];
+    let sendStarted = false;
 
-    for (const [index, player] of players.entries()) {
-      this.bulkSendProgress.set({ done: index, total: players.length, current: player.name });
-      try {
+    try {
+      await this.edgeFunctions.ensureNightInfographicReadiness(this.reportCode(), (progress) => {
+        this.bulkSendReadinessMessage.set(progress.message);
+      });
+
+      // Load and validate every sendable projection before the first Discord
+      // call. A single stale/partial player aborts the whole batch instead of
+      // leaving officers with a half-sent set of mixed generations.
+      const prepared: { player: NightAttendee; summary: NightPlayerSummary }[] = [];
+      for (const [index, player] of players.entries()) {
+        this.bulkSendReadinessMessage.set(
+          `Validando infografías actualizadas… ${index + 1}/${players.length}`,
+        );
         const summary = await this.nightPlayerSummaryService.load(this.reportCode(), player.name, true, true);
         if (!summary.discordChannel?.discordChannelId) {
           skippedNoChannel.push(player.name);
           continue;
         }
-        const componentRef = this.viewContainerRef.createComponent(NightPlayerInfographicComponent);
-        try {
-          componentRef.setInput('summary', summary);
-          componentRef.setInput('headless', true);
-          componentRef.changeDetectorRef.detectChanges();
-          await componentRef.instance.sendToDiscord();
-          if (componentRef.instance.exportStatus() === 'sentDiscord') sent.push(player.name);
-          else failed.push({ name: player.name, error: componentRef.instance.exportError() ?? 'Fallo desconocido al enviar.' });
-        } finally {
-          componentRef.destroy();
-        }
-      } catch (err) {
-        failed.push({ name: player.name, error: errorMessage(err) });
+        const readinessError = nightInfographicSummaryReadinessError(summary);
+        if (readinessError) throw new Error(readinessError);
+        prepared.push({ player, summary });
       }
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
 
-    this.bulkSending.set(false);
-    this.bulkSendProgress.set(null);
-    this.bulkSendResult.set({ sent, skippedNoChannel, failed });
+      this.bulkSendReadinessMessage.set(null);
+      sendStarted = true;
+      for (const [index, { player, summary }] of prepared.entries()) {
+        this.bulkSendProgress.set({ done: index, total: prepared.length, current: player.name });
+        try {
+          const componentRef = this.viewContainerRef.createComponent(NightPlayerInfographicComponent);
+          try {
+            componentRef.setInput('summary', summary);
+            componentRef.setInput('headless', true);
+            componentRef.changeDetectorRef.detectChanges();
+            await componentRef.instance.sendToDiscord();
+            if (componentRef.instance.exportStatus() === 'sentDiscord') sent.push(player.name);
+            else failed.push({ name: player.name, error: componentRef.instance.exportError() ?? 'Fallo desconocido al enviar.' });
+          } finally {
+            componentRef.destroy();
+          }
+        } catch (err) {
+          failed.push({ name: player.name, error: errorMessage(err) });
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      this.bulkSendResult.set({ sent, skippedNoChannel, failed });
+    } catch (err) {
+      this.bulkSendError.set(
+        sendStarted
+          ? `El envío se interrumpió después de ${sent.length} infografías: ${errorMessage(err)}`
+          : `No se ha enviado ninguna infografía: ${errorMessage(err)}`,
+      );
+    } finally {
+      this.bulkSending.set(false);
+      this.bulkSendReadinessMessage.set(null);
+      this.bulkSendProgress.set(null);
+    }
   }
 }

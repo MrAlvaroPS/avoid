@@ -14,6 +14,7 @@ export interface EffectiveWindowOption {
   spellId: number;
   name: string;
   survivalType: ResolvedDefensive['survivalType'];
+  mechanisms: ResolvedDefensive['mechanisms'];
   confidence: DefensiveResolutionConfidence;
   status: EffectiveDefensiveStatus | 'used_during_window';
   chargesAvailable: number | null;
@@ -38,6 +39,63 @@ function personalCandidates(kit: ResolvedDefensive[]): ResolvedDefensive[] {
       defensive.category === 'personal_defensive' &&
       defensive.targetingMode === 'self',
   );
+}
+
+export interface EffectiveDeathDamageEvidence {
+  killingBlowAmount?: unknown;
+  maxHitPoints?: unknown;
+}
+
+const PRE_HIT_SURVIVAL_MECHANISMS = new Set<ResolvedDefensive['mechanisms'][number]>([
+  'mitigation',
+  'absorption',
+  'immunity',
+  'avoidance',
+  'effective_health',
+  'lethal_prevention',
+]);
+
+function finitePositiveNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function hasPreHitSurvivalMechanism(option: Pick<EffectiveWindowOption, 'mechanisms'>): boolean {
+  return option.mechanisms.some((mechanism) => PRE_HIT_SURVIVAL_MECHANISMS.has(mechanism));
+}
+
+/**
+ * Causalidad de muerte, separada de membership/disponibilidad.
+ *
+ * Un recurso de sustain puro puede ser una respuesta defensiva correcta en
+ * presión sostenida, pero no puede demostrar que un golpe individual >= a la
+ * vida máxima era prevenible: cuando la curación/retorno podría actuar, el
+ * jugador ya está muerto. Solo mecanismos capaces de actuar antes/durante el
+ * impacto (mitigación, absorb, inmunidad, avoidance, effective health o lethal
+ * prevention) son prueba contrafactual válida para ese caso extremo.
+ *
+ * Sin killingBlow/maxHP verificables se conserva exactamente la regla previa.
+ */
+export function preventableWithEffectiveDefensive(
+  options: EffectiveWindowOption[],
+  damageEvidence: EffectiveDeathDamageEvidence = {},
+): boolean | null {
+  const missableOptions = options.filter((option) => option.createsMissableOpportunity);
+  if (!missableOptions.length) return null;
+
+  const killingBlowAmount = finitePositiveNumber(damageEvidence.killingBlowAmount);
+  const maxHitPoints = finitePositiveNumber(damageEvidence.maxHitPoints);
+  const provenFullHealthLethalHit = killingBlowAmount != null && maxHitPoints != null && killingBlowAmount >= maxHitPoints;
+  const causallyViableOptions = provenFullHealthLethalHit
+    ? missableOptions.filter(hasPreHitSurvivalMechanism)
+    : missableOptions;
+
+  // Había recursos missable, pero todos eran sustain posterior al golpe.
+  // Esto es evidencia suficiente para FALSE, no para unknown.
+  if (!causallyViableOptions.length) return false;
+  if (causallyViableOptions.some((option) => option.status === 'available_unused')) return true;
+  if (causallyViableOptions.some((option) => option.status === 'unknown')) return null;
+  return false;
 }
 
 /**
@@ -129,6 +187,7 @@ export function effectiveDeathOptions(
     spellId: defensive.spellId,
     name: defensive.name,
     survivalType: defensive.survivalType,
+    mechanisms: defensive.mechanisms,
     confidence: defensive.confidence,
     createsMissableOpportunity: defensive.createsMissableOpportunity,
     ...effectiveDefensiveStateAt(defensive, castsBySpellId.get(defensive.spellId) ?? [], deathAtMs, activeSpellIds.has(defensive.spellId)),
@@ -149,6 +208,7 @@ export function evaluateEffectiveWindowCoverage(
       spellId: defensive.spellId,
       name: defensive.name,
       survivalType: defensive.survivalType,
+      mechanisms: defensive.mechanisms,
       confidence: defensive.confidence,
       createsMissableOpportunity: defensive.createsMissableOpportunity,
       ...atStart,

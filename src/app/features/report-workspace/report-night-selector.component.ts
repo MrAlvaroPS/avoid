@@ -194,16 +194,11 @@ export class ReportNightSelectorComponent {
     this.importError.set(null);
     this.importProgress.set('Consultando WCL…');
     try {
-      let processedTotal = 0;
-      await this.edgeFunctions.analyzeReportFully(code, (r) => {
-        processedTotal += r.processed;
-        this.importProgress.set(
-          r.remaining > 0
-            ? `Procesados ${processedTotal} pulls, quedan ${r.remaining}…`
-            : `Procesados ${processedTotal} pulls.`,
-        );
-        this.duplicateWarning.set(r.possibleDuplicateOf);
-      });
+      await this.edgeFunctions.ensureNightInfographicReadiness(
+        code,
+        (progress) => this.importProgress.set(progress.message),
+        (result) => this.duplicateWarning.set(result.possibleDuplicateOf),
+      );
       // Ya existía o se acaba de importar — el destino da igual, ambos casos
       // terminan igual (§13: "el usuario no debería necesitar saber cuál de
       // los dos casos aplica"). Pasa por el mismo goToReport que las filas de

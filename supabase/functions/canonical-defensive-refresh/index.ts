@@ -1,8 +1,8 @@
 // Production canonical defensive generation refresher.
 //
-// This is deliberately NOT the old shadow-defensive-v7 empirical runner:
+// This is deliberately NOT the old shadow-defensive empirical runner:
 // that runner was hard-scoped to two reports and explicitly said not to wire
-// it into product traffic. This worker reuses the exact evaluator/resolver v7
+// it into product traffic. This worker reuses the exact canonical evaluator/resolver
 // contract, but delegates scope, retry state and publication invariants to the
 // database lifecycle introduced in 20260907110000.
 //
@@ -31,14 +31,15 @@ import {
   computeDemonstratedPersistentCastSpellIds,
 } from '../_shared/effective-defensives.ts';
 import {
-  EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
-  EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-  DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
+  EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V10,
+  EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V10,
+  DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10,
   mergeObservedCastEvidenceV6,
   defensiveSemanticClosureViolationsV6,
   defensiveScoreabilityViolationsV6,
   observedSelfCastAcquisitionViolationsV6,
-} from '../_shared/defensive-evidence-v7.ts';
+} from '../_shared/defensive-evidence-v10.ts';
+import { buildEffectiveDefensiveAuditFacts } from '../_shared/defensive-audit-facts.ts';
 import { evaluateDefensiveEpisodesForPlayer } from '../_shared/defensive-episode-evaluator.ts';
 import { buildDefensiveEpisodeLedgerEvents } from '../_shared/defensive-episode-ledger-events.ts';
 import {
@@ -53,17 +54,22 @@ import {
 } from '../_shared/damage-descriptor-wcl.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
+import { detectDamageWindows } from '../_shared/damage-pressure-windows.ts';
 
 const GAME_BUILD = '12.1.0.68914';
 const SEMANTIC_VERSION = 'defensive-semantics@1.0.0';
 const LEDGER_VERSION = 'execution-ledger@1.0.0';
-const FUNCTION_VERSION = 'canonical-defensive-refresh@1';
+const FUNCTION_VERSION = 'canonical-defensive-refresh@2';
 
-type Action = 'health' | 'start' | 'process' | 'status';
+type Action = 'health' | 'start' | 'process' | 'status' | 'diagnose-pressure-pull';
 interface Body {
   action?: Action;
   reportCode?: string | null;
   generationId?: string | null;
+  /** Internal queue lease. Null for the officer/manual refresh path. */
+  leaseToken?: string | null;
+  /** diagnose-pressure-pull only — one pull per call (see §pressure-detection-diagnostics). */
+  pullId?: string | null;
 }
 
 interface MissingPull {
@@ -78,8 +84,26 @@ interface MissingPull {
 const serviceClient = () =>
   createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
+function describeUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message;
+    const code = (error as { code?: unknown }).code;
+    if (typeof message === 'string') {
+      return typeof code === 'string' ? `${code}: ${message}` : message;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // Fall through to the final string conversion.
+    }
+  }
+  return String(error);
+}
+
 function castRowsToObserved(rows: any[], currentPullId: string, fingerprint: string | null) {
-  const out: { spellId: number; samePull: boolean; pullTalentBuildFingerprint: string | null }[] = [];
+  const out: { spellId: number; samePull: boolean; pullTalentBuildFingerprint: string | null }[] =
+    [];
   for (const row of rows) {
     const samePull = row.pull_id === currentPullId;
     if (!samePull && (!fingerprint || row.talent_build_fingerprint !== fingerprint)) continue;
@@ -88,11 +112,12 @@ function castRowsToObserved(rows: any[], currentPullId: string, fingerprint: str
         typeof cast?.spellId !== 'number' ||
         !Array.isArray(cast?.timestampsMs) ||
         !cast.timestampsMs.length
-      ) continue;
+      )
+        continue;
       out.push({
         spellId: cast.spellId,
         samePull,
-        pullTalentBuildFingerprint: samePull ? null : row.talent_build_fingerprint ?? null,
+        pullTalentBuildFingerprint: samePull ? null : (row.talent_build_fingerprint ?? null),
       });
     }
   }
@@ -100,11 +125,13 @@ function castRowsToObserved(rows: any[], currentPullId: string, fingerprint: str
 }
 
 function liveCastSpellIdsForActor(events: any[], actorId: number): number[] {
-  return [...new Set(
-    events
-      .filter((event: any) => event.sourceID === actorId && Number.isInteger(event.abilityGameID))
-      .map((event: any) => Number(event.abilityGameID)),
-  )].sort((a, b) => a - b);
+  return [
+    ...new Set(
+      events
+        .filter((event: any) => event.sourceID === actorId && Number.isInteger(event.abilityGameID))
+        .map((event: any) => Number(event.abilityGameID)),
+    ),
+  ].sort((a, b) => a - b);
 }
 
 function buildObservedActiveIntervals(
@@ -145,27 +172,28 @@ function buildObservedActiveIntervals(
 }
 
 async function loadResolverData(client: any) {
-  const [catalog, profiles, modifiers, semantics, semanticRules, lookup, combat] = await Promise.all([
-    client
-      .from('cooldown_catalog')
-      .select(
-        'class,spec,spec_override,spell_id,name,category,survival_type,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build,base_cooldown_ms,base_duration_ms,reviewed,excluded',
-      )
-      .eq('excluded', false),
-    client.from('defensive_spec_profiles').select('*'),
-    client.from('defensive_modifier_rules').select('*').eq('active', true),
-    client.from('defensive_ability_semantic_catalog').select('*'),
-    client.from('defensive_semantic_rules').select('*'),
-    client
-      .from('talent_spell_lookup')
-      .select('entry_to_spell,known_entry_ids')
-      .eq('build', GAME_BUILD)
-      .maybeSingle(),
-    client
-      .from('ability_combat_table_facts')
-      .select('ability_game_id,dodge_count,parry_count,block_count')
-      .eq('game_build', GAME_BUILD),
-  ]);
+  const [catalog, profiles, modifiers, semantics, semanticRules, lookup, combat] =
+    await Promise.all([
+      client
+        .from('cooldown_catalog')
+        .select(
+          'class,spec,spec_override,spell_id,name,category,survival_type,targeting_mode,activation_mode,passive_conversion_spell_ids,activation_game_build,base_cooldown_ms,base_duration_ms,reviewed,excluded',
+        )
+        .eq('excluded', false),
+      client.from('defensive_spec_profiles').select('*'),
+      client.from('defensive_modifier_rules').select('*').eq('active', true),
+      client.from('defensive_ability_semantic_catalog').select('*'),
+      client.from('defensive_semantic_rules').select('*'),
+      client
+        .from('talent_spell_lookup')
+        .select('entry_to_spell,known_entry_ids')
+        .eq('build', GAME_BUILD)
+        .maybeSingle(),
+      client
+        .from('ability_combat_table_facts')
+        .select('ability_game_id,dodge_count,parry_count,block_count')
+        .eq('game_build', GAME_BUILD),
+    ]);
   for (const response of [catalog, profiles, modifiers, semantics, semanticRules, lookup, combat]) {
     if (response.error) throw response.error;
   }
@@ -207,12 +235,7 @@ async function resolvePlayerKit(
         : { id: node.id, nodeID: node.nodeID, rank: node.rank };
     }) ?? null,
   );
-  const fingerprint = await fingerprintTalentBuild(
-    record.class,
-    record.spec,
-    GAME_BUILD,
-    enriched,
-  );
+  const fingerprint = await fingerprintTalentBuild(record.class, record.spec, GAME_BUILD, enriched);
   const input: any = {
     className: record.class,
     specName: record.spec,
@@ -256,7 +279,93 @@ async function coverage(client: any, generationId: string) {
   return data;
 }
 
-async function start(client: any, reportCode: string | null) {
+// §pressure-detection-diagnostics (2026-09-10) — puramente diagnóstico, no
+// toca defensive_generations/staging/pointer. Reutiliza EXACTAMENTE la misma
+// detectDamageWindows() que evaluateDefensiveEpisodesForPlayer() usa en
+// producción (mismo umbral 2.5x, mismo mínimo de 3 buckets no-cero) contra
+// la MISMA serie DamageTaken de WCL — solo persiste los números intermedios
+// que hoy se calculan y se tiran, para poder comparar la fórmula entre
+// tanks/melee/ranged/healers con datos reales en vez de adivinar. Un pull
+// por invocación (ver supabase-edge-function-cpu-quota): el orquestador vive
+// fuera del runtime (cliente/script), nunca en un bucle dentro de esta
+// función.
+async function diagnosePressurePull(client: any, pullId: string) {
+  const { data: pull, error: pullError } = await client
+    .from('pulls')
+    .select('report_code,fight_id,duration_ms')
+    .eq('id', pullId)
+    .maybeSingle();
+  if (pullError) throw pullError;
+  if (!pull) throw new Error(`Pull ${pullId} not found.`);
+
+  const { data: records, error: recordsError } = await client
+    .from('player_pull_records')
+    .select('player_name,class,spec')
+    .eq('pull_id', pullId);
+  if (recordsError) throw recordsError;
+  if (!records?.length) return { pullId, playersDiagnosed: 0 };
+
+  const report = await getReportFights(pull.report_code);
+  const fight = report.fights.find((candidate: any) => candidate.id === pull.fight_id);
+  if (!fight) throw new Error(`Fight ${pull.fight_id} not found in WCL report ${pull.report_code}.`);
+
+  const [actors, graph] = await Promise.all([
+    getReportActors(pull.report_code),
+    getFightGraph({
+      code: pull.report_code,
+      fightId: fight.id,
+      dataType: 'DamageTaken',
+      hostilityType: 'Friendlies',
+      startTime: fight.startTime,
+      endTime: fight.endTime,
+    }),
+  ]);
+  const actorByName = new Map<string, any>(actors.map((actor: any) => [actor.name, actor]));
+  const seriesByActor = new Map<number, any>(
+    (graph?.series ?? []).map((series: any) => [series.id, series]),
+  );
+
+  const rows: Record<string, unknown>[] = [];
+  for (const record of records as { player_name: string; class: string | null; spec: string | null }[]) {
+    const actor = actorByName.get(record.player_name);
+    const series = actor?.id != null ? seriesByActor.get(actor.id) : null;
+    const points: number[] = series?.data ?? [];
+    const pointStart = series ? series.pointStart - fight.startTime : 0;
+    const pointInterval = series?.pointInterval ?? 0;
+    const detection = detectDamageWindows(points, pointStart, pointInterval);
+    rows.push({
+      pull_id: pullId,
+      player_name: record.player_name,
+      class: record.class,
+      spec: record.spec,
+      pull_duration_ms: pull.duration_ms,
+      point_interval_ms: pointInterval,
+      total_buckets: points.length,
+      nonzero_buckets: points.filter((v) => v > 0).length,
+      baseline_value: detection.baselineValue,
+      threshold_value: detection.baselineValue * 2.5,
+      max_point_value: points.length ? Math.max(...points) : 0,
+      window_count: detection.windows.length,
+      // §pressure-detection-diagnostics follow-up — mismos points, mismo
+      // baseline; solo cambia el factor, para comparar el recuento REAL de
+      // ventanas (no una aproximación por "¿el pico llega al umbral?") en
+      // varios candidatos antes de proponer un cambio de fórmula.
+      window_count_factor_1_5: detectDamageWindows(points, pointStart, pointInterval, 1.5).windows.length,
+      window_count_factor_1_7: detectDamageWindows(points, pointStart, pointInterval, 1.7).windows.length,
+      window_count_factor_2_0: detectDamageWindows(points, pointStart, pointInterval, 2.0).windows.length,
+      window_count_factor_2_2: detectDamageWindows(points, pointStart, pointInterval, 2.2).windows.length,
+    });
+  }
+
+  const { error: upsertError } = await client
+    .from('canonical_defensive_pressure_diagnostics')
+    .upsert(rows, { onConflict: 'pull_id,player_name' });
+  if (upsertError) throw upsertError;
+
+  return { pullId, playersDiagnosed: rows.length };
+}
+
+async function start(client: any, reportCode: string | null, leaseToken: string | null) {
   if (reportCode) {
     const { count, error } = await client
       .from('canonical_defensive_eligible_player_pulls')
@@ -274,21 +383,30 @@ async function start(client: any, reportCode: string | null) {
     }
   }
 
-  const { data: generationId, error } = await client.rpc('begin_defensive_generation_refresh', {
-    p_game_build: GAME_BUILD,
-    p_semantic_version: SEMANTIC_VERSION,
-    p_resolver_version: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
-    p_semantic_resolver_version: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-    p_episode_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
-    p_evaluator_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
-    p_report_code: reportCode,
-  });
+  // Contract upgrades and queue binding are one DB transaction. In particular,
+  // a deployed v8 worker can retire an unpublishable, private v7 BUILDING
+  // generation instead of retrying the same contract mismatch forever.
+  const { data: generationId, error } = await client.rpc(
+    'begin_or_resume_canonical_defensive_refresh',
+    {
+      p_game_build: GAME_BUILD,
+      p_semantic_version: SEMANTIC_VERSION,
+      p_resolver_version: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V10,
+      p_semantic_resolver_version: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V10,
+      p_episode_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10,
+      p_evaluator_version: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10,
+      p_report_code: reportCode,
+      p_dispatch_lease_token: leaseToken,
+    },
+  );
   if (error) throw error;
+  // Do not make generation identity depend on an accessory coverage read. The
+  // dispatcher must receive/bind the ID even if diagnostics are temporarily
+  // unavailable; process/status still calculate exhaustive coverage later.
   return {
     skipped: false,
     generationId,
     reportCode,
-    coverage: await coverage(client, generationId),
   };
 }
 
@@ -305,10 +423,10 @@ async function processOne(client: any, generationId: string) {
   if (
     generation.game_build !== GAME_BUILD ||
     generation.semantic_version !== SEMANTIC_VERSION ||
-    generation.resolver_version !== EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7 ||
-    generation.semantic_resolver_version !== EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7 ||
-    generation.episode_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7 ||
-    generation.evaluator_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7
+    generation.resolver_version !== EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V10 ||
+    generation.semantic_resolver_version !== EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V10 ||
+    generation.episode_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10 ||
+    generation.evaluator_version !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10
   ) {
     throw new Error(`Generation ${generationId} contract does not match ${FUNCTION_VERSION}.`);
   }
@@ -366,7 +484,9 @@ async function processOne(client: any, generationId: string) {
       `Eligibility drift for pull ${target.pull_id}: DB target expected ${target.expected_player_rows}, current view has ${expectedNames.size}.`,
     );
   }
-  const eligible = (recordsResponse.data ?? []).filter((row: any) => expectedNames.has(row.player_name));
+  const eligible = (recordsResponse.data ?? []).filter((row: any) =>
+    expectedNames.has(row.player_name),
+  );
   if (eligible.length !== expectedNames.size) {
     throw new Error(
       `Missing player_pull_records for canonical pull ${target.pull_id}: expected ${expectedNames.size}, loaded ${eligible.length}.`,
@@ -389,7 +509,8 @@ async function processOne(client: any, generationId: string) {
   const resolver = await loadResolverData(client);
   const report = await getReportFights(target.report_code);
   const fight = report.fights.find((candidate: any) => candidate.id === target.fight_id);
-  if (!fight) throw new Error(`Fight ${target.fight_id} not found in WCL report ${target.report_code}.`);
+  if (!fight)
+    throw new Error(`Fight ${target.fight_id} not found in WCL report ${target.report_code}.`);
 
   const [actors, abilities, graph, casts, damage, buffs] = await Promise.all([
     getReportActors(target.report_code),
@@ -454,19 +575,27 @@ async function processOne(client: any, generationId: string) {
   for (const record of eligible) {
     const actor = actorByName.get(record.player_name);
     if (!actor?.id) {
-      throw new Error(`Expected canonical actor ${record.player_name} is absent from WCL pull ${target.pull_id}.`);
+      throw new Error(
+        `Expected canonical actor ${record.player_name} is absent from WCL pull ${target.pull_id}.`,
+      );
     }
     const liveSpellIds = liveCastSpellIdsForActor(normalizedCasts, actor.id);
     const resolved = await resolvePlayerKit(record, resolver, history ?? [], liveSpellIds);
     kits.set(record.player_name, resolved);
 
     const hard = [
-      ...resolved.semanticClosure.map((violation: any) => ({ gate: 'semantic_closure', ...violation })),
-      ...resolved.acquisition.map((violation: any) => ({ gate: 'live_cast_acquisition', ...violation })),
+      ...resolved.semanticClosure.map((violation: any) => ({
+        gate: 'semantic_closure',
+        ...violation,
+      })),
+      ...resolved.acquisition.map((violation: any) => ({
+        gate: 'live_cast_acquisition',
+        ...violation,
+      })),
     ];
     if (hard.length) {
       throw new Error(
-        `Canonical v7 hard gate violation on ${target.pull_id}/${record.player_name}: ${JSON.stringify(hard.slice(0, 10))}`,
+        `Canonical v8 hard gate violation on ${target.pull_id}/${record.player_name}: ${JSON.stringify(hard.slice(0, 10))}`,
       );
     }
     for (const violation of resolved.scoreability) {
@@ -476,12 +605,14 @@ async function processOne(client: any, generationId: string) {
       resolved.kit.some(
         (defensive: any) => defensive.applicability?.requiresSourceAffectedBySpell === true,
       )
-    ) needsDebuffs = true;
+    )
+      needsDebuffs = true;
   }
 
   let debuffIntervals: any[] = [];
   const bossActor =
-    (actors as any[]).find((actor: any) => actor.name === fight.name && actor.type !== 'Player') ?? null;
+    (actors as any[]).find((actor: any) => actor.name === fight.name && actor.type !== 'Player') ??
+    null;
   if (needsDebuffs && bossActor) {
     const debuffs = await getFightEvents({
       code: target.report_code,
@@ -528,16 +659,16 @@ async function processOne(client: any, generationId: string) {
     const hasPositiveRawDamage = rawHits.some(
       (event: any) => typeof event.amount === 'number' && event.amount > 0,
     );
-    const series = observedSeries ?? (
-      graphSeries.length > 0 && !hasPositiveRawDamage
+    const series =
+      observedSeries ??
+      (graphSeries.length > 0 && !hasPositiveRawDamage
         ? {
             id: actor.id,
             data: [],
             pointStart: graphSeries[0]?.pointStart ?? fight.startTime,
             pointInterval: graphSeries[0]?.pointInterval ?? 1000,
           }
-        : null
-    );
+        : null);
     if (!series) {
       throw new Error(
         `Expected WCL damage series for ${record.player_name} is absent in canonical pull ${target.pull_id}; positiveRawDamage=${hasPositiveRawDamage}, graphSeries=${graphSeries.length}.`,
@@ -550,7 +681,8 @@ async function processOne(client: any, generationId: string) {
         event.sourceID !== actor.id ||
         typeof event.abilityGameID !== 'number' ||
         typeof event.timestamp !== 'number'
-      ) continue;
+      )
+        continue;
       const list = castsBySpellId.get(event.abilityGameID) ?? [];
       list.push(event.timestamp);
       castsBySpellId.set(event.abilityGameID, list);
@@ -579,11 +711,12 @@ async function processOne(client: any, generationId: string) {
       defensiveGenerationId: generationId,
       pullId: target.pull_id,
       playerName: record.player_name,
-      episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
+      episodeEvaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10,
       semanticVersion: SEMANTIC_VERSION,
-      semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-      resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
+      semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V10,
+      resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V10,
       buildFingerprint: resolved.fingerprint,
+      effectiveKit: buildEffectiveDefensiveAuditFacts(resolved.kit),
       episodes,
     });
     const { error: stageError } = await client
@@ -657,22 +790,43 @@ async function processOne(client: any, generationId: string) {
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
+  if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'POST required' }, 405);
+
+  const body = (await req.json().catch(() => ({}))) as Body;
+  const action = body.action ?? 'status';
+  const client = serviceClient();
 
   // Normal product traffic still requires a real Officer session. Internal
   // maintenance may use the project's service-role JWT; the Edge gateway also
   // keeps verify_jwt=true, so there is no unauthenticated bypass here.
+  //
+  // §pressure-detection-diagnostics (2026-09-10) — diagnose-pressure-pull
+  // never touches defensive_generations/staging/pointer (see its own
+  // comment above); it is scoped to the SAME internal dispatch token
+  // canonical-defensive-auto-refresh already uses for drain/execute, so it
+  // can be driven by the same automated maintenance path without an Officer
+  // browser session. Every other action keeps the officer/service-role gate.
   const serviceRoleHeader = `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!}`;
   if (req.headers.get('Authorization') !== serviceRoleHeader) {
-    const guard = await requireOfficer(req);
-    if (guard instanceof Response) return guard;
+    let internalDiagnostic = false;
+    if (action === 'diagnose-pressure-pull') {
+      const supplied = req.headers.get('x-iris-dispatch-token');
+      if (supplied) {
+        const { data: runtime } = await client
+          .from('canonical_defensive_refresh_dispatch_runtime')
+          .select('dispatch_token')
+          .eq('id', true)
+          .maybeSingle();
+        internalDiagnostic = !!runtime && supplied === runtime.dispatch_token;
+      }
+    }
+    if (!internalDiagnostic) {
+      const guard = await requireOfficer(req);
+      if (guard instanceof Response) return guard;
+    }
   }
 
-  if (req.method !== 'POST') return jsonResponse({ ok: false, error: 'POST required' }, 405);
-
   try {
-    const body = (await req.json().catch(() => ({}))) as Body;
-    const action = body.action ?? 'status';
-    const client = serviceClient();
 
     if (action === 'health') {
       return jsonResponse({
@@ -680,19 +834,28 @@ Deno.serve(async (req: Request) => {
         version: FUNCTION_VERSION,
         gameBuild: GAME_BUILD,
         semanticVersion: SEMANTIC_VERSION,
-        resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V7,
-        semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V7,
-        evaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V7,
+        resolverVersion: EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V10,
+        semanticResolverVersion: EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V10,
+        evaluatorVersion: DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10,
       });
     }
     if (action === 'start') {
-      return jsonResponse({ ok: true, ...(await start(client, body.reportCode ?? null)) });
+      return jsonResponse({
+        ok: true,
+        ...(await start(client, body.reportCode ?? null, body.leaseToken ?? null)),
+      });
     }
     if (action === 'process') {
       if (!body.generationId) {
         return jsonResponse({ ok: false, error: 'generationId required' }, 400);
       }
       return jsonResponse({ ok: true, ...(await processOne(client, body.generationId)) });
+    }
+    if (action === 'diagnose-pressure-pull') {
+      if (!body.pullId) {
+        return jsonResponse({ ok: false, error: 'pullId required' }, 400);
+      }
+      return jsonResponse({ ok: true, ...(await diagnosePressurePull(client, body.pullId)) });
     }
     if (action === 'status') {
       if (!body.generationId) {
@@ -719,9 +882,6 @@ Deno.serve(async (req: Request) => {
     }
     return jsonResponse({ ok: false, error: `Unknown action ${action}` }, 400);
   } catch (error) {
-    return jsonResponse(
-      { ok: false, error: error instanceof Error ? error.message : String(error) },
-      500,
-    );
+    return jsonResponse({ ok: false, error: describeUnknownError(error) }, 500);
   }
 });

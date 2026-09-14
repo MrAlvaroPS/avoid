@@ -1,6 +1,8 @@
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { errorMessage } from '../_shared/error-message.ts';
+import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { sendDiscordParts } from '../_shared/discord-multipart-send.ts';
 
 // §"dejar preparada una capa para interactuar en discord para enviar la
 // infografía directamente a discord" (feedback real, 2026-08-27). DISCORD_APP_ID/
@@ -44,11 +46,23 @@ async function discordFetchWithRetry(url: string, init: RequestInit, attempt = 0
 }
 
 interface Body {
-  channelId: string;
+  /** Legacy callers keep passing a channel directly. New player-audit callers use rosterCharacterId instead. */
+  channelId?: string;
+  rosterCharacterId?: number;
+  /** Raider identity shown by the dossier; bound sends must match the stored roster link. */
+  playerName?: string;
   content?: string;
+  /** Ordered, already-semantic chunks for the player audit. Every part must fit Discord independently. */
+  parts?: string[];
+  /** Resume index after a partial Discord failure; indexes the original parts array. */
+  startPartIndex?: number;
   /** Imagen en base64 SIN el prefijo "data:image/...;base64,". */
   imageBase64?: string;
   imageFilename?: string;
+}
+
+function adminClient() {
+  return createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 }
 
 Deno.serve(async (req: Request) => {
@@ -65,8 +79,19 @@ Deno.serve(async (req: Request) => {
   } catch {
     return jsonResponse({ ok: false, error: 'Body JSON inválido' }, 400);
   }
-  if (!body.channelId) return jsonResponse({ ok: false, error: 'channelId es obligatorio' }, 400);
-  if (!body.content?.trim() && !body.imageBase64) return jsonResponse({ ok: false, error: 'Hace falta content o imageBase64' }, 400);
+  const isBoundPlayerSend = body.rosterCharacterId != null;
+  if (isBoundPlayerSend && body.channelId) return jsonResponse({ ok: false, error: 'No combines rosterCharacterId con channelId.' }, 400);
+  if (!isBoundPlayerSend && !body.channelId) return jsonResponse({ ok: false, error: 'channelId es obligatorio' }, 400);
+  if (body.parts && (!Array.isArray(body.parts) || !body.parts.length)) return jsonResponse({ ok: false, error: 'parts debe contener al menos un mensaje.' }, 400);
+  if (body.parts?.some((part) => typeof part !== 'string' || !part.trim() || part.length > 2000)) {
+    return jsonResponse({ ok: false, error: 'Cada parte de Discord debe contener texto y medir como máximo 2000 caracteres.' }, 400);
+  }
+  if (!body.parts && !body.content?.trim() && !body.imageBase64) return jsonResponse({ ok: false, error: 'Hace falta content, parts o imageBase64' }, 400);
+  if (body.parts && (body.content || body.imageBase64)) return jsonResponse({ ok: false, error: 'parts no se puede combinar con content o imagen.' }, 400);
+  const startPartIndex = body.startPartIndex ?? 0;
+  if (!Number.isInteger(startPartIndex) || startPartIndex < 0 || (body.parts && startPartIndex >= body.parts.length)) {
+    return jsonResponse({ ok: false, error: 'startPartIndex inválido.' }, 400);
+  }
 
   const botToken = Deno.env.get('DISCORD_BOT_TOKEN');
   const allowedGuildId = Deno.env.get('DISCORD_GUILD_ID');
@@ -74,7 +99,29 @@ Deno.serve(async (req: Request) => {
   if (!allowedGuildId) return jsonResponse({ ok: false, error: 'Falta DISCORD_GUILD_ID en los secrets del proyecto Supabase.' }, 500);
 
   try {
-    const channelRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${body.channelId}`, {
+    let channelId = body.channelId ?? null;
+    if (isBoundPlayerSend) {
+      if (!Number.isInteger(body.rosterCharacterId) || Number(body.rosterCharacterId) <= 0) {
+        return jsonResponse({ ok: false, error: 'rosterCharacterId inválido.' }, 400);
+      }
+      const requestedPlayerName = body.playerName?.trim() ?? '';
+      if (!requestedPlayerName || requestedPlayerName.length > 80) {
+        return jsonResponse({ ok: false, error: 'playerName es obligatorio para un envío vinculado.' }, 400);
+      }
+      const { data: binding, error: bindingError } = await adminClient()
+        .from('discord_roster_channels')
+        .select('character_name,discord_channel_id')
+        .eq('character_id', body.rosterCharacterId)
+        .maybeSingle();
+      if (bindingError) return jsonResponse({ ok: false, error: `No se pudo resolver el canal vinculado: ${errorMessage(bindingError)}` }, 500);
+      if (binding?.character_name?.trim().toLocaleLowerCase('en-US') !== requestedPlayerName.toLocaleLowerCase('en-US')) {
+        return jsonResponse({ ok: false, error: 'El personaje solicitado no coincide con la vinculación de Discord.' }, 409);
+      }
+      channelId = binding?.discord_channel_id ?? null;
+      if (!channelId) return jsonResponse({ ok: false, error: 'Este raider no tiene canal privado de Discord vinculado.' }, 409);
+    }
+
+    const channelRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${channelId}`, {
       headers: { Authorization: `Bot ${botToken}` },
     });
     if (!channelRes.ok) {
@@ -86,10 +133,26 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ ok: false, error: 'Este canal no pertenece al guild autorizado para este bot — envío bloqueado.' }, 403);
     }
 
+    if (body.parts) {
+      const result = await sendDiscordParts(body.parts, startPartIndex, async (content) => {
+        const response = await discordFetchWithRetry(`${DISCORD_API}/channels/${channelId}/messages`, {
+            method: 'POST',
+            headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+          });
+        if (!response.ok) throw new Error(`Discord devolvió HTTP ${response.status}: ${await response.text()}`);
+        return ((await response.json()) as { id: string }).id;
+      });
+      return jsonResponse({
+        ...result,
+        channelName: channel.name ?? null,
+      });
+    }
+
     let sendRes: Response;
     if (body.imageBase64) {
       const form = new FormData();
-      form.append('payload_json', JSON.stringify({ content: body.content ?? '' }));
+      form.append('payload_json', JSON.stringify({ content: body.content ?? '', allowed_mentions: { parse: [] } }));
       const bytes = Uint8Array.from(atob(body.imageBase64), (c) => c.charCodeAt(0));
       // §"Discord devolvió HTTP 413" (feedback real, 2026-08-27): esto
       // estaba hardcodeado a image/png sin mirar el nombre real, así que un
@@ -102,23 +165,23 @@ Deno.serve(async (req: Request) => {
       const filename = body.imageFilename ?? 'infografia.png';
       const mimeType = /\.jpe?g$/i.test(filename) ? 'image/jpeg' : 'image/png';
       form.append('files[0]', new Blob([bytes], { type: mimeType }), filename);
-      sendRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${body.channelId}/messages`, {
+      sendRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${channelId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bot ${botToken}` },
         body: form,
       });
     } else {
-      sendRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${body.channelId}/messages`, {
+      sendRes = await discordFetchWithRetry(`${DISCORD_API}/channels/${channelId}/messages`, {
         method: 'POST',
         headers: { Authorization: `Bot ${botToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: body.content }),
+        body: JSON.stringify({ content: body.content, allowed_mentions: { parse: [] } }),
       });
     }
     if (!sendRes.ok) {
       return jsonResponse({ ok: false, error: `Discord devolvió HTTP ${sendRes.status}: ${await sendRes.text()}` }, 502);
     }
     const sent = (await sendRes.json()) as { id: string };
-    return jsonResponse({ ok: true, messageId: sent.id, channelName: channel.name ?? null });
+    return jsonResponse({ ok: true, messageId: sent.id, messageIds: [sent.id], parts: 1, sentParts: 1, failedPartIndex: null, channelName: channel.name ?? null });
   } catch (err) {
     return jsonResponse({ ok: false, error: errorMessage(err) }, 500);
   }

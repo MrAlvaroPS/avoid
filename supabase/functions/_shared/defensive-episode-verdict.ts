@@ -76,10 +76,12 @@ export interface EpisodeVerdictCandidate {
 export interface EpisodeVerdictResult {
   usageEngaged: boolean;
   /** True when a real core opportunity was actionable, even if Response itself must remain uncertain. */
-  usageEvaluable: boolean;
+  /** Optional only for pre-v5 persisted/test fixtures; current evaluator always writes it explicitly. */
+  usageEvaluable?: boolean;
   usedSpellIds: number[];
   /** Positive non-core defensive actions are preserved without inflating either KPI. */
-  bonusCreditSpellIds: number[];
+  /** Optional only for backward-compatible fixtures; current evaluator always writes it explicitly. */
+  bonusCreditSpellIds?: number[];
   responseVerdict: ResponseVerdict;
   reason: string;
   coveredBySpellId: number | null;
@@ -348,11 +350,53 @@ export interface CausalAvailabilityResult {
   justifyingEpisodeIndex?: number;
 }
 
+/**
+ * §causal-fix (2026-09-10, hallazgo empírico real: Gusmï/Txerokee/Truchaman/
+ * Tetasdivinas cayendo a `uncertain` en la mayoría de sus episodios pese a
+ * tener casts defensivos reales cerca) — el cast previo puede ser una
+ * respuesta legítima a daño real que el detector de ventanas de presión
+ * (umbral = 2.5x mediana propia) no agrupó en un DamageWindow/episodio
+ * completo. Antes de esta función solo se comprobaba cobertura contra
+ * episodios YA DETECTADOS; eso castiga desproporcionadamente a roles con
+ * daño más disperso (ranged/healer) frente a tanks con presión casi
+ * continua, cuyo cast previo casi siempre cae dentro de ALGÚN episodio
+ * detectado. `allDamageTimestampsMs` (todos los hits de daño reales del
+ * jugador en el pull, no solo los que formaron episodio) es evidencia
+ * POSITIVA adicional — nunca sustituye la comprobación por episodio, solo
+ * se consulta cuando esa comprobación ya falló. Sigue sin producir jamás
+ * `missed_due_to_mistime` (comentario §3 arriba) — un cast sin ninguna
+ * evidencia de daño cercano (ni episodio ni hit crudo) sigue degradando a
+ * `uncertain`, nunca se convierte en acusación.
+ */
+function castExplainedByNearbyRawDamage(
+  timing: CausalTimingContext,
+  castMs: number,
+  allDamageTimestampsMs: readonly number[],
+): boolean {
+  if (!allDamageTimestampsMs.length) return false;
+  const reactiveWindowMs = timing.afterDamageResponseWindowMs;
+  const proactiveWindowMs = timing.effectiveDurationMs ?? 0;
+  const reactsToHit = (hitMs: number) => castMs >= hitMs && castMs <= hitMs + reactiveWindowMs;
+  const anticipatesHit = (hitMs: number) => castMs <= hitMs && castMs + proactiveWindowMs >= hitMs;
+  switch (timing.timingRelation) {
+    case 'after_damage':
+      return allDamageTimestampsMs.some(reactsToHit);
+    case 'before_or_during':
+    case 'continuous_state':
+      return allDamageTimestampsMs.some(anticipatesHit);
+    case 'either':
+      return allDamageTimestampsMs.some((hitMs) => reactsToHit(hitMs) || anticipatesHit(hitMs));
+    default:
+      return false;
+  }
+}
+
 export function reconstructCausalAvailability(
   timing: CausalTimingContext,
   castsForSpellMs: readonly number[],
   episodes: readonly EpisodeWindow[],
   episodeIndex: number,
+  allDamageTimestampsMs: readonly number[] = [],
 ): CausalAvailabilityResult {
   const sortedCasts = normalizeCastTimestamps(castsForSpellMs);
   const atMs = episodes[episodeIndex].peakMs;
@@ -383,21 +427,35 @@ export function reconstructCausalAvailability(
     }
   }
 
+  if (castExplainedByNearbyRawDamage(timing, lastCastBefore, allDamageTimestampsMs)) {
+    return {
+      classification: 'unavailable_legitimate',
+      reason: `El cast anterior (${lastCastBefore}ms) no cae dentro de un episodio agrupado, pero sí cerca de daño real registrado (no solo picos de presión) — cooldown consecuencia de un uso legítimo que el detector de episodios no agrupó.`,
+    };
+  }
+
   return {
     classification: 'uncertain',
-    reason: `El cast anterior (${lastCastBefore}ms) no demuestra cobertura de ningún episodio anterior conocido — puede ser uso legítimo contra una amenaza que el detector no capturó. Sin evidencia positiva de mal uso, no se demuestra mistime.`,
+    reason: `El cast anterior (${lastCastBefore}ms) no demuestra cobertura de ningún episodio anterior conocido ni de daño real cercano — puede ser uso legítimo contra una amenaza que el detector no capturó. Sin evidencia positiva de mal uso, no se demuestra mistime.`,
   };
 }
 
 export interface CausallyAwareCandidate extends EpisodeVerdictCandidate {
   castsForSpellMs: number[];
   timing: CausalTimingContext;
+  /** Full charge-aware result used to derive statusAtPeak; persisted by v8 for auditability. */
+  availabilityAtPeak?: {
+    status: DefensiveCooldownStatus;
+    chargesAvailable: number | null;
+    cooldownRemainingMs?: number;
+  };
 }
 
 export function resolveEpisodeVerdictWithCausalAvailability(
   candidates: CausallyAwareCandidate[],
   episodes: readonly EpisodeWindow[],
   episodeIndex: number,
+  allDamageTimestampsMs: readonly number[] = [],
 ): EpisodeVerdictResult {
   const base = resolveEpisodeVerdict(candidates);
   if (base.responseVerdict !== 'uncertain' || !base.causalUpgradeEligible) return base;
@@ -410,7 +468,7 @@ export function resolveEpisodeVerdictWithCausalAvailability(
   const causalResults = onCooldownMissable.map((c) => ({
     spellId: c.spellId,
     confidence: c.availabilityConfidence ?? c.confidence,
-    ...reconstructCausalAvailability(c.timing, c.castsForSpellMs, episodes, episodeIndex),
+    ...reconstructCausalAvailability(c.timing, c.castsForSpellMs, episodes, episodeIndex, allDamageTimestampsMs),
   }));
 
   if (causalResults.every((r) => r.classification === 'unavailable_legitimate')) {

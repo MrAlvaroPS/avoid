@@ -66,55 +66,61 @@
             <span>{{ view.hero.execution.label }}</span>
             <p>{{ view.hero.execution.detail }}</p>
           </article>
-          <div class="iris-v3-defensive-triangle" role="group" aria-label="Análisis defensivo">
-            <article
-              class="iris-v3-defensive-circle iris-v3-defensive-usage"
-              [attr.data-tone]="view.hero.defensive.usage.tone"
-              [attr.aria-label]="view.hero.defensive.usage.detail"
-              [title]="view.hero.defensive.usage.detail"
-            >
-              <div
-                class="iris-v3-metric-ring"
-                [style.--ring-pct]="defensiveRingPct(view.hero.defensive.usage) + '%'"
-                [style.--ring-color]="defensiveRingColor(view.hero.defensive.usage)"
+          <div class="iris-v3-defensive-group">
+            <span class="iris-v3-defensive-group-label">Análisis defensivo</span>
+            <div class="iris-v3-defensive-triangle" role="group" aria-label="Análisis defensivo">
+              <article
+                class="iris-v3-defensive-circle iris-v3-defensive-usage"
+                [attr.data-tone]="view.hero.defensive.usage.tone"
+                [attr.aria-label]="view.hero.defensive.usage.detail"
+                [title]="view.hero.defensive.usage.detail"
               >
-                <strong>{{ view.hero.defensive.usage.value }}</strong>
-              </div>
-              <span>{{ view.hero.defensive.usage.label }}</span>
-              <small>{{ view.hero.defensive.usage.fraction }}</small>
-            </article>
-            <article
-              class="iris-v3-defensive-circle iris-v3-defensive-management"
-              [attr.data-tone]="view.hero.defensive.management.tone"
-              [attr.aria-label]="view.hero.defensive.management.detail"
-              [title]="view.hero.defensive.management.detail"
-            >
-              <div
-                class="iris-v3-metric-ring"
-                [style.--ring-pct]="defensiveRingPct(view.hero.defensive.management) + '%'"
-                [style.--ring-color]="defensiveRingColor(view.hero.defensive.management)"
+                <div
+                  class="iris-v3-metric-ring"
+                  [style.--ring-pct]="defensiveRingPct(view.hero.defensive.usage) + '%'"
+                  [style.--ring-color]="defensiveRingColor(view.hero.defensive.usage)"
+                >
+                  <strong>{{ view.hero.defensive.usage.value }}</strong>
+                </div>
+                <span>{{ view.hero.defensive.usage.label }}</span>
+                <small>{{ view.hero.defensive.usage.fraction }}</small>
+              </article>
+              <article
+                class="iris-v3-defensive-circle iris-v3-defensive-response"
+                [attr.data-tone]="view.hero.defensive.response.tone"
+                [attr.aria-label]="view.hero.defensive.response.detail"
+                [title]="view.hero.defensive.response.detail"
               >
-                <strong>{{ view.hero.defensive.management.value }}</strong>
-              </div>
-              <span>{{ view.hero.defensive.management.label }}</span>
-              <small>{{ view.hero.defensive.management.fraction }}</small>
-            </article>
-            <article
-              class="iris-v3-defensive-circle iris-v3-defensive-response"
-              [attr.data-tone]="view.hero.defensive.response.tone"
-              [attr.aria-label]="view.hero.defensive.response.detail"
-              [title]="view.hero.defensive.response.detail"
-            >
-              <div
-                class="iris-v3-metric-ring"
-                [style.--ring-pct]="defensiveRingPct(view.hero.defensive.response) + '%'"
-                [style.--ring-color]="defensiveRingColor(view.hero.defensive.response)"
+                <div
+                  class="iris-v3-metric-ring"
+                  [style.--ring-pct]="defensiveRingPct(view.hero.defensive.response) + '%'"
+                  [style.--ring-color]="defensiveRingColor(view.hero.defensive.response)"
+                >
+                  <strong>{{ view.hero.defensive.response.value }}</strong>
+                </div>
+                <span>{{ view.hero.defensive.response.label }}</span>
+                <small>{{ view.hero.defensive.response.fraction }}</small>
+              </article>
+              <!-- Uso es el KPI defensivo principal del triángulo (§uso-hero-swap, 2026-09-11): responde
+                   "¿cuántas veces usé un defensivo, dado su propio cooldown?" — Reacción/Respuesta son
+                   ajuste fino de timing sobre ESE uso, no la pregunta que un raider mira primero. -->
+              <article
+                class="iris-v3-defensive-circle iris-v3-defensive-management"
+                [attr.data-tone]="view.hero.defensive.management.tone"
+                [attr.aria-label]="view.hero.defensive.management.detail"
+                [title]="view.hero.defensive.management.detail"
               >
-                <strong>{{ view.hero.defensive.response.value }}</strong>
-              </div>
-              <span>{{ view.hero.defensive.response.label }}</span>
-              <small>{{ view.hero.defensive.response.fraction }}</small>
-            </article>
+                <div
+                  class="iris-v3-metric-ring"
+                  [style.--ring-pct]="defensiveRingPct(view.hero.defensive.management) + '%'"
+                  [style.--ring-color]="defensiveRingColor(view.hero.defensive.management)"
+                >
+                  <strong>{{ view.hero.defensive.management.value }}</strong>
+                </div>
+                <span>{{ view.hero.defensive.management.label }}</span>
+                <small>{{ view.hero.defensive.management.fraction }}</small>
+              </article>
+            </div>
           </div>
         </div>
       </section>
@@ -314,6 +320,34 @@
         }
       </section>
 
+      <section class="iris-v3-section iris-v3-kit-section">
+        <div class="iris-v3-section-heading compact">
+          <div><span>KIT DEFENSIVO</span></div>
+        </div>
+        @if (view.defensiveKit.length) {
+          <div class="iris-v3-kit-grid">
+            @for (spell of view.defensiveKit; track spell.spellId) {
+              <span class="iris-v3-defensive-chip" [class.credit-only]="!spell.countsAgainstKpi">
+                @if (iconUrl(spell.spellId); as icon) {
+                  <img [src]="icon" [alt]="spell.name" (error)="onIconError($event)" />
+                } @else {
+                  <svg viewBox="0 0 32 32" aria-hidden="true">
+                    <path d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z" />
+                  </svg>
+                }
+                <b>{{ spell.name }}</b>
+                <small>
+                  {{ spell.effectiveCooldownMs ? 'CD ' + formatDuration(spell.effectiveCooldownMs) : 'sin CD fijo' }}
+                  · {{ spell.countsAgainstKpi ? 'cuenta' : 'bonus' }}
+                </small>
+              </span>
+            }
+          </div>
+        } @else {
+          <p class="iris-v3-inline-empty">Sin defensivos core resueltos en el kit esta noche.</p>
+        }
+      </section>
+
       <footer class="iris-v3-page-footer">
         <div>
           <img src="/assets/avoid-guild-logo.png" alt="" /><b>IRIS</b
@@ -351,11 +385,22 @@
       <section class="iris-v3-section iris-v3-mechanics-section">
         <div class="iris-v3-section-heading compact">
           <div><span>MECÁNICAS RELEVANTES DE LA NOCHE</span></div>
-          <div class="iris-v3-occurrence-legend">
+          <!-- §leyenda-duplicada (2026-09-11, feedback real: "esto en la cabecera de defensivos relevantes
+               esta duplicado") — son dos ejes distintos (estado del PICO en la cabecera de columna vs estado
+               de CADA DEFENSIVO en el cuerpo de la matriz) que compartían casi el mismo vocabulario/colores y
+               por eso se leían como la misma leyenda repetida dos veces. Una sola fila, con etiqueta de grupo
+               para dejar explícito que son dos cosas distintas, no una redundancia. -->
+          <div class="iris-v3-mechanics-legend">
+            <span class="iris-v3-legend-group-label">Pico</span>
             <span data-state="covered">Cubierta</span>
             <span data-state="uncovered">Sin cobertura</span>
             <span data-state="not_required">No exigible</span>
             <span data-state="context">Sin dato</span>
+            <span class="iris-v3-legend-divider" aria-hidden="true"></span>
+            <span class="iris-v3-legend-group-label">Defensivo en ese pico</span>
+            <span data-kit-state="covered">Cubrió</span>
+            <span data-kit-state="available_unused">Libre sin usar</span>
+            <span data-kit-state="neutral">CD / no exigible / sin dato</span>
           </div>
         </div>
         @if (view.mechanics.length) {
@@ -403,54 +448,61 @@
                     }}<small>{{ mechanic.coverageLabel }}</small></strong
                   >
                 </header>
-                <div class="iris-v3-occurrence-groups">
-                  @for (group of mechanic.occurrenceGroups; track group.pullNumber) {
-                    <div>
-                      <span>Pull {{ group.pullNumber }}</span>
-                      <div>
-                        @for (cell of group.cells; track cell.key) {
-                          <i [attr.data-state]="cell.state" [title]="cell.label"></i>
+                <!-- §mecanicas-verificables-v2 (2026-09-11): matriz kit×pico — una columna por pico real
+                     (pull+minuto+daño+link WCL, cabecera), una fila por defensivo aplicable (icono+nombre UNA
+                     vez, no repetido por columna), la intersección es un solo estado. Escala con kits de
+                     varios defensivos sin repetir iconos por cada pico. -->
+                <div class="iris-v3-kit-matrix">
+                  <div class="iris-v3-kit-matrix-row iris-v3-kit-matrix-head">
+                    <span class="iris-v3-kit-matrix-label"></span>
+                    @for (occ of mechanic.occurrences; track occ.key) {
+                      <div class="iris-v3-kit-matrix-cell">
+                        @if (occ.wclUrl) {
+                          <a
+                            [attr.data-state]="occ.state"
+                            [title]="occ.label"
+                            [href]="occ.wclUrl"
+                            target="_blank"
+                            rel="noopener"
+                          >
+                            <strong>{{ occ.minuteLabel }}</strong>
+                            @if (occ.damageLabel) {
+                              <small>{{ occ.damageLabel }}</small>
+                            }
+                          </a>
+                        } @else {
+                          <i [attr.data-state]="occ.state" [title]="occ.label">
+                            <strong>{{ occ.minuteLabel }}</strong>
+                            @if (occ.damageLabel) {
+                              <small>{{ occ.damageLabel }}</small>
+                            }
+                          </i>
                         }
-                      </div>
-                    </div>
-                  }
-                </div>
-                @if (mechanic.defensives.length) {
-                  <div class="iris-v3-defensive-table">
-                    <div class="iris-v3-defensive-table-head">
-                      <span>Defensivo</span><span>Cubrió</span><span>Libre sin usar</span
-                      ><span>En CD</span><span>No exigible</span><span>Sin dato</span>
-                    </div>
-                    @for (defensive of mechanic.defensives; track defensive.spellId) {
-                      <div class="iris-v3-defensive-table-row">
-                        <span>
-                          <svg viewBox="0 0 32 32" aria-hidden="true">
-                            <path
-                              d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z"
-                            />
-                          </svg>
-                          @if (iconUrl(defensive.spellId); as icon) {
-                            <img
-                              [src]="icon"
-                              [alt]="defensive.name"
-                              (error)="onIconError($event)"
-                            />
-                          }
-                          <b>{{ defensive.name }}</b>
-                        </span>
-                        <strong data-state="covered">{{ defensive.coveredCount }}</strong>
-                        <strong data-state="uncovered">{{ defensive.freeUnusedCount }}</strong>
-                        <strong data-state="cooldown">{{ defensive.onCooldownCount }}</strong>
-                        <strong data-state="not_required">{{ defensive.notRequiredCount }}</strong>
-                        <strong data-state="unknown">{{ defensive.unknownCount }}</strong>
                       </div>
                     }
                   </div>
-                } @else {
-                  <p class="iris-v3-mechanic-empty">
-                    Sin defensivos evaluables para esta mecánica.
-                  </p>
-                }
+                  @for (row of mechanic.kitAvailability; track row.spellId) {
+                    <div class="iris-v3-kit-matrix-row">
+                      <span class="iris-v3-kit-matrix-label">
+                        <svg viewBox="0 0 32 32" aria-hidden="true">
+                          <path d="M16 3 5 8v8c0 6.5 4.4 11.5 11 14 6.6-2.5 11-7.5 11-14V8L16 3Z" />
+                        </svg>
+                        @if (iconUrl(row.spellId); as icon) {
+                          <img [src]="icon" [alt]="row.name" (error)="onIconError($event)" />
+                        }
+                        <b>{{ row.name }}</b>
+                      </span>
+                      @for (occ of mechanic.occurrences; track occ.key) {
+                        <div class="iris-v3-kit-matrix-cell">
+                          <i [attr.data-kit-state]="row.cellsByOccurrenceKey[occ.key]"></i>
+                        </div>
+                      }
+                    </div>
+                  }
+                  @if (!mechanic.kitAvailability.length) {
+                    <p class="iris-v3-mechanic-empty">Sin defensivos evaluables para esta mecánica.</p>
+                  }
+                </div>
                 <p class="iris-v3-mechanic-relevance">{{ mechanic.relevanceNote }}</p>
               </article>
             }

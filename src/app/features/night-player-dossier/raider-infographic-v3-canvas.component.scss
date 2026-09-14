@@ -25,6 +25,13 @@ app-raider-infographic-v3-canvas {
   --iris-warning: #dda53a;
   --iris-information: #4a8fcc;
   --iris-neutral: #64717a;
+  // Tokens de reuso puro (sin significado semántico propio, a diferencia de
+  // los --iris-* de arriba): factorizan dos fragmentos de valor repetidos
+  // literalmente ~20 y ~18 veces en este archivo (familia tipográfica de
+  // titulares Georgia y el hairline de separación var(--iris-line)) para que
+  // el CSS compilado no los duplique en cada regla.
+  --iris-serif: Georgia, 'Times New Roman', serif;
+  --iris-hairline: 1px solid var(--iris-line);
   // §"el espacio en blanco encima del footer... depende del número de
   // cards que tengas, pero debe ser dinámico... pero para que pueda haberlo
   // si se necesita para crecer los datos" (feedback real, 2026-09-03): antes
@@ -87,11 +94,11 @@ app-raider-infographic-v3-canvas {
   align-items: center;
   justify-content: space-between;
   gap: 22px;
-  border-bottom: 1px solid var(--iris-line);
+  border-bottom: var(--iris-hairline);
 }
 
 .iris-v3-brand,
-.iris-v3-page-footer > div,
+.iris-v3-page-footer>div,
 .iris-v3-page-title {
   display: flex;
   align-items: center;
@@ -120,7 +127,7 @@ app-raider-infographic-v3-canvas {
 .iris-v3-brand strong {
   display: block;
   margin-top: 3px;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 28px;
   font-weight: 500;
 }
@@ -140,7 +147,7 @@ app-raider-infographic-v3-canvas {
 
 .iris-v3-report-meta strong {
   display: block;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 18px;
 }
 
@@ -160,7 +167,7 @@ app-raider-infographic-v3-canvas {
   // más abajo, así que el tinte queda coherente sin depender de una segunda
   // fuente de color.
   background: linear-gradient(90deg, color-mix(in srgb, var(--class-accent) 20%, rgb(8 25 38 / 91%)), rgb(5 17 27 / 65%));
-  border: 1px solid var(--iris-line);
+  border: var(--iris-hairline);
   border-radius: 12px;
 }
 
@@ -182,7 +189,7 @@ app-raider-infographic-v3-canvas {
   border-radius: 12px;
 }
 
-.iris-v3-player-copy > span {
+.iris-v3-player-copy>span {
   color: var(--class-accent);
   font-size: 13px;
   font-weight: 800;
@@ -192,7 +199,7 @@ app-raider-infographic-v3-canvas {
 .iris-v3-player-copy h1 {
   margin: 7px 0 4px;
   color: #fff;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 52px;
   font-weight: 500;
 }
@@ -235,18 +242,41 @@ app-raider-infographic-v3-canvas {
   text-align: center;
 }
 
+// §identificar-grupos (2026-09-11, feedback real: "es complicado saber que son esos circulos... deberiamos
+// identificarlos bien... el circulo de la izquierda es Ejecución y los 3 de la derecha pertenecen al análisis
+// defensivo") — Ejecución ya se identifica sola (su propio <span> dentro del círculo, "EJECUCIÓN DE LA
+// NOCHE"), pero el triángulo de 3 círculos no tenía ninguna etiqueta que los agrupara como una sola cosa.
+// Esta caja solo apila la etiqueta encima del triángulo existente, sin tocar su ancho/solape.
+.iris-v3-defensive-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.iris-v3-defensive-group-label {
+  color: var(--iris-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
 // Contenedor del triángulo: los tres círculos se posicionan en absoluto
 // dentro de esta caja de altura fija (cabe en los 190px de .iris-v3-identity)
 // — mismo mecanismo de anillo (conic-gradient vía --ring-pct/--ring-color)
 // que Ejecución, solo con tamaños/posiciones distintos, para que
 // html-to-image lo capture exactamente igual que en el navegador (§73).
 // Ancho FIJO a propósito, no flex:1 — con left/right en % dentro de un contenedor que llenara todo el hueco
-// restante (varios cientos de px), Usage/Gestión quedarían muy separados de Respuesta en vez de solaparla
-// parcialmente. 240px es justo el hueco que necesitan los tres círculos para solaparse de verdad.
+// restante (varios cientos de px), Reacción/Respuesta quedarían muy separados de Uso en vez de rozarlo por
+// abajo. 270px (§header-legibilidad, 2026-09-11: "todavia se solapa mucho... sin solapamiento, solo que se
+// rocen ligeramente" — 240px solo daba hueco para el solape fuerte de antes; separar Reacción/Respuesta con
+// Pitágoras hasta tangencia real necesita más ancho, no cabía en 240).
 .iris-v3-defensive-triangle {
   position: relative;
   flex: 0 0 auto;
-  width: 240px;
+  width: 270px;
   height: 168px;
 }
 
@@ -256,7 +286,7 @@ app-raider-infographic-v3-canvas {
   white-space: nowrap;
 }
 
-.iris-v3-defensive-circle > span {
+.iris-v3-defensive-circle>span {
   display: block;
   color: var(--tone);
   font-size: 10px;
@@ -264,32 +294,55 @@ app-raider-infographic-v3-canvas {
   text-transform: uppercase;
 }
 
-.iris-v3-defensive-circle > small {
+.iris-v3-defensive-circle>small {
   display: block;
   margin-top: 2px;
   color: var(--iris-muted);
   font-size: 10px;
 }
 
-// Respuesta: núcleo del triángulo, siempre el KPI defensivo principal
-// (§9/§94) — círculo más grande, centrado/inferior, por encima del resto
-// en el eje z. Usage/Gestión son satélites secundarios ~70-75% del
-// diámetro (§9), superior-izquierda/superior-derecha con solape parcial.
-// Sin z-index explícito a propósito: los tres son hermanos position:absolute
-// y el orden del DOM (usage, gestión, respuesta) ya pinta Respuesta encima —
-// mismo resultado, menos CSS.
+// Uso: núcleo del triángulo, el KPI defensivo principal (§uso-hero-swap, 2026-09-11 — feedback real: "el
+// circulo principal deberia ser USO, que dice cuantas veces usaste un defensivo, el resto es ajustar timing y
+// cd's"). Círculo más grande, centrado/superior. Reacción/Respuesta (§header-legibilidad, mismo día — "los
+// circulos pequeños... quiero que esten en las esquinas inferiores. Sin solapamiento, solo que se rocen
+// ligeramente") son satélites secundarios abajo, izquierda/derecha, apenas rozando el borde inferior de Uso.
+// Sin z-index explícito a propósito: los tres son hermanos position:absolute y el orden del DOM (usage,
+// response, management) ya pinta Uso encima en la franja de roce — mismo resultado, menos CSS.
+.iris-v3-defensive-management {
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.iris-v3-defensive-management .iris-v3-metric-ring {
+  width: 108px;
+  height: 108px;
+}
+
+.iris-v3-defensive-management>span {
+  font-size: 12px;
+}
+
+// §header-legibilidad: ambos satélites centrados en el eje X del contenedor (left:50%) y luego desplazados
+// ±76px — el mismo truco de translateX(-50%) que ya centra Uso, pero sumando/restando un offset fijo, así el
+// desplazamiento es exacto sin depender del ancho real del artículo (texto variable debajo del anillo).
+// 76px sale de acercar los anillos justo hasta un roce mínimo (Pitágoras: separación vertical real
+// centro-a-centro ~49px entre el anillo de Uso arriba y el de cada satélite abajo, radios 54px+39px=93px de
+// distancia para tangencia real → dx≈sqrt(93²-49²)≈79px; 76px deja un roce de ~3px, no un hueco).
+.iris-v3-defensive-usage {
+  left: 50%;
+  bottom: 0;
+  transform: translateX(calc(-50% - 76px));
+}
+
 .iris-v3-defensive-response {
   left: 50%;
   bottom: 0;
-  transform: translateX(-50%);
+  transform: translateX(calc(-50% + 76px));
 }
-.iris-v3-defensive-response .iris-v3-metric-ring { width: 108px; height: 108px; }
-.iris-v3-defensive-response > span { font-size: 12px; }
 
-.iris-v3-defensive-usage { left: 6%; top: 0; }
-.iris-v3-defensive-management { right: 6%; top: 0; }
 .iris-v3-defensive-usage .iris-v3-metric-ring,
-.iris-v3-defensive-management .iris-v3-metric-ring {
+.iris-v3-defensive-response .iris-v3-metric-ring {
   width: 78px;
   height: 78px;
 }
@@ -313,10 +366,8 @@ app-raider-infographic-v3-canvas {
   border-radius: 50%;
   background:
     radial-gradient(circle, #09131d 62%, transparent 63%),
-    conic-gradient(
-      var(--ring-color, var(--tone)) var(--ring-pct, 100%),
-      color-mix(in srgb, var(--ring-color, var(--tone)) 20%, #18313f) 0
-    );
+    conic-gradient(var(--ring-color, var(--tone)) var(--ring-pct, 100%),
+      color-mix(in srgb, var(--ring-color, var(--tone)) 20%, #18313f) 0);
   box-shadow:
     0 0 22px color-mix(in srgb, var(--ring-color, var(--tone)) 24%, transparent),
     inset 0 2px 3px rgb(255 255 255 / 12%),
@@ -324,17 +375,31 @@ app-raider-infographic-v3-canvas {
 }
 
 .iris-v3-metric-ring strong {
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 23px;
 }
 
-[data-tone='positive'] { --tone: var(--iris-positive); }
-[data-tone='danger'] { --tone: var(--iris-danger); }
-[data-tone='warning'] { --tone: var(--iris-warning); }
-[data-tone='information'] { --tone: var(--iris-information); }
-[data-tone='neutral'] { --tone: var(--iris-neutral); }
+[data-tone='positive'] {
+  --tone: var(--iris-positive);
+}
 
-.iris-v3-hero-metric > span {
+[data-tone='danger'] {
+  --tone: var(--iris-danger);
+}
+
+[data-tone='warning'] {
+  --tone: var(--iris-warning);
+}
+
+[data-tone='information'] {
+  --tone: var(--iris-information);
+}
+
+[data-tone='neutral'] {
+  --tone: var(--iris-neutral);
+}
+
+.iris-v3-hero-metric>span {
   display: block;
   color: var(--tone);
   font-size: 12px;
@@ -356,21 +421,27 @@ app-raider-infographic-v3-canvas {
 .iris-v3-defensive-strip {
   display: grid;
   background: rgb(7 21 32 / 88%);
-  border: 1px solid var(--iris-line);
+  border: var(--iris-hairline);
   border-radius: 10px;
 }
 
 // §Spec sección 6/12: la izquierda mantiene 6 KPIs (incluye Ventanas de
 // presión); la derecha baja a 5 (Kills de boss ya no forma parte del strip).
-.iris-v3-stat-strip { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-.iris-v3-defensive-strip { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.iris-v3-stat-strip {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.iris-v3-defensive-strip {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
 
 .iris-v3-stat-strip article,
 .iris-v3-defensive-strip article {
   min-width: 0;
   min-height: 100px;
   padding: 13px 12px;
-  border-right: 1px solid var(--iris-line);
+  border-right: var(--iris-hairline);
+  text-align: center;
 }
 
 .iris-v3-stat-strip article:last-child,
@@ -393,7 +464,7 @@ app-raider-infographic-v3-canvas {
   display: block;
   margin: 4px 0;
   color: var(--tone);
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 28px;
   font-weight: 500;
 }
@@ -417,7 +488,7 @@ app-raider-infographic-v3-canvas {
   justify-content: space-between;
   gap: 18px;
   padding: 0 8px 8px;
-  border-bottom: 1px solid var(--iris-line);
+  border-bottom: var(--iris-hairline);
 }
 
 .iris-v3-section-heading.compact {
@@ -428,7 +499,7 @@ app-raider-infographic-v3-canvas {
 
 .iris-v3-section-heading h2 {
   margin: 3px 0 0;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 27px;
   font-weight: 500;
 }
@@ -441,7 +512,9 @@ app-raider-infographic-v3-canvas {
 // §"el título COACHING ACCIONABLE no es adecuado... solo Qué pasó y cómo
 // corregirlo, con el mismo color que tenía COACHING ACCIONABLE" (feedback
 // real, 2026-09-03).
-.iris-v3-gold-heading { color: var(--iris-gold); }
+.iris-v3-gold-heading {
+  color: var(--iris-gold);
+}
 
 .iris-v3-coaching-list {
   display: grid;
@@ -466,10 +539,24 @@ app-raider-infographic-v3-canvas {
 // infographic-view-model.ts) se reduce lo mínimo para no recortar el resto
 // de la página fija — mismo patrón que .defensive-compact ya usa para su
 // propia sección.
-.coaching-compact .iris-v3-coaching-card { min-height: 190px; }
-.coaching-compact .iris-v3-event-icon { width: 56px; height: 56px; margin-bottom: 6px; }
-.coaching-compact .iris-v3-event-identity { padding: 10px 8px; }
-.coaching-compact .iris-v3-coaching-body > header { min-height: 40px; padding: 6px 12px; }
+.coaching-compact .iris-v3-coaching-card {
+  min-height: 190px;
+}
+
+.coaching-compact .iris-v3-event-icon {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 6px;
+}
+
+.coaching-compact .iris-v3-event-identity {
+  padding: 10px 8px;
+}
+
+.coaching-compact .iris-v3-coaching-body>header {
+  min-height: 40px;
+  padding: 6px 12px;
+}
 
 .iris-v3-priority-rail {
   padding: 17px 8px;
@@ -480,7 +567,7 @@ app-raider-infographic-v3-canvas {
 
 .iris-v3-priority-rail strong {
   color: var(--tone);
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 28px;
   font-weight: 500;
 }
@@ -496,7 +583,7 @@ app-raider-infographic-v3-canvas {
 .iris-v3-event-identity {
   padding: 14px 10px;
   text-align: center;
-  border-right: 1px solid var(--iris-line);
+  border-right: var(--iris-hairline);
 }
 
 .iris-v3-event-icon,
@@ -536,17 +623,17 @@ app-raider-infographic-v3-canvas {
   stroke-width: 2;
 }
 
-.iris-v3-event-identity > strong,
-.iris-v3-event-identity > span {
+.iris-v3-event-identity>strong,
+.iris-v3-event-identity>span {
   display: block;
 }
 
-.iris-v3-event-identity > strong {
-  font-family: Georgia, 'Times New Roman', serif;
+.iris-v3-event-identity>strong {
+  font-family: var(--iris-serif);
   font-size: 18px;
 }
 
-.iris-v3-event-identity > span {
+.iris-v3-event-identity>span {
   margin-top: 5px;
   color: var(--iris-muted);
   font-size: 13px;
@@ -573,28 +660,28 @@ app-raider-infographic-v3-canvas {
   flex-direction: column;
 }
 
-.iris-v3-coaching-body > header {
+.iris-v3-coaching-body>header {
   min-height: 50px;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 7px 12px;
-  border-bottom: 1px solid var(--iris-line);
+  border-bottom: var(--iris-hairline);
 }
 
-.iris-v3-coaching-body > header h3 {
+.iris-v3-coaching-body>header h3 {
   min-width: 0;
   flex: 1;
   overflow: hidden;
   margin: 0;
-  font-family: Georgia, 'Times New Roman', serif;
+  font-family: var(--iris-serif);
   font-size: 21px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.iris-v3-coaching-body > header span {
+.iris-v3-coaching-body>header span {
   padding: 4px 7px;
   color: var(--tone);
   background: color-mix(in srgb, var(--tone) 10%, transparent);
@@ -605,7 +692,7 @@ app-raider-infographic-v3-canvas {
   text-transform: uppercase;
 }
 
-.iris-v3-coaching-body > header small {
+.iris-v3-coaching-body>header small {
   color: var(--iris-muted);
   font-size: 11px;
 }
@@ -621,15 +708,15 @@ app-raider-infographic-v3-canvas {
   flex: 1;
 }
 
-.iris-v3-fact-grid > div,
-.iris-v3-correction-row > div {
+.iris-v3-fact-grid>div,
+.iris-v3-correction-row>div {
   min-width: 0;
   padding: 8px 10px;
-  border-right: 1px solid var(--iris-line);
+  border-right: var(--iris-hairline);
 }
 
-.iris-v3-fact-grid > div:last-child,
-.iris-v3-correction-row > div:last-child {
+.iris-v3-fact-grid>div:last-child,
+.iris-v3-correction-row>div:last-child {
   border-right: 0;
 }
 
@@ -651,7 +738,7 @@ app-raider-infographic-v3-canvas {
   line-height: 1.35;
 }
 
-.iris-v3-card-defensives > div {
+.iris-v3-card-defensives>div {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -665,7 +752,7 @@ app-raider-infographic-v3-canvas {
   grid-template-columns: 25px minmax(0, 1fr);
   gap: 0 5px;
   padding: 3px;
-  border: 1px solid var(--iris-line);
+  border: var(--iris-hairline);
   border-radius: 5px;
 }
 
@@ -706,7 +793,7 @@ app-raider-infographic-v3-canvas {
   grid-template-columns: 2fr 1.15fr;
   min-height: 80px;
   background: rgb(4 12 20 / 55%);
-  border-top: 1px solid var(--iris-line);
+  border-top: var(--iris-hairline);
 }
 
 .iris-v3-coaching-body footer {
@@ -718,18 +805,26 @@ app-raider-infographic-v3-canvas {
   display: grid;
   grid-template-columns: 2fr 1.15fr;
   min-height: 52px;
-  border-top: 1px solid var(--iris-line);
+  border-top: var(--iris-hairline);
 }
 
 .iris-v3-coaching-body footer span {
   min-width: 0;
   margin: 0;
   padding: 7px 10px;
-  border-right: 1px solid var(--iris-line);
+  border-right: var(--iris-hairline);
 }
 
-.iris-v3-coaching-body footer span:last-child { border-right: 0; }
-.iris-v3-coaching-body footer b { display: block; color: var(--tone); font-size: 10px; text-transform: uppercase; }
+.iris-v3-coaching-body footer span:last-child {
+  border-right: 0;
+}
+
+.iris-v3-coaching-body footer b {
+  display: block;
+  color: var(--tone);
+  font-size: 10px;
+  text-transform: uppercase;
+}
 
 .iris-v3-more-evidence,
 .iris-v3-inline-empty {
@@ -747,15 +842,32 @@ app-raider-infographic-v3-canvas {
   margin-top: 8px;
   padding: 22px;
   background: var(--iris-card);
-  border: 1px solid var(--iris-line);
+  border: var(--iris-hairline);
   border-radius: 10px;
   text-align: left;
 }
 
-.iris-v3-empty-state.compact { min-height: 110px; }
-.iris-v3-empty-state svg { width: 58px; fill: none; stroke: var(--iris-positive); stroke-width: 2; }
-.iris-v3-empty-state strong { font-family: Georgia, 'Times New Roman', serif; font-size: 20px; }
-.iris-v3-empty-state p { margin: 5px 0 0; color: var(--iris-muted); font-size: 13px; }
+.iris-v3-empty-state.compact {
+  min-height: 110px;
+}
+
+.iris-v3-empty-state svg {
+  width: 58px;
+  fill: none;
+  stroke: var(--iris-positive);
+  stroke-width: 2;
+}
+
+.iris-v3-empty-state strong {
+  font-family: var(--iris-serif);
+  font-size: 20px;
+}
+
+.iris-v3-empty-state p {
+  margin: 5px 0 0;
+  color: var(--iris-muted);
+  font-size: 13px;
+}
 
 // §Spec sección 10: "la maqueta funciona mejor porque comprime la
 // regularidad de toda la noche en una sola banda... la app actual la
@@ -777,7 +889,7 @@ app-raider-infographic-v3-canvas {
   gap: 4px;
   margin-left: 10px;
   padding-left: 10px;
-  border-left: 1px solid var(--iris-line);
+  border-left: var(--iris-hairline);
 }
 
 .iris-v3-timeline-range.is-first {
@@ -801,12 +913,16 @@ app-raider-infographic-v3-canvas {
   white-space: nowrap;
 }
 
-.iris-v3-timeline-range.is-first .iris-v3-timeline-range-label { left: 0; }
+.iris-v3-timeline-range.is-first .iris-v3-timeline-range-label {
+  left: 0;
+}
 
 // Muchos bosses de 1-2 pulls dejan grupos más estrechos que su propia
 // etiqueta; alternar la altura evita que dos etiquetas vecinas se pisen
 // aunque su ancho se solape (quedan en líneas distintas, ambas legibles).
-.iris-v3-timeline-range:nth-child(even) .iris-v3-timeline-range-label { top: -30px; }
+.iris-v3-timeline-range:nth-child(even) .iris-v3-timeline-range-label {
+  top: -30px;
+}
 
 .iris-v3-pull-cell {
   width: 39px;
@@ -821,25 +937,54 @@ app-raider-infographic-v3-canvas {
   font-weight: 800;
 }
 
-[data-state='clean'], [data-state='covered'] { --cell-tone: var(--iris-positive); }
-[data-state='coaching'], [data-state='cooldown'] { --cell-tone: var(--iris-warning); }
-[data-state='confirmed_error'], [data-state='uncovered'] { --cell-tone: var(--iris-danger); }
-[data-state='correct_hold'], [data-state='reserved'], [data-state='not_required'] { --cell-tone: var(--iris-information); }
-[data-state='no_data'], [data-state='unknown'], [data-state='context'] { --cell-tone: var(--iris-neutral); }
+[data-state='clean'],
+[data-state='covered'] {
+  --cell-tone: var(--iris-positive);
+}
 
-.pull-compact .iris-v3-pull-cell { width: 32px; }
-.pull-dense .iris-v3-pull-cell { width: 26px; height: 26px; font-size: 9px; }
+[data-state='coaching'],
+[data-state='cooldown'] {
+  --cell-tone: var(--iris-warning);
+}
+
+[data-state='confirmed_error'],
+[data-state='uncovered'] {
+  --cell-tone: var(--iris-danger);
+}
+
+[data-state='correct_hold'],
+[data-state='reserved'],
+[data-state='not_required'] {
+  --cell-tone: var(--iris-information);
+}
+
+[data-state='no_data'],
+[data-state='unknown'],
+[data-state='context'] {
+  --cell-tone: var(--iris-neutral);
+}
+
+.pull-compact .iris-v3-pull-cell {
+  width: 32px;
+}
+
+.pull-dense .iris-v3-pull-cell {
+  width: 26px;
+  height: 26px;
+  font-size: 9px;
+}
 
 .iris-v3-timeline-legend,
-.iris-v3-occurrence-legend {
+.iris-v3-mechanics-legend {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: end;
   gap: 6px 12px;
 }
 
 .iris-v3-timeline-legend span,
-.iris-v3-occurrence-legend span {
+.iris-v3-mechanics-legend span {
   color: var(--iris-muted);
   font-size: 11px;
   font-weight: 600;
@@ -848,7 +993,7 @@ app-raider-infographic-v3-canvas {
 }
 
 .iris-v3-timeline-legend span::before,
-.iris-v3-occurrence-legend span::before {
+.iris-v3-mechanics-legend span[data-state]::before {
   content: '';
   width: 9px;
   height: 9px;
@@ -856,6 +1001,45 @@ app-raider-infographic-v3-canvas {
   margin-right: 5px;
   background: var(--cell-tone);
   border-radius: 2px;
+}
+
+// §leyenda-duplicada (2026-09-11) — mismo mecanismo que el resto de leyendas de esta página (punto de color +
+// texto), pero con una etiqueta de grupo delante de cada bloque y un separador entre los dos, para que "Pico"
+// y "Defensivo en ese pico" se lean como dos leyendas distintas en una fila, no una repetida.
+.iris-v3-legend-group-label {
+  color: var(--iris-muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.iris-v3-legend-divider {
+  width: 1px;
+  height: 11px;
+  background: var(--iris-line);
+}
+
+.iris-v3-mechanics-legend span[data-kit-state]::before {
+  content: '';
+  width: 9px;
+  height: 9px;
+  display: inline-block;
+  margin-right: 5px;
+  border-radius: 2px;
+}
+
+.iris-v3-mechanics-legend span[data-kit-state='covered']::before {
+  background: var(--iris-positive);
+}
+
+.iris-v3-mechanics-legend span[data-kit-state='available_unused']::before {
+  background: var(--iris-danger);
+}
+
+.iris-v3-mechanics-legend span[data-kit-state='neutral']::before {
+  background: var(--iris-information);
 }
 
 // §Spec sección 11: "estas cards cierran la página izquierda y equilibran
@@ -869,9 +1053,39 @@ app-raider-infographic-v3-canvas {
   padding-top: 7px;
 }
 
-.iris-v3-positive-grid[data-count='1'] { grid-template-columns: minmax(0, 50%); }
-.iris-v3-positive-grid[data-count='2'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.iris-v3-positive-grid[data-count='3'] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.iris-v3-positive-grid[data-count='1'] {
+  grid-template-columns: minmax(0, 50%);
+}
+
+.iris-v3-positive-grid[data-count='2'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.iris-v3-positive-grid[data-count='3'] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+// §defensive-kit-panel (2026-09-11, feedback real: "así el raider puede verificar correctamente su kit y
+// detectar inconsistencias") — reutiliza el chip ya validado de .iris-v3-defensive-chip (icono+nombre+small),
+// solo en su propia sección con más aire, ocupando el hueco real que quedaba bajo Señales Positivas.
+.iris-v3-kit-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 7px;
+}
+
+.iris-v3-kit-grid .iris-v3-defensive-chip {
+  width: 165px;
+}
+
+.iris-v3-kit-grid .iris-v3-defensive-chip.credit-only {
+  opacity: 0.68;
+}
+
+.iris-v3-kit-grid .iris-v3-defensive-chip.credit-only small {
+  color: var(--iris-muted);
+}
 
 .iris-v3-positive-grid article {
   min-width: 0;
@@ -894,10 +1108,31 @@ app-raider-infographic-v3-canvas {
 }
 
 .iris-v3-positive-grid span,
-.iris-v3-positive-grid strong { display: block; }
-.iris-v3-positive-grid span { color: #ced6db; font-size: 11px; font-weight: 800; text-transform: uppercase; }
-.iris-v3-positive-grid strong { margin-top: 2px; color: var(--iris-positive); font-size: 20px; }
-.iris-v3-positive-grid p { max-height: 35px; overflow: hidden; margin: 3px 0 0; color: var(--iris-muted); font-size: 11px; line-height: 1.35; }
+.iris-v3-positive-grid strong {
+  display: block;
+}
+
+.iris-v3-positive-grid span {
+  color: #ced6db;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.iris-v3-positive-grid strong {
+  margin-top: 2px;
+  color: var(--iris-positive);
+  font-size: 20px;
+}
+
+.iris-v3-positive-grid p {
+  max-height: 35px;
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: var(--iris-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
 
 .iris-v3-page-footer {
   min-height: 52px;
@@ -907,293 +1142,36 @@ app-raider-infographic-v3-canvas {
   gap: 22px;
   margin-top: auto;
   padding-top: 10px;
-  border-top: 1px solid var(--iris-line);
+  border-top: var(--iris-hairline);
 }
 
-.iris-v3-page-footer > div { gap: 8px; }
-.iris-v3-page-footer img { width: 35px; height: 35px; }
-.iris-v3-page-footer b { color: var(--iris-gold); font-family: Georgia, 'Times New Roman', serif; font-size: 19px; }
-.iris-v3-page-footer span { color: var(--iris-muted); font-size: 8px; font-weight: 800; letter-spacing: 0.16em; }
-.iris-v3-page-footer p { max-width: 68%; margin: 0; color: var(--iris-muted); font-size: 9px; line-height: 1.4; text-align: right; }
-
-.iris-v3-page-title {
-  min-height: 92px;
-  justify-content: flex-start;
-}
-
-.iris-v3-title-mark {
-  width: 62px;
-  height: 62px;
-  display: grid;
-  place-items: center;
-}
-
-.iris-v3-title-mark svg {
-  width: 52px;
-  fill: none;
-  stroke: var(--class-accent);
-  stroke-width: 1.6;
-}
-
-.iris-v3-page-title h2 {
-  margin: 3px 0 0;
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 34px;
-  font-weight: 500;
-}
-
-.iris-v3-page-title > small {
-  margin-left: auto;
-  color: var(--iris-muted);
-  font-size: 12px;
-}
-
-.iris-v3-defensive-strip article { min-height: 118px; padding-top: 16px; }
-.iris-v3-defensive-strip strong { font-size: 30px; }
-
-.iris-v3-mechanic-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.iris-v3-page-footer>div {
   gap: 8px;
-  padding-top: 8px;
 }
 
-.iris-v3-mechanic-card {
-  min-width: 0;
-  overflow: hidden;
-  background: var(--iris-card);
-  border: 1px solid var(--iris-line);
-  border-radius: 9px;
+.iris-v3-page-footer img {
+  width: 35px;
+  height: 35px;
 }
 
-.iris-v3-mechanic-card > header {
-  // §"a la derecha del título... y a la izquierda de 1/1 100%, un breve
-  // texto de qué es la habilidad y debajo cómo resolverla" (feedback real,
-  // 2026-09-03): 4ª columna entre identidad y ratio, ancha solo si hay
-  // texto — si no hay description/resolution el hueco queda vacío, no se
-  // fabrica contenido.
-  min-height: 88px;
-  display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
-  padding: 8px 9px;
-  border-bottom: 1px solid var(--iris-line);
+.iris-v3-page-footer b {
+  color: var(--iris-gold);
+  font-family: var(--iris-serif);
+  font-size: 19px;
 }
 
-.iris-v3-mechanic-icon { width: 56px; height: 56px; }
-.iris-v3-mechanic-card h3 { overflow: hidden; margin: 0; font-family: Georgia, 'Times New Roman', serif; font-size: 19px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.iris-v3-mechanic-identity > span,
-.iris-v3-mechanic-identity > small { display: block; overflow: hidden; margin-top: 3px; color: var(--iris-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.iris-v3-mechanic-card header > strong { color: #eef2f5; font-family: Georgia, 'Times New Roman', serif; font-size: 23px; font-weight: 500; text-align: right; }
-.iris-v3-mechanic-card header > strong small { display: block; color: var(--iris-positive); font-family: Arial, Helvetica, sans-serif; font-size: 12px; }
-
-.iris-v3-mechanic-note {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-}
-
-.iris-v3-mechanic-note p {
-  // §"la descripción... es demasiado pequeña para el espacio que tiene (aún
-  // puede crecer más hacia abajo)" (feedback real, 2026-09-03).
-  display: -webkit-box;
-  overflow: hidden;
-  margin: 0;
-  font-size: 10.5px;
-  line-height: 1.3;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-}
-
-.iris-v3-mechanic-note p.what { color: var(--iris-muted); }
-.iris-v3-mechanic-note p.how { color: var(--iris-gold); }
-
-.iris-v3-occurrence-groups {
-  min-height: 62px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: start;
-  gap: 7px;
-  overflow: visible;
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--iris-line);
-}
-
-.iris-v3-occurrence-groups > div { flex: 0 0 auto; }
-.iris-v3-occurrence-groups > div > span { display: block; margin-bottom: 3px; color: var(--iris-muted); font-size: 9px; text-transform: uppercase; }
-.iris-v3-occurrence-groups > div > div { display: flex; gap: 2px; }
-.iris-v3-occurrence-groups i { width: 17px; height: 17px; display: block; background: var(--cell-tone); border: 1px solid color-mix(in srgb, var(--cell-tone) 70%, #fff); border-radius: 2px; }
-
-.iris-v3-defensive-table-head,
-.iris-v3-defensive-table-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.8fr) repeat(5, minmax(34px, 0.55fr));
-  align-items: center;
-}
-
-.iris-v3-defensive-table-head {
-  min-height: 29px;
+.iris-v3-page-footer span {
   color: var(--iris-muted);
-  background: rgb(2 10 17 / 52%);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.iris-v3-page-footer p {
+  max-width: 68%;
+  margin: 0;
+  color: var(--iris-muted);
   font-size: 9px;
-  text-align: center;
+  line-height: 1.4;
+  text-align: right;
 }
-
-.iris-v3-defensive-table-head span:first-child { padding-left: 8px; text-align: left; }
-.iris-v3-defensive-table-row { min-height: 30px; border-top: 1px solid rgb(137 170 192 / 12%); }
-.iris-v3-defensive-table-row > span { position: relative; min-width: 0; display: flex; align-items: center; gap: 5px; padding-left: 7px; }
-.iris-v3-defensive-table-row img,
-.iris-v3-defensive-table-row svg { width: 25px; height: 25px; flex: 0 0 auto; border-radius: 3px; }
-.iris-v3-defensive-table-row img { position: absolute; left: 7px; }
-.iris-v3-defensive-table-row svg { fill: none; stroke: var(--iris-warning); stroke-width: 1.5; }
-// Nombre a una línea, ancho controlado, nunca hace crecer la card — más
-// robusto aún tras el saneo de nombres corruptos (safeSpellName).
-.iris-v3-defensive-table-row b { overflow: hidden; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.iris-v3-defensive-table-row strong { color: var(--cell-tone); font-size: 10px; text-align: center; }
-.iris-v3-mechanic-empty { margin: 0; padding: 10px; color: var(--iris-muted); font-size: 9px; }
-
-// §"el literal de 'Buena ejecución' podemos quitarlo... en su lugar un
-// texto muy breve de por qué esa mecánica es relevante" (feedback real,
-// 2026-09-03): ya no es un veredicto (eso lo dicen los colores de la
-// tabla) — es la razón de inclusión, así que no lleva tono ni punto de color.
-.iris-v3-mechanic-relevance {
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  margin: 0;
-  padding: 0 10px;
-  border-top: 1px solid var(--iris-line);
-  color: var(--iris-muted);
-  font-size: 10px;
-}
-
-.defensive-compact .iris-v3-defensive-table-row img,
-.defensive-compact .iris-v3-defensive-table-row svg { width: 21px; height: 21px; }
-
-// §"no quiero que se genere una nueva página, si no que se pongan en lugar
-// de 2 columnas, 3 columnas... para hacer hueco podemos reducir
-// horizontalmente la tabla de defensivos" (feedback real, 2026-09-03).
-.mechanic-three-col .iris-v3-mechanic-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.mechanic-three-col .iris-v3-mechanic-card > header {
-  min-height: 68px;
-  grid-template-columns: 40px minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 6px;
-  padding: 6px 7px;
-}
-.mechanic-three-col .iris-v3-mechanic-icon { width: 40px; height: 40px; }
-.mechanic-three-col .iris-v3-mechanic-card h3 { font-size: 15px; }
-.mechanic-three-col .iris-v3-mechanic-card header > strong { font-size: 18px; }
-.mechanic-three-col .iris-v3-mechanic-note p { font-size: 8px; }
-.mechanic-three-col .iris-v3-occurrence-groups { min-height: 50px; padding: 7px 8px; }
-.mechanic-three-col .iris-v3-occurrence-groups i { width: 14px; height: 14px; }
-.mechanic-three-col .iris-v3-defensive-table-head,
-.mechanic-three-col .iris-v3-defensive-table-row { grid-template-columns: minmax(0, 1.3fr) repeat(5, minmax(22px, 0.5fr)); }
-.mechanic-three-col .iris-v3-defensive-table-row img,
-.mechanic-three-col .iris-v3-defensive-table-row svg { width: 17px; height: 17px; }
-.mechanic-three-col .iris-v3-defensive-table-head span,
-.mechanic-three-col .iris-v3-defensive-table-row b,
-.mechanic-three-col .iris-v3-defensive-table-row strong { font-size: 8px; }
-
-.iris-v3-lower-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  min-height: 360px;
-  align-content: start;
-}
-
-.iris-v3-death-card,
-.iris-v3-pattern-card {
-  /* --tone: .iris-v3-death-card lo recibe de [data-tone] (death.tone, línea
-     ~214); .iris-v3-pattern-card no tiene verdict propio y usa el neutral
-     de abajo. No fijar aquí un valor común: con la misma especificidad que
-     [data-tone], la regla declarada más tarde en el archivo ganaba siempre
-     y dejaba las death cards en gris pase lo que pase el veredicto real. */
-  // §Spec sección 16: "Altura 112-132 px por card para que la sección
-  // tenga peso real" — antes 70 px dejaba estas cards como líneas de
-  // resumen en vez de piezas de coaching.
-  min-height: 118px;
-  margin-top: 7px;
-  padding: 13px;
-  background: color-mix(in srgb, var(--tone) 6%, var(--iris-card));
-  border: 1px solid color-mix(in srgb, var(--tone) 35%, var(--iris-line));
-  border-radius: 7px;
-}
-
-.iris-v3-pattern-card {
-  --tone: var(--iris-neutral);
-}
-
-.iris-v3-death-card header { display: flex; justify-content: space-between; gap: 8px; }
-.iris-v3-death-card header strong { overflow: hidden; font-family: Georgia, 'Times New Roman', serif; font-size: 15px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.iris-v3-death-card header span { color: var(--tone); font-size: 10px; font-weight: 800; text-transform: uppercase; }
-.iris-v3-death-card > small { display: block; margin-top: 2px; color: var(--iris-muted); font-size: 10px; }
-.iris-v3-death-card p { margin: 4px 0 0; color: #bdc6cd; font-size: 11px; line-height: 1.35; }
-.iris-v3-death-card p.evidence { color: var(--iris-muted); }
-
-.iris-v3-death-body { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
-.iris-v3-death-text { min-width: 0; flex: 1; }
-
-// §Spec sección 16: "Valor de daño en serif 26-30 px, color danger" — antes
-// era el mismo número enterrado dentro de una frase de 10 px como el resto
-// del texto secundario.
-.iris-v3-death-damage { flex: 0 0 auto; text-align: right; }
-.iris-v3-death-damage strong { display: block; color: var(--iris-danger); font-family: Georgia, 'Times New Roman', serif; font-size: 27px; font-weight: 500; line-height: 1; }
-.iris-v3-death-damage span { display: block; margin-top: 2px; color: var(--iris-muted); font-size: 9px; text-transform: uppercase; }
-
-.iris-v3-death-defensives { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
-.iris-v3-death-defensives .iris-v3-defensive-chip { width: auto; max-width: 150px; }
-
-// §"que ocupen lo mismo que las cards que tiene a su izquierda para que
-// esté visualmente equilibrado" (feedback real, 2026-09-03): mismo
-// min-height que .iris-v3-death-card (118px) en vez de quedar más bajo.
-.iris-v3-pattern-card { display: flex; align-items: flex-start; gap: 10px; }
-.iris-v3-pattern-icon { width: 54px; height: 54px; flex: 0 0 auto; }
-.iris-v3-pattern-card strong,
-.iris-v3-pattern-card span { display: block; }
-.iris-v3-pattern-card strong { font-family: Georgia, 'Times New Roman', serif; font-size: 15px; font-weight: 500; }
-.iris-v3-pattern-card span,
-.iris-v3-pattern-card p { margin: 2px 0 0; color: var(--iris-muted); font-size: 10px; }
-.iris-v3-pattern-note {
-  display: -webkit-box;
-  overflow: hidden;
-  line-height: 1.3;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.iris-v3-pattern-note.what { color: #c9d3da; }
-.iris-v3-pattern-note.how { color: var(--iris-gold); }
-
-.iris-v3-evolution-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 6px;
-  padding-top: 6px;
-}
-
-.iris-v3-evolution-grid article {
-  // §Spec sección 17: "220-260 px incluido header; no comprimir a una tira
-  // de 120 px" — es el cierre analítico de la página, antes del footer.
-  min-width: 0;
-  min-height: 168px;
-  padding: 14px;
-  background: var(--iris-card);
-  border: 1px solid var(--iris-line);
-  border-radius: 7px;
-}
-
-.iris-v3-evolution-grid span,
-.iris-v3-evolution-grid strong,
-.iris-v3-evolution-grid small,
-.iris-v3-evolution-grid b { display: block; }
-.iris-v3-evolution-grid span { min-height: 30px; color: var(--iris-muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
-.iris-v3-evolution-grid strong { margin: 4px 0; font-family: Georgia, 'Times New Roman', serif; font-size: 29px; font-weight: 500; }
-.iris-v3-evolution-grid small { color: var(--iris-muted); font-size: 11px; }
-.iris-v3-evolution-grid b { margin-top: 5px; color: var(--iris-neutral); font-size: 14px; font-weight: 600; }
-.iris-v3-evolution-grid [data-direction='improved'] b { color: var(--iris-positive); }
-.iris-v3-evolution-grid [data-direction='worsened'] b { color: var(--iris-danger); }
-.iris-v3-evolution-grid p { max-height: 28px; overflow: hidden; margin: 6px 0 0; color: #7f8d98; font-size: 10px; line-height: 1.3; }
-

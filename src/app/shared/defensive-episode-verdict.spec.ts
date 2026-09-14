@@ -224,6 +224,36 @@ describe('reconstructCausalAvailability', () => {
     const result = reconstructCausalAvailability(timing(), [500, 500, -100], episodes, 1);
     expect(result.classification).toBe('unavailable_legitimate');
   });
+
+  it('§causal-fix without allDamageTimestampsMs behaves exactly as before (Mythic sustained-damage case unaffected)', () => {
+    const result = reconstructCausalAvailability(timing(), [5_000], episodes, 1);
+    expect(result.classification).toBe('uncertain');
+  });
+
+  it('§causal-fix real case (Gusmï, report VNvX3MqWxZ9jhT6d, pull 20): a reactive (after_damage) cast that predates any DETECTED episode, but lands right after a REAL raw damage hit, becomes unavailable_legitimate instead of uncertain', () => {
+    const reactiveTiming = timing({ timingRelation: 'after_damage', effectiveDurationMs: 3000 });
+    // 8_000ms falls outside episode #0's own [startMs, endMs+afterDamageResponseWindowMs] = [0, 5000]
+    // fallback window, so the existing episode-based check legitimately fails to explain it — but a
+    // real hit at 7_800ms did happen (below the pressure-window threshold, so detectDamageWindows
+    // never grouped it into an episode).
+    const withoutRawDamage = reconstructCausalAvailability(reactiveTiming, [8_000], episodes, 1);
+    expect(withoutRawDamage.classification).toBe('uncertain');
+
+    const withRawDamage = reconstructCausalAvailability(reactiveTiming, [8_000], episodes, 1, [7_800]);
+    expect(withRawDamage.classification).toBe('unavailable_legitimate');
+  });
+
+  it('§causal-fix a proactive (before_or_during) cast just ahead of a real but sub-threshold hit also resolves to unavailable_legitimate', () => {
+    const proactiveTiming = timing({ timingRelation: 'before_or_during', effectiveDurationMs: 8000 });
+    const withRawDamage = reconstructCausalAvailability(proactiveTiming, [5_000], episodes, 1, [5_400]);
+    expect(withRawDamage.classification).toBe('unavailable_legitimate');
+  });
+
+  it('§causal-fix raw damage evidence that is nowhere near the cast still degrades to uncertain — never fabricates coverage', () => {
+    const reactiveTiming = timing({ timingRelation: 'after_damage', effectiveDurationMs: 3000 });
+    const result = reconstructCausalAvailability(reactiveTiming, [8_000], episodes, 1, [500_000]);
+    expect(result.classification).toBe('uncertain');
+  });
 });
 
 describe('resolveEpisodeVerdictWithCausalAvailability', () => {

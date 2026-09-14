@@ -1681,6 +1681,30 @@ app-night-player-infographic {
     font-family: Georgia, 'Times New Roman', serif;
     font-size: 22px;
     font-weight: 500;
+    // §detailed-kpi-explainer — "Ver en WCL" reutiliza esta píldora como <a>, no como <div>: sin esto
+    // hereda el subrayado/azul de enlace por defecto del navegador.
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .iris-player-pressure-penalty:hover {
+    filter: brightness(1.15);
+  }
+
+  // §detailed-kpi-explainer — critical-windows invierte el tinte por defecto (rojo = penalización) de
+  // .iris-player-pressure-list: un pico cubierto es una buena noticia, se marca en verde, no en rojo. kit-
+  // breakdown atenúa (nunca oculta) los defensivos credit_only — siguen siendo evidencia real, solo no cuentan
+  // en contra.
+  .critical-windows article.covered {
+    background: linear-gradient(90deg, rgb(120 207 152 / 10%), rgb(7 6 12 / 55%) 40%);
+    border-color: rgb(120 207 152 / 20%);
+  }
+  .critical-windows article.covered .iris-player-pressure-penalty {
+    color: #78cf98;
+    background: rgb(120 207 152 / 12%);
+    border-color: rgb(120 207 152 / 25%);
+  }
+  .kit-breakdown article.credit-only {
+    opacity: 0.72;
   }
 
   .iris-player-defensive-summary {
@@ -1688,7 +1712,8 @@ app-night-player-infographic {
     grid-template-columns: repeat(4, 1fr);
     gap: 13px;
   }
-  .iris-player-defensive-summary.v2 {
+  .iris-player-defensive-summary.v2,
+  .iris-player-defensive-summary.kpi-explainer {
     grid-template-columns: repeat(3, 1fr);
   }
   .iris-player-defensive-summary article {

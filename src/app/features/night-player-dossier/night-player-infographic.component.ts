@@ -31,6 +31,7 @@ import {
   type RaiderPullTimelineCell,
 } from '../../core/raider-evidence-projection';
 import { buildRaiderInfographicViewModel } from '../../core/raider-infographic-view-model';
+import { buildDefensiveKpiExplainer, type DefensiveKpiExplainer } from './defensive-kpi-explainer';
 import { CombatEvaluationFeatureFlagsService } from '../../core/combat-evaluation-feature-flags.service';
 import { DefensiveFeatureFlagsService } from '../../core/defensive-feature-flags.service';
 import { EdgeFunctionsService } from '../../core/edge-functions.service';
@@ -163,6 +164,10 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
   readonly fitToScreen = signal(true);
   readonly exportError = signal<string | null>(null);
   readonly iconUrls = signal<Record<number, string>>({});
+  /** §mechanic-name-wowhead-fallback (2026-09-11) — nombre real por spellId, solo de Wowhead (ver
+   * loadSpellIcons). Nunca se consulta directamente desde la plantilla: v3ViewModelResolved es quien decide
+   * cuándo hace falta (solo si mechanicName sigue siendo el fallback `#<id>` tras la resolución de BD). */
+  readonly mechanicNameOverrides = signal<Record<number, string>>({});
 
   readonly classAccent = computed(
     () =>
@@ -207,10 +212,44 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
       spellNameById: new Map(this.summary().defensiveSummary.spells.map((spell) => [spell.spellId, spell.spellName])),
     }),
   );
+  // §detailed-kpi-explainer (2026-09-10) — sustituye a la sección "04 · GESTIÓN DE DEFENSIVOS" legacy
+  // (defensiveManagementV2/sensor local): explica Reacción/Response/Uso con la MISMA evidencia canónica ya
+  // publicada (episode.applicableCandidates/decisiveSpellIds/coveredBySpellId), nunca reinterpretada — cada
+  // fila es verificable contra WCL con el fightId real del pull.
+  readonly defensiveKpiExplainer = computed<DefensiveKpiExplainer>(() => {
+    const fightIdByPullId = new Map(this.summary().pulls.map((pull) => [pull.pullId, pull.fightId]));
+    const spellNameById = new Map(
+      this.summary().defensiveSummary.spells.map((spell) => [spell.spellId, spell.spellName]),
+    );
+    return buildDefensiveKpiExplainer(
+      this.summary().canonicalDefensive,
+      fightIdByPullId,
+      this.summary().reportCode,
+      spellNameById,
+    );
+  });
   readonly useV3Layout = computed(() => this.combatFlags.enabled('playerInfographicV3'));
   readonly v3ViewModel = computed(() =>
     buildRaiderInfographicViewModel(this.summary(), this.evidenceProjectionV3()),
   );
+  // §mechanic-name-wowhead-fallback (2026-09-11, feedback real: "aunque salen algunas habilidades, hay otras
+  // que NO salen") — parche puramente cosmético SOBRE el view-model ya construido, nunca dentro de
+  // buildRaiderInfographicViewModel (esa función es pura/sin red, ver su spec): solo toca mechanicName cuando
+  // sigue siendo el fallback `#<id>` (BD sin match, ver mechanic-notes.ts) Y Wowhead sí trajo un nombre real
+  // para ese mismo spellId. Nunca pisa un nombre ya resuelto por la BD (esa sigue siendo la fuente primaria).
+  readonly v3ViewModelResolved = computed(() => {
+    const view = this.v3ViewModel();
+    const overrides = this.mechanicNameOverrides();
+    if (!Object.keys(overrides).length) return view;
+    let changed = false;
+    const mechanics = view.mechanics.map((mechanic) => {
+      const override = mechanic.mechanicName.startsWith('#') ? overrides[mechanic.mechanicId] : undefined;
+      if (!override) return mechanic;
+      changed = true;
+      return { ...mechanic, mechanicName: override };
+    });
+    return changed ? { ...view, mechanics } : view;
+  });
   readonly evidenceQualityTone = computed(() => {
     const quality = this.evidenceProjection().quality;
     return quality === 'high' ? 'success' : quality === 'partial' ? 'warning' : 'neutral';
@@ -1123,24 +1162,35 @@ export class NightPlayerInfographicComponent implements OnInit, AfterViewInit, O
       for (const spellId of episode.decisiveSpellIds) ids.add(spellId);
       if (episode.coveredBySpellId != null) ids.add(episode.coveredBySpellId);
     }
+    // §defensive-kit-panel (2026-09-11) — un spell del kit real puede no haber sido nunca
+    // decisivo/usado/cobertura (p. ej. jamás tuvo ocasión esta noche) y aun así se muestra en el
+    // panel de kit; sin esto se quedaría sin icono.
+    for (const spell of this.summary().canonicalDefensive.kit) ids.add(spell.spellId);
 
-    const entries = await Promise.all(
-      [...ids].map(async (spellId): Promise<[number, string] | null> => {
+    // §mechanic-name-wowhead-fallback (2026-09-11, feedback real: "hay otras que NO salen... por lo general en
+    // wowhead tienes todas las habilidades... solo hay que matchear el ID") — este fetch YA se hacía por cada
+    // spellId solo para el icono; el mismo tooltip de Wowhead trae también el nombre real (verificado en real:
+    // GET nether.wowhead.com/tooltip/spell/1308330 → {"name":"Gravebound",...}), así que capturarlo no cuesta
+    // una sola llamada de red extra. Nunca sustituye al nombre ya resuelto por la BD (pull_mechanic_events/
+    // boss_mechanics_candidates, ver mechanic-notes.ts) — es el ÚLTIMO fallback, solo para el `#<id>` que
+    // ninguna de esas dos fuentes cubrió (ver v3ViewModelResolved más abajo).
+    const iconEntries: [number, string][] = [];
+    const nameEntries: [number, string][] = [];
+    await Promise.all(
+      [...ids].map(async (spellId) => {
         try {
           const response = await fetch(`https://nether.wowhead.com/tooltip/spell/${spellId}`);
-          if (!response.ok) return null;
-          const payload = (await response.json()) as { icon?: string };
-          return payload.icon
-            ? [spellId, `https://wow.zamimg.com/images/wow/icons/large/${payload.icon}.jpg`]
-            : null;
+          if (!response.ok) return;
+          const payload = (await response.json()) as { icon?: string; name?: string };
+          if (payload.icon) iconEntries.push([spellId, `https://wow.zamimg.com/images/wow/icons/large/${payload.icon}.jpg`]);
+          if (payload.name) nameEntries.push([spellId, payload.name]);
         } catch {
-          return null;
+          // El fallback visual (SVG/`#<id>`) mantiene la infografía exportable sin este dato.
         }
       }),
     );
-    this.iconUrls.set(
-      Object.fromEntries(entries.filter((entry): entry is [number, string] => entry != null)),
-    );
+    this.iconUrls.set(Object.fromEntries(iconEntries));
+    this.mechanicNameOverrides.set(Object.fromEntries(nameEntries));
     queueMicrotask(() => this.updateSheetSize());
   }
 

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCanonicalDefensiveSummary,
+  buildGenericUsageKpi,
   buildManagementKpi,
   closedCanonicalDefensiveSummary,
   type CanonicalDefensiveEpisodeFact,
   type CanonicalDefensiveGeneration,
+  type EffectiveKitEntry,
   type EpisodeEvaluationDbRow,
+  type PullDefensiveCastsRow,
 } from './canonical-defensive-summary.service';
 import type { PersistedDefensiveEpisode } from '../../../supabase/functions/_shared/defensive-episode-persistence';
 import type { ResponseVerdict } from '../../../supabase/functions/_shared/defensive-episode-verdict';
@@ -163,7 +166,7 @@ describe('buildManagementKpi (§67-69)', () => {
   it('sin ninguna asignación de plan: status no_plan, score null', () => {
     const episodes: CanonicalDefensiveEpisodeFact[] = [];
     const result = buildManagementKpi(episodes, []);
-    expect(result).toEqual({ status: 'no_plan', score: null, fulfilled: 0, evaluable: 0 });
+    expect(result).toEqual({ status: 'no_plan', score: null, fulfilled: 0, evaluable: 0, mode: 'plan' });
   });
 
   it('3 covered + 1 missed de 4 asignaciones → 75%, sin bonus por encima de 100', () => {
@@ -172,7 +175,7 @@ describe('buildManagementKpi (§67-69)', () => {
     );
     episodes.push(episodeFact({ planAssignmentId: 'd', planVerdict: 'missed' }));
     const result = buildManagementKpi(episodes, []);
-    expect(result).toEqual({ status: 'available', score: 75, fulfilled: 3, evaluable: 4 });
+    expect(result).toEqual({ status: 'available', score: 75, fulfilled: 3, evaluable: 4, mode: 'plan' });
   });
 
   it('una assignment duplicada con el mismo veredicto no se cuenta dos veces', () => {
@@ -181,15 +184,104 @@ describe('buildManagementKpi (§67-69)', () => {
       episodeFact({ planAssignmentId: 'a', planVerdict: 'covered' }),
     ];
     const result = buildManagementKpi(episodes, []);
-    expect(result).toEqual({ status: 'available', score: 100, fulfilled: 1, evaluable: 1 });
+    expect(result).toEqual({ status: 'available', score: 100, fulfilled: 1, evaluable: 1, mode: 'plan' });
   });
 
   it('planAssignmentId sin planVerdict no se asume covered ni missed — se excluye y se registra', () => {
     const issues: string[] = [];
     const episodes = [episodeFact({ planAssignmentId: 'a', planVerdict: null })];
     const result = buildManagementKpi(episodes, issues);
-    expect(result).toEqual({ status: 'no_plan', score: null, fulfilled: 0, evaluable: 0 });
+    expect(result).toEqual({ status: 'no_plan', score: null, fulfilled: 0, evaluable: 0, mode: 'plan' });
     expect(issues).toHaveLength(1);
+  });
+});
+
+describe('buildGenericUsageKpi (§generic-usage-fallback, hallazgo real: Txerokee — 30 Astral Shift reales, solo un puñado de episodios evaluables)', () => {
+  function kitEntry(overrides: Partial<EffectiveKitEntry> = {}): EffectiveKitEntry {
+    return {
+      spellId: 108271,
+      isDefensiveKitMember: true,
+      opportunityMode: 'normal',
+      effectiveCooldownMs: 120_000,
+      charges: 1,
+      rechargeMs: null,
+      ...overrides,
+    };
+  }
+
+  function castRow(pullId: string, spellId: number, timestampsMs: number[]): PullDefensiveCastsRow {
+    return { pull_id: pullId, defensive_casts: [{ spellId, timestampsMs }] };
+  }
+
+  it('un único defensivo de cooldown largo (Astral Shift, 120s) — caso real Txerokee: 29 casts reales contra ~65min de combate ≈ 90% de eficiencia', () => {
+    const durationMs = 5 * 60_000; // 5 min por pull
+    const pullIds = Array.from({ length: 13 }, (_, i) => `p${i}`);
+    const safeRows: EpisodeEvaluationDbRow[] = pullIds.map((id) => row(id, [], { effective_kit: [kitEntry()] }));
+    const pullDurations = new Map(pullIds.map((id) => [id, durationMs]));
+    // 29 casts repartidos en las primeras pulls — el reparto exacto no importa, solo el total.
+    const castRows: PullDefensiveCastsRow[] = [castRow('p0', 108271, [0, 130_000]), castRow('p1', 108271, Array.from({ length: 27 }, (_, i) => i * 100_000))];
+
+    const result = buildGenericUsageKpi(safeRows, pullDurations, castRows);
+
+    // Máximo teórico: 13 pulls × (1 carga inicial + floor(300000/120000)=2) = 13 × 3 = 39.
+    expect(result.evaluable).toBe(39);
+    expect(result.fulfilled).toBe(29);
+    expect(result.status).toBe('available');
+    expect(result.mode).toBe('generic_usage');
+    expect(result.score).toBeCloseTo((29 / 39) * 100, 1);
+  });
+
+  it('kit con varios defensivos core (ej. DK) suma cupos — usar solo 1 de 2 baja el score proporcionalmente, no lo colapsa a la mitad de un promedio', () => {
+    const durationMs = 5 * 60_000;
+    const kit: EffectiveKitEntry[] = [
+      kitEntry({ spellId: 1, effectiveCooldownMs: 60_000 }), // cabe 1 + floor(300000/60000)=5 → 6
+      kitEntry({ spellId: 2, effectiveCooldownMs: 300_000 }), // cabe 1 + floor(300000/300000)=1 → 2
+    ];
+    const safeRows: EpisodeEvaluationDbRow[] = [row('p0', [], { effective_kit: kit })];
+    const pullDurations = new Map([['p0', durationMs]]);
+    // Solo usa el spell 1, y lo usa al máximo (6 veces); el spell 2 no lo toca nunca.
+    const castRows: PullDefensiveCastsRow[] = [castRow('p0', 1, [0, 60_000, 120_000, 180_000, 240_000, 300_000])];
+
+    const result = buildGenericUsageKpi(safeRows, pullDurations, castRows);
+
+    expect(result.evaluable).toBe(8); // 6 + 2, sumados — no promediados
+    expect(result.fulfilled).toBe(6);
+    expect(result.score).toBeCloseTo((6 / 8) * 100, 1);
+  });
+
+  it('cargas múltiples (ej. Survival Instincts 2 cargas) se tienen en cuenta en el máximo teórico', () => {
+    const durationMs = 3 * 60_000;
+    const kit: EffectiveKitEntry[] = [kitEntry({ spellId: 61336, effectiveCooldownMs: 180_000, charges: 2, rechargeMs: 180_000 })];
+    const safeRows: EpisodeEvaluationDbRow[] = [row('p0', [], { effective_kit: kit })];
+    const pullDurations = new Map([['p0', durationMs]]);
+    const result = buildGenericUsageKpi(safeRows, pullDurations, []);
+    // 2 cargas iniciales + floor(180000/180000)=1 recarga = 3.
+    expect(result.evaluable).toBe(3);
+  });
+
+  it('sin ningún defensivo core en el kit (todo credit_only/none) → insufficient_evidence, nunca 0% fabricado', () => {
+    const kit: EffectiveKitEntry[] = [kitEntry({ opportunityMode: 'credit_only' })];
+    const safeRows: EpisodeEvaluationDbRow[] = [row('p0', [], { effective_kit: kit })];
+    const result = buildGenericUsageKpi(safeRows, new Map([['p0', 300_000]]), []);
+    expect(result.status).toBe('insufficient_evidence');
+    expect(result.score).toBeNull();
+  });
+
+  it('un cooldown sin cadencia conocida (rechargeMs y effectiveCooldownMs ambos null) se excluye del máximo en vez de inventar uno', () => {
+    const kit: EffectiveKitEntry[] = [kitEntry({ effectiveCooldownMs: null, rechargeMs: null })];
+    const safeRows: EpisodeEvaluationDbRow[] = [row('p0', [], { effective_kit: kit })];
+    const result = buildGenericUsageKpi(safeRows, new Map([['p0', 300_000]]), []);
+    expect(result.status).toBe('insufficient_evidence');
+  });
+
+  it('el score nunca supera 100 aunque un proc real dé más casts de los teóricamente posibles', () => {
+    const durationMs = 60_000;
+    const kit: EffectiveKitEntry[] = [kitEntry({ effectiveCooldownMs: 120_000 })]; // máximo teórico: 1
+    const safeRows: EpisodeEvaluationDbRow[] = [row('p0', [], { effective_kit: kit })];
+    const castRows: PullDefensiveCastsRow[] = [castRow('p0', 108271, [0, 1000, 2000])]; // 3 casts reales, imposible sin proc
+    const result = buildGenericUsageKpi(safeRows, new Map([['p0', durationMs]]), castRows);
+    expect(result.fulfilled).toBe(3); // el conteo real no se recorta
+    expect(result.score).toBe(100); // pero el % mostrado sí se limita
   });
 });
 
@@ -272,6 +364,31 @@ describe('buildCanonicalDefensiveSummary · corrupción de datos (§69)', () => 
   });
 });
 
+describe('buildCanonicalDefensiveSummary · management cae a eficiencia de cooldown genérica sin plan (§generic-usage-fallback)', () => {
+  it('sin ningún planAssignmentId: management usa el fallback genérico en vez de quedarse en no_plan vacío', () => {
+    const kit: EffectiveKitEntry[] = [
+      { spellId: 108271, isDefensiveKitMember: true, opportunityMode: 'normal', effectiveCooldownMs: 120_000, charges: 1, rechargeMs: null },
+    ];
+    const rows = [row('p1', [persistedEpisode({ responseVerdict: 'covered_verified' })], { effective_kit: kit })];
+    const pullDurations = new Map([['p1', 300_000]]);
+    const castRows: PullDefensiveCastsRow[] = [{ pull_id: 'p1', defensive_casts: [{ spellId: 108271, timestampsMs: [0, 130_000] }] }];
+
+    const result = buildCanonicalDefensiveSummary(GENERATION, ['p1'], rows, 'Raider', pullDurations, castRows);
+
+    expect(result.management.mode).toBe('generic_usage');
+    expect(result.management.status).toBe('available');
+    expect(result.management.evaluable).toBe(3); // 1 carga + floor(300000/120000)=2
+    expect(result.management.fulfilled).toBe(2);
+  });
+
+  it('sin pullDurations/castRows (llamada legacy) el fallback degrada a insufficient_evidence, no revienta', () => {
+    const rows = [row('p1', [persistedEpisode({ responseVerdict: 'covered_verified' })])];
+    const result = buildCanonicalDefensiveSummary(GENERATION, ['p1'], rows, 'Raider');
+    expect(result.management.mode).toBe('generic_usage');
+    expect(result.management.status).toBe('insufficient_evidence');
+  });
+});
+
 describe('closedCanonicalDefensiveSummary', () => {
   it('fuerza los tres KPI a null/insufficient_evidence y episodes vacío', () => {
     const result = closedCanonicalDefensiveSummary('unavailable', ['sin generación'], null);
@@ -291,6 +408,7 @@ function episodeFact(overrides: Partial<CanonicalDefensiveEpisodeFact> & { respo
     startMs: 19_000,
     peakMs: 20_000,
     endMs: 21_000,
+    peakValue: null,
     dominantAbilityGameId: 5000,
     usageEngaged: false,
     usageEvaluable: true,

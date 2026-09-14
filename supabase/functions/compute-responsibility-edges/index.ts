@@ -29,6 +29,27 @@ function rowToEdge(row: Record<string, unknown>): MechanicResponsibilityEdgeCont
   };
 }
 
+function formatCaughtError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    const parts = [
+      typeof record['message'] === 'string' ? record['message'] : null,
+      typeof record['details'] === 'string' ? `details=${record['details']}` : null,
+      typeof record['hint'] === 'string' ? `hint=${record['hint']}` : null,
+      typeof record['code'] === 'string' ? `code=${record['code']}` : null,
+    ].filter((value): value is string => Boolean(value));
+    if (parts.length) return parts.join(' | ');
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return '[unserializable error object]';
+    }
+  }
+  return String(error);
+}
+
 Deno.serve(async (req: Request) => {
   const preflight = handlePreflight(req);
   if (preflight) return preflight;
@@ -105,11 +126,17 @@ Deno.serve(async (req: Request) => {
       });
     });
 
-    // Leer roster (para role-based responsibility)
+    // Leer roster (para role-based responsibility) — §bug real (2026-09-11, feedback real: "No se han
+    // actualizado las infografías: ... Could not find the table 'public.players' in the schema cache"): esta
+    // tabla nunca existió en el esquema real (sin CREATE TABLE en ninguna migración) — el nombre correcto del
+    // roster real es wowaudit_roster (ver wowaudit-roster.service.ts, night-brief-context.ts,
+    // generate-defensive-plan/index.ts, todas usan esta misma tabla). Nunca lleva .eq('active', true): la
+    // sincronización (sync-wowaudit-roster) ya filtra a solo personajes con status==='tracking' antes de
+    // escribir la fila, así que la tabla completa YA es el roster activo — un filtro adicional aquí solo
+    // devolvería 0 filas si 'active' existiera como columna, que no existe.
     const { data: rosterData, error: rosterErr } = await client
-      .from('players')
-      .select('name, role')
-      .eq('active', true);
+      .from('wowaudit_roster')
+      .select('name, role');
 
     if (rosterErr) throw rosterErr;
 
@@ -177,6 +204,20 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // Cero responsibility edges es un resultado válido: el resolver de
+    // occurrences actual puede dejar targetActorIds sin resolver y, por diseño,
+    // role membership no se expande a culpables. Nunca enviar upsert([]) a
+    // PostgREST ni bloquear por ello el resto del full_execution_backfill.
+    if (edgesToInsert.length === 0) {
+      return jsonResponse({
+        ok: true,
+        action: 'compute_responsibility_edges',
+        pullId,
+        edgesCreated: 0,
+        edges: [],
+      });
+    }
+
     // UPSERT edges
     const { data: inserted, error: upsertErr } = await client
       .from('mechanic_responsibility_edges')
@@ -198,7 +239,7 @@ Deno.serve(async (req: Request) => {
       edges: result,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatCaughtError(error);
     console.error('compute-responsibility-edges error:', error);
     return jsonResponse({ ok: false, error: message }, 500);
   }

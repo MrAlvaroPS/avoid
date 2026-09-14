@@ -16,6 +16,7 @@ import {
 } from './reliability.service';
 import { WowauditRosterService, type WowauditRosterEntry } from './wowaudit-roster.service';
 import { NightPlayerSummaryCacheService } from './night-player-summary-cache.service';
+import { EdgeFunctionsService } from './edge-functions.service';
 import { CombatEvaluationFeatureFlagsService } from './combat-evaluation-feature-flags.service';
 import {
   ExecutionLedgerService,
@@ -68,6 +69,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { computeDefensiveManagementScore } from '../../../supabase/functions/_shared/defensive-management-score';
 import { isPunitivePersonalMechanicEvent } from '../../../supabase/functions/_shared/mechanic-attribution';
 import { homogeneousDefensiveEvaluationGeneration } from '../shared/defensive-evaluation-generation';
+import {
+  emptyDefensiveNightAuditState,
+  type DefensiveNightAudit,
+} from '../../../supabase/functions/_shared/player-defensive-audit-contract';
 
 const REQUIRED_DEFENSIVE_EVALUATOR_VERSION = 'defensive-execution-evaluator@2.4.0';
 const REQUIRED_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.1.0';
@@ -739,6 +744,8 @@ export interface NightPlayerSummary {
    * publicada → episodios v7) para el hero/estrip/mecánicas/coaching defensivo de la infografía v3. No
    * confundir con defensiveManagementV2 (V2/legacy, sigue existiendo para el layout v1). */
   canonicalDefensive: NightCanonicalDefensiveSummary;
+  /** Deterministic backend projection of the same published canonical evidence; the dossier only renders its AST. */
+  defensiveAudit?: DefensiveNightAudit;
   execution: NightExecutionSnapshot;
   /** Comparación determinista con la noche anterior del jugador, si existe. */
   evolution: NightEvolution | null;
@@ -866,6 +873,7 @@ export class NightPlayerSummaryService {
   private combatFlags = inject(CombatEvaluationFeatureFlagsService);
   private executionLedger = inject(ExecutionLedgerService);
   private canonicalDefensiveSummary = inject(CanonicalDefensiveSummaryService);
+  private edgeFunctions = inject(EdgeFunctionsService);
 
   /**
    * §"no todos los días tenemos raid... tiene sentido que actualice una
@@ -893,6 +901,15 @@ export class NightPlayerSummaryService {
     }
 
     const client = this.supabase.client;
+    const defensiveAuditPromise = this.edgeFunctions
+      .getPlayerDefensiveAudit(reportCode, playerName)
+      .catch((err: unknown) => emptyDefensiveNightAuditState(
+        reportCode,
+        playerName,
+        'error',
+        `No se pudo cargar la auditoría defensiva: ${errorMessage(err)}`,
+        new Date().toISOString(),
+      ));
 
     const [{ data: reportRow }, { data: pullsData, error: pullsErr }, { data: encounters }] =
       await Promise.all([
@@ -1936,9 +1953,10 @@ export class NightPlayerSummaryService {
     // para el porqué exacto de NO cruzar por boss_mechanics_candidates.ability_id directamente (es el ID del
     // Journal, casi nunca coincide con el real). mechanicNameById (más abajo) es la segunda fuente para cubrir
     // los episodios missed_ready/no_applicable_resource que pull_mechanic_events pueda omitir en silencio.
-    const [canonicalRaw, mechanicCatalogByAbility] = await Promise.all([
+    const [canonicalRaw, mechanicCatalogByAbility, defensiveAudit] = await Promise.all([
       canonicalDefensivePromise,
       mechanicCatalogByAbilityPromise,
+      defensiveAuditPromise,
     ]);
     const canonicalEpisodes: CanonicalDefensiveEpisodeView[] = [];
     for (const episode of canonicalRaw.episodes) {
@@ -2087,6 +2105,7 @@ export class NightPlayerSummaryService {
       defensiveSummary,
       defensiveManagementV2,
       canonicalDefensive,
+      defensiveAudit,
       execution,
       evolution: null,
       battleNetUrl,

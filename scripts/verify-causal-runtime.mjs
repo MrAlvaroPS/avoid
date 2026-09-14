@@ -10,6 +10,8 @@ const functions = [
   'materialize-execution-ledger',
   'materialize-consumable-execution',
   'process-combat-evaluation-queue',
+  'canonical-defensive-refresh',
+  'canonical-defensive-auto-refresh',
   'publish-mechanic-policy',
   'query-mechanic-policy',
   'sync-mechanic-aliases',

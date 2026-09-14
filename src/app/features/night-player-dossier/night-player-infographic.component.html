@@ -9,7 +9,7 @@
     <div class="iris-player-toolbar-title">
       <span>Vista previa exportable</span>
       <strong id="iris-player-infographic-title"
-        >Informe de combate de {{ summary().playerName }}</strong
+        >Informe de combate de {{ summary().playerName }} v3.1</strong
       >
     </div>
     <div class="iris-player-toolbar-actions">
@@ -142,7 +142,7 @@
             data-v3-canvas
           >
             <app-raider-infographic-v3-canvas
-              [viewModel]="v3ViewModel()"
+              [viewModel]="v3ViewModelResolved()"
               [iconUrls]="iconUrls()"
             />
           </main>
@@ -578,172 +578,113 @@
             <section class="iris-player-section iris-player-evidence iris-player-defensives">
               <div class="iris-player-section-title inline">
                 <div>
-                  <span>04 · GESTIÓN DE DEFENSIVOS</span>
-                  <h2>Plan, cobertura y eficiencia durante la noche</h2>
+                  <span>04 · REACCIÓN, RESPUESTA Y USO</span>
+                  <h2>Los 3 KPI defensivos, explicados con la evidencia ya publicada</h2>
                 </div>
-                @if (defensiveManagementV2()) {
-                  <p>Reminders publicados + casts reales + replay global de reservas y oportunidades factibles.</p>
-                } @else {
-                  <p>Sensor local de ventanas de presión y catálogo; recuento provisional sin cruzar plan ni disponibilidad real.</p>
+                <p>Misma generación canónica que decide los porcentajes — cada fila de abajo enlaza al pull real en WCL.</p>
+              </div>
+
+              <div class="iris-player-defensive-summary kpi-explainer">
+                <article [class.danger]="defensiveKpiExplainer().reaction.score != null && defensiveKpiExplainer().reaction.score! < 50">
+                  <strong>{{ formatPct(defensiveKpiExplainer().reaction.score) }}</strong>
+                  <span>Reacción</span>
+                  <p>
+                    {{ defensiveKpiExplainer().reaction.engaged }}/{{ defensiveKpiExplainer().reaction.evaluable }} picos de
+                    peligro con algo defensivo pulsado justo en su ventana — no basta con usar el kit en general.
+                  </p>
+                </article>
+                <article [class.danger]="defensiveKpiExplainer().response.score != null && defensiveKpiExplainer().response.score! < 50">
+                  <strong>{{ formatPct(defensiveKpiExplainer().response.score) }}</strong>
+                  <span>Respuesta</span>
+                  <p>
+                    {{ defensiveKpiExplainer().response.covered }}/{{ defensiveKpiExplainer().response.evaluable }} picos
+                    realmente cubiertos — {{ defensiveKpiExplainer().response.missedReady }} listos y sin cubrir.
+                  </p>
+                </article>
+                <article [class.danger]="defensiveKpiExplainer().usage.score != null && defensiveKpiExplainer().usage.score! < 50">
+                  <strong>{{ formatPct(defensiveKpiExplainer().usage.score) }}</strong>
+                  <span>{{ defensiveKpiExplainer().usage.label }}</span>
+                  <p>
+                    {{ defensiveKpiExplainer().usage.actualCasts }}/{{ defensiveKpiExplainer().usage.theoreticalMax }} usos
+                    reales sobre el máximo posible dado su propio cooldown/cargas — actividad de TODO el kit, no solo los
+                    picos aislados.
+                  </p>
+                </article>
+              </div>
+
+              <p class="iris-player-miss-subheading">Qué cuenta de su kit y qué no</p>
+              <p class="iris-player-miss-note">
+                El kit real que el evaluador resolvió para su build esta noche (effective_kit) — cooldown/cargas reales,
+                para que puedas comprobarlo contra su hoja de talentos.
+              </p>
+              <div class="iris-player-pressure-list kit-breakdown">
+                @for (spell of defensiveKpiExplainer().kit; track spell.spellId) {
+                  <article [class.credit-only]="!spell.countsAgainstKpi">
+                    <span class="iris-player-spell-icon">
+                      @if (iconUrl(spell.spellId); as url) { <img [src]="url" crossorigin="anonymous" alt="" (error)="onIconError($event)" /> }
+                    </span>
+                    <div class="iris-player-pressure-copy">
+                      <strong>
+                        {{ spell.name }}
+                        @if (spell.effectiveCooldownMs) {
+                          <small>· CD {{ formatDuration(spell.effectiveCooldownMs) }}{{ spell.charges && spell.charges > 1 ? ' · ' + spell.charges + ' cargas' : '' }}</small>
+                        }
+                      </strong>
+                      <p>
+                        @if (spell.countsAgainstKpi) {
+                          Cuenta para Reacción/Respuesta: un pico sin cubrir con este spell disponible resta.
+                        } @else {
+                          Solo bonus — usarlo suma si cubre, pero no usarlo nunca resta.
+                        }
+                        Decisivo en {{ spell.timesDecisive }}, cubrió {{ spell.timesCovering }}, usado
+                        {{ spell.timesUsed }} vez{{ spell.timesUsed === 1 ? '' : 'es' }} esta noche.
+                      </p>
+                    </div>
+                  </article>
+                } @empty {
+                  <p class="iris-player-empty-evidence">Sin defensivos core resueltos en el kit esta noche.</p>
                 }
               </div>
 
-              @if (defensiveManagementV2(); as management) {
-                <div class="iris-player-defensive-summary v2">
-                  <article>
-                    <strong>{{ management.requiredExactAdherenceCount }}/{{ management.planRequiredCount }}</strong>
-                    <span>adherencia exacta</span>
-                    <p>required con el spell planificado</p>
+              <p class="iris-player-miss-subheading">Ventanas críticas identificadas — verificables en WCL</p>
+              <p class="iris-player-miss-note">
+                Exactamente los picos que ya deciden Reacción/Respuesta arriba — mismo pico, mismo veredicto, enlace directo
+                al pull real (sin adivinar el segundo exacto: navega dentro del pull al minuto indicado).
+              </p>
+              <div class="iris-player-pressure-list critical-windows">
+                @for (window of defensiveKpiExplainer().criticalWindows; track window.episodeId) {
+                  <article [class.covered]="window.verdict === 'covered_verified'">
+                    <div class="iris-player-boss-icon">
+                      <svg viewBox="0 0 48 48">
+                        <path d="M24 4 8 12v12c0 10 7 17 16 20 9-3 16-10 16-20V12L24 4Z" />
+                        <path d="M24 14v12m0 7v1" />
+                      </svg>
+                      <img
+                        [src]="bossIconUrl(window.bossId)"
+                        crossorigin="anonymous"
+                        referrerpolicy="no-referrer"
+                        alt=""
+                        (error)="onBossIconError($event)"
+                      />
+                    </div>
+                    <div class="iris-player-pressure-copy">
+                      <strong>{{ window.bossName }} · {{ window.difficulty }} · #{{ window.pullNumber }} · {{ window.peakLabel }}</strong>
+                      <p>
+                        {{ window.verdictLabel }}
+                        @if (window.decisiveSpellNames.length) {
+                          — esperado: {{ window.decisiveSpellNames.join(', ') }}
+                        }
+                        @if (window.coveredBySpellName) {
+                          — cubierto con {{ window.coveredBySpellName }}
+                        }
+                      </p>
+                    </div>
+                    <a [href]="window.wclUrl" target="_blank" rel="noopener" class="iris-player-pressure-penalty">Ver en WCL</a>
                   </article>
-                  <article>
-                    <strong>{{ management.requiredCoverageSuccessCount }}/{{ management.planRequiredCount }}</strong>
-                    <span>cobertura required</span>
-                    <p>incluye sustituciones funcionales</p>
-                  </article>
-                  <article [class.danger]="management.criticalCoveredCount < management.criticalWindowCount">
-                    <strong>{{ management.criticalCoveredCount }}/{{ management.criticalWindowCount }}</strong>
-                    <span>cobertura crítica</span>
-                    <p>ventanas factibles protegidas</p>
-                  </article>
-                  <article class="success">
-                    <strong>{{ management.correctHoldCount }}</strong>
-                    <span>holds correctos</span>
-                    <p>disciplina de reserva, no penaliza</p>
-                  </article>
-                  <article [class.danger]="management.brokenReservationCount > 0">
-                    <strong>{{ management.brokenReservationCount }}</strong>
-                    <span>reservas rotas</span>
-                    <p>objetivo: 0</p>
-                  </article>
-                  <article>
-                    <strong>{{ management.extraUsedCount }}/{{ management.viableExtraCount }}</strong>
-                    <span>extras seguros</span>
-                    <p>usos de valor / oportunidades factibles</p>
-                  </article>
-                  <article [class.danger]="management.deathViableCdCount > 0">
-                    <strong>{{ management.deathViableCdCount }}</strong>
-                    <span>respuesta omitida en secuencia letal</span>
-                    <p>no afirma prevención cuantitativa</p>
-                  </article>
-                  <article [class.warning]="management.deathReadyCdCount > 0">
-                    <strong>{{ management.deathReadyCdCount }}</strong>
-                    <span>CD listo solo al morir</span>
-                    <p>coaching; prevención no demostrada</p>
-                  </article>
-                </div>
-
-                <p class="iris-player-miss-subheading">
-                  {{
-                    management.mode === 'plan'
-                      ? 'Decisiones frente al plan'
-                      : management.mode === 'optimal_no_plan'
-                        ? 'Modo: uso óptimo factible'
-                        : 'Noche mixta: plan + uso óptimo factible'
-                  }}
-                </p>
-                <p class="iris-player-miss-note">
-                  {{ management.evaluatedPullCount }} pulls evaluados por {{ management.evaluatorVersion }} ·
-                  confidence {{ management.dataConfidence }}. Aquí se conserva toda la evidencia; el coaching superior limita solo la selección editorial.
-                </p>
-                @if (management.decisions.length) {
-                  <div class="iris-player-defensive-decisions">
-                    @for (decision of management.decisions; track decision.pullId + '|' + decision.atMs + '|' + decision.state) {
-                      <article [class]="'tone-' + defensiveDecisionTone(decision)">
-                        <div class="iris-player-decision-time">
-                          <strong>#{{ decision.pullNumber }} · {{ formatDuration(decision.atMs) }}</strong>
-                          <span>
-                            {{ decision.bossName }} · {{ decision.difficulty }} ·
-                            {{ decision.evaluationMode === 'no_plan' ? 'sin plan' : 'plan' }}
-                          </span>
-                        </div>
-                        <div class="iris-player-decision-copy">
-                          <strong>{{ defensiveDecisionLabel(decision) }}</strong>
-                          <p>{{ defensiveDecisionCopy(decision) }}</p>
-                        </div>
-                      </article>
-                    }
-                  </div>
-                } @else {
-                  <p class="iris-player-empty-evidence">Sin decisiones defensivas accionables: no hubo reservas rotas, reminders omitidos ni extras factibles.</p>
+                } @empty {
+                  <p class="iris-player-empty-evidence">Sin ventanas críticas evaluables esta noche.</p>
                 }
-              }
-              @if (!defensiveManagementV2()) {
-              <div class="iris-player-defensive-summary">
-                <article>
-                  <strong>{{ summary().defensiveSummary.totalCasts }}</strong
-                  ><span>casts defensivos</span>
-                  <p>en {{ summary().defensiveSummary.pullsWithCasts }} pulls</p>
-                </article>
-                <article
-                  [class.danger]="
-                    windowCoverageTotals().coverable > 0 &&
-                    windowCoverageTotals().covered / windowCoverageTotals().coverable < 0.5
-                  "
-                >
-                  <strong
-                    >{{ windowCoverageTotals().covered }}/{{
-                      windowCoverageTotals().coverable
-                    }}</strong
-                  ><span>ventanas de presión cubiertas</span>
-                  <p>picos reales de daño recibido esta noche</p>
-                </article>
-                <article
-                  [class.danger]="summary().defensiveSummary.deathsWithDefensiveAvailable > 0"
-                >
-                  <strong>{{ summary().defensiveSummary.deathsWithDefensiveAvailable }}</strong
-                  ><span>muertes con defensivo libre</span>
-                  <p>disponible y sin usar en ese momento</p>
-                </article>
-                <article>
-                  <strong
-                    >{{ summary().execution.emergencyConsumableUses }}/{{
-                      summary().execution.emergencyConsumableOpportunities
-                    }}</strong
-                  ><span>piedra / poción</span>
-                  <p>en pulls con muerte evaluable</p>
-                </article>
               </div>
-              }
-
-              @if (neverTouchedPulls().length) {
-                <p class="iris-player-miss-subheading">Ventanas no cubiertas y cero casts en el pull</p>
-                <p class="iris-player-miss-note">
-                  Sensor descriptivo de pressure windows: hubo una oportunidad real y no consta ningún
-                  cast del catálogo antes del wipe call. No equivale por sí solo a culpabilidad mecánica.
-                </p>
-                <div class="iris-player-pressure-list">
-                  @for (pull of neverTouchedPulls(); track pull.pullId) {
-                    <article>
-                      <div class="iris-player-boss-icon">
-                        <svg viewBox="0 0 48 48">
-                          <path d="M24 4 8 12v12c0 10 7 17 16 20 9-3 16-10 16-20V12L24 4Z" />
-                          <path d="M24 14v12m0 7v1" />
-                        </svg>
-                        <img
-                          [src]="bossIconUrl(pull.bossId)"
-                          crossorigin="anonymous"
-                          referrerpolicy="no-referrer"
-                          alt=""
-                          (error)="onBossIconError($event)"
-                        />
-                      </div>
-                      <div class="iris-player-pressure-copy">
-                        <strong
-                          >{{ pull.bossName }} · {{ pull.difficulty }} · #{{
-                            pull.pullNumber
-                          }}</strong
-                        >
-                        <p>
-                          {{ formatDuration(pull.durationMs) }} de intento,
-                          {{ pull.missedCount }} ventana{{ pull.missedCount === 1 ? '' : 's' }} de
-                          presión real — cero casts defensivos en todo el pull.
-                        </p>
-                      </div>
-                      <div class="iris-player-pressure-penalty">0 casts</div>
-                    </article>
-                  }
-                </div>
-              }
 
               @if (mechanicPressureBreakdown().length) {
                 <p class="iris-player-miss-subheading">Mecánicas que exigían respuesta</p>

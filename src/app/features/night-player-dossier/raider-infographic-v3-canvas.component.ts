@@ -4,18 +4,26 @@ import type {
   RaiderInfographicMetric,
   RaiderInfographicViewModel,
 } from '../../core/raider-infographic-view-model';
+import { formatDuration } from '../../shared/format.util';
 
 @Component({
   selector: 'app-raider-infographic-v3-canvas',
   standalone: true,
   templateUrl: './raider-infographic-v3-canvas.component.html',
-  styleUrl: './raider-infographic-v3-canvas.component.scss',
+  // Dos hojas en vez de una: angular.json mide el budget anyComponentStyle
+  // por archivo compilado, no por componente — ver el comentario al inicio
+  // de raider-infographic-v3-canvas-right-page.component.scss.
+  styleUrls: [
+    './raider-infographic-v3-canvas.component.scss',
+    './raider-infographic-v3-canvas-right-page.component.scss',
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
 })
 export class RaiderInfographicV3CanvasComponent {
   viewModel = input.required<RaiderInfographicViewModel>();
   iconUrls = input.required<Record<number, string>>();
+  formatDuration = formatDuration;
 
   iconUrl(spellId: number | null): string | null {
     return spellId == null ? null : (this.iconUrls()[spellId] ?? null);

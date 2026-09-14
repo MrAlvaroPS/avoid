@@ -31,7 +31,10 @@ import {
   untracked,
 } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
-import { EdgeFunctionsService } from '../../core/edge-functions.service';
+import {
+  EdgeFunctionsService,
+  type AnalyzeReportResult,
+} from '../../core/edge-functions.service';
 import {
   ReportsService,
   type NightPlayerListItem,
@@ -465,7 +468,7 @@ export class RaidSessionComponent {
     }
     try {
       let processedTotal = 0;
-      const newestPullId = await this.edgeFunctions.analyzeReportFully(code, (r) => {
+      const onAnalyzeProgress = (r: AnalyzeReportResult) => {
         processedTotal += r.processed;
         if (isManual) {
           this.importProgress.set(
@@ -475,7 +478,14 @@ export class RaidSessionComponent {
           );
         }
         this.duplicateWarning.set(r.possibleDuplicateOf);
-      });
+      };
+      const newestPullId = isManual
+        ? await this.edgeFunctions.ensureNightInfographicReadiness(
+            code,
+            (progress) => this.importProgress.set(progress.message),
+            onAnalyzeProgress,
+          )
+        : await this.edgeFunctions.analyzeReportFully(code, onAnalyzeProgress);
       this.currentReportCode.set(code);
       // §"actividad real" = se encontró una pull nueva de verdad, o el
       // propio RL pulsó "Actualizar" a mano — un tick de auto-refresh vacío

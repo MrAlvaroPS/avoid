@@ -5,6 +5,7 @@
 // round-trip staging→ledger sea testeable desde vitest sin mock de red.
 
 import type { EvaluationConfidence } from './combat-evaluation-contract.ts';
+import type { EffectiveDefensiveAuditFact } from './defensive-audit-facts.ts';
 import type { PersistedDefensiveEpisode } from './defensive-episode-persistence.ts';
 
 export interface DefensiveEpisodeEvaluationRow {
@@ -18,6 +19,8 @@ export interface DefensiveEpisodeEvaluationRow {
   buildFingerprint: string | null;
   /** Rollup de fila — el confidence más débil entre sus episodios (ver rollupDataConfidence). Cada episodio conserva el suyo propio en episodes[]. */
   dataConfidence: EvaluationConfidence;
+  /** Effective build-aware kit snapshot used by audit projections; v7 rows legitimately contain []. */
+  effectiveKit: EffectiveDefensiveAuditFact[];
   episodes: PersistedDefensiveEpisode[];
   evaluatedAt: string;
 }
@@ -51,6 +54,7 @@ export interface BuildDefensiveEpisodeEvaluationRowParams {
   resolverVersion: string;
   buildFingerprint?: string | null;
   episodes: PersistedDefensiveEpisode[];
+  effectiveKit?: EffectiveDefensiveAuditFact[];
   evaluatedAt?: string;
 }
 
@@ -67,6 +71,7 @@ export function buildDefensiveEpisodeEvaluationRow(
     resolverVersion: params.resolverVersion,
     buildFingerprint: params.buildFingerprint ?? null,
     dataConfidence: rollupDataConfidence(params.episodes),
+    effectiveKit: params.effectiveKit ?? [],
     episodes: params.episodes,
     evaluatedAt: params.evaluatedAt ?? new Date().toISOString(),
   };
@@ -83,6 +88,7 @@ export interface DefensiveEpisodeEvaluationDbRecord {
   resolver_version: string;
   build_fingerprint: string | null;
   data_confidence: EvaluationConfidence;
+  effective_kit?: EffectiveDefensiveAuditFact[];
   episodes: PersistedDefensiveEpisode[];
   evaluated_at: string;
 }
@@ -100,6 +106,7 @@ export function episodeEvaluationRowToDbRecord(
     resolver_version: row.resolverVersion,
     build_fingerprint: row.buildFingerprint,
     data_confidence: row.dataConfidence,
+    effective_kit: row.effectiveKit,
     episodes: row.episodes,
     evaluated_at: row.evaluatedAt,
   };
@@ -119,6 +126,7 @@ export function dbRecordToEpisodeEvaluationRow(
     resolverVersion: record.resolver_version,
     buildFingerprint: record.build_fingerprint,
     dataConfidence: record.data_confidence,
+    effectiveKit: record.effective_kit ?? [],
     episodes: record.episodes,
     evaluatedAt: record.evaluated_at,
   };

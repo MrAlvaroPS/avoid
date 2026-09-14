@@ -15,6 +15,7 @@ import type {
   RaiderEvidenceVerdict,
 } from './raider-evidence-projection';
 import { classDisplayName, formatDuration, safeSpellName } from '../shared/format.util';
+import { buildDefensiveKitBreakdown, type DefensiveKitBreakdownEntry } from './defensive-kit-breakdown';
 
 export type RaiderInfographicTone =
   | 'positive'
@@ -123,13 +124,42 @@ export interface RaiderMechanicCard {
   /** Una línea al pie: por qué esta mecánica aparece aquí (frecuencia esta noche). Siempre presente. */
   relevanceNote: string;
   timingLabel: string | null;
-  occurrenceGroups: {
+  // §mecanicas-verificables-v2 (2026-09-11) — rediseño en forma de matriz tras feedback real: "esto que has
+  // hecho esta OK si solo tiene un defensivo, si tienes 5 defensivos ahí no se lee nada. Diseñala bien y
+  // piensa el proposito y a quien esta destinado". Propósito: un raider (o un oficial revisando su noche)
+  // necesita, PARA CADA PICO REAL de esta mecánica, saber qué defensivo lo cubrió y cuáles tenía disponibles
+  // y no usó — sin fabricar nada, todo verificable en WCL con pull+minuto reales. Repetir un icono por cada
+  // miembro del kit DEBAJO de cada pico (diseño anterior) no escala con kits de 4-5 defensivos: se vuelve
+  // ruido repetido. Una matriz sí escala — cada defensivo aparece UNA vez (fila, icono+nombre), cada pico
+  // aparece UNA vez (columna, con su minuto/daño/link ya construidos), la intersección es un solo estado.
+  /** Una columna por pico real (episodio) de esta mecánica — aplanado, sin agrupar por pull (un pull puede
+   * aportar más de un pico; cada uno es su propia columna de la matriz, `pullNumber` identifica de cuál viene). */
+  occurrences: {
+    key: string;
     pullNumber: number;
-    cells: {
-      key: string;
-      state: RaiderMechanicOccurrenceState;
-      label: string;
-    }[];
+    state: RaiderMechanicOccurrenceState;
+    label: string;
+    /** mm:ss dentro del pull — mismo dato que ya decide el color de la columna (episode.peakMs), ahora visible
+     * en vez de solo en el title/tooltip (§mecanicas-verificables: "que daño entró... que vaya un raider a
+     * WCL y se vaya a ese minuto y ese pull y vea exactamente lo que le ponemos nosotros ahi"). */
+    minuteLabel: string;
+    /** Magnitud del bucket de daño de WCL que marcó este pico (episode.peakValue) — null si el detector no lo
+     * persistió para este episodio en particular; nunca se fabrica un número. */
+    damageLabel: string | null;
+    /** Solo se rellena con un fightId real de este pull — nunca se adivina (§mismo criterio que
+     * defensive-kpi-explainer.ts). null cuando no hay fightId disponible; la columna sigue mostrando pull+minuto. */
+    wclUrl: string | null;
+  }[];
+  /** Una fila por defensivo del kit que fue candidato aplicable en AL MENOS un pico de esta mecánica (nunca el
+   * kit completo de la noche — solo lo que realmente pudo entrar en juego aquí). `cellsByOccurrenceKey` trae
+   * exactamente una entrada por elemento de `occurrences` (misma `key`): 'covered' lo cubrió, 'available_unused'
+   * estaba libre y no se usó, 'neutral' cualquier otro estado real (en CD, no exigible, sin dato, o ni
+   * siquiera era candidato aplicable en ese pico concreto) — mismo criterio de 3 estados que pidió el
+   * feedback, ahora ubicado por pico en vez de sumado en una tabla aparte. */
+  kitAvailability: {
+    spellId: number;
+    name: string;
+    cellsByOccurrenceKey: Record<string, 'covered' | 'available_unused' | 'neutral'>;
   }[];
   defensives: RaiderMechanicDefensiveRow[];
 }
@@ -211,6 +241,10 @@ export interface RaiderInfographicViewModel {
   additionalCoachingCount: number;
   timelineGroups: RaiderInfographicTimelineGroup[];
   positiveSignals: RaiderInfographicSignal[];
+  /** §defensive-kit-panel (2026-09-11) — el kit real de esta noche (effective_kit), con cooldown/cargas y si
+   * cuenta o no en contra de Reacción/Respuesta, para que el raider pueda verificar su propio kit y detectar
+   * inconsistencias (p. ej. un spell que debería contar y no cuenta, o viceversa). */
+  defensiveKit: DefensiveKitBreakdownEntry[];
   defensiveMetrics: RaiderInfographicMetric[];
   mechanics: RaiderMechanicCard[];
   additionalMechanicCount: number;
@@ -289,14 +323,18 @@ function defensiveTone(score: number | null): RaiderInfographicTone {
   return 'positive';
 }
 
-function usageDefensiveMetric(canonical: NightCanonicalDefensiveSummary): RaiderInfographicDefensiveMetric {
+// §reaction-rename (2026-09-10, hallazgo real: "Uso" sonaba a "¿tocas el kit en general?" pero medía algo
+// mucho más estrecho — ¿reaccionaste DENTRO de la ventana de ESTE pico concreto? Mismo cálculo de siempre,
+// solo cambia el nombre para que deje de confundirse con la actividad defensiva genérica (ver 'management'
+// más abajo, que ahora sí cubre esa pregunta).
+function reactionDefensiveMetric(canonical: NightCanonicalDefensiveSummary): RaiderInfographicDefensiveMetric {
   const { usage } = canonical;
   return {
     key: 'usage',
-    label: 'Uso',
+    label: 'Reacción',
     value: defensivePercent(usage.score),
     fraction: usage.evaluable === 0 ? 'Sin oportunidades evaluables' : `${usage.engaged}/${usage.evaluable}`,
-    detail: '¿Estoy reaccionando defensivamente cuando tengo una oportunidad real?',
+    detail: '¿Reacciono con algo defensivo justo en el pico de peligro concreto?',
     tone: defensiveTone(usage.score),
     progressPct: usage.score,
   };
@@ -315,17 +353,34 @@ function responseDefensiveMetric(canonical: NightCanonicalDefensiveSummary): Rai
   };
 }
 
+// §generic-usage-fallback (2026-09-10) — este tercer KPI significa DOS cosas distintas según `mode`, nunca
+// mezcladas: con plan asignado, sigue siendo adherencia real (§67-69, sin tocar). Sin plan (hoy siempre,
+// defensiveDeployedPlans apagado), ocupa el mismo hueco para responder la pregunta que faltaba: ¿tocas tu kit
+// defensivo en general, dado su propio cooldown, o casi nunca? (Reacción de arriba solo mira los picos
+// aislados que el detector consiguió agrupar — un jugador puede tener Reacción baja con Uso alto: usa mucho
+// su defensivo, pero no en los momentos que más importan.)
 function managementDefensiveMetric(canonical: NightCanonicalDefensiveSummary): RaiderInfographicDefensiveMetric {
   const { management } = canonical;
-  if (management.status === 'no_plan') {
+  if (management.mode === 'generic_usage') {
+    if (management.status !== 'available') {
+      return {
+        key: 'management',
+        label: 'Uso',
+        value: 'N/D',
+        fraction: 'Sin datos suficientes',
+        detail: '¿Uso mi kit defensivo, dado su propio cooldown, a lo largo de la noche?',
+        tone: 'neutral',
+        progressPct: null,
+      };
+    }
     return {
       key: 'management',
-      label: 'Gestión',
-      value: 'N/D',
-      fraction: 'Sin plan',
-      detail: '¿Cumplí el plan defensivo que tenía asignado?',
-      tone: 'neutral',
-      progressPct: null,
+      label: 'Uso',
+      value: defensivePercent(management.score),
+      fraction: `${management.fulfilled}/${management.evaluable}`,
+      detail: '¿Uso mi kit defensivo, dado su propio cooldown, a lo largo de la noche?',
+      tone: defensiveTone(management.score),
+      progressPct: management.score,
     };
   }
   return {
@@ -474,6 +529,65 @@ function occurrenceCellLabel(episode: CanonicalDefensiveEpisodeView, spellNameBy
   return `Pull ${episode.pullNumber} · ${formatDuration(episode.peakMs)} · ${OCCURRENCE_STATE_LABEL[state]}`;
 }
 
+/** peakValue es "la magnitud del bucket del gráfico DamageTaken de WCL que marcó el detector" — mismas
+ * unidades sin re-etiquetar (ver defensive-episode-persistence.ts). null cuando el detector no lo persistió
+ * (episodios más antiguos) — nunca se rellena con un número inventado. */
+function occurrenceCellDamageLabel(episode: CanonicalDefensiveEpisodeView): string | null {
+  return episode.peakValue != null && episode.peakValue > 0 ? compactNumber(episode.peakValue) : null;
+}
+
+/** Construye las filas de la matriz kit×pico (§mecanicas-verificables-v2) — una fila por spellId que fue
+ * candidato aplicable en AL MENOS un episodio de `pairs`, con un estado por columna (occurrenceKey). Mismo
+ * criterio de clasificación que canonicalDefensiveRows (§41: covered/available_unused/neutral), aquí ubicado
+ * por pico en vez de sumado en una tabla aparte — nunca reproduce un veredicto nuevo, pura lectura de
+ * applicableCandidates ya persistidos. */
+function buildKitAvailabilityRows(
+  pairs: { episode: CanonicalDefensiveEpisodeView; occurrenceKey: string }[],
+  spellNameById: ReadonlyMap<number, string>,
+): RaiderMechanicCard['kitAvailability'] {
+  const spellIds = new Set<number>();
+  for (const { episode } of pairs) {
+    for (const candidate of episode.applicableCandidates) {
+      if (candidate.isDefensiveKitMember) spellIds.add(candidate.spellId);
+    }
+  }
+  return [...spellIds]
+    .sort((a, b) => a - b)
+    .map((spellId) => {
+      const cellsByOccurrenceKey: Record<string, 'covered' | 'available_unused' | 'neutral'> = {};
+      for (const { episode, occurrenceKey } of pairs) {
+        const candidate = episode.applicableCandidates.find(
+          (c) => c.isDefensiveKitMember && c.spellId === spellId,
+        );
+        if (!candidate) {
+          cellsByOccurrenceKey[occurrenceKey] = 'neutral';
+          continue;
+        }
+        const covered =
+          episode.responseVerdict === 'covered_verified' && episode.usedSpellIds.includes(spellId);
+        cellsByOccurrenceKey[occurrenceKey] = covered
+          ? 'covered'
+          : candidate.statusAtPeak === 'available_unused'
+            ? 'available_unused'
+            : 'neutral';
+      }
+      return { spellId, name: safeSpellName(spellNameById.get(spellId) ?? `#${spellId}`), cellsByOccurrenceKey };
+    });
+}
+
+/** Mismo criterio que defensive-kpi-explainer.ts (§detailed-kpi-explainer): un link de WCL solo existe si hay
+ * un fightId real para ese pull — nunca se fabrica. reportCode vacío (fila sin informe resuelto) también
+ * excluye el link. */
+function occurrenceCellWclUrl(
+  episode: CanonicalDefensiveEpisodeView,
+  fightIdByPullId: ReadonlyMap<string, number>,
+  reportCode: string,
+): string | null {
+  const fightId = fightIdByPullId.get(episode.pullId);
+  if (fightId == null || !reportCode) return null;
+  return `https://www.warcraftlogs.com/reports/${reportCode}#fight=${fightId}&type=damage-taken`;
+}
+
 function timingLabelFor(pattern: { kind: 'fixed' | 'periodic'; ms: number; sampleSize: number } | null): string | null {
   if (!pattern) return null;
   return pattern.kind === 'fixed'
@@ -530,6 +644,10 @@ function canonicalDefensiveRows(
  */
 function mechanicCards(canonical: NightCanonicalDefensiveSummary, summary: NightPlayerSummary): RaiderMechanicCard[] {
   const spellNameById = new Map(summary.defensiveSummary.spells.map((spell) => [spell.spellId, spell.spellName]));
+  // §mecanicas-verificables (2026-09-11) — mismo mapa que defensive-kpi-explainer.ts: el fightId real de cada
+  // pull (nunca adivinado) es lo único que falta en el episodio canónico para poder linkar a WCL.
+  const fightIdByPullId = new Map(summary.pulls.map((pull) => [pull.pullId, pull.fightId]));
+  const reportCode = summary.reportCode;
   const timingByKey = new Map(
     summary.defensiveSummary.mechanicPressureBreakdown.map((m) => [
       `${m.bossId}|${m.difficulty}|${m.mechanicId}`,
@@ -567,16 +685,19 @@ function mechanicCards(canonical: NightCanonicalDefensiveSummary, summary: Night
 
   const cards = [...groups.values()].map((group): RaiderMechanicCard => {
     const sortedEpisodes = [...group.episodes].sort((a, b) => a.pullNumber - b.pullNumber || a.peakMs - b.peakMs);
-    const occurrenceGroups = new Map<number, RaiderMechanicCard['occurrenceGroups'][number]>();
-    for (const episode of sortedEpisodes) {
-      const bucket = occurrenceGroups.get(episode.pullNumber) ?? { pullNumber: episode.pullNumber, cells: [] };
-      bucket.cells.push({
-        key: `${episode.pullId}|${episode.peakMs}`,
-        state: occurrenceStateFor(episode.responseVerdict),
-        label: occurrenceCellLabel(episode, spellNameById),
-      });
-      occurrenceGroups.set(episode.pullNumber, bucket);
-    }
+    const occurrences = sortedEpisodes.map((episode) => ({
+      key: `${episode.pullId}|${episode.peakMs}`,
+      pullNumber: episode.pullNumber,
+      state: occurrenceStateFor(episode.responseVerdict),
+      label: occurrenceCellLabel(episode, spellNameById),
+      minuteLabel: formatDuration(episode.peakMs),
+      damageLabel: occurrenceCellDamageLabel(episode),
+      wclUrl: occurrenceCellWclUrl(episode, fightIdByPullId, reportCode),
+    }));
+    const kitAvailability = buildKitAvailabilityRows(
+      sortedEpisodes.map((episode, index) => ({ episode, occurrenceKey: occurrences[index].key })),
+      spellNameById,
+    );
     const coveredCount = group.episodes.filter((e) => e.responseVerdict === 'covered_verified').length;
     const totalCount = group.episodes.length;
     return {
@@ -593,7 +714,8 @@ function mechanicCards(canonical: NightCanonicalDefensiveSummary, summary: Night
       resolution: group.resolution,
       relevanceNote: mechanicRelevanceNote(totalCount),
       timingLabel: timingLabelFor(timingByKey.get(`${group.bossId}|${group.difficulty}|${group.mechanicId}`) ?? null),
-      occurrenceGroups: [...occurrenceGroups.values()],
+      occurrences,
+      kitAvailability,
       defensives: canonicalDefensiveRows(group.episodes, spellNameById),
     };
   });
@@ -604,7 +726,7 @@ function mechanicCards(canonical: NightCanonicalDefensiveSummary, summary: Night
   const missCount = (card: RaiderMechanicCard) => card.totalCount - card.coveredCount;
   const firstPullNumberByBoss = new Map<string, number>();
   for (const card of cards) {
-    const earliest = Math.min(...card.occurrenceGroups.map((g) => g.pullNumber));
+    const earliest = Math.min(...card.occurrences.map((o) => o.pullNumber));
     const current = firstPullNumberByBoss.get(card.bossId);
     if (current == null || earliest < current) firstPullNumberByBoss.set(card.bossId, earliest);
   }
@@ -728,6 +850,8 @@ export function buildRaiderInfographicViewModel(
   // contradecirse en la misma lámina ("0 muertes con respuesta viable"
   // arriba, dos cards de muerte con CD libre debajo). Ahora el contador
   // cuenta exactamente las mismas cards que se van a pintar.
+  const kitSpellNameById = new Map(summary.defensiveSummary.spells.map((spell) => [spell.spellId, spell.spellName]));
+  const defensiveKit = buildDefensiveKitBreakdown(canonical.kit, canonical.episodes, kitSpellNameById);
   const deathItems = projection.items.filter(
     (item) => item.kind === 'death' || item.reasonCode.startsWith('DEATH_'),
   );
@@ -790,7 +914,7 @@ export function buildRaiderInfographicViewModel(
                 : 'positive',
       },
       defensive: {
-        usage: usageDefensiveMetric(canonical),
+        usage: reactionDefensiveMetric(canonical),
         response: responseDefensiveMetric(canonical),
         management: managementDefensiveMetric(canonical),
       },
@@ -859,12 +983,13 @@ export function buildRaiderInfographicViewModel(
     additionalCoachingCount: projection.additionalCoachingCount,
     timelineGroups: groupTimeline(projection),
     positiveSignals: positiveSignals(summary, canonical),
+    defensiveKit,
     defensiveMetrics: [
       {
         key: 'usage',
-        label: 'Uso defensivo',
+        label: 'Reacción a pico de daño',
         value: `${canonical.usage.engaged}/${canonical.usage.evaluable}`,
-        detail: canonical.usage.score == null ? 'sin oportunidades evaluables' : `${defensivePercent(canonical.usage.score)} · episodios con uso`,
+        detail: canonical.usage.score == null ? 'sin oportunidades evaluables' : `${defensivePercent(canonical.usage.score)} · episodios con reacción`,
         tone: canonical.usage.score == null ? 'neutral' : defensiveTone(canonical.usage.score),
       },
       {
@@ -883,20 +1008,32 @@ export function buildRaiderInfographicViewModel(
       },
       {
         key: 'missed-mistimed',
-        label: 'Mal timing demostrado',
-        value: String(canonical.response.missedMistimed),
-        detail: 'uso anterior probadamente causó la falta de cobertura',
-        tone: canonical.response.missedMistimed > 0 ? 'danger' : 'positive',
+        label: 'Mal timing defensivo',
+        // §2026-09-11 (feedback real: "muchos usos desalineados pero marcando 0 ahí"): missed_due_to_mistime
+        // está en el contrato pero reconstructCausalAvailability nunca lo produce todavía (ver comentario §3 en
+        // defensive-episode-verdict.ts) — confirmado 0/0 en TODA la generación publicada, no solo aquí. Mostrar
+        // "0" en verde aparentaba un resultado calculado ("nunca mal cronometrado") cuando en realidad es un
+        // hueco permanentemente vacío — N/D honesto hasta que exista la lógica real.
+        value: 'N/D',
+        detail: 'funcionalidad en implementación',
+        tone: 'neutral',
       },
       {
         key: 'management',
-        label: 'Gestión',
+        label: canonical.management.mode === 'generic_usage' ? 'Uso' : 'Gestión',
         value:
-          canonical.management.status === 'no_plan'
+          canonical.management.status !== 'available'
             ? 'N/D'
             : `${canonical.management.fulfilled}/${canonical.management.evaluable}`,
-        detail: canonical.management.status === 'no_plan' ? 'Sin plan defensivo asignado' : 'plan cumplido',
-        tone: canonical.management.status === 'no_plan' ? 'neutral' : defensiveTone(canonical.management.score),
+        detail:
+          canonical.management.status !== 'available'
+            ? canonical.management.mode === 'generic_usage'
+              ? 'sin datos suficientes de cooldown/kit'
+              : 'sin plan defensivo asignado'
+            : canonical.management.mode === 'generic_usage'
+              ? 'usos reales · máximo posible dado el cooldown'
+              : 'plan cumplido',
+        tone: canonical.management.status !== 'available' ? 'neutral' : defensiveTone(canonical.management.score),
       },
       // §36 del cutover: exactamente 5 cards canónicas (Uso/Respuesta/CD sin
       // cubrir/Mal timing/Gestión) — "Muertes con respuesta disponible" salía

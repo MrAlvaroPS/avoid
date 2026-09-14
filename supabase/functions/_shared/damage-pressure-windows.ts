@@ -43,7 +43,21 @@ export interface DamageWindowDetection {
 
 import { defensiveStatusAt, type CooldownCatalog } from './defensive-cooldowns.ts';
 
-const DEFAULT_FACTOR = 2.5;
+// §pressure-detection-recalibration (2026-09-10, hallazgo empírico real):
+// 2.5 se validó en su día SOLO contra un perfil de tank (Pitpally, 24 picos
+// falsos → 0), nunca contra ranged/healer/melee. Con daño de raid casi
+// continuo en este contenido (94-98% de buckets>0 en TODOS los roles, no
+// solo tanks), 2.5x la mediana propia dejaba ~50% de los pulls de
+// DPS/healer en 0 ventanas frente al 23% de los tanks — una brecha de
+// ~1.5x sin justificación real, comprobada con canonical_defensive_
+// pressure_diagnostics contra 2 noches reales (34 pulls, 753 filas
+// jugador×pull, 4 roles). A 1.7 la brecha desaparece (4.5-5.0 ventanas/
+// pull en los 4 roles) y el tank resulta ser el rol con MENOS varianza
+// (desviación 1.92, máximo 11) — no el que necesita más margen; separar el
+// umbral por rol no tiene base empírica. A 1.5 ya aparece ruido, pero es
+// específico de ciertas pulls (afecta a todos los roles de esa pull por
+// igual), no de una clase/rol concreto.
+const DEFAULT_FACTOR = 1.7;
 const MIN_NONZERO_BUCKETS = 3; // con menos de esto no hay línea base fiable — sin ventanas, no un umbral inventado
 
 function median(values: number[]): number {
@@ -90,10 +104,17 @@ export function detectDamageWindows(
 
   return {
     baselineValue,
+    // §bug real (2026-09-11, feedback real: '"error": "materialize-execution-ledger: invalid input syntax
+    // for type integer: \"106886.90416666679\""') — pointIntervalMs viene de WCL (WclGraphSeries) como
+    // (endTime-startTime)/(nº de buckets), que casi nunca es un entero exacto; startIdx/endIdx/peakIdx ×
+    // pointIntervalMs heredaba esa fracción y viajaba así por todo el pipeline (JSONB no se queja) hasta
+    // chocar con player_execution_events.timestamp_ms, que SÍ es `integer`. Un milisegundo fraccionario
+    // nunca es un dato real — es un artefacto de interpolar la posición de un bucket — así que se redondea
+    // aquí, en el origen, en vez de parchear cada consumidor aguas abajo.
     windows: runs.map((raw) => ({
-      startMs: pointStart + raw.startIdx * pointIntervalMs,
-      endMs: pointStart + raw.endIdx * pointIntervalMs,
-      peakMs: pointStart + raw.peakIdx * pointIntervalMs,
+      startMs: Math.round(pointStart + raw.startIdx * pointIntervalMs),
+      endMs: Math.round(pointStart + raw.endIdx * pointIntervalMs),
+      peakMs: Math.round(pointStart + raw.peakIdx * pointIntervalMs),
       peakValue: raw.peakValue,
     })),
   };

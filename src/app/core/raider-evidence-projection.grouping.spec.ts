@@ -66,6 +66,7 @@ function episode(
     startMs: peakMs - 1_000,
     peakMs,
     endMs: peakMs + 1_000,
+    peakValue: null,
     dominantAbilityGameId: 1282408,
     usageEngaged: false,
     usageEvaluable: true,

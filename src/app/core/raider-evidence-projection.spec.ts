@@ -42,6 +42,7 @@ function canonicalEpisode(overrides: Partial<CanonicalDefensiveEpisodeView> = {}
     startMs: 29_000,
     peakMs: 30_000,
     endMs: 31_000,
+    peakValue: null,
     dominantAbilityGameId: 456,
     usageEngaged: false,
     usageEvaluable: true,
