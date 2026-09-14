@@ -122,7 +122,7 @@ function row(episodes: PersistedDefensiveEpisode[] = [episode()], overrides: Par
   return {
     pullId: 'pull-1',
     playerName: 'Jugador',
-    episodeEvaluatorVersion: 'episode-evaluator@8',
+    episodeEvaluatorVersion: 'episode-evaluator@10',
     semanticVersion: 'defensive-semantics@1.0.0',
     semanticResolverVersion: 'effective-defensive-semantics@1.5.0',
     resolverVersion: 'effective-defensives@2.1.0',
@@ -144,8 +144,8 @@ function input(overrides: Partial<BuildDefensiveNightAuditInput> = {}): BuildDef
       id: 'generation-8',
       status: 'published',
       publishedAt: '2026-09-08T08:30:00.000Z',
-      evaluatorVersion: 'episode-evaluator@8',
-      episodeVersion: 'episode-evaluator@8',
+      evaluatorVersion: 'episode-evaluator@10',
+      episodeVersion: 'episode-evaluator@10',
       resolverVersion: 'effective-defensives@2.1.0',
       semanticResolverVersion: 'effective-defensive-semantics@1.5.0',
       semanticVersion: 'defensive-semantics@1.0.0',
@@ -498,6 +498,19 @@ describe('player defensive audit — population, integrity and renderers', () =>
     expect(narrative).toContain('no se asociaron a presión evaluable');
     expect(narrative).toContain('no se consideran errores');
     expect(narrative).not.toContain('desperdiciaste');
+  });
+
+  it('candidato NO kit-member con casts reales no dispara candidate_casts_mismatch (pull.defensiveCasts nunca los registra)', () => {
+    // §bug real (2026-09-11) — validado E2E contra datos reales de producción: 2443 candidate_casts_mismatch
+    // en 14 jugadores del roster, el 100% con isDefensiveKitMember=false (p.ej. Death Strike de un Blood DK,
+    // rastreado como evidencia contextual, nunca como defensivo). analyze-report solo escribe
+    // pull.defensiveCasts para spells kit-member de verdad, así que un candidato no-kit-member SIEMPRE tiene
+    // rawCasts=[] ahí aunque el episodio sí tenga casts reales — comparar ahí es un falso positivo permanente,
+    // no evidencia desactualizada.
+    const nonKitFact: EffectiveDefensiveAuditFact = { ...CORE, spellId: 200, isDefensiveKitMember: false, createsMissableOpportunity: false };
+    const nonKitMember = candidate({ spellId: 200, isDefensiveKitMember: false, castsForSpellMs: [900] });
+    const audit = auditWith([900], episode('non-kit', { applicableCandidates: [nonKitMember] }), [CORE, nonKitFact]);
+    expect(audit.integrityIssues).not.toContain('candidate_casts_mismatch:non-kit:200');
   });
 
   it('evidencia runtime incompleta bajo v8 falla cerrada', () => {

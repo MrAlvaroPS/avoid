@@ -381,6 +381,13 @@ export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvalua
 
   const episodes = groupDamageWindowsIntoEpisodes(candidates, input.continuityGapMs);
   const episodeWindows: EpisodeWindow[] = episodes.map((e) => ({ startMs: e.startMs, endMs: e.endMs, peakMs: e.peakMs }));
+  // §causal-fix — TODO el daño crudo del jugador en el pull (no solo los hits
+  // que formaron un episodio agrupado), para que reconstructCausalAvailability
+  // pueda justificar un cooldown contra daño real disperso que no cruzó el
+  // umbral de ventana de presión (ver comentario en defensive-episode-verdict.ts).
+  const allDamageTimestampsMs = normalizeCastTimestamps(
+    input.rawDamageHits.map((h) => h.timestamp).filter((t): t is number => typeof t === 'number'),
+  );
 
   // Índice de hits por abilityGameID, para no recorrer TODO el array por cada episodio×defensivo.
   const hitsByAbility = new Map<number, RawDamageHit[]>();
@@ -442,7 +449,7 @@ export function evaluateDefensiveEpisodesForPlayer(input: DefensiveEpisodeEvalua
       )
       .sort((a, b) => a.spellId - b.spellId);
 
-    const baseVerdict = resolveEpisodeVerdictWithCausalAvailability(causalCandidates, episodeWindows, i);
+    const baseVerdict = resolveEpisodeVerdictWithCausalAvailability(causalCandidates, episodeWindows, i, allDamageTimestampsMs);
     const verdict = applyUsedMaterialRuntimeSafety(baseVerdict, causalCandidates);
     // §11 — techo de dataConfidence sobre la confidence decision-scoped del veredicto; nunca la más débil de TODO el kit.
     const confidence = weakestConfidence(input.dataConfidence, verdict.confidence);

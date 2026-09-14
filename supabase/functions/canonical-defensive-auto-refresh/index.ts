@@ -170,7 +170,10 @@ async function failActiveRequest(
   leaseToken: string,
   error: unknown,
 ) {
-  const message = error instanceof Error ? error.message : String(error);
+  // §bug real (2026-09-11) — describeUnknownError() ya maneja los objetos planos de Postgrest que
+  // `error instanceof Error` no detecta; esta rama se había quedado con el patrón viejo, roto (ver el mismo
+  // fix en materialize-execution-ledger/index.ts) — last_error podía guardar literalmente "[object Object]".
+  const message = describeUnknownError(error);
   let result: FailureResult = { retryScheduled: false, retryAfterSeconds: 0 };
   try {
     result = await rpc<FailureResult>(client, 'fail_canonical_defensive_refresh_request', {
@@ -462,7 +465,8 @@ async function status(
         p_generation_id: building.id,
       });
     } catch (error) {
-      buildingCoverage = { error: error instanceof Error ? error.message : String(error) };
+      // §bug real (2026-09-11) — mismo fix de arriba: describeUnknownError() en vez del patrón roto.
+      buildingCoverage = { error: describeUnknownError(error) };
     }
   }
 

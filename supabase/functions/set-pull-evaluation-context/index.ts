@@ -3,6 +3,7 @@ import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { executePullEvaluationCommand, type PullContextCommandClient } from '../_shared/pull-evaluation-context-command.ts';
 import type { PullEvaluationContextAction } from '../_shared/pull-evaluation-context.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 
 interface Body {
   pullId?: unknown;
@@ -76,7 +77,9 @@ Deno.serve(async (req: Request) => {
     const result = await executePullEvaluationCommand(client as unknown as PullContextCommandClient, body.pullId, action, guard.userId);
     return jsonResponse({ ok: true, pullId: body.pullId, action: action.action, ...result, reanalysisQueued: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    // §bug real (2026-09-11) — mismo fix que materialize-execution-ledger: errorMessage() maneja los objetos
+    // planos de Postgrest que `error instanceof Error` no detecta, evitando "[object Object]".
+    const message = errorMessage(error);
     const status = /no encontrado/i.test(message) ? 404 : /obligatorio|no soportada|debe ser|entre 0|Restaura primero/i.test(message) ? 400 : 500;
     console.error('set-pull-evaluation-context error:', error);
     return jsonResponse({ ok: false, error: message }, status);

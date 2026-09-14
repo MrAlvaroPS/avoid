@@ -83,7 +83,11 @@ export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION = 'effective-defensives@2.4.0'
 // comportamiento observable real en isDefensiveKitMember/
 // createsMissableOpportunity para cualquier caller que ya pasara
 // demonstratedPersistentCastSpellIds junto con allTalentSpellIds.
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.5.0';
+// §divine-shield-all-specs (2026-09-11, feedback real/decisión explícita del usuario tras verificar en real
+// que el override de Divine Shield (642) solo aplicaba a Protection): "Ampliar a las 3 specs" — Retribution y
+// Holy ahora también credit_only para Divine Shield (antes solo Protection, requiriendo Final Stand). Bump
+// para forzar la re-evaluación de todo el kit resuelto.
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION = 'effective-defensive-semantics@1.7.0';
 export const LEGACY_GAME_BUILD = 'legacy-current';
 
 // §E1 — presencia real en ESTE build, independiente de "elegible ahora mismo"

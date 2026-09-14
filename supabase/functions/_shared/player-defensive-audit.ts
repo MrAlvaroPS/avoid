@@ -2,7 +2,7 @@ import { aggregateDefensiveEpisodeKpis } from './defensive-episode-kpis.ts';
 import { chargeAvailabilityAt, type DefensiveCooldown } from './defensive-cooldowns.ts';
 import type { PersistedDefensiveEpisode, PersistedEpisodeVerdictCandidate } from './defensive-episode-persistence.ts';
 import type { EffectiveDefensiveAuditFact } from './defensive-audit-facts.ts';
-import { DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8 } from './defensive-evidence-v8.ts';
+import { DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10 } from './defensive-evidence-v10.ts';
 import {
   DEFENSIVE_NIGHT_AUDIT_VERSION,
   type ActionableTimingWindow,
@@ -562,8 +562,16 @@ export function buildDefensiveNightAudit(input: BuildDefensiveNightAuditInput): 
   if (!generation) return baseAudit(input, 'unavailable', 'No hay una generación defensiva publicada disponible.');
   if (!input.pointerStable) return baseAudit(input, 'incompatible', 'La generación publicada cambió durante la lectura; vuelve a cargar para obtener una auditoría atómica.');
   if (generation.status !== 'published') return baseAudit(input, 'incompatible', 'La generación defensiva seleccionada no está publicada.');
-  if (generation.evaluatorVersion !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8 || generation.episodeVersion !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V8) {
-    return baseAudit(input, 'incompatible', `La generación publicada usa ${generation.evaluatorVersion ?? 'una versión desconocida'} y todavía no contiene el contrato de auditoría v8.`);
+  // §mensaje-version-desfasado (2026-09-11, feedback real: "¿y este mensaje es correcto?" sobre un dosier que
+  // mostraba episode-evaluator@10 publicado Y este mensaje de incompatibilidad al mismo tiempo) — el gate en
+  // sí ya comparaba contra V10 (correcto), pero el texto tenía "contrato de auditoría v8" hardcodeado desde
+  // que se escribió contra V8, sin actualizarse en los renames V9→V10 posteriores (esos solo tocaron el
+  // identificador, no el string literal). Causa real del mensaje en pantalla: la función player-defensive-audit
+  // llevaba desplegada desde antes de que existiera defensive-evidence-v10.ts (version 1, nunca redeployada) —
+  // el bundle en producción seguía comparando contra V8. Redeploy + mensaje ya no hardcodea un número de
+  // versión que se desfasa en el siguiente bump.
+  if (generation.evaluatorVersion !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10 || generation.episodeVersion !== DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10) {
+    return baseAudit(input, 'incompatible', `La generación publicada usa ${generation.evaluatorVersion ?? 'una versión desconocida'}; la auditoría necesita ${DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10}.`);
   }
 
   const canonicalPulls = input.pulls.filter((pull) => pull.canonical).sort((a, b) => a.fightId - b.fightId);
@@ -627,11 +635,22 @@ export function buildDefensiveNightAudit(input: BuildDefensiveNightAuditInput): 
           projectionIssues.push(`candidate_missing_v8_evidence:${episode.episodeId}:${candidate.spellId}`);
           continue;
         }
-        const rawCasts = pull.defensiveCasts
-          .filter((cast) => cast.spellId === candidate.spellId)
-          .flatMap((cast) => cast.timestampsMs);
-        if (!sameNumbers(candidate.castsForSpellMs, rawCasts)) {
-          projectionIssues.push(`candidate_casts_mismatch:${episode.episodeId}:${candidate.spellId}`);
+        // §bug real (2026-09-11, "state: incompatible" para 14 jugadores del roster, validado E2E localmente
+        // contra datos reales: 2443 candidate_casts_mismatch, el 100% con isDefensiveKitMember=false) —
+        // pull.defensiveCasts (analyze-report) SOLO registra casts de spells que son kit member de verdad
+        // (`resolvedKit.filter(d => d.isDefensiveKitMember)`, ver analyze-report/index.ts); un candidato NO
+        // kit-member (p.ej. Death Strike de un Blood DK, rastreado como evidencia contextual, no como
+        // defensivo) SIEMPRE tendrá rawCasts=[] ahí aunque el episodio sí tenga sus casts reales — no es un
+        // dato desactualizado, es que esa columna nunca tuvo motivo para guardarlo. Comparar en ese caso no
+        // detecta nada real, solo genera un falso positivo permanente. Se comprueba solo para kit members de
+        // verdad, que es donde pull.defensiveCasts sí es la fuente que debería coincidir.
+        if (candidate.isDefensiveKitMember) {
+          const rawCasts = pull.defensiveCasts
+            .filter((cast) => cast.spellId === candidate.spellId)
+            .flatMap((cast) => cast.timestampsMs);
+          if (!sameNumbers(candidate.castsForSpellMs, rawCasts)) {
+            projectionIssues.push(`candidate_casts_mismatch:${episode.episodeId}:${candidate.spellId}`);
+          }
         }
         if (candidate.availabilityAtPeak.status !== candidate.statusAtPeak) {
           projectionIssues.push(`candidate_availability_mismatch:${episode.episodeId}:${candidate.spellId}`);

@@ -2,6 +2,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 import { enqueueCombatEvaluation, type CombatQueueClient } from '../_shared/combat-evaluation-queue.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 
 interface ClaimedJob {
   id: string;
@@ -215,11 +216,15 @@ async function processClaimedJob(
         .eq('pull_id', job.pull_id);
       if (occurrenceReadError) throw new Error(`load_occurrences: ${occurrenceReadError.message}`);
       const occurrenceIds = (occurrenceRows ?? []).map((row: { id: string }) => row.id);
-      if (occurrenceIds.length) {
+      // §bug real (2026-09-11, "http2 error: stream error detected" en materialize-execution-ledger con el
+      // mismo patrón) — un pull con cientos de occurrences puede romper el framing HTTP/2 con un único
+      // .in(...) sin acotar; se trocea igual que allí.
+      for (let i = 0; i < occurrenceIds.length; i += 100) {
+        const batch = occurrenceIds.slice(i, i + 100);
         const { error: responsibilityError } = await supabase
           .from('mechanic_responsibility_edges')
           .delete()
-          .in('occurrence_id', occurrenceIds);
+          .in('occurrence_id', batch);
         if (responsibilityError) throw new Error(`invalidate_responsibility: ${responsibilityError.message}`);
       }
       const { error: occurrenceError } = await supabase
@@ -250,7 +255,9 @@ async function processClaimedJob(
     if (finishError) throw new Error(`finish_job: ${finishError.message}`);
     return { ok: true, processed: true, jobId: job.id, pullId: job.pull_id, stages };
   } catch (caught) {
-    const message = caught instanceof Error ? caught.message : String(caught);
+    // §bug real (2026-09-11, feedback real: '"error": "materialize-execution-ledger: [object Object]"') —
+    // errorMessage() maneja los objetos planos de Postgrest que `caught instanceof Error` no detecta.
+    const message = errorMessage(caught);
     const { error: finishError } = await supabase.rpc('finish_combat_evaluation_job', {
       p_job_id: job.id,
       p_lease_token: job.lease_token,
@@ -333,7 +340,9 @@ Deno.serve(async (req: Request) => {
     );
     return jsonResponse(result, result.ok ? 200 : 500);
   } catch (caught) {
-    const message = caught instanceof Error ? caught.message : String(caught);
+    // §bug real (2026-09-11, feedback real: '"error": "materialize-execution-ledger: [object Object]"') —
+    // errorMessage() maneja los objetos planos de Postgrest que `caught instanceof Error` no detecta.
+    const message = errorMessage(caught);
     return jsonResponse({ ok: false, error: message }, 500);
   }
 });

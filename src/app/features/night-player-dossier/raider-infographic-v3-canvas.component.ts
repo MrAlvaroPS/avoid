@@ -4,6 +4,7 @@ import type {
   RaiderInfographicMetric,
   RaiderInfographicViewModel,
 } from '../../core/raider-infographic-view-model';
+import { formatDuration } from '../../shared/format.util';
 
 @Component({
   selector: 'app-raider-infographic-v3-canvas',
@@ -16,6 +17,7 @@ import type {
 export class RaiderInfographicV3CanvasComponent {
   viewModel = input.required<RaiderInfographicViewModel>();
   iconUrls = input.required<Record<number, string>>();
+  formatDuration = formatDuration;
 
   iconUrl(spellId: number | null): string | null {
     return spellId == null ? null : (this.iconUrls()[spellId] ?? null);

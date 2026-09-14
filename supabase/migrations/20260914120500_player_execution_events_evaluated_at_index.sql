@@ -1,0 +1,23 @@
+-- Incident (2026-09-14), same night as 20260914120000 — see that migration's
+-- header for the canonical-defensive-refresh timeout fix. This is the other
+-- half of the same incident: while the officer's "Actualizar infografías"
+-- click was blocked, the player dossier / night infographics ALSO failed:
+--
+--   GET .../player_execution_events?select=pull_id,ledger_evaluator_version,
+--       evaluated_at&order=evaluated_at.desc&limit=1
+--   500 { "code": "57014", "message": "canceling statement due to statement
+--         timeout" }
+--
+-- This is night-score-cache.service.ts / roster-snapshot-cache.service.ts's
+-- freshness check ("has any ledger event been written since my cached
+-- snapshot?"), run on every dossier/infographic load. player_execution_events
+-- has grown to ~53k JSONB-heavy rows (~337MB) and none of its existing
+-- indexes cover a plain `ORDER BY evaluated_at DESC LIMIT 1` (they all
+-- require player_name/domain/penalty_eligible as a leading column) — so this
+-- runs as a full sequential scan + sort every single time. Measured directly
+-- against production with the database otherwise idle: ~2 seconds already,
+-- with no upper bound as the table keeps growing. That is why it was the
+-- query that tipped over into a real 57014 the moment it ran concurrently
+-- with the copy-on-write clone in canonical-defensive-refresh.
+create index if not exists player_execution_events_evaluated_at_idx
+  on player_execution_events (evaluated_at desc);

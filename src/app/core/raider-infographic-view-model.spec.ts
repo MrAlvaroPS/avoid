@@ -81,6 +81,7 @@ function canonicalEpisode(overrides: Partial<CanonicalDefensiveEpisodeView> = {}
     startMs: 19_000,
     peakMs: 20_000,
     endMs: 21_000,
+    peakValue: null,
     dominantAbilityGameId: 5000,
     usageEngaged: false,
     usageEvaluable: true,
@@ -127,7 +128,8 @@ function canonicalSummary(
       missedReady,
       missedMistimed,
     },
-    management: { status: 'no_plan', score: null, fulfilled: 0, evaluable: 0 },
+    management: { status: 'insufficient_evidence', score: null, fulfilled: 0, evaluable: 0, mode: 'generic_usage' },
+    kit: [],
     context: { unavailableLegitimate: 0, noApplicableResource: 0, uncertain: 0, excluded: 0 },
     totalEpisodes: episodes.length,
     episodes,
@@ -290,14 +292,30 @@ describe('RaiderInfographicViewModel · hero defensivo canónico', () => {
     expect(view.hero.defensive.response.value).toBe('0%');
   });
 
-  it('§67 sin plan: Gestión es N/D · Sin plan, nunca 0%', () => {
+  it('§67 sin plan y sin datos de eficiencia de cooldown: Uso genérico es N/D, nunca 0%', () => {
     const canonical = canonicalSummary([canonicalEpisode({ responseVerdict: 'covered_verified' })]);
     const view = buildView(summary([pull(1)], canonical));
 
+    expect(view.hero.defensive.management.label).toBe('Uso');
     expect(view.hero.defensive.management.value).toBe('N/D');
-    expect(view.hero.defensive.management.fraction).toBe('Sin plan');
+    expect(view.hero.defensive.management.fraction).toBe('Sin datos suficientes');
     expect(view.hero.defensive.management.tone).toBe('neutral');
     expect(view.hero.defensive.management.progressPct).toBeNull();
+  });
+
+  it('§generic-usage-fallback sin plan pero con eficiencia de cooldown calculable: Uso genérico muestra el % real, nunca "Sin plan"', () => {
+    const canonical = canonicalSummary([canonicalEpisode({ responseVerdict: 'covered_verified' })], {
+      management: { status: 'available', score: 74.36, fulfilled: 29, evaluable: 39, mode: 'generic_usage' },
+    });
+    const view = buildView(summary([pull(1)], canonical));
+
+    expect(view.hero.defensive.management.label).toBe('Uso');
+    expect(view.hero.defensive.management.value).toBe('74,4%');
+    // §fix-overlap (2026-09-11, hallazgo real: círculos satélite solapados/ilegibles con texto largo,
+    // white-space:nowrap y ~78px de hueco) — la fracción tiene que ser tan terse como Reacción/Respuesta;
+    // el detalle explicativo vive en `detail` (tooltip), nunca en esta línea.
+    expect(view.hero.defensive.management.fraction).toBe('29/39');
+    expect(view.hero.defensive.management.tone).not.toBe('neutral');
   });
 
   it('§68 con plan: 3/4 asignaciones cumplidas → 75%, sin bonus', () => {
@@ -308,7 +326,7 @@ describe('RaiderInfographicViewModel · hero defensivo canónico', () => {
       canonicalEpisode({ planAssignmentId: 'd', planVerdict: 'missed' }),
     ];
     const canonical = canonicalSummary(episodes, {
-      management: { status: 'available', score: 75, fulfilled: 3, evaluable: 4 },
+      management: { status: 'available', score: 75, fulfilled: 3, evaluable: 4, mode: 'plan' },
     });
     const view = buildView(summary([pull(1)], canonical));
 
@@ -341,7 +359,7 @@ describe('RaiderInfographicViewModel · mecánicas y strip defensivo canónicos'
     const first = view.mechanics.find((m) => m.mechanicId === 5000)!;
     expect(first.coveredCount).toBe(1);
     expect(first.totalCount).toBe(2);
-    expect(first.occurrenceGroups.flatMap((g) => g.cells).map((c) => c.state).sort()).toEqual(['covered', 'uncovered']);
+    expect(first.occurrences.map((o) => o.state).sort()).toEqual(['covered', 'uncovered']);
   });
 
   it('unavailable_legitimate y uncertain nunca cuentan como uncovered en el grid (§39/§40, corregido)', () => {
@@ -352,7 +370,7 @@ describe('RaiderInfographicViewModel · mecánicas y strip defensivo canónicos'
     ];
     const canonical = canonicalSummary(episodes);
     const view = buildView(summary([pull(1)], canonical));
-    const states = view.mechanics[0].occurrenceGroups.flatMap((g) => g.cells).map((c) => c.state);
+    const states = view.mechanics[0].occurrences.map((o) => o.state);
 
     expect(states).not.toContain('uncovered');
     expect(states.filter((s) => s === 'not_required')).toHaveLength(1);
@@ -390,7 +408,12 @@ describe('RaiderInfographicViewModel · mecánicas y strip defensivo canónicos'
 
     expect(keys).toEqual(['usage', 'response', 'missed-ready', 'missed-mistimed', 'management']);
     expect(view.defensiveMetrics.find((m) => m.key === 'missed-ready')?.value).toBe('1');
-    expect(view.defensiveMetrics.find((m) => m.key === 'missed-mistimed')?.value).toBe('1');
+    // §2026-09-11 (feedback real) — missed_due_to_mistime nunca lo produce reconstructCausalAvailability
+    // todavía (confirmado 0/0 en toda la generación publicada); la card siempre muestra N/D honesto, nunca un
+    // número que aparente ser calculado — ni siquiera si la fixture (como aquí) fuerza un episodio con ese
+    // veredicto, porque en producción real ese episodio nunca podría existir.
+    expect(view.defensiveMetrics.find((m) => m.key === 'missed-mistimed')?.value).toBe('N/D');
+    expect(view.defensiveMetrics.find((m) => m.key === 'missed-mistimed')?.tone).toBe('neutral');
   });
 
   it('positiveSignals nunca deriva de unavailable_legitimate — solo de covered_verified', () => {

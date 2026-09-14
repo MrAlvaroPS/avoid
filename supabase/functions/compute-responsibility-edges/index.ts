@@ -126,11 +126,17 @@ Deno.serve(async (req: Request) => {
       });
     });
 
-    // Leer roster (para role-based responsibility)
+    // Leer roster (para role-based responsibility) — §bug real (2026-09-11, feedback real: "No se han
+    // actualizado las infografías: ... Could not find the table 'public.players' in the schema cache"): esta
+    // tabla nunca existió en el esquema real (sin CREATE TABLE en ninguna migración) — el nombre correcto del
+    // roster real es wowaudit_roster (ver wowaudit-roster.service.ts, night-brief-context.ts,
+    // generate-defensive-plan/index.ts, todas usan esta misma tabla). Nunca lleva .eq('active', true): la
+    // sincronización (sync-wowaudit-roster) ya filtra a solo personajes con status==='tracking' antes de
+    // escribir la fila, así que la tabla completa YA es el roster activo — un filtro adicional aquí solo
+    // devolvería 0 filas si 'active' existiera como columna, que no existe.
     const { data: rosterData, error: rosterErr } = await client
-      .from('players')
-      .select('name, role')
-      .eq('active', true);
+      .from('wowaudit_roster')
+      .select('name, role');
 
     if (rosterErr) throw rosterErr;
 

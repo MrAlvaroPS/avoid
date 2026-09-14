@@ -1,6 +1,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 import type {
   MechanicOccurrenceEvaluationContract,
   MechanicResponsibilityEdgeContract,
@@ -721,14 +722,26 @@ Deno.serve(async (req: Request) => {
     ) || [];
 
     // Leer edges
+    // §bug real (2026-09-11, "http2 error: stream error detected: unspecific protocol error detected" — un
+    // pull con cientos de occurrences generaba un .in('occurrence_id', [...]) con cientos de UUIDs en la
+    // URL, y esa URL gigante rompía el framing HTTP/2 entre la función y PostgREST). mechanic_responsibility_edges
+    // no tiene columna pull_id propia (solo occurrence_id), así que no hay un filtro más simple posible —
+    // se trocea la lista en lotes acotados en vez de un único IN sin límite.
+    const OCCURRENCE_ID_BATCH_SIZE = 100;
     let edges: MechanicResponsibilityEdgeContract[] = [];
     if (occurrences.length) {
-      const { data: edgesData, error: edgesErr } = await client
-        .from('mechanic_responsibility_edges')
-        .select('*')
-        .in('occurrence_id', occurrences.map((occurrence) => occurrence.id));
-      if (edgesErr) throw edgesErr;
-      edges = (edgesData as any[] | null)?.map((row) => rowToEdge(row)) ?? [];
+      const occurrenceIds = occurrences.map((occurrence) => occurrence.id);
+      const batches: string[][] = [];
+      for (let i = 0; i < occurrenceIds.length; i += OCCURRENCE_ID_BATCH_SIZE) {
+        batches.push(occurrenceIds.slice(i, i + OCCURRENCE_ID_BATCH_SIZE));
+      }
+      const edgesResults = await Promise.all(
+        batches.map((batch) => client.from('mechanic_responsibility_edges').select('*').in('occurrence_id', batch)),
+      );
+      for (const { data, error } of edgesResults) {
+        if (error) throw error;
+        edges.push(...((data as any[] | null)?.map((row) => rowToEdge(row)) ?? []));
+      }
     }
 
     const { data: defensiveData, error: defensiveErr } = await client
@@ -898,7 +911,13 @@ Deno.serve(async (req: Request) => {
       player_name: event.playerName,
       occurrence_id: event.occurrenceId,
       causal_group_id: event.causalGroupId || stableCausalGroupId(event.deduplicationKey),
-      timestamp_ms: event.timestampMs,
+      // §bug real (2026-09-11, "invalid input syntax for type integer: 106886.90416666679") — el fix en el
+      // origen (damage-pressure-windows.ts) solo evita NUEVOS milisegundos fraccionarios; no corrige filas ya
+      // persistidas en player_pull_defensive_evaluations.events (JSONB, sin tipos) de ANTES del fix, y
+      // "Actualizar infografías" no fuerza un re-cálculo completo de esa fila antes de reintentar el ledger.
+      // Redondeo defensivo aquí también, justo en el borde donde de verdad importa (timestamp_ms es integer
+      // en Postgres) — nunca falla por un dato viejo, sin depender de que todo lo de aguas arriba esté limpio.
+      timestamp_ms: Math.round(event.timestampMs),
       domain: event.domain,
       event_type: event.eventType,
       verdict: event.verdict,
@@ -920,10 +939,33 @@ Deno.serve(async (req: Request) => {
       evaluated_at: now,
     }));
 
+    // §bug real (2026-09-11, "ON CONFLICT DO UPDATE command cannot affect row a second time") — Postgres
+    // rechaza un UPSERT que intente tocar la misma fila (mismo pull_id+ledger_evaluator_version+
+    // deduplication_key, el conflict target real de abajo) dos veces DENTRO del mismo statement. Con 7
+    // generadores de eventos independientes (mechanic/defensive/death/preparation/interrupt/external/dispel)
+    // sobre datos reales de WCL, dos eventos distintos pueden legítimamente resolver a la misma clave de
+    // deduplicación (identifica "el mismo evento real", no "la misma fila de origen") — eso es justo lo que
+    // la deduplication_key está diseñada para colapsar, así que se colapsa aquí antes del upsert en vez de
+    // dejar que Postgres lo rechace. Se queda con la ÚLTIMA aparición (mismo criterio que "el upsert más
+    // reciente gana" que ya rige el resto del pipeline).
+    const dedupedEventsToInsert = [
+      ...new Map(
+        eventsToInsert.map((row) => [
+          `${row.pull_id}|${row.ledger_evaluator_version}|${row.deduplication_key}`,
+          row,
+        ]),
+      ).values(),
+    ];
+    if (dedupedEventsToInsert.length !== eventsToInsert.length) {
+      console.warn(
+        `materialize-execution-ledger: ${eventsToInsert.length - dedupedEventsToInsert.length} evento(s) colapsados por deduplication_key duplicada dentro del mismo lote (pull ${body.pullId}).`,
+      );
+    }
+
     // UPSERT idempotente
     const { data: inserted, error: upsertErr } = await client
       .from('player_execution_events')
-      .upsert(eventsToInsert, {
+      .upsert(dedupedEventsToInsert, {
         onConflict: 'pull_id,ledger_evaluator_version,deduplication_key',
         ignoreDuplicates: false,
       })
@@ -958,7 +1000,13 @@ Deno.serve(async (req: Request) => {
       events: result,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    // §bug real (2026-09-11, feedback real: '"error": "materialize-execution-ledger: [object Object]"') —
+    // `error instanceof Error` es falso para los errores que devuelve el cliente de Supabase/Postgrest
+    // (throw upsertErr, throw contextErr, etc. — son objetos planos {message, details, hint, code}, nunca
+    // instancias de Error), así que la rama de fallback `String(error)` colapsaba a "[object Object]" y se
+    // perdía el mensaje real. errorMessage() ya existía para esto exacto (§bug real 2026-08-27, classify-defensives)
+    // pero esta función se quedó fuera cuando se introdujo — mismo fix, ahora aplicado aquí también.
+    const message = errorMessage(error);
     console.error('materialize-execution-ledger error:', error);
     return jsonResponse({ ok: false, error: message }, 500);
   }

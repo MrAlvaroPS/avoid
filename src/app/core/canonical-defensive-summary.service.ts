@@ -70,6 +70,8 @@ export interface RawPersistedDefensiveEpisode {
   startMs: number;
   peakMs: number;
   endMs: number;
+  /** WCL DamageTaken graph bucket magnitude selected by the canonical detector — mirrors PersistedDefensiveEpisode.peakValue. */
+  peakValue?: number;
   usageEngaged: boolean;
   usageEvaluable: boolean;
   usedSpellIds: number[];
@@ -90,6 +92,10 @@ export interface CanonicalDefensiveEpisodeFact {
   startMs: number;
   peakMs: number;
   endMs: number;
+  /** Magnitud del bucket del gráfico DamageTaken de WCL que el detector canónico marcó como pico — mismas
+   * unidades sin re-etiquetar (ver PersistedDefensiveEpisode.peakValue). Solo verificable/existe desde que el
+   * detector persiste este campo; null en episodios más antiguos o si el detector no lo calculó. */
+  peakValue: number | null;
   /** De episode.evidence.dominantAbilityGameId (v7 no lo expone en la raíz del episodio) — null si el episodio no está atado a una habilidad identificable. */
   dominantAbilityGameId: number | null;
   usageEngaged: boolean;
@@ -126,6 +132,12 @@ export interface CanonicalManagementKpi {
   score: number | null;
   fulfilled: number;
   evaluable: number;
+  /** §generic-usage-fallback (2026-09-10): 'plan' = adherencia real a un plan asignado (fulfilled/evaluable =
+   *  asignaciones cumplidas/totales). 'generic_usage' = sin plan publicado (defensiveDeployedPlans apagado o
+   *  sin asignación esta noche): fulfilled/evaluable pasan a significar casts reales/máximo teórico de
+   *  cooldown — eficiencia de uso de TODO el kit core, no solo si acertó el pico. Nunca se mezclan ambos
+   *  significados en la misma fila; el modo determina cuál aplica. */
+  mode: 'plan' | 'generic_usage';
 }
 
 export interface CanonicalDefensiveGeneration {
@@ -151,6 +163,11 @@ export interface CanonicalDefensiveSummary {
   context: { unavailableLegitimate: number; noApplicableResource: number; uncertain: number; excluded: number };
   totalEpisodes: number;
   episodes: CanonicalDefensiveEpisodeFact[];
+  /** §defensive-kit-panel (2026-09-11) — un elemento por spellId distinto visto en effective_kit a lo largo
+   * de la noche (deduplicado; el cooldown de un spell no cambia pull a pull salvo respec real, así que se
+   * conserva la primera aparición). Nunca el catálogo completo — solo lo que el evaluator resolvió como
+   * parte del kit real de este jugador/build esta noche. */
+  kit: EffectiveKitEntry[];
   generation: CanonicalDefensiveGeneration | null;
   integrityIssues: string[];
   /** Nunca se muestra como KPI — agregado crudo (incluida cualquier fila excluida) para trazabilidad/futura pantalla de origen. */
@@ -167,6 +184,19 @@ interface EpisodeEvidenceShape {
   decisiveSpellIds?: number[];
 }
 
+/** §generic-usage-fallback — espejo estructural de UN elemento de effective_kit tal como lo persiste el
+ * backend (ver resolveEffectiveDefensiveKit/ResolvedDefensive en effective-defensives.ts); solo los campos que
+ * necesita el cálculo de eficiencia de cooldown, nunca reimportado desde el módulo Deno (mismo criterio que el
+ * resto de este archivo). */
+export interface EffectiveKitEntry {
+  spellId: number;
+  isDefensiveKitMember: boolean;
+  opportunityMode: 'normal' | 'credit_only' | 'none';
+  effectiveCooldownMs: number | null;
+  charges: number | null;
+  rechargeMs: number | null;
+}
+
 /** Exportada — es exactamente la forma de fila que devuelve Supabase (snake_case), para poder construir
  * fixtures de test sin mockear el cliente (§ decisión de test: probar la lógica pura, no la orquestación). */
 export interface EpisodeEvaluationDbRow {
@@ -176,6 +206,16 @@ export interface EpisodeEvaluationDbRow {
   semantic_resolver_version: string;
   resolver_version: string;
   episodes: RawPersistedDefensiveEpisode[];
+  /** Opcional — filas de generaciones anteriores a §generic-usage-fallback, o fixtures de test que no
+   * ejercitan la eficiencia de cooldown, no lo tienen. buildGenericUsageKpi trata ausente/null como kit vacío. */
+  effective_kit?: EffectiveKitEntry[] | null;
+}
+
+/** §generic-usage-fallback — forma de fila de player_pull_records para leer casts reales, independiente de
+ * episodios/generación (un cast real cuenta aunque no haya generado ningún episodio evaluable). */
+export interface PullDefensiveCastsRow {
+  pull_id: string;
+  defensive_casts: { spellId?: number; timestampsMs?: number[] }[] | null;
 }
 
 interface GenerationDbRow {
@@ -194,6 +234,14 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+const EMPTY_MANAGEMENT: CanonicalManagementKpi = {
+  status: 'insufficient_evidence',
+  score: null,
+  fulfilled: 0,
+  evaluable: 0,
+  mode: 'generic_usage',
+};
+
 const EMPTY_USAGE: CanonicalUsageKpi = { status: 'insufficient_evidence', score: null, engaged: 0, evaluable: 0 };
 const EMPTY_RESPONSE: CanonicalResponseKpi = {
   status: 'insufficient_evidence',
@@ -203,7 +251,6 @@ const EMPTY_RESPONSE: CanonicalResponseKpi = {
   missedReady: 0,
   missedMistimed: 0,
 };
-const EMPTY_MANAGEMENT: CanonicalManagementKpi = { status: 'insufficient_evidence', score: null, fulfilled: 0, evaluable: 0 };
 const EMPTY_CONTEXT = { unavailableLegitimate: 0, noApplicableResource: 0, uncertain: 0, excluded: 0 };
 const EMPTY_KPI_AGGREGATE_SLICE: Pick<DefensiveEpisodeKpiAggregate, 'usage' | 'response'> = {
   usage: { status: 'insufficient_evidence', engaged: 0, evaluable: 0, score: null },
@@ -225,6 +272,7 @@ export function closedCanonicalDefensiveSummary(
     context: EMPTY_CONTEXT,
     totalEpisodes: 0,
     episodes: [],
+    kit: [],
     generation,
     integrityIssues,
     diagnostics: { ...EMPTY_KPI_AGGREGATE_SLICE, rowsExpected: coverage.expectedPulls, rowsFound: 0 },
@@ -306,12 +354,41 @@ export class CanonicalDefensiveSummaryService {
     if (!pullIds.length) return [];
     const { data, error } = await this.supabase.client
       .from('player_pull_defensive_episode_evaluations')
-      .select('pull_id, episode_evaluator_version, semantic_version, semantic_resolver_version, resolver_version, episodes')
+      .select(
+        'pull_id, episode_evaluator_version, semantic_version, semantic_resolver_version, resolver_version, episodes, effective_kit',
+      )
       .eq('defensive_generation_id', generationId)
       .eq('player_name', playerName)
       .in('pull_id', pullIds);
     if (error) throw error;
     return (data ?? []) as EpisodeEvaluationDbRow[];
+  }
+
+  /** §generic-usage-fallback — duración real de cada pull, para el denominador teórico de eficiencia de
+   * cooldown. Independiente de la generación defensiva (viene de `pulls`, nunca de staging). */
+  private async readPullDurations(pullIds: string[]): Promise<Map<string, number>> {
+    if (!pullIds.length) return new Map();
+    const { data, error } = await this.supabase.client
+      .from('pulls')
+      .select('id, duration_ms')
+      .in('id', pullIds);
+    if (error) throw error;
+    return new Map(
+      ((data ?? []) as { id: string; duration_ms: number | null }[]).map((row) => [row.id, row.duration_ms ?? 0]),
+    );
+  }
+
+  /** §generic-usage-fallback — casts reales del jugador, independientes de si generaron algún episodio
+   * evaluable (un cast cuenta para el numerador de eficiencia aunque el detector no lo agrupara en pico). */
+  private async readDefensiveCasts(pullIds: string[], playerName: string): Promise<PullDefensiveCastsRow[]> {
+    if (!pullIds.length) return [];
+    const { data, error } = await this.supabase.client
+      .from('player_pull_records')
+      .select('pull_id, defensive_casts')
+      .eq('player_name', playerName)
+      .in('pull_id', pullIds);
+    if (error) throw error;
+    return (data ?? []) as PullDefensiveCastsRow[];
   }
 
   private async resolve(
@@ -336,7 +413,11 @@ export class CanonicalDefensiveSummaryService {
     const scoredPullIds = await this.readCanonicalScoredPullIds(reportCode);
     const expectedPullIds = [...new Set(participatedPullIds)].filter((id) => scoredPullIds.has(id));
 
-    const rows = await this.readEpisodeRows(generation.id, expectedPullIds, playerName);
+    const [rows, pullDurations, castRows] = await Promise.all([
+      this.readEpisodeRows(generation.id, expectedPullIds, playerName),
+      this.readPullDurations(expectedPullIds),
+      this.readDefensiveCasts(expectedPullIds, playerName),
+    ]);
 
     const pointerAfter = await this.readPublishedGenerationId();
     if (pointerAfter !== pointerBefore) {
@@ -351,7 +432,7 @@ export class CanonicalDefensiveSummaryService {
       return this.resolve(reportCode, playerName, participatedPullIds, true);
     }
 
-    return buildCanonicalDefensiveSummary(generation, expectedPullIds, rows, playerName);
+    return buildCanonicalDefensiveSummary(generation, expectedPullIds, rows, playerName, pullDurations, castRows);
   }
 }
 
@@ -365,6 +446,10 @@ export function buildCanonicalDefensiveSummary(
   expectedPullIds: string[],
   rows: EpisodeEvaluationDbRow[],
   playerName: string,
+  /** §generic-usage-fallback — opcionales con default vacío: los tests existentes que no ejercitan la
+   * eficiencia de cooldown siguen pasando sin tocarlos (mismo criterio que el resto del contrato: aditivo). */
+  pullDurations: Map<string, number> = new Map(),
+  castRows: PullDefensiveCastsRow[] = [],
 ): CanonicalDefensiveSummary {
   const integrityIssues: string[] = [];
   const expectedSet = new Set(expectedPullIds);
@@ -419,7 +504,14 @@ export function buildCanonicalDefensiveSummary(
   const showKpis = state === 'available' || state === 'partial';
   const safeAgg = showKpis ? aggregateDefensiveEpisodeKpis(safeEpisodes) : null;
 
-  const management = showKpis ? buildManagementKpi(safeEpisodes, integrityIssues) : EMPTY_MANAGEMENT;
+  let management: CanonicalManagementKpi = EMPTY_MANAGEMENT;
+  if (showKpis) {
+    const planManagement = buildManagementKpi(safeEpisodes, integrityIssues);
+    management =
+      planManagement.status === 'no_plan'
+        ? buildGenericUsageKpi(safeRows, pullDurations, castRows)
+        : planManagement;
+  }
 
   return {
     state,
@@ -448,6 +540,7 @@ export function buildCanonicalDefensiveSummary(
       : EMPTY_CONTEXT,
     totalEpisodes: showKpis ? safeEpisodes.length : 0,
     episodes: showKpis ? safeEpisodes : [],
+    kit: showKpis ? dedupeKit(safeRows) : [],
     generation,
     integrityIssues,
     diagnostics: {
@@ -457,6 +550,19 @@ export function buildCanonicalDefensiveSummary(
       rowsFound: rows.length,
     },
   };
+}
+
+/** §defensive-kit-panel — un elemento por spellId de kit real (isDefensiveKitMember), primera aparición
+ * conservada (el cooldown de un spell no cambia pull a pull salvo respec real). */
+function dedupeKit(rows: EpisodeEvaluationDbRow[]): EffectiveKitEntry[] {
+  const bySpell = new Map<number, EffectiveKitEntry>();
+  for (const row of rows) {
+    for (const entry of row.effective_kit ?? []) {
+      if (!entry.isDefensiveKitMember) continue;
+      if (!bySpell.has(entry.spellId)) bySpell.set(entry.spellId, entry);
+    }
+  }
+  return [...bySpell.values()];
 }
 
 function toEpisodeFacts(row: EpisodeEvaluationDbRow): CanonicalDefensiveEpisodeFact[] {
@@ -469,6 +575,7 @@ function toEpisodeFacts(row: EpisodeEvaluationDbRow): CanonicalDefensiveEpisodeF
       startMs: episode.startMs,
       peakMs: episode.peakMs,
       endMs: episode.endMs,
+      peakValue: episode.peakValue ?? null,
       dominantAbilityGameId: evidence?.dominantAbilityGameId ?? null,
       usageEngaged: episode.usageEngaged,
       usageEvaluable: episode.usageEvaluable,
@@ -512,7 +619,62 @@ export function buildManagementKpi(
     byAssignment.set(episode.planAssignmentId, episode.planVerdict);
   }
   const evaluable = byAssignment.size;
-  if (evaluable === 0) return { status: 'no_plan', score: null, fulfilled: 0, evaluable: 0 };
+  if (evaluable === 0) return { status: 'no_plan', score: null, fulfilled: 0, evaluable: 0, mode: 'plan' };
   const fulfilled = [...byAssignment.values()].filter((verdict) => verdict === 'covered').length;
-  return { status: 'available', score: round2((fulfilled / evaluable) * 100), fulfilled, evaluable };
+  return { status: 'available', score: round2((fulfilled / evaluable) * 100), fulfilled, evaluable, mode: 'plan' };
+}
+
+/**
+ * §generic-usage-fallback (2026-09-10, hallazgo empírico real: Txerokee lanzó Astral Shift 30 veces esa
+ * noche pero Uso/Response solo "veían" un puñado — ambos KPI están deliberadamente acotados a episodios
+ * evaluables concretos, nunca a la actividad general del kit). Ocupa el hueco de Gestión SOLO cuando no hay
+ * plan asignado (buildManagementKpi devolvió 'no_plan') — si algún día se publica un plan real, ese branch
+ * sigue ganando siempre, este es puramente el fallback.
+ *
+ * Eficiencia de cooldown = Σ(casts reales de cada defensivo core) / Σ(casts teóricos máximos de ese mismo
+ * defensivo dado su propio cooldown/cargas y el tiempo de combate real jugado esa noche) — SUMA de cupos, no
+ * promedio de porcentajes, para que una clase con varios defensivos core (ej. DK: Anti-Magic Shell + Death
+ * Pact + Icebound Fortitude + Lichborne) no necesite ponderación manual: cada spell aporta su propio cupo al
+ * total, proporcional a cuántas veces cabe de verdad en el tiempo jugado. Solapar el uso de dos defensivos
+ * distintos en el mismo pico no penaliza nada — cada cupo es independiente.
+ */
+export function buildGenericUsageKpi(
+  safeRows: EpisodeEvaluationDbRow[],
+  pullDurations: Map<string, number>,
+  castRows: PullDefensiveCastsRow[],
+): CanonicalManagementKpi {
+  const castsByPull = new Map<string, Map<number, number>>();
+  for (const row of castRows) {
+    const perSpell = new Map<number, number>();
+    for (const cast of row.defensive_casts ?? []) {
+      if (!Number.isInteger(cast?.spellId) || !Array.isArray(cast?.timestampsMs)) continue;
+      perSpell.set(cast.spellId!, (perSpell.get(cast.spellId!) ?? 0) + cast.timestampsMs.length);
+    }
+    castsByPull.set(row.pull_id, perSpell);
+  }
+
+  let theoreticalMax = 0;
+  let actualCasts = 0;
+  for (const row of safeRows) {
+    const durationMs = pullDurations.get(row.pull_id) ?? 0;
+    if (durationMs <= 0) continue;
+    const castsForPull = castsByPull.get(row.pull_id) ?? new Map<number, number>();
+    for (const entry of row.effective_kit ?? []) {
+      if (!entry.isDefensiveKitMember || entry.opportunityMode !== 'normal') continue;
+      const rechargeMs = entry.rechargeMs ?? entry.effectiveCooldownMs;
+      if (rechargeMs == null || rechargeMs <= 0) continue; // sin cadencia conocida — no se puede fijar un máximo real, se excluye en vez de inventarlo
+      const startingCharges = entry.charges ?? 1;
+      theoreticalMax += startingCharges + Math.floor(durationMs / rechargeMs);
+      actualCasts += castsForPull.get(entry.spellId) ?? 0;
+    }
+  }
+
+  if (theoreticalMax === 0) return { status: 'insufficient_evidence', score: null, fulfilled: 0, evaluable: 0, mode: 'generic_usage' };
+  return {
+    status: 'available',
+    score: Math.min(100, round2((actualCasts / theoreticalMax) * 100)),
+    fulfilled: actualCasts,
+    evaluable: theoreticalMax,
+    mode: 'generic_usage',
+  };
 }

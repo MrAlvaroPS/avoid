@@ -1,6 +1,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 import type { MechanicPolicyContract } from '../_shared/combat-evaluation-contract.ts';
 
 interface Body {
@@ -94,7 +95,9 @@ Deno.serve(async (req: Request) => {
     );
     return jsonResponse({ ok: true, policy });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    // §bug real (2026-09-11) — mismo fix que materialize-execution-ledger: errorMessage() maneja los objetos
+    // planos de Postgrest que `error instanceof Error` no detecta, evitando "[object Object]".
+    const message = errorMessage(error);
     console.error('query-mechanic-policy error:', error);
     return jsonResponse({ ok: false, error: message }, 500);
   }

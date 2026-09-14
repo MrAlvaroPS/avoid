@@ -16,6 +16,7 @@ import {
   summarizeMechanicEventReplay,
   type ReplayMechanicEventRow,
 } from '../_shared/mechanic-event-replay-diff.ts';
+import { errorMessage } from '../_shared/error-message.ts';
 import { handlePreflight, jsonResponse } from '../_shared/cors.ts';
 import { requireOfficer } from '../_shared/require-officer.ts';
 
@@ -362,8 +363,10 @@ Deno.serve(async (req: Request) => {
     });
   } catch (error) {
     console.error('reanalyze-mechanic-events error:', error);
+    // §bug real (2026-09-11) — mismo fix que materialize-execution-ledger: errorMessage() maneja los objetos
+    // planos de Postgrest que `error instanceof Error` no detecta, evitando "[object Object]".
     return jsonResponse(
-      { ok: false, error: error instanceof Error ? error.message : String(error) },
+      { ok: false, error: errorMessage(error) },
       500,
     );
   }
