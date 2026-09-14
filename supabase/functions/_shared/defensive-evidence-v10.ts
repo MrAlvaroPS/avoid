@@ -1,6 +1,5 @@
 import {
   EFFECTIVE_DEFENSIVE_RESOLVER_VERSION,
-  EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION,
 } from './effective-defensives.ts';
 
 export {
@@ -28,8 +27,16 @@ export {
  * detectan como episodio (más episodios evaluables por jugador×pull,
  * especialmente en roles no-tank), a diferencia de v9 (que solo tocaba cómo
  * se reconstruye la disponibilidad causal de un episodio ya detectado).
- * resolver/semantic-resolver de kit NO cambian.
+ * resolver de timing no cambia.
+ *
+ * §rogue-defensive-semantics-12-1 (2026-09-14): el algoritmo puro del
+ * resolver semántico tampoco cambia, pero SÍ cambia el contrato semántico
+ * canónico que consume v10: Evasion baseline y Crimson Vial pasan a
+ * credit_only; Elusiveness/Bait and Switch promocionan Evasion a normal
+ * cuando aportan mitigación directa. Versionamos este cambio de DATOS como
+ * 1.8.0 en el contrato canónico para impedir que una generación 1.7.0
+ * reutilice snapshots calculados con la clasificación anterior.
  */
 export const EFFECTIVE_DEFENSIVE_RESOLVER_VERSION_V10 = EFFECTIVE_DEFENSIVE_RESOLVER_VERSION;
-export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V10 = EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION;
+export const EFFECTIVE_DEFENSIVE_SEMANTIC_RESOLVER_VERSION_V10 = 'effective-defensive-semantics@1.8.0';
 export const DEFENSIVE_EPISODE_EVALUATOR_VERSION_V10 = 'episode-evaluator@10';

@@ -84,6 +84,12 @@ describe('buildDefensiveKitBreakdown (§defensive-kit-panel, caso real Gusmï)',
     expect(result[0].timesUsed).toBe(0);
   });
 
+  it('usa el nombre canónico persistido en effective_kit aunque el spell nunca se castease y no exista en spellNameById', () => {
+    const kit = [{ ...kitEntry({ spellId: 5277, opportunityMode: 'credit_only', effectiveCooldownMs: 120_000 }), name: 'Evasion' }] as EffectiveKitEntry[];
+    const result = buildDefensiveKitBreakdown(kit, [], new Map());
+    expect(result[0].name).toBe('Evasion');
+  });
+
   it('un candidato de un spell que el kit no resolvió como miembro no fabrica una fila nueva', () => {
     const kit = [kitEntry({ spellId: 22812 })];
     const episodes = [episode({ applicableCandidates: [candidate({ spellId: 999 })] })];
